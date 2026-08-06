@@ -4,11 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "2.68.0"
+version = "2.68.1"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.11"
+# 3.12 하한. 내부 의존(xgen-edit2docs / xgen-contextifier / xgen-an-web)이 전부
+# 3.12+ 이고, extras 를 core 로 흡수한 뒤로는 그것들이 선택이 아니다. 3.11 을
+# 계속 지원한다고 적어 두면 그 환경에서 문서·브라우저 도구가 **조용히 없는
+# 기능**이 되는데, extras 를 없앤 이유가 바로 그 실패 모드였다.
+requires-python = ">=3.12"
 authors = [
     { name = "CocoRoF", email = "cocorof@users.noreply.github.com" },
 ]
@@ -148,7 +152,7 @@ markers = [
 allow-direct-references = true
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 # 규칙 집합을 고정한다. 안 고정하면 ruff 버전이 올라갈 때마다 새 규칙이 켜져
 # **코드 변경 없이** 게이트가 빨개진다 (UP/I/RUF 등 6천여 건이 그렇게 떠 있었다).
 # 레이아웃은 포매터가 소유하므로 E501 은 제외.
@@ -187,7 +191,6 @@ exclude = ["tests/**"]
 [tool.mypy]
 # 3.11 로 두면 설치된 서드파티 스텁(numpy 등)이 3.12 문법을 써서 mypy 가
 # 파싱 단계에서 죽는다 — 우리 코드와 무관한 곳에서 게이트가 멈춘다.
-# CI 가 3.12 로 돌리므로 거기에 맞춘다 (requires-python 하한은 그대로 3.11).
 python_version = "3.12"
 ignore_missing_imports = true
 check_untyped_defs = false
