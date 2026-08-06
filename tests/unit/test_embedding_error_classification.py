@@ -174,7 +174,6 @@ async def test_voyage_transport_stub_can_raise_classified_error() -> None:
 
 import asyncio  # noqa: E402
 
-from xgen_agent_runtime.memory.embedding import openai as _openai_mod  # noqa: E402
 
 
 def test_bound_input_passes_short_text():

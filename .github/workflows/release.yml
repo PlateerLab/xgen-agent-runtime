@@ -31,22 +31,12 @@ jobs:
       - run: pip install build
       - run: python -m build
 
-      # 우리 패키지들은 PyPI 에 없다(설계). extras 를 core 로 흡수한 뒤로는
-      # 평소 설치에서도 형제 의존이 필요하므로, 그쪽 GitHub Release 에서 받아
-      # 함께 설치한다 — 소비자가 URL 직접참조로 하는 것과 같은 방식이라
-      # 이 검사가 곧 소비자 경로의 예행연습이 된다.
-      - name: 형제 wheel 내려받기
-        run: |
-          mkdir -p siblings
-          for r in xgen-contextifier xgen-edit2docs xgen-an-web xgen-agent-memory; do
-            gh release download --repo "PlateerLab/$r" -p '*.whl' -D siblings/
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
-
+      # 내부 의존은 pyproject 에 URL 직접참조로 박혀 있어 pip 이 알아서 받는다.
+      # (예전에는 형제 wheel 을 Release 에서 따로 내려받았는데, URL 고정 이후로는
+      #  같은 패키지의 출처가 둘이 되어 오히려 충돌한다.)
       - name: 설치되고 import 되는지 확인
         run: |
-          pip install siblings/*.whl dist/*.whl
+          pip install dist/*.whl
           python -c "import ${MODULE}; print('${MODULE}', getattr(${MODULE}, '__version__', '(no __version__)'))"
         env:
           MODULE: xgen_agent_runtime

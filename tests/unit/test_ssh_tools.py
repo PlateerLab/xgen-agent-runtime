@@ -22,7 +22,6 @@ from xgen_agent_runtime.tools._ssh import (
 from xgen_agent_runtime.tools.built_in._ssh_store import SSHServerStore
 from xgen_agent_runtime.tools.built_in import ssh_tools
 from xgen_agent_runtime.tools.built_in.ssh_tools import (
-    SshDownloadTool,
     SshListServersTool,
     SshRunTool,
     SshUploadTool,

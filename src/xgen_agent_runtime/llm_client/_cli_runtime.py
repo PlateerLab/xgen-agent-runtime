@@ -62,6 +62,7 @@ from typing import (
 
 logger = logging.getLogger(__name__)
 
+
 # ── CLI stdout stream limit ────────────────────────────────────────────
 # The CLI emits one stream-json event per line, and tool_result contents
 # ride INSIDE those lines — a DocXmlRead (200K chars), a big file Read, or
@@ -78,7 +79,6 @@ def _cli_stream_limit() -> int:
     except ValueError:
         v = 0
     return v if v >= 2**16 else 32 * 1024 * 1024
-
 
 
 # ---------------------------------------------------------------------------
@@ -459,9 +459,7 @@ class ContainerCLIRunner(CLIProcessRunner):
         if self.sandbox is None:
             raise ValueError("ContainerCLIRunner requires sandbox=")
 
-    async def _spawn(
-        self, argv: Sequence[str]
-    ) -> tuple[asyncio.subprocess.Process, float]:
+    async def _spawn(self, argv: Sequence[str]) -> tuple[asyncio.subprocess.Process, float]:
         sandbox = self.sandbox
         assert sandbox is not None  # guaranteed by __post_init__
         # First spawn after a host restart may hit a stopped container.
@@ -496,9 +494,7 @@ class ContainerCLIRunner(CLIProcessRunner):
         if sys.platform != "win32":
             kwargs["start_new_session"] = True
         kwargs["limit"] = _cli_stream_limit()
-        proc = await asyncio.create_subprocess_exec(
-            self.launcher, *exec_argv, **kwargs
-        )
+        proc = await asyncio.create_subprocess_exec(self.launcher, *exec_argv, **kwargs)
         return proc, time.monotonic()
 
 
@@ -533,7 +529,9 @@ async def _aiter_lines(
             # killing the whole delegated turn. Log loudly and continue.
             logger.warning(
                 "CLI stream line exceeded the %d-byte limit — skipping one "
-                "event and continuing (%s)", _cli_stream_limit(), e,
+                "event and continuing (%s)",
+                _cli_stream_limit(),
+                e,
             )
             continue
         if not line:

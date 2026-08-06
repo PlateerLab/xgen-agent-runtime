@@ -30,6 +30,7 @@ don't have one, `forge_tool` will tell you.
    Minimal Python example (`tools/wordcount/main.py`):
    ```python
    import sys, json
+
    req = json.load(sys.stdin)
    text = req.get("text", "")
    print(json.dumps({"words": len(text.split()), "chars": len(text)}))

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from xgen_agent_runtime.memory.composite.handles import (
     _CompositeCuratedHandle,
@@ -438,11 +438,7 @@ class CompositeMemoryProvider(MemoryProvider):
             node_set.add(e.get("source"))
             node_set.add(e.get("target"))
         existing = {c.key for c in chunks}
-        seeds = {
-            c.key: max(float(c.relevance_score), 0.05)
-            for c in chunks
-            if c.key in node_set
-        }
+        seeds = {c.key: max(float(c.relevance_score), 0.05) for c in chunks if c.key in node_set}
         if not seeds:
             return []
         # PageRank is pure-CPU and O(max_iter·|E|); on a large knowledge
@@ -452,9 +448,7 @@ class CompositeMemoryProvider(MemoryProvider):
         # inline to avoid the thread hop.
         alpha = float(getattr(hooks, "graph_alpha", 0.5))
         if len(edges) > 2000:
-            ranked = await asyncio.to_thread(
-                personalized_pagerank, edges, seeds, alpha=alpha
-            )
+            ranked = await asyncio.to_thread(personalized_pagerank, edges, seeds, alpha=alpha)
         else:
             ranked = personalized_pagerank(edges, seeds, alpha=alpha)
         top_k = max(0, int(getattr(hooks, "graph_top_k", 5)))

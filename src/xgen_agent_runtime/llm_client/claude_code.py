@@ -808,8 +808,7 @@ def build_container_cli_client(
     """
     if "runner_factory" in client_kwargs:
         raise TypeError(
-            "build_container_cli_client sets runner_factory itself; "
-            "do not pass it in client_kwargs"
+            "build_container_cli_client sets runner_factory itself; do not pass it in client_kwargs"
         )
 
     def _factory(**runner_kwargs: Any) -> CLIProcessRunner:

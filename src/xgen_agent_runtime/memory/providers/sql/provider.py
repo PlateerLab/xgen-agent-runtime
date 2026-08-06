@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from xgen_agent_runtime.memory.embedding.client import EmbeddingClient
 from xgen_agent_runtime.memory.provider import (
