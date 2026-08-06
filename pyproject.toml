@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "2.65.0"
+version = "2.66.0"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -71,27 +71,29 @@ dependencies = [
     # SQL provider — sqlite is in stdlib; postgres needs psycopg + pgvector.
     "psycopg[binary]>=3.1",
     "pgvector>=0.3.0",
+
+    # ── extras 흡수 (XGEN 은 기능을 옵션으로 두지 않는다) ──────────────
+    # 예전에는 소비자가 xgen-agent-runtime[docs,ssh,browser] 처럼 태그를
+    # 붙여야 켜졌다. 붙이는 걸 잊은 배포에서는 도구가 조용히 사라진다 —
+    # 있어야 할 기능이 '없는 것'이 되는 실패는 원인을 찾기 가장 어렵다.
+    # qdrant(벡터 메모리) · browser(an-web) · docs(edit2docs) · ssh
+    "qdrant-client>=1.12.0",
+    "xgen-an-web>=0.11.0; python_version >= '3.12'",
+    "xgen-edit2docs>=0.16.0",
+    "asyncssh>=2.14",
 ]
 
 # Optional dev tooling — `pip install xgen-agent-runtime[dev]` for tests
 # and lint. End-users never need these; they stay as an extras group
 # so the runtime install footprint isn't bloated by pytest/ruff.
 [project.optional-dependencies]
-qdrant = ["qdrant-client>=1.12.0"]
+# 기능 extras(qdrant/browser/docs/ssh)는 core 로 흡수했다. dev 만 남긴다 —
+# 테스트·린트 도구를 프로덕션 이미지에 넣을 이유가 없다.
 # Browser* built-ins — an-web semantic web engine (embedded V8; needs
 # Python >= 3.12 and glibc, so it stays out of the core install).
-browser = [
-    "xgen-an-web>=0.10.0; python_version >= '3.12'",
-]
 # Doc* built-ins — edit2docs document engine (docx/xlsx/pptx).
-docs = [
-    "xgen-edit2docs>=0.15.0",
-]
 # Ssh* built-ins — remote command/SFTP over SSH. Pure-async (asyncssh),
 # lazy-imported so the core install stays lean.
-ssh = [
-    "asyncssh>=2.14",
-]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
