@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "2.66.1"
+version = "2.67.0"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -79,7 +79,7 @@ dependencies = [
     # qdrant(벡터 메모리) · browser(an-web) · docs(edit2docs) · ssh
     "qdrant-client>=1.12.0",
     "xgen-an-web>=0.11.0; python_version >= '3.12'",
-    "xgen-edit2docs>=0.16.1",
+    "xgen-edit2docs>=0.17.0",
     "asyncssh>=2.14",
 ]
 
