@@ -18,13 +18,13 @@ import json
 import tempfile
 from pathlib import Path
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     NoteDraft,
     NotePatch,
     Scope,
 )
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
 
 def _run(coro):
@@ -266,7 +266,7 @@ def test_snapshot_returns_full_in_memory_view_without_disk_dump():
 
 
 def test_set_hooks_updates_descriptions_on_next_refresh():
-    from geny_executor.memory.provider import MemoryHooks
+    from xgen_agent_runtime.memory.provider import MemoryHooks
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)

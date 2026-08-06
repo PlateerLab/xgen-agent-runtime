@@ -1,6 +1,6 @@
 # EnvironmentManifest
 
-> Status: current for geny-executor 2.1.0.
+> Status: current for xgen-agent-runtime 2.1.0.
 
 A pipeline is fully described by an `EnvironmentManifest` — a serialisable, diffable JSON artifact that names every stage, picks one strategy per slot, and pins config values. Loading the manifest reconstructs the pipeline deterministically.
 
@@ -9,7 +9,7 @@ This is the **recommended way to build pipelines for production hosts**. The flu
 ## Quick start
 
 ```python
-from geny_executor import (
+from xgen_agent_runtime import (
     Pipeline,
     CredentialBundle,
     ProviderCredentials,
@@ -94,7 +94,7 @@ One entry per stage. Order matches the canonical 1–21. Fields:
 
 | Field | Notes |
 |---|---|
-| `built_in` | Names from `geny_executor.tools.built_in.BUILT_IN_TOOL_CLASSES`. `["*"]` registers every shipped tool. |
+| `built_in` | Names from `xgen_agent_runtime.tools.built_in.BUILT_IN_TOOL_CLASSES`. `["*"]` registers every shipped tool. |
 | `external` | Names resolved against `adhoc_providers` passed to `Pipeline.from_manifest_async`. The first provider that knows the name wins. |
 | `mcp_servers` | `MCPServerConfig` entries for host-attached MCP servers (transport + url/command + env). |
 | `core_overrides` | `{name: bool}` — flips a tool between **core** (schema sent to the LLM on every request) and **deferred** (registered but only discoverable/activatable via `ToolSearch`). Defaults: `built_in` → core, `external` / provider / MCP tools → deferred. A trailing `*` matches by prefix (`"mcp__github__*": true` promotes a whole server); exact keys beat wildcards. When any deferred tool exists, `ToolSearch` is auto-registered as core so the discovery path is never stranded. |
@@ -129,7 +129,7 @@ The single-source-of-truth rule lives in `core/pipeline.py:_validate_manifest_pr
 A built pipeline tracks the manifest it came from. `core/mutation.py` exposes `PipelineMutator` which can:
 
 ```python
-from geny_executor import PipelineMutator
+from xgen_agent_runtime import PipelineMutator
 
 mut = PipelineMutator(pipeline)
 record = await mut.swap_strategy(stage_order=2, slot_name="loader", impl="vector_search")

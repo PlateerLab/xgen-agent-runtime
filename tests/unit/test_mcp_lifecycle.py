@@ -18,20 +18,20 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.core.environment import EnvironmentManifest, ToolsSnapshot
+from xgen_agent_runtime.core.environment import EnvironmentManifest, ToolsSnapshot
 from tests._fixtures.manifest_entries import required_stage_entries
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.tools.base import Tool, ToolContext
-from geny_executor.tools.mcp.state import MCPConnectionState
-from geny_executor.tools.mcp.adapter import MCPToolAdapter
-from geny_executor.tools.mcp.errors import MCPConnectionError
-from geny_executor.tools.mcp.manager import (
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.tools.base import Tool, ToolContext
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.adapter import MCPToolAdapter
+from xgen_agent_runtime.tools.mcp.errors import MCPConnectionError
+from xgen_agent_runtime.tools.mcp.manager import (
     MCPManager,
     MCPServerConfig,
     MCPServerConnection,
     _normalize_mcp_result,
 )
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ── Helpers ──────────────────────────────────────────────
@@ -317,7 +317,7 @@ class TestMCPManagerOAuth:
 
     @pytest.mark.asyncio
     async def test_start_oauth_authorizes_injects_token_reconnects(self, monkeypatch):
-        from geny_executor.tools.mcp.oauth import OAuthAuthConfig, OAuthToken
+        from xgen_agent_runtime.tools.mcp.oauth import OAuthAuthConfig, OAuthToken
 
         cfg = OAuthAuthConfig(
             client_id="c",
@@ -357,7 +357,7 @@ class TestMCPManagerOAuth:
 
     @pytest.mark.asyncio
     async def test_start_oauth_error_is_structured(self):
-        from geny_executor.tools.mcp.oauth import OAuthAuthConfig
+        from xgen_agent_runtime.tools.mcp.oauth import OAuthAuthConfig
 
         cfg = OAuthAuthConfig(
             client_id="c",
@@ -381,7 +381,7 @@ class TestMCPManagerOAuth:
     @pytest.mark.asyncio
     async def test_connect_injects_cached_bearer_token(self, monkeypatch):
         """A cached, non-expired token is reused on connect (oauth.py wired)."""
-        from geny_executor.tools.mcp.oauth import OAuthToken
+        from xgen_agent_runtime.tools.mcp.oauth import OAuthToken
 
         class _CachedFlow:
             def load_cached_token(self, name):
@@ -402,8 +402,8 @@ class TestMCPManagerOAuth:
 
     @pytest.mark.asyncio
     async def test_mcp_auth_tool_surfaces_status(self):
-        from geny_executor.tools.base import ToolContext
-        from geny_executor.tools.built_in.mcp_wrapper_tools import McpAuthTool
+        from xgen_agent_runtime.tools.base import ToolContext
+        from xgen_agent_runtime.tools.built_in.mcp_wrapper_tools import McpAuthTool
 
         class _Mgr:
             async def start_oauth(self, server):
@@ -679,7 +679,7 @@ class TestMcpSdkV2Compat:
 
     def test_resolver_prefers_v1_name_then_v2(self, monkeypatch):
         import mcp.client.streamable_http as shttp_mod
-        from geny_executor.tools.mcp.manager import _resolve_streamable_http_client
+        from xgen_agent_runtime.tools.mcp.manager import _resolve_streamable_http_client
 
         sentinel_v1 = lambda *a, **k: "v1"  # noqa: E731
         monkeypatch.setattr(shttp_mod, "streamablehttp_client", sentinel_v1,
@@ -694,7 +694,7 @@ class TestMcpSdkV2Compat:
         assert _resolve_streamable_http_client() is streamable_http_client
 
     def test_factory_v1_passes_headers_kw(self):
-        from geny_executor.tools.mcp.manager import _streamable_factory
+        from xgen_agent_runtime.tools.mcp.manager import _streamable_factory
 
         calls = {}
         def streamablehttp_client(url, headers=None):
@@ -706,7 +706,7 @@ class TestMcpSdkV2Compat:
 
     def test_factory_v2_builds_http_client_for_headers(self, monkeypatch):
         import mcp.client.streamable_http as shttp_mod
-        from geny_executor.tools.mcp.manager import _streamable_factory
+        from xgen_agent_runtime.tools.mcp.manager import _streamable_factory
 
         built = {}
         def create_mcp_http_client(headers=None):

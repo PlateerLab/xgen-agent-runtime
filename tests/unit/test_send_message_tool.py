@@ -6,13 +6,13 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.channels import (
+from xgen_agent_runtime.channels import (
     SendMessageChannel,
     SendMessageChannelRegistry,
     StdoutSendMessageChannel,
 )
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES, SendMessageTool
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, SendMessageTool
 
 
 def test_registered():

@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.llm_client import BaseClient, ClientRegistry
+from xgen_agent_runtime.llm_client import BaseClient, ClientRegistry
 
 
 def test_available_lists_four_builtins():

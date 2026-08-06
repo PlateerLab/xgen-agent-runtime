@@ -23,21 +23,21 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.hooks import HookConfig, HookEvent, HookOutcome, HookRunner
-from geny_executor.permission.types import (
+from xgen_agent_runtime.hooks import HookConfig, HookEvent, HookOutcome, HookRunner
+from xgen_agent_runtime.permission.types import (
     PermissionBehavior,
     PermissionPosture,
     PermissionRule,
     PermissionSource,
 )
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.stages.s15_hitl.interface import (
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.stages.s15_hitl.interface import (
     HITL_HISTORY_KEY,
     HITL_LAST_DECISION_KEY,
 )
-from geny_executor.stages.s15_hitl.types import HITLDecision, HITLRequest
-from geny_executor.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.stages.s15_hitl.types import HITLDecision, HITLRequest
+from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -436,8 +436,8 @@ class _CapturingExecutor:
 class TestStagePropagation:
     @pytest.mark.asyncio
     async def test_stage_propagates_posture_and_requester(self):
-        from geny_executor.core.state import PipelineState
-        from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
         requester = _StubRequester()
         stage_ctx = ToolContext(session_id="s")
@@ -463,8 +463,8 @@ class TestStagePropagation:
 
     @pytest.mark.asyncio
     async def test_stage_omits_attrs_when_unset(self):
-        from geny_executor.core.state import PipelineState
-        from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
         executor = _CapturingExecutor()
         stage = ToolStage(registry=_registry_with(_RecordingTool()), executor=executor)

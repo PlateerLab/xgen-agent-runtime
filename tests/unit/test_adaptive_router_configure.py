@@ -10,9 +10,9 @@ Audit §1-2 found two problems in this router:
 
 from __future__ import annotations
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s06_api.artifact.default.router import AdaptiveModelRouter
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s06_api.artifact.default.router import AdaptiveModelRouter
 
 
 def _state(

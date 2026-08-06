@@ -24,9 +24,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.llm_client._cli_runtime import CLIProcessRunner
-from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.llm_client._cli_runtime import CLIProcessRunner
+from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
 FAKE_CLAUDE = str((Path(__file__).resolve().parents[2] / "_fixtures" / "fake_claude.py"))
 

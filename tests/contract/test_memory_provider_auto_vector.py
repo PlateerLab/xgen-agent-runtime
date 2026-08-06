@@ -15,13 +15,13 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from geny_executor.memory.embedding import LocalHashEmbeddingClient
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.embedding import LocalHashEmbeddingClient
+from xgen_agent_runtime.memory.provider import (
     NoteDraft,
     NotePatch,
     Scope,
 )
-from geny_executor.memory.providers import FileMemoryProvider
+from xgen_agent_runtime.memory.providers import FileMemoryProvider
 
 
 async def _build_provider(root: Path) -> FileMemoryProvider:
@@ -100,7 +100,7 @@ class TestAutoVectorOnWrite:
         self, tmp_path: Path
     ) -> None:
         # Hand-rolled provider that injects a failing indexer.
-        from geny_executor.memory.providers.file.notes_store import (
+        from xgen_agent_runtime.memory.providers.file.notes_store import (
             _FilesystemNotesStore,
         )
 

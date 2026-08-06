@@ -16,13 +16,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.llm_client import BaseClient, ClientCapabilities
-from geny_executor.llm_client.types import APIResponse, ContentBlock
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def test_fresh_state_has_null_llm_client():

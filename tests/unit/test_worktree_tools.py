@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import (
     BUILT_IN_TOOL_CLASSES,
     EnterWorktreeTool,
     ExitWorktreeTool,

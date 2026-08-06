@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 from types import SimpleNamespace
 
 
-from geny_executor.llm_client import AnthropicClient
-from geny_executor.llm_client.base import BaseClient
+from xgen_agent_runtime.llm_client import AnthropicClient
+from xgen_agent_runtime.llm_client.base import BaseClient
 
 from tests.llm_client.conformance.harness import ConformanceTestSuite
 

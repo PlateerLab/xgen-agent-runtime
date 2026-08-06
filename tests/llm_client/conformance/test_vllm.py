@@ -11,8 +11,8 @@ import pytest
 
 pytest.importorskip("openai")
 
-from geny_executor.llm_client.vllm import VLLMClient  # noqa: E402
-from geny_executor.llm_client.base import BaseClient  # noqa: E402
+from xgen_agent_runtime.llm_client.vllm import VLLMClient  # noqa: E402
+from xgen_agent_runtime.llm_client.base import BaseClient  # noqa: E402
 
 from tests.llm_client.conformance.harness import ConformanceTestSuite  # noqa: E402
 
@@ -43,7 +43,7 @@ class TestVLLMConformance(ConformanceTestSuite):
         assert client.supports("tool_choice") is False
 
     def test_vllm_requires_base_url(self) -> None:
-        from geny_executor.llm_client.vllm import VLLMClient as V
+        from xgen_agent_runtime.llm_client.vllm import VLLMClient as V
         with pytest.raises(ValueError):
             V(base_url=None)
 

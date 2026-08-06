@@ -4,8 +4,8 @@ Regression: non-stream `--print --output-format json` carried NO prompt (not in
 stdin, not in argv) → CLI "input must be provided". Streaming worked. Now the
 non-stream path appends the prompt as the trailing positional argument.
 """
-from geny_executor.llm_client.base import APIRequest
-from geny_executor.llm_client.translators._cli import (
+from xgen_agent_runtime.llm_client.base import APIRequest
+from xgen_agent_runtime.llm_client.translators._cli import (
     claude_code_argv, flatten_messages_to_prompt,
 )
 

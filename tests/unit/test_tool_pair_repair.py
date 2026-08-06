@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.message_repair import (
+from xgen_agent_runtime.core.message_repair import (
     repair_dangling_tool_calls,
     strip_leading_orphan_tool_results,
 )
@@ -80,8 +80,8 @@ class TestStripLeadingOrphans:
 class TestCompactorBoundary:
     @pytest.mark.asyncio
     async def test_truncate_never_starts_on_orphan_tool_result(self):
-        from geny_executor.core.state import PipelineState
-        from geny_executor.stages.s02_context.artifact.default.compactors import (
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
             TruncateCompactor,
         )
 

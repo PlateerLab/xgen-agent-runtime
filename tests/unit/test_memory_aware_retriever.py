@@ -15,17 +15,17 @@ from typing import List
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.memory.provider import (
     Importance,
     MemoryHooks,
     NoteDraft,
     Scope,
     Turn,
 )
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
-from geny_executor.memory.retriever import MemoryAwareRetriever
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever
 
 
 def _state(query: str, session_id: str = "sess-test") -> PipelineState:

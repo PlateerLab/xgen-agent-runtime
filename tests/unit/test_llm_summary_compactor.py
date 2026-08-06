@@ -7,11 +7,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.state import PipelineState
-from geny_executor.llm_client import BaseClient, ClientCapabilities
-from geny_executor.llm_client.types import APIResponse, ContentBlock
-from geny_executor.stages.s02_context.artifact.default.compactors import (
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
     LLMSummaryCompactor,
     SummaryCompactor,
 )

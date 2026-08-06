@@ -8,9 +8,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.registry import ToolRegistry
-from geny_executor.tools.adhoc import (
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.adhoc import (
     AdhocTool,
     AdhocToolDefinition,
     AdhocToolFactory,
@@ -20,9 +20,9 @@ from geny_executor.tools.adhoc import (
     CompositeToolConfig,
     CompositeStep,
 )
-from geny_executor.tools.composer import ToolComposer, ToolPreset
-from geny_executor.tools.scope import ToolScope, ToolScopeRule, ToolScopeManager
-from geny_executor.tools.sandbox import ToolSandbox, SandboxConfig, SandboxPolicy
+from xgen_agent_runtime.tools.composer import ToolComposer, ToolPreset
+from xgen_agent_runtime.tools.scope import ToolScope, ToolScopeRule, ToolScopeManager
+from xgen_agent_runtime.tools.sandbox import ToolSandbox, SandboxConfig, SandboxPolicy
 
 
 # ── Helpers ──────────────────────────────────────────────

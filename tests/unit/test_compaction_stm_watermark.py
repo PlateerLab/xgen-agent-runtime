@@ -6,7 +6,7 @@ be remapped so recording doesn't silently stop until the list regrows.
 
 from __future__ import annotations
 
-from geny_executor.core.compaction import (
+from xgen_agent_runtime.core.compaction import (
     _STATE_LAST_RECORDED,
     reconcile_recorded_index,
 )
@@ -68,9 +68,9 @@ def test_truncate_compactor_keeps_recording_after_shrink():
     points such that the newest message is still recordable."""
     import asyncio
 
-    from geny_executor.core.compaction import run_compaction
-    from geny_executor.core.state import PipelineState
-    from geny_executor.stages.s02_context.artifact.default.compactors import (
+    from xgen_agent_runtime.core.compaction import run_compaction
+    from xgen_agent_runtime.core.state import PipelineState
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
         TruncateCompactor,
     )
 

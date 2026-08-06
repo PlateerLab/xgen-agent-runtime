@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.llm_client.base import BaseClient, ClientCapabilities
-from geny_executor.llm_client.types import APIRequest, APIResponse, ContentBlock
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
 
 
 class _EchoClient(BaseClient):

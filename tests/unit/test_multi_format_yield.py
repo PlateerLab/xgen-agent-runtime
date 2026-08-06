@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState, TokenUsage
-from geny_executor.stages.s21_yield import (
+from xgen_agent_runtime.core.state import PipelineState, TokenUsage
+from xgen_agent_runtime.stages.s21_yield import (
     MultiFormatFormatter,
     YieldStage,
     build_markdown,

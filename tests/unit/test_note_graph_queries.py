@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     NoteGraph,
     NoteMeta,

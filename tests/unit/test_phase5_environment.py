@@ -16,16 +16,16 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentManager,
     EnvironmentResolver,
     EnvironmentSanitizer,
     ToolsSnapshot,
 )
-from geny_executor.core.diff import DiffEntry, EnvironmentDiff
-from geny_executor.core.snapshot import PipelineSnapshot, StageSnapshot
-from geny_executor.core.presets import PresetManager
+from xgen_agent_runtime.core.diff import DiffEntry, EnvironmentDiff
+from xgen_agent_runtime.core.snapshot import PipelineSnapshot, StageSnapshot
+from xgen_agent_runtime.core.presets import PresetManager
 
 
 # ── Fixtures ──────────────────────────────────────────────

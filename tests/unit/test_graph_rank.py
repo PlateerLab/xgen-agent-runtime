@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from geny_executor.memory.graph_rank import personalized_pagerank
+from xgen_agent_runtime.memory.graph_rank import personalized_pagerank
 
 
 def _edges(*pairs):

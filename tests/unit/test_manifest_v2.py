@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     EnvironmentManifest,
     HostSelections,
     ModelConfig,
@@ -30,9 +30,9 @@ from geny_executor import (
     StageManifestEntry,
     create_stage,
 )
-from geny_executor.core.environment import MANIFEST_VERSION
-from geny_executor.core.snapshot import PipelineSnapshot, StageSnapshot
-from geny_executor.stages.s06_api.artifact.default.providers import MockProvider
+from xgen_agent_runtime.core.environment import MANIFEST_VERSION
+from xgen_agent_runtime.core.snapshot import PipelineSnapshot, StageSnapshot
+from xgen_agent_runtime.stages.s06_api.artifact.default.providers import MockProvider
 
 
 # ── StageSnapshot v2 ───────────────────────────────────────────
@@ -504,7 +504,7 @@ def test_blank_manifest_rebuild_uses_real_provider_with_supplied_api_key():
     convenience kwarg). ``_resolve_llm_client`` builds an
     :class:`AnthropicClient` from that bundle on demand.
     """
-    from geny_executor.llm_client import AnthropicClient
+    from xgen_agent_runtime.llm_client import AnthropicClient
 
     m = EnvironmentManifest.blank_manifest("Blank")
     rebuilt = Pipeline.from_manifest(m, api_key="sk-test-key")

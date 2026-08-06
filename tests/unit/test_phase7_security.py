@@ -12,13 +12,13 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
-from geny_executor.security import SSRFError, validate_url, is_safe_url
-from geny_executor.security.script_sandbox import (
+from xgen_agent_runtime.security import SSRFError, validate_url, is_safe_url
+from xgen_agent_runtime.security.script_sandbox import (
     validate_script,
     check_script,
     ScriptSecurityError,
 )
-from geny_executor.security.import_validator import (
+from xgen_agent_runtime.security.import_validator import (
     validate_import,
     check_import,
     ImportValidationError,

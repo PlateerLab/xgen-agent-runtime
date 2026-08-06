@@ -7,15 +7,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s06_api.retry import NoRetry
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s06_api.retry import NoRetry
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 # Think imports
-from geny_executor.stages.s08_think import (
+from xgen_agent_runtime.stages.s08_think import (
     ThinkStage,
     PassthroughProcessor,
     ExtractAndStoreProcessor,
@@ -25,7 +25,7 @@ from geny_executor.stages.s08_think import (
 )
 
 # Agent imports
-from geny_executor.stages.s12_agent import (
+from xgen_agent_runtime.stages.s12_agent import (
     AgentStage,
     SingleAgentOrchestrator,
     DelegateOrchestrator,
@@ -33,7 +33,7 @@ from geny_executor.stages.s12_agent import (
 )
 
 # Evaluate imports
-from geny_executor.stages.s14_evaluate import (
+from xgen_agent_runtime.stages.s14_evaluate import (
     EvaluateStage,
     SignalBasedEvaluation,
     CriteriaBasedEvaluation,
@@ -366,7 +366,7 @@ async def test_no_scorer_returns_one():
 @pytest.mark.asyncio
 async def test_loop_respects_evaluate_complete():
     """LoopStage respects Stage 12's 'complete' decision."""
-    from geny_executor.stages.s16_loop import LoopStage, StandardLoopController
+    from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController
 
     stage = LoopStage(StandardLoopController(max_turns=50))
     state = PipelineState()
@@ -379,7 +379,7 @@ async def test_loop_respects_evaluate_complete():
 @pytest.mark.asyncio
 async def test_loop_respects_evaluate_error():
     """LoopStage respects Stage 12's 'error' decision."""
-    from geny_executor.stages.s16_loop import LoopStage, StandardLoopController
+    from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController
 
     stage = LoopStage(StandardLoopController(max_turns=50))
     state = PipelineState()
@@ -392,7 +392,7 @@ async def test_loop_respects_evaluate_error():
 @pytest.mark.asyncio
 async def test_loop_overrides_continue_with_controller():
     """LoopStage applies controller logic when upstream says 'continue'."""
-    from geny_executor.stages.s16_loop import LoopStage, StandardLoopController
+    from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController
 
     stage = LoopStage(StandardLoopController(max_turns=50))
     state = PipelineState()

@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.core.shared_keys import SharedKeys
-from geny_executor.core.state import PipelineState
-from geny_executor.llm_client.credentials import CredentialBundle, ProviderCredentials
-from geny_executor.stages.s12_agent.subagent_type import (
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.core.shared_keys import SharedKeys
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.llm_client.credentials import CredentialBundle, ProviderCredentials
+from xgen_agent_runtime.stages.s12_agent.subagent_type import (
     SubagentTypeDescriptor,
     SubagentTypeOrchestrator,
     SubagentTypeRegistry,

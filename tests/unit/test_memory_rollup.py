@@ -1,6 +1,6 @@
 """MemoryRollup — semantic rolling digest (2.16.0)."""
 import pytest
-from geny_executor.memory.rollup import (
+from xgen_agent_runtime.memory.rollup import (
     MemoryRollup, build_segment_instruction, PRESERVE_CLAUSE,
 )
 
@@ -110,7 +110,7 @@ class _ProviderWithNotes:
 
 @pytest.mark.asyncio
 async def test_evergreen_merges_current_and_recent_then_writes_pinned_critical():
-    from geny_executor.memory.rollup import EVERGREEN_FILENAME, EVERGREEN_CATEGORY
+    from xgen_agent_runtime.memory.rollup import EVERGREEN_FILENAME, EVERGREEN_CATEGORY
     stm = _STM([], summary="## Summary\n사장님 prefers rhythm games")
     notes = _Notes(pinned="## Identity\nGeny, a VTuber")
     captured = {}

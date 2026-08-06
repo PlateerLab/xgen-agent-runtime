@@ -11,12 +11,12 @@ import asyncio
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s12_agent.subagent_type import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s12_agent.subagent_type import (
     SubagentTypeDescriptor,
     SubagentTypeRegistry,
 )
-from geny_executor.stages.s12_agent.persistent_subagent import (
+from xgen_agent_runtime.stages.s12_agent.persistent_subagent import (
     SubAgentInbox,
     SubAgentManager,
 )
@@ -198,7 +198,7 @@ async def test_on_event_callback_fires():
 
 def test_inbox_bounded():
     inbox = SubAgentInbox(max_per_owner=3)
-    from geny_executor.stages.s12_agent.persistent_subagent import InboxMessage
+    from xgen_agent_runtime.stages.s12_agent.persistent_subagent import InboxMessage
 
     for i in range(5):
         inbox.deliver(InboxMessage(id=str(i), owner="o", sender="s", kind="message", body=str(i)))

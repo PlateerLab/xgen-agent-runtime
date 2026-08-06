@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState, TokenUsage
-from geny_executor.stages.s20_persist import (
+from xgen_agent_runtime.core.state import PipelineState, TokenUsage
+from xgen_agent_runtime.stages.s20_persist import (
     CheckpointNotFound,
     CheckpointRecord,
     FilePersister,
@@ -42,7 +42,7 @@ def _seed_state() -> PipelineState:
 class TestStateFromPayload:
     def test_round_trip_full(self):
         original = _seed_state()
-        from geny_executor.stages.s20_persist.artifact.default.stage import (
+        from xgen_agent_runtime.stages.s20_persist.artifact.default.stage import (
             _build_payload,
         )
 

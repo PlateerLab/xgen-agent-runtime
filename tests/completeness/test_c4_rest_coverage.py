@@ -10,7 +10,7 @@ domain logic.
 State: **red** until Phase 4 lands the executor-web mirror routers.
 This file lives in the executor repo as the *contract* the web layer
 must satisfy. The actual HTTP-level test runs in
-`geny-executor-web/backend/tests/` and pulls this manifest as input.
+`xgen-agent-runtime-web/backend/tests/` and pulls this manifest as input.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ PHASE_REASON = (
 )
 
 # The endpoint set the web mirror must implement. Any mismatch with
-# `geny-executor-web/backend/app/routers/memory.py` is a Phase 4 bug.
+# `xgen-agent-runtime-web/backend/app/routers/memory.py` is a Phase 4 bug.
 EXPECTED_ROUTES = [
     ("GET", "/api/sessions/{sid}/memory/descriptor"),
     ("GET", "/api/sessions/{sid}/memory"),

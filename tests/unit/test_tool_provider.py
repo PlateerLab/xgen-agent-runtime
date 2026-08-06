@@ -11,15 +11,15 @@ from typing import List
 
 import pytest
 
-from geny_executor.tools.base import Tool, ToolResult
+from xgen_agent_runtime.tools.base import Tool, ToolResult
 from tests._fixtures.manifest_entries import required_stage_entries
-from geny_executor.tools.provider import (
+from xgen_agent_runtime.tools.provider import (
     BuiltInToolProvider,
     ToolProvider,
     register_providers,
     shutdown_providers,
 )
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ class TestABC:
 
 class TestBuiltInProvider:
     def test_default_returns_every_builtin(self):
-        from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES
+        from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
 
         p = BuiltInToolProvider()
         names = [t.name for t in p.list_tools()]
@@ -255,8 +255,8 @@ class TestPipelineIntegration:
     @pytest.mark.asyncio
     async def test_providers_register_through_manifest(self):
         """End-to-end: tool_providers kwarg populates pipeline.tool_registry."""
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         manifest = EnvironmentManifest(stages=required_stage_entries())
         pipeline = await Pipeline.from_manifest_async(
@@ -277,8 +277,8 @@ class TestPipelineIntegration:
 
     @pytest.mark.asyncio
     async def test_shutdown_tool_providers_clears_list(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         manifest = EnvironmentManifest(stages=required_stage_entries())
         trace: List[str] = []
@@ -293,8 +293,8 @@ class TestPipelineIntegration:
 
     @pytest.mark.asyncio
     async def test_no_providers_keeps_pipeline_empty(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         manifest = EnvironmentManifest(stages=required_stage_entries())
         pipeline = await Pipeline.from_manifest_async(manifest)

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from geny_executor.core.state import PipelineState, TokenUsage
-from geny_executor.stages.s20_persist import (
+from xgen_agent_runtime.core.state import PipelineState, TokenUsage
+from xgen_agent_runtime.stages.s20_persist import (
     CHECKPOINT_HISTORY_KEY,
     CheckpointRecord,
     EveryNTurnsFrequency,

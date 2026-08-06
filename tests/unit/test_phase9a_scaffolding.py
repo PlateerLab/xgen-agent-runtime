@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s11_tool_review import ToolReviewStage
-from geny_executor.stages.s13_task_registry import TaskRegistryStage
-from geny_executor.stages.s15_hitl import HITLStage
-from geny_executor.stages.s19_summarize import SummarizeStage
-from geny_executor.stages.s20_persist import PersistStage
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s11_tool_review import ToolReviewStage
+from xgen_agent_runtime.stages.s13_task_registry import TaskRegistryStage
+from xgen_agent_runtime.stages.s15_hitl import HITLStage
+from xgen_agent_runtime.stages.s19_summarize import SummarizeStage
+from xgen_agent_runtime.stages.s20_persist import PersistStage
 
 
 # All five still report the same identity; only the bodies have grown.
@@ -61,7 +61,7 @@ class TestRegistration:
     """Sanity: S9a.3 wired the scaffolds into STAGE_MODULES."""
 
     def test_stage_modules_now_21_entries(self):
-        from geny_executor.core.artifact import STAGE_MODULES
+        from xgen_agent_runtime.core.artifact import STAGE_MODULES
 
         assert len(STAGE_MODULES) == 21
         # Each new order points at its scaffolding module.
@@ -72,12 +72,12 @@ class TestRegistration:
         assert STAGE_MODULES[20] == "s20_persist"
 
     def test_scaffolds_importable_via_artifact(self):
-        from geny_executor.stages.s11_tool_review.artifact.default import Stage
+        from xgen_agent_runtime.stages.s11_tool_review.artifact.default import Stage
 
         assert Stage is ToolReviewStage
 
     def test_create_stage_resolves_scaffolds(self):
-        from geny_executor.core.artifact import create_stage
+        from xgen_agent_runtime.core.artifact import create_stage
 
         s = create_stage("s11_tool_review")
         assert isinstance(s, ToolReviewStage)

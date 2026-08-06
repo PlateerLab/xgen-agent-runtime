@@ -1,6 +1,6 @@
 """Stage Uniformity Contract tests (E1.8).
 
-Every stage in geny-executor's 21-stage pipeline must satisfy the same
+Every stage in xgen-agent-runtime's 21-stage pipeline must satisfy the same
 introspection and configuration contract, regardless of slot- vs. chain-
 based architecture. These tests pin that contract so regressions fail fast.
 
@@ -31,37 +31,37 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     ConfigSchema,
     SlotChain,
     Stage,
     StageDescription,
     StrategySlot,
 )
-from geny_executor.tools.stage_binding import StageToolBinding
+from xgen_agent_runtime.tools.stage_binding import StageToolBinding
 
-from geny_executor.stages.s01_input.artifact.default.stage import InputStage
-from geny_executor.stages.s02_context.artifact.default.stage import ContextStage
-from geny_executor.stages.s03_system.artifact.default.stage import SystemStage
-from geny_executor.stages.s04_guard.artifact.default.stage import GuardStage
-from geny_executor.stages.s05_cache.artifact.default.stage import CacheStage
-from geny_executor.stages.s06_api.artifact.default.stage import APIStage
-from geny_executor.stages.s06_api.artifact.default.providers import MockProvider
-from geny_executor.stages.s07_token.artifact.default.stage import TokenStage
-from geny_executor.stages.s08_think.artifact.default.stage import ThinkStage
-from geny_executor.stages.s09_parse.artifact.default.stage import ParseStage
-from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
-from geny_executor.stages.s11_tool_review.artifact.default.stage import ToolReviewStage
-from geny_executor.stages.s12_agent.artifact.default.stage import AgentStage
-from geny_executor.stages.s13_task_registry.artifact.default.stage import TaskRegistryStage
-from geny_executor.stages.s14_evaluate.artifact.default.stage import EvaluateStage
-from geny_executor.stages.s15_hitl.artifact.default.stage import HITLStage
-from geny_executor.stages.s16_loop.artifact.default.stage import LoopStage
-from geny_executor.stages.s17_emit.artifact.default.stage import EmitStage
-from geny_executor.stages.s18_memory.artifact.default.stage import MemoryStage
-from geny_executor.stages.s19_summarize.artifact.default.stage import SummarizeStage
-from geny_executor.stages.s20_persist.artifact.default.stage import PersistStage
-from geny_executor.stages.s21_yield.artifact.default.stage import YieldStage
+from xgen_agent_runtime.stages.s01_input.artifact.default.stage import InputStage
+from xgen_agent_runtime.stages.s02_context.artifact.default.stage import ContextStage
+from xgen_agent_runtime.stages.s03_system.artifact.default.stage import SystemStage
+from xgen_agent_runtime.stages.s04_guard.artifact.default.stage import GuardStage
+from xgen_agent_runtime.stages.s05_cache.artifact.default.stage import CacheStage
+from xgen_agent_runtime.stages.s06_api.artifact.default.stage import APIStage
+from xgen_agent_runtime.stages.s06_api.artifact.default.providers import MockProvider
+from xgen_agent_runtime.stages.s07_token.artifact.default.stage import TokenStage
+from xgen_agent_runtime.stages.s08_think.artifact.default.stage import ThinkStage
+from xgen_agent_runtime.stages.s09_parse.artifact.default.stage import ParseStage
+from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
+from xgen_agent_runtime.stages.s11_tool_review.artifact.default.stage import ToolReviewStage
+from xgen_agent_runtime.stages.s12_agent.artifact.default.stage import AgentStage
+from xgen_agent_runtime.stages.s13_task_registry.artifact.default.stage import TaskRegistryStage
+from xgen_agent_runtime.stages.s14_evaluate.artifact.default.stage import EvaluateStage
+from xgen_agent_runtime.stages.s15_hitl.artifact.default.stage import HITLStage
+from xgen_agent_runtime.stages.s16_loop.artifact.default.stage import LoopStage
+from xgen_agent_runtime.stages.s17_emit.artifact.default.stage import EmitStage
+from xgen_agent_runtime.stages.s18_memory.artifact.default.stage import MemoryStage
+from xgen_agent_runtime.stages.s19_summarize.artifact.default.stage import SummarizeStage
+from xgen_agent_runtime.stages.s20_persist.artifact.default.stage import PersistStage
+from xgen_agent_runtime.stages.s21_yield.artifact.default.stage import YieldStage
 
 
 # ── Stage Factory ────────────────────────────────────────────────

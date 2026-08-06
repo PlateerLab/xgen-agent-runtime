@@ -2,7 +2,7 @@
 
 Cycle 20260420_7 / PR-2: ``Pipeline.from_manifest_async`` (and
 ``from_manifest``) now resolve ``manifest.tools.built_in`` names
-against :data:`geny_executor.tools.built_in.BUILT_IN_TOOL_CLASSES`,
+against :data:`xgen_agent_runtime.tools.built_in.BUILT_IN_TOOL_CLASSES`,
 so that consumers can opt into the framework's shipped Read / Write /
 Edit / Bash / Glob / Grep without reimplementing them.
 
@@ -31,11 +31,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.core.environment import EnvironmentManifest, ToolsSnapshot
+from xgen_agent_runtime.core.environment import EnvironmentManifest, ToolsSnapshot
 from tests._fixtures.manifest_entries import required_stage_entries
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ def _manifest(*, built_in: List[str] = (), external: List[str] = ()) -> Environm
 def test_built_in_tool_classes_map_covers_all_exports() -> None:
     """Every class exported from ``built_in`` should appear in the map.
     Prevents drift between ``__all__`` and the auto-register source."""
-    from geny_executor.tools import built_in as built_in_mod
+    from xgen_agent_runtime.tools import built_in as built_in_mod
 
     for cls_name in (
         "ReadTool",
@@ -153,7 +153,7 @@ def test_empty_list_registers_nothing() -> None:
 
 
 def test_unknown_name_warns_and_skips(caplog) -> None:
-    caplog.set_level(logging.WARNING, logger="geny_executor.core.pipeline")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline")
     manifest = _manifest(built_in=["Write", "Nonexistent"])
     pipeline = Pipeline.from_manifest(manifest)
 

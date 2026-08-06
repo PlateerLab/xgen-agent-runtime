@@ -15,14 +15,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-import geny_executor.llm_client._cli_runtime as rt
-from geny_executor.llm_client import (
+import xgen_agent_runtime.llm_client._cli_runtime as rt
+from xgen_agent_runtime.llm_client import (
     ClaudeCodeCLIClient,
     ContainerCLIRunner,
     SandboxHandle,
     build_container_cli_client,
 )
-from geny_executor.llm_client._cli_runtime import CLIBinaryNotFound
+from xgen_agent_runtime.llm_client._cli_runtime import CLIBinaryNotFound
 
 
 class FakeSandbox:

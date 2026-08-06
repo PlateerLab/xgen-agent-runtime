@@ -8,11 +8,11 @@ from typing import Any, Dict
 
 import pytest
 
-from geny_executor.stages.s10_tool.persistence import (
+from xgen_agent_runtime.stages.s10_tool.persistence import (
     TOOL_RESULTS_DIRNAME,
     maybe_persist_large_result,
 )
-from geny_executor.tools.base import ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.base import ToolCapabilities, ToolContext, ToolResult
 
 
 def _ctx(storage_path: str | None) -> ToolContext:
@@ -177,7 +177,7 @@ class TestFallbacks:
             raise OSError("disk full")
 
         monkeypatch.setattr(
-            "geny_executor.stages.s10_tool.persistence.os.makedirs",
+            "xgen_agent_runtime.stages.s10_tool.persistence.os.makedirs",
             _boom,
         )
         out = maybe_persist_large_result(
@@ -214,17 +214,17 @@ class TestFallbacks:
 # ─────────────────────────────────────────────────────────────────
 
 
-from geny_executor.stages.s10_tool import (  # noqa: E402
+from xgen_agent_runtime.stages.s10_tool import (  # noqa: E402
     ParallelExecutor,
     PartitionExecutor,
     SequentialExecutor,
     StreamingToolExecutor,
 )
-from geny_executor.stages.s10_tool.artifact.default.routers import (  # noqa: E402
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import (  # noqa: E402
     RegistryRouter,
 )
-from geny_executor.tools.base import Tool  # noqa: E402
-from geny_executor.tools.registry import ToolRegistry  # noqa: E402
+from xgen_agent_runtime.tools.base import Tool  # noqa: E402
+from xgen_agent_runtime.tools.registry import ToolRegistry  # noqa: E402
 
 
 class _FixedOutputTool(Tool):

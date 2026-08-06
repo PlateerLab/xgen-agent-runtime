@@ -2,13 +2,13 @@
 
 ## What changed
 
-### geny-executor 1.3.3
+### xgen-agent-runtime 1.3.3
 - `HostSelections` dataclass 신설 (hooks/skills/permissions 각각 `["*"]`/`[]`/이름 리스트)
 - `EnvironmentManifest.host_selections` 필드 추가 + serialize/deserialize 지원
 - `blank_manifest()`이 host_selections 기본값(`["*"]` × 3)을 명시적으로 세팅
 - `HostSelections.resolve(selection, available)` 헬퍼: 와일드카드/empty/literal 3-mode 해결
 - 프리-1.3.3 payload (host_selections 필드 없음)는 와일드카드 기본값으로 로드 → forward-compat
-- `geny_executor.HostSelections` top-level export
+- `xgen_agent_runtime.HostSelections` top-level export
 - 9개 신규 테스트 + 24개 기존 테스트 모두 통과
 
 ### Geny frontend
@@ -38,7 +38,7 @@
 
 ## Follow-ups
 
-1. **Geny pin bump**: Geny가 `geny-executor>=1.3.1,<1.4.0`이므로 1.3.3 자동 호환, 단 venv 재설치 필요
+1. **Geny pin bump**: Geny가 `xgen-agent-runtime>=1.3.1,<1.4.0`이므로 1.3.3 자동 호환, 단 venv 재설치 필요
 2. **Runtime enforcement (hooks/skills)**: env load 시 `host_selections.resolve()`로 host 레지스트리 필터링 — 별도 작업 (현재 schema와 UI만 in-place)
 3. **Permissions enforcement**: 미래 작업. UI 이미 forward-compat이므로 manifest schema 변경 없이 enforcement만 추가 가능
 4. **사용자 예고된 default 변경**: "나중에 몇 개 제외한 default" 적용 시점에 wildcard → literal list 전환 — schema는 이미 지원

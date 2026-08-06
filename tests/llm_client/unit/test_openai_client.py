@@ -25,13 +25,13 @@ import pytest
 
 openai_sdk = pytest.importorskip("openai")
 
-from geny_executor.core.config import ModelConfig  # noqa: E402
-from geny_executor.core.errors import ErrorCategory  # noqa: E402
-from geny_executor.llm_client.openai import (  # noqa: E402
+from xgen_agent_runtime.core.config import ModelConfig  # noqa: E402
+from xgen_agent_runtime.core.errors import ErrorCategory  # noqa: E402
+from xgen_agent_runtime.llm_client.openai import (  # noqa: E402
     OpenAIClient,
     _model_requires_max_completion_tokens,
 )
-from geny_executor.llm_client.types import APIRequest  # noqa: E402
+from xgen_agent_runtime.llm_client.types import APIRequest  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ async def test_send_heals_rename_and_emits_drift_event(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
 
-    with caplog.at_level(logging.WARNING, logger="geny_executor.llm_client.base"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.llm_client.base"):
         resp = await client.create_message(
             model_config=ModelConfig(model="o9-future", max_tokens=512),
             messages=[{"role": "user", "content": "x"}],
@@ -373,7 +373,7 @@ async def test_unhealable_stream_error_classified() -> None:
     client._client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
-    from geny_executor.core.errors import APIError
+    from xgen_agent_runtime.core.errors import APIError
 
     with pytest.raises(APIError) as ei:
         async for _ in client.create_message_stream(
@@ -418,7 +418,7 @@ async def test_streaming_response_raw_carries_provenance() -> None:
 
 
 def test_vllm_provenance_reports_vllm_provider_with_openai_sdk() -> None:
-    from geny_executor.llm_client.vllm import VLLMClient
+    from xgen_agent_runtime.llm_client.vllm import VLLMClient
 
     client = VLLMClient(base_url="http://localhost:8000/v1")
     prov = client._provenance()

@@ -26,15 +26,15 @@ import asyncio
 
 import pytest
 
-from geny_executor.memory.embedding.client import (
+from xgen_agent_runtime.memory.embedding.client import (
     EmbeddingError,
     category_for_http_status,
 )
-from geny_executor.memory.embedding.openai_compatible import (
+from xgen_agent_runtime.memory.embedding.openai_compatible import (
     OpenAICompatibleEmbeddingClient,
     _normalize_endpoint,
 )
-from geny_executor.memory.embedding.registry import (
+from xgen_agent_runtime.memory.embedding.registry import (
     create_embedding_client,
     register_embedding_provider,
     registered_embedding_providers,
@@ -187,7 +187,7 @@ def test_category_for_http_status(status, expected):
 
 
 def test_voyage_alias_still_matches_shared_classifier():
-    from geny_executor.memory.embedding.voyage import _category_for_status
+    from xgen_agent_runtime.memory.embedding.voyage import _category_for_status
 
     for status in (401, 429, 500, 404, 302):
         assert _category_for_status(status) == category_for_http_status(status)
@@ -223,7 +223,7 @@ class _StubClient:
 
     @property
     def descriptor(self):  # pragma: no cover - shape only
-        from geny_executor.memory.provider import EmbeddingDescriptor
+        from xgen_agent_runtime.memory.provider import EmbeddingDescriptor
 
         return EmbeddingDescriptor(provider="stub", model="m", dimension=3)
 
@@ -260,7 +260,7 @@ def test_register_and_create_by_name():
 
 def test_register_routes_through_memory_provider_factory(tmp_path):
     register_embedding_provider("host-svc", lambda **kw: _StubClient(**kw))
-    from geny_executor.memory.factory import MemoryProviderFactory
+    from xgen_agent_runtime.memory.factory import MemoryProviderFactory
 
     provider = MemoryProviderFactory().build(
         {

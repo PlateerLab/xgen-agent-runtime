@@ -10,15 +10,15 @@ this controller doesn't have. Both halves are pinned here.
 
 from __future__ import annotations
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s16_loop import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s16_loop import (
     IterationBudget,
     LoopStage,
     MultiDimensionalBudgetController,
     StandardLoopController,
     ToolCallBudget,
 )
-from geny_executor.stages.s16_loop.interface import LoopDecision
+from xgen_agent_runtime.stages.s16_loop.interface import LoopDecision
 
 
 def _state(*, iteration: int = 0, pending: bool = True, **overrides) -> PipelineState:

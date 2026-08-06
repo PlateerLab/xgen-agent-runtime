@@ -7,15 +7,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s06_api.retry import NoRetry
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s06_api.retry import NoRetry
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 # Emit imports
-from geny_executor.stages.s17_emit import (
+from xgen_agent_runtime.stages.s17_emit import (
     EmitStage,
     TextEmitter,
     CallbackEmitter,
@@ -24,13 +24,13 @@ from geny_executor.stages.s17_emit import (
 )
 
 # Presets
-from geny_executor.core.presets import PipelinePresets
+from xgen_agent_runtime.core.presets import PipelinePresets
 
 # Builder
-from geny_executor.core.builder import PipelineBuilder
+from xgen_agent_runtime.core.builder import PipelineBuilder
 
 # MCP
-from geny_executor.tools.mcp import MCPManager, MCPServerConfig, MCPToolAdapter
+from xgen_agent_runtime.tools.mcp import MCPManager, MCPServerConfig, MCPToolAdapter
 
 
 # ── Emit Stage ──
@@ -247,7 +247,7 @@ def test_mcp_manager_list_servers():
 async def test_mcp_manager_connect_fails_fast_for_bogus_command():
     """MCPManager surfaces a structured MCPConnectionError when the
     target server doesn't speak MCP (v0.22.0 fail-fast lifecycle)."""
-    from geny_executor.tools.mcp.errors import MCPConnectionError
+    from xgen_agent_runtime.tools.mcp.errors import MCPConnectionError
 
     manager = MCPManager()
     config = MCPServerConfig(name="test", command="echo")
@@ -263,7 +263,7 @@ async def test_mcp_manager_connect_fails_fast_for_bogus_command():
 @pytest.mark.asyncio
 async def test_mcp_tool_adapter():
     """MCPToolAdapter wraps MCP tool definition (no live connection needed)."""
-    from geny_executor.tools.mcp.manager import MCPServerConnection
+    from xgen_agent_runtime.tools.mcp.manager import MCPServerConnection
 
     config = MCPServerConfig(name="test", command="echo")
     conn = MCPServerConnection(config)

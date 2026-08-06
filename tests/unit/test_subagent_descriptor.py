@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.llm_client.credentials import CredentialBundle, ProviderCredentials
-from geny_executor.stages.s12_agent.subagent_type import (
+from xgen_agent_runtime.llm_client.credentials import CredentialBundle, ProviderCredentials
+from xgen_agent_runtime.stages.s12_agent.subagent_type import (
     SubAgentBuildContext,
     SubagentTypeDescriptor,
     SubagentTypeOrchestrator,
@@ -131,7 +131,7 @@ async def test_factory_receives_build_context() -> None:
     reg = SubagentTypeRegistry().register(desc)
     orch = SubagentTypeOrchestrator(reg)
 
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     state = PipelineState(session_id="sess-7")
     state.credentials = bundle
@@ -165,7 +165,7 @@ async def test_legacy_zero_arg_factory_still_works() -> None:
     reg = SubagentTypeRegistry().register(desc)
     orch = SubagentTypeOrchestrator(reg)
 
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     state = PipelineState(session_id="sess-l")
     state.delegate_requests = [{"agent_type": "legacy", "task": "noop"}]
@@ -194,7 +194,7 @@ async def test_result_metadata_carries_provider_and_parallel_flags() -> None:
     reg = SubagentTypeRegistry().register(desc)
     orch = SubagentTypeOrchestrator(reg)
 
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
     state = PipelineState(session_id="s")
     state.delegate_requests = [{"agent_type": "r", "task": "go"}]
     result = await orch.orchestrate(state)

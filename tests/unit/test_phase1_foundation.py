@@ -7,16 +7,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.core.schema import ConfigField, ConfigSchema
-from geny_executor.core.slot import StrategySlot
-from geny_executor.core.snapshot import PipelineSnapshot, StageSnapshot
-from geny_executor.core.mutation import (
+from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
+from xgen_agent_runtime.core.slot import StrategySlot
+from xgen_agent_runtime.core.snapshot import PipelineSnapshot, StageSnapshot
+from xgen_agent_runtime.core.mutation import (
     PipelineMutator,
     MutationKind,
 )
-from geny_executor.core.errors import MutationError, MutationLocked
-from geny_executor.core.stage import Stage, Strategy, StrategyInfo
-from geny_executor import Pipeline, PipelineConfig
+from xgen_agent_runtime.core.errors import MutationError, MutationLocked
+from xgen_agent_runtime.core.stage import Stage, Strategy, StrategyInfo
+from xgen_agent_runtime import Pipeline, PipelineConfig
 
 
 # ══════════════════════════════════════════════════════════
@@ -669,7 +669,7 @@ class TestMutationErrors:
         assert "locked" in str(err)
 
     def test_inheritance(self):
-        from geny_executor.core.errors import GenyExecutorError
+        from xgen_agent_runtime.core.errors import GenyExecutorError
 
         assert issubclass(MutationError, GenyExecutorError)
         assert issubclass(MutationLocked, GenyExecutorError)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from geny_executor.tools._sandbox import (
+from xgen_agent_runtime.tools._sandbox import (
     map_into_container,
     resolve_container_workdir,
 )

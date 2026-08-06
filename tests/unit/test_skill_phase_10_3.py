@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.skills.loader import SkillLoadError, parse_skill_file
-from geny_executor.skills.shell_blocks import (
+from xgen_agent_runtime.skills.loader import SkillLoadError, parse_skill_file
+from xgen_agent_runtime.skills.shell_blocks import (
     execute_blocks,
     is_trusted_source,
     parse_blocks,
 )
-from geny_executor.skills.skill_tool import SkillTool, _render_body
-from geny_executor.skills.types import Skill, SkillMetadata
-from geny_executor.tools.base import ToolContext
+from xgen_agent_runtime.skills.skill_tool import SkillTool, _render_body
+from xgen_agent_runtime.skills.types import Skill, SkillMetadata
+from xgen_agent_runtime.tools.base import ToolContext
 
 
 HAS_BASH = shutil.which("bash") is not None

@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.slash_commands import (
+from xgen_agent_runtime.slash_commands import (
     SlashCategory,
     SlashCommandRegistry,
     SlashContext,
 )
-from geny_executor.slash_commands.md_template import (
+from xgen_agent_runtime.slash_commands.md_template import (
     load_md_command,
     load_md_commands_into,
 )

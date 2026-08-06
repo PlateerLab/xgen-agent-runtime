@@ -16,11 +16,11 @@ from typing import List, Set, Tuple
 
 import pytest
 
-from geny_executor import EVENT_CATALOG_VERSION, EventTypes, known_event_types
-from geny_executor.events import PAYLOADS
-from geny_executor.memory.provider import MemoryEvent
+from xgen_agent_runtime import EVENT_CATALOG_VERSION, EventTypes, known_event_types
+from xgen_agent_runtime.events import PAYLOADS
+from xgen_agent_runtime.memory.provider import MemoryEvent
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "geny_executor"
+SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "xgen_agent_runtime"
 
 #: Dynamic emit sites the AST scan cannot resolve to a literal. Keep
 #: TINY and justified — every entry is a place where the event name is
@@ -191,12 +191,12 @@ class TestCatalogueShape:
         assert EVENT_CATALOG_VERSION >= 1
 
     def test_exported_from_package_root(self):
-        import geny_executor
+        import xgen_agent_runtime
 
-        assert geny_executor.EventTypes is EventTypes
-        assert "EventTypes" in geny_executor.__all__
-        assert "EVENT_CATALOG_VERSION" in geny_executor.__all__
-        assert "known_event_types" in geny_executor.__all__
+        assert xgen_agent_runtime.EventTypes is EventTypes
+        assert "EventTypes" in xgen_agent_runtime.__all__
+        assert "EVENT_CATALOG_VERSION" in xgen_agent_runtime.__all__
+        assert "known_event_types" in xgen_agent_runtime.__all__
 
 
 class TestStabilityPins:

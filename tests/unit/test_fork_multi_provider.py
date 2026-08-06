@@ -14,17 +14,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.llm_client.base import BaseClient, ClientCapabilities
-from geny_executor.llm_client.credentials import (
+from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.credentials import (
     CredentialBundle,
     ProviderCredentials,
 )
-from geny_executor.llm_client.types import APIResponse, ContentBlock
-from geny_executor.skills.fork import (
+from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+from xgen_agent_runtime.skills.fork import (
     ForkResult,
     make_credential_bundle_fork_runner,
 )
-from geny_executor.skills.types import Skill, SkillMetadata
+from xgen_agent_runtime.skills.types import Skill, SkillMetadata
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ async def test_runner_uses_skill_provider(monkeypatch: pytest.MonkeyPatch) -> No
     runner = make_credential_bundle_fork_runner(bundle)
 
     # Hijack ClientRegistry.get to return our recorder.
-    from geny_executor.llm_client.registry import ClientRegistry
+    from xgen_agent_runtime.llm_client.registry import ClientRegistry
 
     monkeypatch.setattr(
         ClientRegistry, "get", classmethod(lambda cls, p: _RecordingClient)
@@ -132,7 +132,7 @@ async def test_runner_falls_back_to_fallback_provider(monkeypatch: pytest.Monkey
     runner = make_credential_bundle_fork_runner(
         bundle, fallback_provider="anthropic",
     )
-    from geny_executor.llm_client.registry import ClientRegistry
+    from xgen_agent_runtime.llm_client.registry import ClientRegistry
 
     monkeypatch.setattr(
         ClientRegistry, "get", classmethod(lambda cls, p: _RecordingClient)
@@ -193,7 +193,7 @@ async def test_runner_uses_skill_model_override(monkeypatch: pytest.MonkeyPatch)
         "anthropic": ProviderCredentials(api_key="sk-a"),
     })
     runner = make_credential_bundle_fork_runner(bundle)
-    from geny_executor.llm_client.registry import ClientRegistry
+    from xgen_agent_runtime.llm_client.registry import ClientRegistry
 
     monkeypatch.setattr(
         ClientRegistry, "get", classmethod(lambda cls, p: _RecordingClient)

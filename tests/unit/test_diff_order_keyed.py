@@ -10,9 +10,9 @@ int ``order`` keys) now diff per order with stable
 
 from __future__ import annotations
 
-from geny_executor.core.diff import EnvironmentDiff
-from geny_executor.core.environment import EnvironmentManifest
-from geny_executor.core.manifest_factory import build_manifest
+from xgen_agent_runtime.core.diff import EnvironmentDiff
+from xgen_agent_runtime.core.environment import EnvironmentManifest
+from xgen_agent_runtime.core.manifest_factory import build_manifest
 
 
 def _entry(order, name, active=True, **extra):
@@ -121,7 +121,7 @@ class TestDriftAgainst:
         assert any(e.path == "stages[order=19]" for e in removed)
 
     def test_accepts_precomputed_catalog(self):
-        from geny_executor.core.introspection import introspect_all
+        from xgen_agent_runtime.core.introspection import introspect_all
 
         catalog = introspect_all()
         manifest = build_manifest("vtuber", provider="anthropic")

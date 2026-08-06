@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.composite import CompositeMemoryProvider, LayerRouting
-from geny_executor.memory.provider import Layer, MemoryProvider
-from geny_executor.memory.providers import FileMemoryProvider
+from xgen_agent_runtime.memory.composite import CompositeMemoryProvider, LayerRouting
+from xgen_agent_runtime.memory.provider import Layer, MemoryProvider
+from xgen_agent_runtime.memory.providers import FileMemoryProvider
 from tests.contract.memory_provider_contract import MemoryProviderContract
 
 

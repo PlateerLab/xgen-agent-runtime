@@ -28,7 +28,7 @@ GOLDEN_DATASET_PATH = "tests/completeness/fixtures/geny_golden/"
 
 def _provider_module_available() -> bool:
     try:
-        from geny_executor.memory.provider import MemoryProvider  # noqa: F401
+        from xgen_agent_runtime.memory.provider import MemoryProvider  # noqa: F401
 
         return True
     except ImportError:

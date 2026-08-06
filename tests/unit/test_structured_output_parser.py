@@ -6,9 +6,9 @@ from typing import Any, Dict
 
 import pytest
 
-from geny_executor.llm_client.types import ContentBlock
-from geny_executor.stages.s06_api.types import APIResponse
-from geny_executor.stages.s09_parse.artifact.default.parsers import (
+from xgen_agent_runtime.llm_client.types import ContentBlock
+from xgen_agent_runtime.stages.s06_api.types import APIResponse
+from xgen_agent_runtime.stages.s09_parse.artifact.default.parsers import (
     StructuredOutputParser,
     _try_parse_json,
 )
@@ -175,13 +175,13 @@ class TestMetadata:
 
 class TestParsedResponseField:
     def test_default_is_none(self):
-        from geny_executor.stages.s09_parse.types import ParsedResponse
+        from xgen_agent_runtime.stages.s09_parse.types import ParsedResponse
 
         r = ParsedResponse()
         assert r.structured_output_error is None
 
     def test_can_round_trip(self):
-        from geny_executor.stages.s09_parse.types import ParsedResponse
+        from xgen_agent_runtime.stages.s09_parse.types import ParsedResponse
 
         r = ParsedResponse(
             text="x",

@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.sandbox_exec_tool import SandboxExecTool
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.sandbox_exec_tool import SandboxExecTool
 
 
 class _FakeSandbox:
@@ -48,7 +48,7 @@ def _patch_exec(monkeypatch, fn) -> List[Tuple[Any, ...]]:
         return fn(argv, input_bytes)
 
     monkeypatch.setattr(
-        "geny_executor.tools.built_in.sandbox_exec_tool.sandbox_exec", _fake
+        "xgen_agent_runtime.tools.built_in.sandbox_exec_tool.sandbox_exec", _fake
     )
     return calls
 
@@ -109,7 +109,7 @@ async def test_timeout_is_error(monkeypatch) -> None:
         raise asyncio.TimeoutError()
 
     monkeypatch.setattr(
-        "geny_executor.tools.built_in.sandbox_exec_tool.sandbox_exec", _boom
+        "xgen_agent_runtime.tools.built_in.sandbox_exec_tool.sandbox_exec", _boom
     )
     tool = SandboxExecTool.from_dict(_spec(timeout_s=3.0), sandbox=_FakeSandbox())
     res = await tool.execute({}, ToolContext())
@@ -148,9 +148,9 @@ def test_capabilities_reflect_spec() -> None:
 @pytest.mark.asyncio
 async def test_exposed_from_public_packages() -> None:
     # built_in package export + container-exec primitives on tools package.
-    from geny_executor.tools.built_in import SandboxExecTool as A
-    from geny_executor.tools import sandbox_exec, SandboxExecError  # noqa: F401
-    from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES
+    from xgen_agent_runtime.tools.built_in import SandboxExecTool as A
+    from xgen_agent_runtime.tools import sandbox_exec, SandboxExecError  # noqa: F401
+    from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
 
     assert A is SandboxExecTool
     # NOT a manifest-activated built-in.

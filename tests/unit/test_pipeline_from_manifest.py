@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     EnvironmentManifest,
     ModelConfig,
     Pipeline,
@@ -29,7 +29,7 @@ from geny_executor import (
     PipelineMutator,
     create_stage,
 )
-from geny_executor.stages.s06_api.artifact.default.providers import MockProvider
+from xgen_agent_runtime.stages.s06_api.artifact.default.providers import MockProvider
 
 
 def _template_pipeline() -> Pipeline:

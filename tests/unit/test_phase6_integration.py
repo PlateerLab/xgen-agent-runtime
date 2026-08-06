@@ -7,34 +7,34 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.core.presets import PipelinePresets
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s02_context import ContextStage, HybridStrategy
-from geny_executor.stages.s03_system import (
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.core.presets import PipelinePresets
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s02_context import ContextStage, HybridStrategy
+from xgen_agent_runtime.stages.s03_system import (
     SystemStage,
     ComposablePromptBuilder,
     PersonaBlock,
     RulesBlock,
 )
-from geny_executor.stages.s04_guard import GuardStage
-from geny_executor.stages.s05_cache import CacheStage, SystemCacheStrategy
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s06_api.retry import NoRetry
-from geny_executor.stages.s07_token import TokenStage
-from geny_executor.stages.s08_think import ThinkStage
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s10_tool import ToolStage
-from geny_executor.stages.s12_agent import AgentStage
-from geny_executor.stages.s14_evaluate import EvaluateStage
-from geny_executor.stages.s16_loop import LoopStage, StandardLoopController
-from geny_executor.stages.s17_emit import EmitStage, TextEmitter, VTuberEmitter
-from geny_executor.stages.s18_memory import MemoryStage, InMemoryPersistence
-from geny_executor.stages.s21_yield import YieldStage
-from geny_executor.tools.base import Tool, ToolResult, ToolContext
-from geny_executor.tools.registry import ToolRegistry
-from geny_executor.stages.s06_api.types import APIResponse, ContentBlock
-from geny_executor.session import Session
+from xgen_agent_runtime.stages.s04_guard import GuardStage
+from xgen_agent_runtime.stages.s05_cache import CacheStage, SystemCacheStrategy
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s06_api.retry import NoRetry
+from xgen_agent_runtime.stages.s07_token import TokenStage
+from xgen_agent_runtime.stages.s08_think import ThinkStage
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s10_tool import ToolStage
+from xgen_agent_runtime.stages.s12_agent import AgentStage
+from xgen_agent_runtime.stages.s14_evaluate import EvaluateStage
+from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController
+from xgen_agent_runtime.stages.s17_emit import EmitStage, TextEmitter, VTuberEmitter
+from xgen_agent_runtime.stages.s18_memory import MemoryStage, InMemoryPersistence
+from xgen_agent_runtime.stages.s21_yield import YieldStage
+from xgen_agent_runtime.tools.base import Tool, ToolResult, ToolContext
+from xgen_agent_runtime.tools.registry import ToolRegistry
+from xgen_agent_runtime.stages.s06_api.types import APIResponse, ContentBlock
+from xgen_agent_runtime.session import Session
 
 
 # ── Helper tools ──
@@ -313,7 +313,7 @@ async def test_vtuber_emitter_in_pipeline():
 @pytest.mark.asyncio
 async def test_guard_blocks_over_budget():
     """Guard stage blocks execution when over cost budget."""
-    from geny_executor.stages.s04_guard.guards import CostBudgetGuard
+    from xgen_agent_runtime.stages.s04_guard.guards import CostBudgetGuard
 
     provider = MockProvider(default_text="Should not reach")
     pipeline = Pipeline(PipelineConfig(name="guard"))

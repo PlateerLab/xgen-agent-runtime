@@ -16,14 +16,14 @@ from typing import Any, List
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.core.token_estimate import estimate_prompt_tokens
-from geny_executor.memory.embedding.client import QueryEmbedLRU
-from geny_executor.stages.s02_context import ContextStage
-from geny_executor.stages.s02_context.artifact.default.compactors import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
+from xgen_agent_runtime.memory.embedding.client import QueryEmbedLRU
+from xgen_agent_runtime.stages.s02_context import ContextStage
+from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
     LLMSummaryCompactor,
 )
-from geny_executor.stages.s02_context.types import MemoryChunk
+from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
 
 
 class _CountingRetriever:
@@ -163,7 +163,7 @@ class _InstantLLMClient:
 
 
 def _llm_compactor() -> LLMSummaryCompactor:
-    from geny_executor.core.config import ModelConfig
+    from xgen_agent_runtime.core.config import ModelConfig
 
     return LLMSummaryCompactor(
         keep_recent=2,

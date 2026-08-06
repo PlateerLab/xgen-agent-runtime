@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from geny_executor.memory.factory import MemoryProviderFactory
-from geny_executor.memory.provider import Turn
+from xgen_agent_runtime.memory.factory import MemoryProviderFactory
+from xgen_agent_runtime.memory.provider import Turn
 
 
 def _turn(role: str, content: str) -> Turn:

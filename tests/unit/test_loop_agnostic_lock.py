@@ -25,14 +25,14 @@ from pathlib import Path
 from typing import Any, Awaitable, TypeVar
 
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     NoteDraft,
     Scope,
     Turn,
 )
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
 _T = TypeVar("_T")
 
@@ -212,7 +212,7 @@ def test_concurrent_writes_serialize_correctly() -> None:
 # could never resume to release). This reproduces that exact shape.
 
 import pytest
-from geny_executor.memory._locks import LoopAgnosticLock
+from xgen_agent_runtime.memory._locks import LoopAgnosticLock
 
 
 @pytest.mark.asyncio

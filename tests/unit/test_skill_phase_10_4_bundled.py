@@ -12,13 +12,13 @@ from typing import Set
 
 import pytest
 
-from geny_executor.skills.bundled_skills import (
+from xgen_agent_runtime.skills.bundled_skills import (
     bundled_skill_ids,
     bundled_skills_dir,
     load_bundled_skills,
 )
-from geny_executor.skills.registry import SkillRegistry
-from geny_executor.skills.types import Skill
+from xgen_agent_runtime.skills.registry import SkillRegistry
+from xgen_agent_runtime.skills.types import Skill
 
 
 # ── Catalog inventory ───────────────────────────────────────────────

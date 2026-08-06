@@ -72,7 +72,7 @@ future model-backed strategies via `resolve_model`.
 ### E1.7 — Preset Plugin System
 New `PresetRegistry` + `register_preset` decorator in `core/presets.py`.
 Third-party packages can contribute pipeline presets through the
-`geny_executor.presets` entry-point group, or programmatically via the
+`xgen_agent_runtime.presets` entry-point group, or programmatically via the
 decorator. `PresetManager.list_all()` now surfaces plugin presets as
 `preset_type="plugin"`, and `PresetManager.create(name, **kwargs)`
 resolves built-ins first, then plugins. Auto-discovery is cached and
@@ -110,31 +110,31 @@ Chain stages additionally:
 
 ## Affected files (net)
 
-- `src/geny_executor/core/slot.py` — added `SlotChain`
-- `src/geny_executor/core/stage.py` — chain hook, tool_binding, model_override, resolve_model
-- `src/geny_executor/core/mutation.py` — 11 new MutationKinds, hook bridge, batch, bind/unbind, set_stage_model
-- `src/geny_executor/core/presets.py` — `PresetRegistry`, `register_preset`, plugin discovery, `PresetManager.create/refresh_plugins`
-- `src/geny_executor/tools/stage_binding.py` — new
-- `src/geny_executor/tools/base.py` — `ToolContext.stage_order` / `stage_name`
-- `src/geny_executor/stages/s04_guard/artifact/default/stage.py` — SlotChain rewrite
-- `src/geny_executor/stages/s14_emit/artifact/default/stage.py` — SlotChain rewrite
-- `src/geny_executor/stages/s14_emit/artifact/default/emitters.py` — optional callback + `bind_callback`
-- `src/geny_executor/stages/s06_api/artifact/default/stage.py` — model_override wiring
-- `src/geny_executor/stages/s10_tool/artifact/default/stage.py` — binding enforcement + stage-scoped ToolContext
-- `src/geny_executor/stages/{s02,s03,s05,s06,s11,s13,s15}/.../stage.py` — config triad
-- `src/geny_executor/__init__.py` — re-export SlotChain, PresetRegistry, register_preset
+- `src/xgen_agent_runtime/core/slot.py` — added `SlotChain`
+- `src/xgen_agent_runtime/core/stage.py` — chain hook, tool_binding, model_override, resolve_model
+- `src/xgen_agent_runtime/core/mutation.py` — 11 new MutationKinds, hook bridge, batch, bind/unbind, set_stage_model
+- `src/xgen_agent_runtime/core/presets.py` — `PresetRegistry`, `register_preset`, plugin discovery, `PresetManager.create/refresh_plugins`
+- `src/xgen_agent_runtime/tools/stage_binding.py` — new
+- `src/xgen_agent_runtime/tools/base.py` — `ToolContext.stage_order` / `stage_name`
+- `src/xgen_agent_runtime/stages/s04_guard/artifact/default/stage.py` — SlotChain rewrite
+- `src/xgen_agent_runtime/stages/s14_emit/artifact/default/stage.py` — SlotChain rewrite
+- `src/xgen_agent_runtime/stages/s14_emit/artifact/default/emitters.py` — optional callback + `bind_callback`
+- `src/xgen_agent_runtime/stages/s06_api/artifact/default/stage.py` — model_override wiring
+- `src/xgen_agent_runtime/stages/s10_tool/artifact/default/stage.py` — binding enforcement + stage-scoped ToolContext
+- `src/xgen_agent_runtime/stages/{s02,s03,s05,s06,s11,s13,s15}/.../stage.py` — config triad
+- `src/xgen_agent_runtime/__init__.py` — re-export SlotChain, PresetRegistry, register_preset
 - `tests/contract/test_stage_uniformity.py` — new
 
 ---
 
 ## Version
 
-`geny-executor` bumps from `v0.11.0` to `v0.12.0` — new minor release
+`xgen-agent-runtime` bumps from `v0.11.0` to `v0.12.0` — new minor release
 carrying the E1 surface additions (SlotChain, StageToolBinding,
 per-stage `model_override`, `PresetRegistry` + `register_preset`,
 contract test suite). Fully backward-compatible: legacy `add_guard()` /
 `add_emitter()` retained with `DeprecationWarning`. Consumers pinned to
-`>=0.11.0` (geny-executor-web) or `>=0.10.0` (Geny) remain compatible.
+`>=0.11.0` (xgen-agent-runtime-web) or `>=0.10.0` (Geny) remain compatible.
 
 The plan_evolution/ naming (v0.8/v0.9/v1.0) referred to a hypothetical
 reset; this repository's released numbering continues monotonically.
@@ -145,7 +145,7 @@ v0.13.x; E4/E5 → v1.0.0 as major stability declaration).
 
 ## Next
 
-- **E2**: Web stage editor (geny-executor-web consumes the new contract).
+- **E2**: Web stage editor (xgen-agent-runtime-web consumes the new contract).
 - **E3**: Environment completeness — persisting the expanded contract
   end-to-end.
 - **E4**: External consumer one-line API.

@@ -14,10 +14,10 @@ import asyncio
 
 import pytest
 
-from geny_executor import Pipeline, PipelineState
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineState
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _pipeline(**kwargs) -> Pipeline:

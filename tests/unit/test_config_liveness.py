@@ -38,9 +38,9 @@ from typing import Any, Awaitable, Callable, Dict, Tuple, Union
 
 import pytest
 
-from geny_executor.core.errors import GuardRejectError
-from geny_executor.core.introspection import STAGE_MODULES, create_stage
-from geny_executor.core.state import PipelineState
+from xgen_agent_runtime.core.errors import GuardRejectError
+from xgen_agent_runtime.core.introspection import STAGE_MODULES, create_stage
+from xgen_agent_runtime.core.state import PipelineState
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -104,7 +104,7 @@ Entry = Union[Probe, CoveredBy, Decoy, Reserved]
 
 async def _probe_s02_stateless() -> None:
     """stateless=True flips should_bypass — the engine skips the stage."""
-    from geny_executor.stages.s02_context import ContextStage
+    from xgen_agent_runtime.stages.s02_context import ContextStage
 
     stage = ContextStage()
     assert stage.should_bypass(PipelineState()) is False
@@ -114,7 +114,7 @@ async def _probe_s02_stateless() -> None:
 
 async def _probe_s03_prompt() -> None:
     """prompt lands verbatim on state.system for the API call."""
-    from geny_executor.stages.s03_system import SystemStage
+    from xgen_agent_runtime.stages.s03_system import SystemStage
 
     stage = SystemStage()
     stage.update_config({"prompt": "You are the liveness probe."})
@@ -125,7 +125,7 @@ async def _probe_s03_prompt() -> None:
 
 async def _probe_s03_template_vars() -> None:
     """template_vars substitute {name} placeholders into the built prompt."""
-    from geny_executor.stages.s03_system import SystemStage
+    from xgen_agent_runtime.stages.s03_system import SystemStage
 
     stage = SystemStage()
     stage.update_config(
@@ -141,7 +141,7 @@ async def _probe_s02_retrieval_timeout_s() -> None:
     degrades to a memory-less turn instead of stalling the first token."""
     import asyncio
 
-    from geny_executor.stages.s02_context import ContextStage
+    from xgen_agent_runtime.stages.s02_context import ContextStage
 
     class _HangingRetriever:
         name = "hanging"
@@ -162,8 +162,8 @@ async def _probe_s02_retrieval_timeout_s() -> None:
 async def _probe_s03_volatile_placement() -> None:
     """volatile_placement decides whether volatile blocks (clock/memory)
     leave the system prompt (turn_context) or stay in it (system)."""
-    from geny_executor.stages.s03_system import SystemStage
-    from geny_executor.stages.s03_system.artifact.default.builders import (
+    from xgen_agent_runtime.stages.s03_system import SystemStage
+    from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
         ComposablePromptBuilder,
         DateTimeBlock,
         PersonaBlock,
@@ -205,7 +205,7 @@ class _CountingGuard:
         return self._label
 
     def check(self, state: PipelineState):  # noqa: ANN001
-        from geny_executor.stages.s04_guard.types import GuardResult
+        from xgen_agent_runtime.stages.s04_guard.types import GuardResult
 
         self.calls += 1
         return GuardResult(
@@ -218,7 +218,7 @@ class _CountingGuard:
 
 async def _probe_s04_max_chain_length() -> None:
     """Oversized chains are rejected with an error naming the knob."""
-    from geny_executor.stages.s04_guard import GuardStage
+    from xgen_agent_runtime.stages.s04_guard import GuardStage
 
     stage = GuardStage(
         guards=[_CountingGuard("a", passed=True), _CountingGuard("b", passed=True)]
@@ -232,7 +232,7 @@ async def _probe_s04_max_chain_length() -> None:
 
 async def _probe_s04_fail_fast() -> None:
     """fail_fast toggles first-failure short-circuit vs run-all."""
-    from geny_executor.stages.s04_guard import GuardStage
+    from xgen_agent_runtime.stages.s04_guard import GuardStage
 
     first = _CountingGuard("g1", passed=False)
     second = _CountingGuard("g2", passed=False)
@@ -252,7 +252,7 @@ async def _probe_s04_fail_fast() -> None:
 
 async def _probe_s05_cache_prefix() -> None:
     """Different prefixes namespace the cache key for identical content."""
-    from geny_executor.stages.s05_cache import CacheStage, SystemCacheStrategy
+    from xgen_agent_runtime.stages.s05_cache import CacheStage, SystemCacheStrategy
 
     def _state() -> PipelineState:
         state = PipelineState(session_id="s")
@@ -272,7 +272,7 @@ async def _probe_s05_cache_prefix() -> None:
 
 async def _probe_s06_provider() -> None:
     """provider selects which client class the stage builds and calls."""
-    from geny_executor.stages.s06_api import APIStage
+    from xgen_agent_runtime.stages.s06_api import APIStage
 
     anthropic_client = APIStage(api_key="k", provider="anthropic")._resolve_client(
         PipelineState()
@@ -287,7 +287,7 @@ async def _probe_s06_provider() -> None:
 
 async def _probe_s06_base_url() -> None:
     """base_url reaches the constructed client (vLLM / proxy routing)."""
-    from geny_executor.stages.s06_api import APIStage
+    from xgen_agent_runtime.stages.s06_api import APIStage
 
     stage = APIStage(api_key="k", provider="openai")
     stage.update_config({"base_url": "http://probe.local/v1"})
@@ -298,7 +298,7 @@ async def _probe_s06_base_url() -> None:
 async def _probe_s06_stream() -> None:
     """stream=False at the stage level routes through the non-streaming
     client call (no text.delta events), winning over state.stream=True."""
-    from geny_executor.stages.s06_api import APIStage, MockProvider
+    from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
 
     stage = APIStage(provider=MockProvider(default_text="alpha beta"))
     stage.update_config({"stream": False})
@@ -315,7 +315,7 @@ async def _probe_s06_stream() -> None:
 async def _probe_s06_timeout_ms() -> None:
     """timeout_ms reaches the call site: clients that can't take the
     kwarg get the api.timeout_unsupported event instead of a silent drop."""
-    from geny_executor.stages.s06_api import APIStage, MockProvider
+    from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
 
     def _events(state: PipelineState) -> list:
         return [e["type"] for e in state.events if e["type"] == "api.timeout_unsupported"]
@@ -346,7 +346,7 @@ class _RecordingOrchestrator:
         pass
 
     async def orchestrate(self, state):  # noqa: ANN001
-        from geny_executor.stages.s12_agent.types import AgentResult
+        from xgen_agent_runtime.stages.s12_agent.types import AgentResult
 
         self.calls += 1
         return AgentResult(
@@ -358,7 +358,7 @@ class _RecordingOrchestrator:
 async def _probe_s12_max_delegations() -> None:
     """max_delegations truncates delegate_requests before dispatch; cap=0
     refuses delegation outright and announces agent.delegations_capped."""
-    from geny_executor.stages.s12_agent import AgentStage
+    from xgen_agent_runtime.stages.s12_agent import AgentStage
 
     orchestrator = _RecordingOrchestrator()
     stage = AgentStage(orchestrator=orchestrator)
@@ -379,7 +379,7 @@ async def _probe_s12_max_delegations() -> None:
 
 async def _probe_s16_max_turns() -> None:
     """max_turns caps the loop ahead of state.max_iterations."""
-    from geny_executor.stages.s16_loop import LoopStage
+    from xgen_agent_runtime.stages.s16_loop import LoopStage
 
     def _state() -> PipelineState:
         state = PipelineState(session_id="loop")
@@ -400,7 +400,7 @@ async def _probe_s16_max_turns() -> None:
 
 async def _probe_s16_early_stop_on() -> None:
     """Listed completion signals abort the loop immediately."""
-    from geny_executor.stages.s16_loop import LoopStage
+    from xgen_agent_runtime.stages.s16_loop import LoopStage
 
     def _state() -> PipelineState:
         state = PipelineState(session_id="loop")
@@ -421,7 +421,7 @@ async def _probe_s16_early_stop_on() -> None:
 
 
 async def _probe_s18_stateless() -> None:
-    from geny_executor.stages.s18_memory import MemoryStage
+    from xgen_agent_runtime.stages.s18_memory import MemoryStage
 
     stage = MemoryStage()  # default AppendOnlyStrategy → not bypassed
     assert stage.should_bypass(PipelineState()) is False
@@ -431,7 +431,7 @@ async def _probe_s18_stateless() -> None:
 
 async def _probe_s18_persistence_path() -> None:
     """Setting the path swaps in FilePersistence and writes the session."""
-    from geny_executor.stages.s18_memory import MemoryStage
+    from xgen_agent_runtime.stages.s18_memory import MemoryStage
 
     state = PipelineState(session_id="liveness-sess")
     state.add_message("user", "hello")

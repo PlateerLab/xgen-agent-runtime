@@ -6,8 +6,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s03_system import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s03_system import (
     ComposablePromptBuilder,
     DynamicPersonaPromptBuilder,
     PersonaBlock,

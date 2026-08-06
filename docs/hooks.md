@@ -1,8 +1,8 @@
 # Hooks — PRE/POST tool-use lifecycle
 
-> Status: current for geny-executor 2.1.0.
+> Status: current for xgen-agent-runtime 2.1.0.
 
-geny-executor's Stage 10 (Tool) fires lifecycle hooks around every tool dispatch. Hosts use this to:
+xgen-agent-runtime's Stage 10 (Tool) fires lifecycle hooks around every tool dispatch. Hosts use this to:
 
 - veto a tool call before it runs (permission / audit policy)
 - mutate the tool input or context just before dispatch
@@ -25,8 +25,8 @@ The contract lives in `hooks/runner.py`. Hooks are coroutines; ordering follows 
 ## Wiring a hook
 
 ```python
-from geny_executor.hooks import HookRunner, HookEvent
-from geny_executor.tools.errors import ToolFailure, ToolErrorCode
+from xgen_agent_runtime.hooks import HookRunner, HookEvent
+from xgen_agent_runtime.tools.errors import ToolFailure, ToolErrorCode
 
 async def audit_pre(event: HookEvent) -> None:
     print(f"[audit] {event.session_id} → {event.tool_name}({list(event.tool_input.keys())})")

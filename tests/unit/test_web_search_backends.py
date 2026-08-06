@@ -14,9 +14,9 @@ from typing import Any, Dict, List
 import httpx
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import _web_search_backends as backends
-from geny_executor.tools.built_in.web_search_tool import WebSearchTool
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import _web_search_backends as backends
+from xgen_agent_runtime.tools.built_in.web_search_tool import WebSearchTool
 
 
 def _ctx(extras: Dict[str, Any] | None = None) -> ToolContext:
@@ -320,7 +320,7 @@ class TestDdgDefault:
         monkeypatch.delenv("GENY_WEBSEARCH_BACKEND", raising=False)
         # Pretend ddgs is installed.
         monkeypatch.setattr(
-            "geny_executor.tools.built_in.web_search_tool._load_ddgs",
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs",
             lambda: object,
         )
 
@@ -337,7 +337,7 @@ class TestDdgDefault:
     async def test_ddg_missing_package_install_hint(self, monkeypatch):
         monkeypatch.delenv("GENY_WEBSEARCH_BACKEND", raising=False)
         monkeypatch.setattr(
-            "geny_executor.tools.built_in.web_search_tool._load_ddgs",
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs",
             lambda: None,
         )
         result = await WebSearchTool().execute(
@@ -345,4 +345,4 @@ class TestDdgDefault:
         )
         assert result.is_error
         assert "pip install" in result.content
-        assert "geny-executor[web]" in result.content
+        assert "xgen-agent-runtime[web]" in result.content

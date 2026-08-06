@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.skills.loader import parse_skill_file
-from geny_executor.skills.skill_tool import SkillTool
-from geny_executor.tools.base import ToolContext
+from xgen_agent_runtime.skills.loader import parse_skill_file
+from xgen_agent_runtime.skills.skill_tool import SkillTool
+from xgen_agent_runtime.tools.base import ToolContext
 
 
 def _ctx() -> ToolContext:

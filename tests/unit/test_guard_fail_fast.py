@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.errors import GuardRejectError
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s04_guard.artifact.default.stage import GuardStage
-from geny_executor.stages.s04_guard.interface import Guard
-from geny_executor.stages.s04_guard.types import GuardResult
+from xgen_agent_runtime.core.errors import GuardRejectError
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s04_guard.artifact.default.stage import GuardStage
+from xgen_agent_runtime.stages.s04_guard.interface import Guard
+from xgen_agent_runtime.stages.s04_guard.types import GuardResult
 
 
 class _StubGuard(Guard):

@@ -16,15 +16,15 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.hooks import (
+from xgen_agent_runtime.hooks import (
     HookConfig,
     HookConfigEntry,
     HookEvent,
     HookRunner,
 )
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ─────────────────────────────────────────────────────────────────

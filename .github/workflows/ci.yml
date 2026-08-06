@@ -1,4 +1,4 @@
-name: CI — geny-executor (library)
+name: CI — xgen-agent-runtime (library)
 
 on:
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
       # Config lives in [tool.mypy] in pyproject.toml — widen the package
       # list there as more modules come clean.
       - name: Run mypy (core + llm_client)
-        run: mypy src/geny_executor/core src/geny_executor/llm_client
+        run: mypy src/xgen_agent_runtime/core src/xgen_agent_runtime/llm_client
 
       # docs/events.md is generated from the EventTypes catalogue; fail
       # if an event landed without regenerating the doc.
@@ -97,7 +97,7 @@ jobs:
 
       - name: Run full test suite with coverage
         if: matrix.python-version == '3.11'
-        run: pytest tests/ --cov=geny_executor --cov-report=term-missing --cov-report=xml
+        run: pytest tests/ --cov=xgen_agent_runtime --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage
         if: matrix.python-version == '3.11'

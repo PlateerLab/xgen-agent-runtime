@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import NoteDraft, Scope
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.provider import NoteDraft, Scope
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
 
 @pytest.mark.asyncio

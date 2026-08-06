@@ -1,4 +1,4 @@
-# geny-executor: Harness-Engineered Agent Pipeline Library
+# xgen-agent-runtime: Harness-Engineered Agent Pipeline Library
 
 > **Version**: 0.2.0-draft  
 > **Date**: 2026-04-08  
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-`geny-executor`는 Anthropic API를 직접 사용하는 **harness-engineered agent pipeline library**이다.  
+`xgen-agent-runtime`는 Anthropic API를 직접 사용하는 **harness-engineered agent pipeline library**이다.  
 Claude Code의 Agent Loop에서 영감을 받되, Geny VTuber 시스템의 철학과 요구사항을 반영한 **범용 에이전트 실행 파이프라인**을 구축한다.
 
 ### 핵심 원칙
@@ -88,7 +88,7 @@ Claude Code의 Agent Loop에서 영감을 받되, Geny VTuber 시스템의 철�
 
 ### 2.4 기존 Geny에서 채용할 핵심 패턴
 
-| 패턴 | 출처 | geny-executor 적용 |
+| 패턴 | 출처 | xgen-agent-runtime 적용 |
 |------|------|-------------------|
 | **Single Execution Path** | `agent_executor.py` | 모든 실행이 Pipeline.run()을 통과 |
 | **State + Reducers** | `state.py` | PipelineState + reducer 함수로 상태 누적 |
@@ -117,7 +117,7 @@ Claude Code 11단계 + Geny 철학 반영 5단계 = **16단계 파이프라인**
 
 ```
                             ┌─────────────────────────────────────────────────┐
-                            │           geny-executor Pipeline (16 Stages)     │
+                            │           xgen-agent-runtime Pipeline (16 Stages)     │
                             │                                                 │
  ┌───────┐  ┌─────────┐  ┌─┴───────┐  ┌────────┐  ┌───────┐  ┌───────┐     │
  │   1   │→│    2    │→│    3    │→│   4    │→│   5   │→│   6   │     │
@@ -1632,13 +1632,13 @@ Emit Events:
 ## 9. Package Structure
 
 ```
-geny-executor/
+xgen-agent-runtime/
 ├── pyproject.toml
 ├── README.md
 ├── PLAN.md
 │
 ├── src/
-│   └── geny_executor/
+│   └── xgen_agent_runtime/
 │       ├── __init__.py                  # Public API
 │       ├── py.typed
 │       │
@@ -1836,9 +1836,9 @@ geny-executor/
 
 ## 10. Geny 호환성 매핑
 
-### 10.1 기존 컴포넌트 → geny-executor 매핑
+### 10.1 기존 컴포넌트 → xgen-agent-runtime 매핑
 
-| Geny 기존 | geny-executor 대응 |
+| Geny 기존 | xgen-agent-runtime 대응 |
 |-----------|-------------------|
 | `ClaudeProcess` (subprocess) | `s06_api/providers.py:AnthropicProvider` |
 | `StreamParser` (JSON line) | `s06_api/streaming.py:StreamHandler` |
@@ -1946,7 +1946,7 @@ class PipelineDescription:
 
 ```toml
 [project]
-name = "geny-executor"
+name = "xgen-agent-runtime"
 version = "0.1.0"
 requires-python = ">=3.11"
 
@@ -1962,7 +1962,7 @@ memory = [
     "faiss-cpu>=1.7",
 ]
 all = [
-    "geny-executor[memory]",
+    "xgen-agent-runtime[memory]",
 ]
 dev = [
     "pytest>=8.0",

@@ -39,8 +39,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.llm_client._cli_runtime import detect_binary
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.llm_client._cli_runtime import detect_binary
 
 
 def _live_enabled(provider: str) -> bool:
@@ -85,7 +85,7 @@ openai_only = pytest.mark.skipif(
 
 
 def _anthropic_client():
-    from geny_executor.llm_client import AnthropicClient
+    from xgen_agent_runtime.llm_client import AnthropicClient
 
     return AnthropicClient(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -155,7 +155,7 @@ async def test_anthropic_streaming_yields_multiple_text_deltas() -> None:
 
 
 def _cli_client(tmp_path) -> "object":  # noqa: ANN001
-    from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
+    from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
     return ClaudeCodeCLIClient(
         workspace_dir=str(tmp_path),
@@ -213,7 +213,7 @@ async def test_cli_version_probe_answers(tmp_path) -> None:
 @openai_only
 @pytest.mark.asyncio
 async def test_openai_streamed_usage_is_nonzero() -> None:
-    from geny_executor.llm_client.openai import OpenAIClient
+    from xgen_agent_runtime.llm_client.openai import OpenAIClient
 
     client = OpenAIClient(api_key=os.environ["OPENAI_API_KEY"])
     completes = []

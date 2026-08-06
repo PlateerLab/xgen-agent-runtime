@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from geny_executor.workspace import (
+from xgen_agent_runtime.workspace import (
     Workspace,
     WorkspaceStack,
     workspace_stack_from_snapshot,
@@ -58,7 +58,7 @@ def test_orchestrator_propagates_snapshot_to_sub_state():
     helper in isolation; the full orchestrator integration requires a
     real sub-pipeline factory which is exercised by the executor's own
     integration suite."""
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     parent = PipelineState(session_id="parent")
     parent.shared["workspace_snapshot"] = [

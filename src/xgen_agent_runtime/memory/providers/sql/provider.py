@@ -1,0 +1,484 @@
+"""SQLMemoryProvider — SQL-backed `MemoryProvider`.
+
+Two dialects ship: SQLite (default, stdlib `sqlite3`) and Postgres
+(`psycopg`, optional `[postgres]` extra). The dialect choice is
+auto-detected from the DSN scheme (``postgresql://`` / ``postgres://``
+→ Postgres; anything else → SQLite) and can be overridden via the
+``dialect=`` constructor kwarg. The dialect flows through the
+`_SQLConnection` wrapper; the per-store SQL builders are dialect-
+agnostic and the Postgres connection translates the SQLite-flavoured
+SQL on the fly.
+
+Layer mapping mirrors `FileMemoryProvider` exactly so the cross-
+provider contract suite passes against both. The Vector layer is
+optional and lights up only when an `EmbeddingClient` is supplied at
+construction.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Union
+
+from xgen_agent_runtime.memory.embedding.client import EmbeddingClient
+from xgen_agent_runtime.memory.provider import (
+    BackendInfo,
+    Capability,
+    CuratedHandle,
+    EmbeddingDescriptor,
+    ExecutionSummary,
+    GlobalHandle,
+    Importance,
+    Insight,
+    Layer,
+    LTMHandle,
+    MemoryDescriptor,
+    MemoryHooks,
+    MemoryProvider,
+    MemorySnapshot,
+    NoteDraft,
+    NoteRef,
+    NotesHandle,
+    RecordReceipt,
+    ReflectionContext,
+    RetrievalQuery,
+    RetrievalResult,
+    STMHandle,
+    Scope,
+    Turn,
+    VectorHandle,
+)
+from xgen_agent_runtime.memory.providers.file.timezone import resolve_timezone
+from xgen_agent_runtime.memory.providers.sql.config import sql_provider_config_schema
+from xgen_agent_runtime.memory.providers.sql.connection import (
+    _SQLConnection,
+    detect_dialect,
+    open_connection,
+)
+from xgen_agent_runtime.memory.providers.sql.index_store import _SQLIndexStore
+from xgen_agent_runtime.memory.providers.sql.ltm_store import _SQLLTMStore
+from xgen_agent_runtime.memory.providers.sql.notes_store import _SQLNotesStore
+from xgen_agent_runtime.memory.providers.sql.schema import Dialect
+from xgen_agent_runtime.memory.providers.sql.snapshot import build_snapshot, restore_snapshot
+from xgen_agent_runtime.memory.providers.sql.stm_store import _SQLSTMStore
+from xgen_agent_runtime.memory.providers.sql.vector_store import _SQLVectorStore
+from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
+
+logger = logging.getLogger(__name__)
+
+
+DSN = Union[str, Path]
+
+
+class SQLMemoryProvider(MemoryProvider):
+    """`MemoryProvider` whose layers are SQL tables.
+
+    Construction is cheap; `initialize()` opens the connection and
+    creates the schema. `close()` flushes and closes the connection.
+    """
+
+    NAME = "sql"
+    VERSION = "1.0.0"
+
+    def __init__(
+        self,
+        dsn: DSN,
+        *,
+        scope: Scope = Scope.SESSION,
+        session_id: str = "",
+        timezone_name: Optional[str] = None,
+        embedding: Optional[EmbeddingDescriptor] = None,
+        embedding_client: Optional[EmbeddingClient] = None,
+        dialect: Optional[Dialect] = None,
+    ) -> None:
+        self._dsn = str(dsn)
+        self._scope = scope
+        self._session_id = session_id
+        self._tz = resolve_timezone(timezone_name)
+        self._embedding_client = embedding_client
+        self._embedding = embedding or (
+            embedding_client.descriptor if embedding_client is not None else None
+        )
+        self._dialect = dialect or detect_dialect(self._dsn)
+        self._backend_name = self._dialect.value
+        self._conn: _SQLConnection = open_connection(self._dsn, dialect=self._dialect)
+        self._stm = _SQLSTMStore(self._conn, tz=self._tz, session_id=session_id)
+        self._ltm = _SQLLTMStore(
+            self._conn, tz=self._tz, scope=scope, backend_name=self._backend_name
+        )
+        self._notes = _SQLNotesStore(
+            self._conn, tz=self._tz, scope=scope, backend_name=self._backend_name
+        )
+        self._index = _SQLIndexStore(self._notes, conn=self._conn, tz=self._tz)
+        self._vector = self._build_vector_store()
+        self._initialized = False
+        # Hook bag — the SQL backend doesn't fire `after_*` callbacks
+        # yet (deployed file provider drives the hook chain), but the
+        # attribute is held so the contract surface is uniform across
+        # provider impls. Future PR will plumb hooks into the SQL
+        # store layers when SQL backend gets production traffic.
+        self._hooks = MemoryHooks()
+        self._descriptor = self._build_descriptor()
+
+    def set_hooks(self, hooks: "MemoryHooks") -> None:
+        """Hold the hook bag for contract-surface uniformity.
+
+        SQL backend currently doesn't fire `after_*` callbacks
+        (no STM/Notes-side hook plumbing yet). Future PR will plumb
+        hooks into `_SQLSTMStore` / `_SQLNotesStore` when SQL gets
+        production traffic; this attribute holds the host's bag so
+        the eventual plumbing is straightforward.
+        """
+        self._hooks = hooks
+
+    def _build_vector_store(self) -> Optional[_SQLVectorStore]:
+        if self._embedding_client is None:
+            return None
+        return _SQLVectorStore(
+            self._conn,
+            client=self._embedding_client,
+            notes_text_lookup=self._lookup_note_text,
+            backend_name=self._backend_name,
+        )
+
+    async def _lookup_note_text(self, filename: str) -> Optional[str]:
+        note = await self._notes.read(filename)
+        if note is None:
+            return None
+        return note.body
+
+    # ── MemoryProvider: descriptor + lifecycle ─────────────────────
+
+    @property
+    def descriptor(self) -> MemoryDescriptor:
+        return self._descriptor
+
+    @property
+    def dsn(self) -> str:
+        return self._dsn
+
+    @property
+    def dialect(self) -> Dialect:
+        return self._dialect
+
+    async def initialize(self) -> None:
+        await self._conn.open()
+        self._initialized = True
+
+    async def close(self) -> None:
+        await self._conn.close()
+
+    # ── layer handles ───────────────────────────────────────────────
+
+    def stm(self) -> STMHandle:
+        return self._stm  # type: ignore[return-value]
+
+    def ltm(self) -> LTMHandle:
+        return self._ltm  # type: ignore[return-value]
+
+    def notes(self) -> NotesHandle:
+        return self._notes
+
+    def vector(self) -> Optional[VectorHandle]:
+        return self._vector  # type: ignore[return-value]
+
+    def curated(self) -> Optional[CuratedHandle]:
+        return None
+
+    def global_(self) -> Optional[GlobalHandle]:
+        return None
+
+    def index(self) -> _SQLIndexStore:
+        return self._index
+
+    # ── cross-layer ─────────────────────────────────────────────────
+
+    async def record_turn(self, turn: Turn) -> None:
+        await self._stm.append(turn)
+
+    async def record_execution(self, summary: ExecutionSummary) -> RecordReceipt:
+        files: List[str] = []
+        receipt = RecordReceipt()
+
+        if summary.final_text:
+            qa_body = f"## Q\n{summary.user_input}\n\n## A\n{summary.final_text}".strip()
+            ref_dated = await self._ltm.write_dated(qa_body)
+            files.append(ref_dated.filename)
+
+            note_meta = await self._notes.write(
+                NoteDraft(
+                    title=(summary.user_input or "execution")[:80],
+                    body=summary.final_text,
+                    importance=Importance.MEDIUM,
+                    tags=list(summary.tags),
+                    category="insights",
+                    scope=self._scope,
+                )
+            )
+            files.append(note_meta.ref.filename)
+            receipt.notes_written = 1
+
+            if self._vector is not None:
+                # Report the ACTUAL indexed count, not a hardcoded 1
+                # (audit D6/F5): index() returns 0 when embedding was
+                # skipped (breaker tripped) or failed, so a swallowed
+                # embedding no longer looks like success on the receipt.
+                indexed = await self._vector.index(note_meta.ref, summary.final_text)
+                receipt.vector_chunks = int(indexed or 0)
+
+        receipt.files_updated = files
+        return receipt
+
+    async def record_compaction(
+        self,
+        summary: str,
+        *,
+        replaced_count: int = 0,
+        strategy: str = "",
+        saved_tokens: Optional[int] = None,
+        session_id: str = "",
+        trigger: str = "",
+    ) -> Optional[str]:
+        """Persist a compaction snapshot to the "compactions" note category
+        (audit D5 — previously only the file provider did this, so SQL
+        deployments dropped every compaction summary)."""
+        body = (summary or "").strip()
+        if not body and replaced_count <= 0:
+            return None
+
+        frontmatter: Dict[str, Any] = {
+            "replaced_count": int(replaced_count),
+            "strategy": strategy or "",
+            "trigger": trigger or "",
+            "session_id": session_id or self._session_id,
+        }
+        if saved_tokens is not None:
+            frontmatter["saved_tokens"] = int(saved_tokens)
+
+        title = f"Compaction · {replaced_count} messages" if replaced_count else "Compaction"
+        try:
+            note_meta = await self._notes.write(
+                NoteDraft(
+                    title=title,
+                    body=body or f"[{replaced_count} messages compacted.]",
+                    importance=Importance.MEDIUM,
+                    tags=["compaction", "system-artifact"],
+                    category="compactions",
+                    scope=self._scope,
+                    frontmatter=frontmatter,
+                )
+            )
+        except TypeError:
+            note_meta = await self._notes.write(
+                NoteDraft(
+                    title=title,
+                    body=body or f"[{replaced_count} messages compacted.]",
+                    importance=Importance.MEDIUM,
+                    tags=["compaction", "system-artifact"],
+                    category="compactions",
+                    scope=self._scope,
+                )
+            )
+        return note_meta.ref.filename
+
+    async def reflect(self, ctx: ReflectionContext) -> Sequence[Insight]:
+        # SQL provider has no LLM; reflection wires in via MemoryHooks
+        # / the orchestrating stage. Default is "no insights".
+        return ()
+
+    async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
+        chunks: List[MemoryChunk] = []
+        breakdown: Dict[Layer, int] = {}
+
+        if Layer.STM in query.layers:
+            recent = await self._stm.recent(n=query.max_per_layer)
+            stm_chunks = [
+                MemoryChunk(
+                    key=f"stm-{i}",
+                    content=_turn_to_text(t),
+                    source="recent_message",
+                    relevance_score=0.0,
+                )
+                for i, t in enumerate(recent)
+            ]
+            chunks.extend(stm_chunks)
+            breakdown[Layer.STM] = len(stm_chunks)
+
+        if Layer.LTM in query.layers:
+            main_text = await self._ltm.read_main()
+            ltm_chunks: List[MemoryChunk] = []
+            if main_text:
+                ltm_chunks.append(
+                    MemoryChunk(
+                        key="MEMORY.md",
+                        content=main_text[:2000],
+                        source="long_term",
+                        relevance_score=1.0,
+                    )
+                )
+            if query.text:
+                ltm_chunks.extend(await self._ltm.search(query.text, limit=query.max_per_layer))
+            chunks.extend(ltm_chunks)
+            breakdown[Layer.LTM] = len(ltm_chunks)
+
+        if Layer.NOTES in query.layers and query.text:
+            note_chunks = await self._notes.search(
+                query.text,
+                limit=query.max_per_layer,
+                importance_floor=query.importance_floor,
+            )
+            chunks.extend(note_chunks)
+            breakdown[Layer.NOTES] = len(note_chunks)
+
+        if Layer.VECTOR in query.layers and self._vector is not None and query.text:
+            vec_chunks = await self._vector.search(
+                query.text,
+                top_k=query.max_per_layer,
+            )
+            chunks.extend(vec_chunks)
+            breakdown[Layer.VECTOR] = len(vec_chunks)
+
+        # Char budget trim — preserves order, always keeps at least one
+        kept: List[MemoryChunk] = []
+        used = 0
+        for c in chunks:
+            cost = len(c.content)
+            if used + cost > query.max_chars and kept:
+                break
+            kept.append(c)
+            used += cost
+
+        return RetrievalResult(
+            chunks=kept,
+            layer_breakdown=breakdown,
+            total_chars=used,
+        )
+
+    async def snapshot(self) -> MemorySnapshot:
+        layers = [Layer.STM, Layer.LTM, Layer.NOTES, Layer.INDEX]
+        if self._vector is not None:
+            layers.append(Layer.VECTOR)
+        payload, checksum = await build_snapshot(self._conn)
+        return MemorySnapshot(
+            provider=self.NAME,
+            version=self.VERSION,
+            layers=layers,
+            payload=payload,
+            size_bytes=len(payload),
+            checksum=checksum,
+        )
+
+    async def restore(self, snap: MemorySnapshot) -> None:
+        if snap.provider != self.NAME:
+            raise ValueError(f"snapshot from {snap.provider!r} cannot restore into {self.NAME!r}")
+        if not isinstance(snap.payload, (bytes, bytearray)):
+            raise TypeError(
+                f"SQLMemoryProvider snapshot payload must be bytes, got {type(snap.payload)!r}"
+            )
+        await restore_snapshot(self._conn, bytes(snap.payload), snap.checksum)
+
+    async def promote(self, ref: NoteRef, to: Scope) -> NoteRef:
+        if to == ref.scope:
+            return ref
+        # Same semantics as the file provider — no cross-scope motion
+        # until the Composite (PR #5) lands.
+        note = await self._notes.read(ref.filename)
+        if note is None:
+            raise KeyError(f"cannot promote: {ref.filename!r} not found")
+        new_ref = ref.with_scope(to)
+        # Persist the new scope on the row so subsequent reads agree.
+        await self._conn.execute(
+            "UPDATE notes SET scope = ? WHERE filename = ?",
+            (to.value, ref.filename),
+        )
+        return new_ref
+
+    # ── descriptor builder ──────────────────────────────────────────
+
+    def _build_descriptor(self) -> MemoryDescriptor:
+        layers = {Layer.STM, Layer.LTM, Layer.NOTES, Layer.INDEX}
+        capabilities = {
+            Capability.READ,
+            Capability.WRITE,
+            Capability.SEARCH,
+            Capability.LINK,
+            Capability.SNAPSHOT,
+        }
+        backends = [
+            BackendInfo(
+                layer=Layer.STM,
+                backend=self._backend_name,
+                location=self._dsn,
+                metadata={"table": "stm_turns"},
+            ),
+            BackendInfo(
+                layer=Layer.LTM,
+                backend=self._backend_name,
+                location=self._dsn,
+                metadata={"table": "ltm_documents"},
+            ),
+            BackendInfo(
+                layer=Layer.NOTES,
+                backend=self._backend_name,
+                location=self._dsn,
+                metadata={"tables": ["notes", "note_tags", "note_links"]},
+            ),
+            BackendInfo(
+                layer=Layer.INDEX,
+                backend=self._backend_name,
+                location=self._dsn,
+                metadata={"derived_from": ["notes", "note_tags", "note_links"]},
+            ),
+        ]
+        if self._vector is not None:
+            layers.add(Layer.VECTOR)
+            capabilities.add(Capability.REINDEX)
+            backends.append(
+                BackendInfo(
+                    layer=Layer.VECTOR,
+                    backend="sqlite",
+                    location=self._dsn,
+                    metadata={
+                        "table": "vector_rows",
+                        "embedding_provider": self._vector.descriptor.provider,
+                        "embedding_model": self._vector.descriptor.model,
+                        "dimension": self._vector.descriptor.dimension,
+                    },
+                )
+            )
+        vector_note = (
+            "Vector layer wired via EmbeddingClient. "
+            if self._vector is not None
+            else "Vector / Curated / Global not wired in this release."
+        )
+        return MemoryDescriptor(
+            name=self.NAME,
+            version=self.VERSION,
+            layers=layers,
+            capabilities=capabilities,
+            backends=backends,
+            scope=self._scope,
+            config_schema=sql_provider_config_schema(),
+            embedding=self._embedding,
+            description=(
+                f"SQL-backed memory provider ({self._backend_name}). Schema "
+                "mirrors the file provider: STM, LTM, Notes (with tags + "
+                "links), Vector, and an SQL-derived Index. " + vector_note
+            ),
+            metadata={
+                "dsn": self._dsn,
+                "session_id": self._session_id,
+                "timezone": str(self._tz),
+                "dialect": self._dialect.value,
+            },
+        )
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+
+def _turn_to_text(turn: Turn) -> str:
+    if isinstance(turn.content, str):
+        return f"[{turn.role}] {turn.content}"
+    return f"[{turn.role}] {turn.content!r}"

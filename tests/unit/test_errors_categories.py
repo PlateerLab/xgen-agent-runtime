@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory
 
 
 # ---------------------------------------------------------------------------

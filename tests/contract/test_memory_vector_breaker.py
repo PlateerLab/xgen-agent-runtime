@@ -24,9 +24,9 @@ import logging
 from pathlib import Path
 from typing import List, Sequence
 
-from geny_executor.memory.embedding.client import EmbeddingError
-from geny_executor.memory.provider import EmbeddingDescriptor, NoteDraft, Scope
-from geny_executor.memory.providers import FileMemoryProvider
+from xgen_agent_runtime.memory.embedding.client import EmbeddingError
+from xgen_agent_runtime.memory.provider import EmbeddingDescriptor, NoteDraft, Scope
+from xgen_agent_runtime.memory.providers import FileMemoryProvider
 
 
 class _ScriptedEmbeddingClient:
@@ -85,7 +85,7 @@ def _draft(i: int) -> NoteDraft:
 async def test_three_auth_failures_trip_breaker_markdown_persists(
     tmp_path: Path, caplog
 ) -> None:
-    caplog.set_level(logging.DEBUG, logger="geny_executor.memory")
+    caplog.set_level(logging.DEBUG, logger="xgen_agent_runtime.memory")
     client = _ScriptedEmbeddingClient(["auth"] * 10)
     provider = await _provider_with(client, tmp_path)
 
@@ -147,7 +147,7 @@ async def test_descriptor_reflects_breaker_state(tmp_path: Path) -> None:
 
 
 async def test_transient_failures_do_not_trip(tmp_path: Path, caplog) -> None:
-    caplog.set_level(logging.DEBUG, logger="geny_executor.memory")
+    caplog.set_level(logging.DEBUG, logger="xgen_agent_runtime.memory")
     client = _ScriptedEmbeddingClient(["transient"] * 5)
     provider = await _provider_with(client, tmp_path)
 
@@ -186,7 +186,7 @@ async def test_unknown_failures_do_not_trip_and_keep_traceback(
     """Unclassified failures keep the conservative path: no breaker
     motion, WARNING with traceback retained (it's the only diagnostic
     for a genuinely unexpected error)."""
-    caplog.set_level(logging.DEBUG, logger="geny_executor.memory")
+    caplog.set_level(logging.DEBUG, logger="xgen_agent_runtime.memory")
     client = _ScriptedEmbeddingClient(["unknown"] * 4)
     provider = await _provider_with(client, tmp_path)
 

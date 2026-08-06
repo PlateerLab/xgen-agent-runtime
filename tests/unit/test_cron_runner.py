@@ -18,7 +18,7 @@ pytest.importorskip(
     reason="cron extra not installed (pip install -e .[cron])",
 )
 
-from geny_executor.cron import (  # noqa: E402
+from xgen_agent_runtime.cron import (  # noqa: E402
     CronJob,
     CronJobStatus,
     CronRunner,

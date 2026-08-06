@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
-from geny_executor.tools.mcp import (
+from xgen_agent_runtime.tools.mcp import (
     FileCredentialStore,
     MemoryCredentialStore,
     OAuthAuthConfig,

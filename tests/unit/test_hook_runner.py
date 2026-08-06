@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.hooks import (
+from xgen_agent_runtime.hooks import (
     DEFAULT_TIMEOUT_MS,
     HookConfig,
     HookConfigEntry,

@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from geny_executor.llm_client._cli_runtime import _aiter_lines, _cli_stream_limit
+from xgen_agent_runtime.llm_client._cli_runtime import _aiter_lines, _cli_stream_limit
 
 
 class TestStreamLimitConfig:

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.llm_client._cli_runtime import (
+from xgen_agent_runtime.llm_client._cli_runtime import (
     DEFAULT_ENV_WHITELIST,
     CLIBinaryNotFound,
     CLIProcessRunner,

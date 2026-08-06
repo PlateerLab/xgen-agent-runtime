@@ -1,4 +1,4 @@
-# geny-executor: Implementation Progress
+# xgen-agent-runtime: Implementation Progress
 
 > **Last Updated**: 2026-04-08
 > **Status**: Core Library Complete (v0.1.0)
@@ -87,7 +87,7 @@ Phase C (once):  [14: Emit] → [15: Memory] → [16: Yield]
 ## Source Structure
 
 ```
-src/geny_executor/
+src/xgen_agent_runtime/
 ├── __init__.py               # Public API exports
 ├── core/
 │   ├── pipeline.py           # Pipeline engine (Phase A/B/C)

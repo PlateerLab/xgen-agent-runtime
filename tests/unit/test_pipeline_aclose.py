@@ -16,7 +16,7 @@ from typing import Any, List
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig
+from xgen_agent_runtime import Pipeline, PipelineConfig
 
 
 class _FakeMCPManager:
@@ -107,7 +107,7 @@ async def test_aclose_mcp_failure_still_shuts_providers():
 async def test_aclose_cancels_pending_hitl():
     """Stage coroutines blocked on a human verdict must unwind at close
     instead of awaiting a future nobody will ever resolve."""
-    from geny_executor.stages.s15_hitl.types import HITLDecision
+    from xgen_agent_runtime.stages.s15_hitl.types import HITLDecision
 
     pipeline = Pipeline(PipelineConfig(name="hitl-close"))
     loop = asyncio.get_running_loop()
@@ -151,10 +151,10 @@ def test_sync_close_outside_loop_blocks_until_done():
 
 
 def _runnable_pipeline() -> Pipeline:
-    from geny_executor.stages.s01_input import InputStage
-    from geny_executor.stages.s06_api import APIStage, MockProvider
-    from geny_executor.stages.s09_parse import ParseStage
-    from geny_executor.stages.s21_yield import YieldStage
+    from xgen_agent_runtime.stages.s01_input import InputStage
+    from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+    from xgen_agent_runtime.stages.s09_parse import ParseStage
+    from xgen_agent_runtime.stages.s21_yield import YieldStage
 
     pipeline = Pipeline(PipelineConfig(name="closed-guard"))
     pipeline.register_stage(InputStage())

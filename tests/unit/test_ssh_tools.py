@@ -13,15 +13,15 @@ import json
 
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools._ssh import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools._ssh import (
     SSHConfigError,
     _connect_kwargs,
     _remote_command,
 )
-from geny_executor.tools.built_in._ssh_store import SSHServerStore
-from geny_executor.tools.built_in import ssh_tools
-from geny_executor.tools.built_in.ssh_tools import (
+from xgen_agent_runtime.tools.built_in._ssh_store import SSHServerStore
+from xgen_agent_runtime.tools.built_in import ssh_tools
+from xgen_agent_runtime.tools.built_in.ssh_tools import (
     SshDownloadTool,
     SshListServersTool,
     SshRunTool,

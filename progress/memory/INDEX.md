@@ -1,13 +1,13 @@
 # Memory Initiative — Progress Index
 
-> **Charter** — `geny-executor` must, *without any Geny code*, express
+> **Charter** — `xgen-agent-runtime` must, *without any Geny code*, express
 > and execute every memory semantics that Geny's `SessionMemoryManager`
 > currently provides. Adapters are validation fixtures, not the
-> operating path. `geny-executor-web` is a thin mirror; it can only
+> operating path. `xgen-agent-runtime-web` is a thin mirror; it can only
 > show what executor exposes. `Geny` is the *final* product, rewritten
 > on top of executor + web after both reach v1.0.0.
 >
-> Source spec: `geny-executor-web/docs/MEMORY_ARCHITECTURE.md`
+> Source spec: `xgen-agent-runtime-web/docs/MEMORY_ARCHITECTURE.md`
 > (rev 2026-04-19).
 
 ---

@@ -7,17 +7,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     Pipeline,
     PipelineConfig,
     ClientRegistry,
 )
-from geny_executor.llm_client import BaseClient, ClientCapabilities
-from geny_executor.llm_client.types import APIResponse, ContentBlock
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 class _CaptureClient(BaseClient):
@@ -136,7 +136,7 @@ def test_unknown_provider_in_registry_raises():
 def test_vllm_provider_string_without_base_url_raises_on_resolve():
     """vLLM fallback client construction fails without base_url."""
     stage = APIStage(provider="vllm", api_key="EMPTY")
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     state = PipelineState()
     with pytest.raises(ValueError) as ei:
@@ -146,7 +146,7 @@ def test_vllm_provider_string_without_base_url_raises_on_resolve():
 
 def test_vllm_provider_string_with_base_url_constructs():
     stage = APIStage(provider="vllm", api_key="EMPTY", base_url="http://localhost:8000/v1")
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     state = PipelineState()
     client = stage._resolve_client(state)

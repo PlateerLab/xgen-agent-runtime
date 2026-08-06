@@ -13,19 +13,19 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.core.schema import ConfigSchema
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s10_tool import (
+from xgen_agent_runtime.core.schema import ConfigSchema
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s10_tool import (
     ParallelExecutor,
     PartitionExecutor,
     SequentialExecutor,
 )
-from geny_executor.stages.s10_tool.artifact.default.stage import (
+from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import (
     _DEFAULT_MAX_CONCURRENCY,
     ToolStage,
 )
-from geny_executor.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 class _CountingTool(Tool):

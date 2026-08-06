@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Optional, Sequence
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     BackendInfo,
     CuratedHandle,
     ExecutionSummary,
@@ -44,7 +44,7 @@ from geny_executor.memory.provider import (
     Turn,
     VectorHandle,
 )
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
 
 
 class GenyManagerAdapter(MemoryProvider):

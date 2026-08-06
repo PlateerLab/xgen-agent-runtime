@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.memory.facts import (
+from xgen_agent_runtime.memory.facts import (
     FACT_EXTRACTION_SCHEMA,
     FACTS_FILENAME,
     Fact,
@@ -25,7 +25,7 @@ from geny_executor.memory.facts import (
     build_fact_extraction_instruction,
     render_ledger_markdown,
 )
-from geny_executor.memory.rollup import (
+from xgen_agent_runtime.memory.rollup import (
     EVERGREEN_SCHEMA,
     MemoryRollup,
     render_evergreen,
@@ -371,7 +371,7 @@ def test_instruction_mentions_ledger_and_rules():
 
 
 def test_api_response_structured_reads_cli_envelope():
-    from geny_executor.llm_client.types import APIResponse
+    from xgen_agent_runtime.llm_client.types import APIResponse
 
     resp = APIResponse(raw={"structured_output": {"name": "BOSS"}, "result": "chat"})
     assert resp.structured == {"name": "BOSS"}
@@ -385,7 +385,7 @@ def test_api_response_structured_reads_cli_envelope():
 
 @pytest.mark.asyncio
 async def test_ledger_roundtrip_through_real_file_provider(tmp_path):
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(tmp_path)
     ledger = FactLedger(provider)
@@ -425,8 +425,8 @@ async def test_ledger_roundtrip_through_real_file_provider(tmp_path):
 async def test_load_tolerates_legacy_python_repr_rows(tmp_path):
     """2.46.0 wrote facts as python-repr strings via the frontmatter
     writer — the loader must recover them instead of dropping the ledger."""
-    from geny_executor.memory.provider import Importance, NoteDraft
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.provider import Importance, NoteDraft
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(tmp_path)
     legacy_row = (

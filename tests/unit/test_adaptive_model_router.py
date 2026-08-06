@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.config import ModelConfig, PipelineConfig
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s06_api import (
+from xgen_agent_runtime.core.config import ModelConfig, PipelineConfig
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s06_api import (
     APIStage,
     AdaptiveModelRouter,
     MockProvider,
     ModelRouter,
     PassthroughRouter,
 )
-from geny_executor.stages.s06_api.artifact.default.router import (
+from xgen_agent_runtime.stages.s06_api.artifact.default.router import (
     AdaptiveModelRouter as DefaultAdaptive,
 )
 

@@ -10,9 +10,9 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from geny_executor.core.environment_control import PipelineEnvironment
-from geny_executor.tools.built_in.env_tools import EnvTool
-from geny_executor.tools.built_in.sandbox_exec_tool import SandboxExecTool
+from xgen_agent_runtime.core.environment_control import PipelineEnvironment
+from xgen_agent_runtime.tools.built_in.env_tools import EnvTool
+from xgen_agent_runtime.tools.built_in.sandbox_exec_tool import SandboxExecTool
 
 
 class _Registry:

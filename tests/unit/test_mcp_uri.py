@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from geny_executor.tools.mcp import (
+from xgen_agent_runtime.tools.mcp import (
     MCP_URI_SCHEME,
     MCPManager,
     MCPServerConfig,
@@ -16,8 +16,8 @@ from geny_executor.tools.mcp import (
     is_mcp_uri,
     parse_mcp_uri,
 )
-from geny_executor.tools.mcp.manager import MCPServerConnection
-from geny_executor.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.manager import MCPServerConnection
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
 
 
 # ── parse_mcp_uri ────────────────────────────────────────────────────────

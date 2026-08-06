@@ -1,9 +1,9 @@
-# geny-executor Error Codes
+# xgen-agent-runtime Error Codes
 
 **Since:** 2.1.0 (table verified against the enum on 2026-06-10, 2.2.0 cycle)
-**Source of truth:** `src/geny_executor/core/errors.py` (`ExecutorErrorCode` enum)
+**Source of truth:** `src/xgen_agent_runtime/core/errors.py` (`ExecutorErrorCode` enum)
 
-Every exception raised by geny-executor carries a stable string identifier
+Every exception raised by xgen-agent-runtime carries a stable string identifier
 in the form `exec.<component>.<reason>`. Hosts use this code for:
 
 - **Logging / Sentry grouping** — drop the free-form `str(exception)` from
@@ -37,7 +37,7 @@ carry it (see [events.md](events.md) for the full event catalogue):
   "data": {
     "error": "Claude Code CLI is not authenticated …",
     "code": "exec.cli.auth_failed",
-    "exception_type": "geny_executor.core.errors.APIError"
+    "exception_type": "xgen_agent_runtime.core.errors.APIError"
   }
 }
 ```

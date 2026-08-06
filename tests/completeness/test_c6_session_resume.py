@@ -21,14 +21,14 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     MemoryProvider,
     NoteDraft,
     Scope,
     Turn,
 )
-from geny_executor.memory.providers import (
+from xgen_agent_runtime.memory.providers import (
     EphemeralMemoryProvider,
     FileMemoryProvider,
     SQLMemoryProvider,

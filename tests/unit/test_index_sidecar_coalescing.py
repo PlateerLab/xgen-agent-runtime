@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.embedding import LocalHashEmbeddingClient
-from geny_executor.memory.provider import NoteDraft, Scope
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.embedding import LocalHashEmbeddingClient
+from xgen_agent_runtime.memory.provider import NoteDraft, Scope
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
 
 def _provider(td: str) -> FileMemoryProvider:
@@ -92,7 +92,7 @@ async def test_sidecar_refresh_keeps_loop_responsive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_index_batch_skips_unchanged_notes():
-    from geny_executor.memory.provider import NoteRef
+    from xgen_agent_runtime.memory.provider import NoteRef
 
     with tempfile.TemporaryDirectory() as td:
         p = FileMemoryProvider(

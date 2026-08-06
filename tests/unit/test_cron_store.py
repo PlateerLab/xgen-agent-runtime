@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.cron import (
+from xgen_agent_runtime.cron import (
     CronJob,
     CronJobStatus,
     FileBackedCronJobStore,

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s05_cache.artifact.default.stage import CacheStage
-from geny_executor.stages.s05_cache.artifact.default.strategies import SystemCacheStrategy
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s05_cache.artifact.default.stage import CacheStage
+from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import SystemCacheStrategy
 
 
 def _state(system: str = "You are a helpful assistant.") -> PipelineState:

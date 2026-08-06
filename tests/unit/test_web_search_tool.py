@@ -12,8 +12,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.web_search_tool import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.web_search_tool import (
     _DEFAULT_MAX_RESULTS,
     _HARD_MAX_RESULTS,
     WebSearchTool,
@@ -47,7 +47,7 @@ def ddgs_available(monkeypatch):
     the sentinel never has any methods called on it.
     """
     monkeypatch.setattr(
-        "geny_executor.tools.built_in.web_search_tool._load_ddgs",
+        "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs",
         lambda: object,
     )
 
@@ -193,13 +193,13 @@ class TestErrorPaths:
     @pytest.mark.asyncio
     async def test_missing_ddgs_gives_install_hint(self, monkeypatch):
         monkeypatch.setattr(
-            "geny_executor.tools.built_in.web_search_tool._load_ddgs",
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs",
             lambda: None,
         )
         result = await WebSearchTool().execute({"query": "x"}, _ctx())
         assert result.is_error
         assert "pip install" in result.content
-        assert "geny-executor[web]" in result.content
+        assert "xgen-agent-runtime[web]" in result.content
 
     @pytest.mark.asyncio
     async def test_ddg_exception_surfaces_as_error_result(
@@ -216,7 +216,7 @@ class TestErrorPaths:
 
 class TestRegistry:
     def test_registered_in_built_in_tool_classes(self):
-        from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES, WebSearchTool
+        from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, WebSearchTool
 
         assert "WebSearch" in BUILT_IN_TOOL_CLASSES
         assert BUILT_IN_TOOL_CLASSES["WebSearch"] is WebSearchTool

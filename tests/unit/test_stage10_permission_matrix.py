@@ -19,25 +19,25 @@ import pytest
 
 from tests._fixtures.manifest_entries import required_stage_entries
 
-from geny_executor.hooks import (
+from xgen_agent_runtime.hooks import (
     HookConfig,
     HookConfigEntry,
     HookEvent,
     HookRunner,
 )
-from geny_executor.permission.types import (
+from xgen_agent_runtime.permission.types import (
     PermissionBehavior,
     PermissionRule,
     PermissionSource,
 )
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.tools.base import (
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.tools.base import (
     Tool,
     ToolCapabilities,
     ToolContext,
     ToolResult,
 )
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -337,9 +337,9 @@ class TestDenyShortCircuitsHooks:
 class TestPipelineAttachRuntime:
     @pytest.mark.asyncio
     async def test_attach_permission_matrix_propagates_to_dispatch(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
-        from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
         # Build a manifest pipeline with a Tool stage in it.
         manifest = EnvironmentManifest(stages=required_stage_entries())
@@ -363,9 +363,9 @@ class TestPipelineAttachRuntime:
 
     @pytest.mark.asyncio
     async def test_attach_mode_only_leaves_rules_intact(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
-        from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
         manifest = EnvironmentManifest(stages=required_stage_entries())
         pipeline = await Pipeline.from_manifest_async(manifest)

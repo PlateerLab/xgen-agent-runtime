@@ -11,23 +11,23 @@ from typing import Any, Dict
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s10_tool import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s10_tool import (
     ParallelExecutor,
     PartitionExecutor,
     SequentialExecutor,
     StreamingToolExecutor,
 )
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
-from geny_executor.stages.s10_tool.state_mutation import apply_state_mutations
-from geny_executor.tools.base import (
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
+from xgen_agent_runtime.stages.s10_tool.state_mutation import apply_state_mutations
+from xgen_agent_runtime.tools.base import (
     Tool,
     ToolCapabilities,
     ToolContext,
     ToolResult,
 )
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ─────────────────────────────────────────────────────────────────

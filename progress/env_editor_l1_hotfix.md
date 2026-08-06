@@ -3,7 +3,7 @@
 > **Completed**: 2026-04-17
 > **Scope**: Fix a usability gap in the v0.13.0 manifest contract: there is
 > no session-less way to produce a well-formed 16-stage template, so the
-> geny-executor-web Environment Builder fell back to
+> xgen-agent-runtime-web Environment Builder fell back to
 > `PipelineSnapshot(pipeline_name=name)` — which has **zero** stages —
 > resulting in an empty left pane and a spurious `base_preset: "<name>"`
 > value leaking through `from_snapshot`.
@@ -33,7 +33,7 @@ Behaviour:
 
 ## Rationale
 
-`geny-executor-web v0.8.0` shipped an Environment Builder whose "Create
+`xgen-agent-runtime-web v0.8.0` shipped an Environment Builder whose "Create
 blank" path was implemented as:
 
 ```python
@@ -73,13 +73,13 @@ Full unit suite: `462 passed, 1 skipped`.
 
 ## Downstream
 
-`geny-executor-web` switches `EnvironmentService.create_blank` to use
+`xgen-agent-runtime-web` switches `EnvironmentService.create_blank` to use
 `EnvironmentManifest.blank_manifest(...)` when `base_preset` is not
-supplied, and pins `geny-executor >= 0.13.1`.
+supplied, and pins `xgen-agent-runtime >= 0.13.1`.
 
 ---
 
 ### Version bump
 
 - `pyproject.toml`: `0.13.0` → `0.13.1`
-- `src/geny_executor/__init__.py`: `__version__ = "0.13.1"`
+- `src/xgen_agent_runtime/__init__.py`: `__version__ = "0.13.1"`

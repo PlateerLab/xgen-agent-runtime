@@ -17,21 +17,21 @@ import shutil
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
-from geny_executor.core.snapshot import PipelineSnapshot, StageSnapshot
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.snapshot import PipelineSnapshot, StageSnapshot
+from xgen_agent_runtime.core.environment import (
     EnvironmentManager,
     EnvironmentSanitizer,
     ToolsSnapshot,
 )
-from geny_executor.core.diff import EnvironmentDiff
-from geny_executor.core.presets import PresetManager
-from geny_executor.history.service import HistoryService
-from geny_executor.history.monitor import PerformanceMonitor
-from geny_executor.history.cost import CostAnalyzer
-from geny_executor.history.ab_test import ABTestRunner
-from geny_executor.history.models import StageTimingRecord
-from geny_executor.tools.adhoc import AdhocToolDefinition, AdhocToolFactory, TemplateToolConfig
-from geny_executor.tools.scope import ToolScope, ToolScopeRule
+from xgen_agent_runtime.core.diff import EnvironmentDiff
+from xgen_agent_runtime.core.presets import PresetManager
+from xgen_agent_runtime.history.service import HistoryService
+from xgen_agent_runtime.history.monitor import PerformanceMonitor
+from xgen_agent_runtime.history.cost import CostAnalyzer
+from xgen_agent_runtime.history.ab_test import ABTestRunner
+from xgen_agent_runtime.history.models import StageTimingRecord
+from xgen_agent_runtime.tools.adhoc import AdhocToolDefinition, AdhocToolFactory, TemplateToolConfig
+from xgen_agent_runtime.tools.scope import ToolScope, ToolScopeRule
 
 
 # ── Fixtures ──────────────────────────────────────────────

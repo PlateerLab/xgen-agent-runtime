@@ -14,17 +14,17 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor import CredentialBundle, Pipeline, ProviderCredentials, validate_manifest
-from geny_executor.core.environment import EnvironmentManifest
-from geny_executor.core.state import TokenUsage
-from geny_executor.llm_client.base import ClientCapabilities
-from geny_executor.llm_client.types import APIResponse, ContentBlock
-from geny_executor.stages.s06_api.artifact.default.stage import APIStage
-from geny_executor.stages.s06_api.artifact.default.tool_loop import (
+from xgen_agent_runtime import CredentialBundle, Pipeline, ProviderCredentials, validate_manifest
+from xgen_agent_runtime.core.environment import EnvironmentManifest
+from xgen_agent_runtime.core.state import TokenUsage
+from xgen_agent_runtime.llm_client.base import ClientCapabilities
+from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+from xgen_agent_runtime.stages.s06_api.artifact.default.stage import APIStage
+from xgen_agent_runtime.stages.s06_api.artifact.default.tool_loop import (
     InternalAgenticLoop,
     PipelineToolLoop,
 )
-from geny_executor.tools.base import Tool, ToolResult
+from xgen_agent_runtime.tools.base import Tool, ToolResult
 
 
 # ─────────────────────────────────── fixtures ─
@@ -400,7 +400,7 @@ async def test_deny_posture_reaches_internal_dispatches():
     """The dispatcher builds its context off the live Tool-stage context,
     so the 2.2.x permission posture applies identically to internal-loop
     dispatches — one decision path."""
-    from geny_executor.permission.types import PermissionPosture
+    from xgen_agent_runtime.permission.types import PermissionPosture
 
     client = ScriptedClient(tool_rounds=1)
     pipeline = await _build(_manifest("internal"), client)
@@ -467,7 +467,7 @@ def test_manifest_with_internal_loop_validates_clean():
 
 
 def test_introspection_exposes_tool_loop_slot():
-    from geny_executor import introspect_stage
+    from xgen_agent_runtime import introspect_stage
 
     info = introspect_stage(6)
     assert "tool_loop" in info.strategy_slots

@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import List
 
 
-from geny_executor.skills.loader import SkillLoadReport, load_skills_dir
-from geny_executor.skills.registry import SkillRegistry
-from geny_executor.skills.watcher import SkillRegistryWatcher
+from xgen_agent_runtime.skills.loader import SkillLoadReport, load_skills_dir
+from xgen_agent_runtime.skills.registry import SkillRegistry
+from xgen_agent_runtime.skills.watcher import SkillRegistryWatcher
 
 
 def _write_skill(root: Path, skill_id: str, *, body: str = "body\n") -> Path:

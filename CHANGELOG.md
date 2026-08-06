@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `geny-executor` are recorded here. The format
+All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
@@ -13,7 +13,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   the agent-surface consolidation to eight verbs; the `DocGuide`
   recipes — which `doc_tools` delegates straight to `edit2docs.doc_guide`
   — surface the themed-deck recipe automatically once 0.14.0 is present.
-  No `doc_tools` code change: every verb geny-executor wraps
+  No `doc_tools` code change: every verb xgen-agent-runtime wraps
   (`set_doc_text`, `edit_chart`, `list_doc_parts`, `get_doc_xml`,
   `build_doc`, `analyze_doc`, `render_doc`, …) is still a first-class
   `edit2docs` library function in 0.14.0.
@@ -114,7 +114,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 ## [2.64.0] — 2026-07-31
 
 ### Added (audio/STT capability family)
-- `geny_executor.audio.stt` — the workspace's speech-to-text bridge.
+- `xgen_agent_runtime.audio.stt` — the workspace's speech-to-text bridge.
   The model has no audio content block, so this family is how workspace
   audio becomes usable: `STTProvider` Protocol + `STTResult`/`STTError`
   (categorized `auth|quota|transient|invalid|unknown`), a factory
@@ -726,7 +726,7 @@ visible".
   auth-kind); `resolve()` returns the full record for internal connection use.
 - Gated on `feature:ssh_enabled` (mirrors `feature:google_connected`), so the
   family stays hidden until the host provisions SSH for the session.
-- `asyncssh` is an **optional extra** (`geny-executor[ssh]`), lazy-imported with
+- `asyncssh` is an **optional extra** (`xgen-agent-runtime[ssh]`), lazy-imported with
   an install-hint `ToolResult` fallback — the core install stays lean.
 - Password + private-key (PEM, optional passphrase) auth; relaxed host-key
   checking by default, opt back in per-server with `strict_host_key: true`.
@@ -839,7 +839,7 @@ visible".
   document re-index replaces stale chunk points, and dimension-mismatched
   collections are refused at bootstrap. Search returns the same
   `MemoryChunk` shape as the built-in stores. Optional extra:
-  `geny-executor[qdrant]`.
+  `xgen-agent-runtime[qdrant]`.
 - **`FileMemoryProvider(vector_store=...)`** — inject any external
   `VectorHandle`; the notes auto-index seam (`attach_vector_indexer`) then
   routes every note write through it.
@@ -960,7 +960,7 @@ Two first-party engines replace host-side tool stacks (Geny's Playwright
 `browser_*` family and python-docx/openpyxl/python-pptx editors):
 
 - **Browser family** (`tools/built_in/browser_tools.py`, optional extra
-  `geny-executor[browser]` → `an-web>=0.9.1`, Python >= 3.12, glibc):
+  `xgen-agent-runtime[browser]` → `an-web>=0.9.1`, Python >= 3.12, glibc):
   `BrowserNavigate` / `BrowserSnapshot` / `BrowserAct` (click/type/select/
   clear/submit/scroll/wait_for) / `BrowserExtract` / `BrowserEval` /
   `BrowserBack` / `BrowserClose`. One an-web tab per pipeline session
@@ -976,7 +976,7 @@ Two first-party engines replace host-side tool stacks (Geny's Playwright
   ephemeral an-web session (SPA pages); default remains the fast httpx
   path.
 - **Doc family** (`tools/built_in/doc_tools.py`, optional extra
-  `geny-executor[docs]` → `edit2docs>=0.4.0`): `DocAnalyze` (addressable
+  `xgen-agent-runtime[docs]` → `edit2docs>=0.4.0`): `DocAnalyze` (addressable
   outline) / `DocApplyEdits` (deterministic `set_doc_text` edits with
   per-edit `applied|stale|not_found|invalid` statuses) / `DocPreview` /
   `DocGenerate` / `DocEdit` (LLM verbs read the Anthropic key from
@@ -1271,7 +1271,7 @@ engages on the manifest build path.
   point). Spec is serializable (`to_dict`/`from_dict`) so a host can persist the
   tool and rebuild it against a freshly-provisioned sandbox. Not in
   `BUILT_IN_TOOL_CLASSES` — it is instantiated per pack, not activated by name.
-- **Public container-exec API** on `geny_executor.tools`: `sandbox_exec`,
+- **Public container-exec API** on `xgen_agent_runtime.tools`: `sandbox_exec`,
   `sb_run`, `sb_read_bytes`, `sb_write_bytes`, `container_path`,
   `SandboxExecError` (previously only the private `_sandbox` module). `tools/
   sandbox.py` (the policy `ToolSandbox`) is unchanged — this is the container
@@ -1551,7 +1551,7 @@ existing behavior changes.
 
 ### Added
 
-- **`MemoryRollup`** (`geny_executor.memory.rollup`) — semantic memory compaction
+- **`MemoryRollup`** (`xgen_agent_runtime.memory.rollup`) — semantic memory compaction
   tier 1: folds the prior rolling digest + recent raw STM turns into an updated,
   preservation-focused **rolling digest** and persists it to the summary slot
   (`STMHandle.write_summary`, retriever L1, always injected) — replacing mechanical
@@ -1565,7 +1565,7 @@ existing behavior changes.
 
 ### Added
 
-- **Per-provider model discovery** (`geny_executor.llm_client.discover_models`):
+- **Per-provider model discovery** (`xgen_agent_runtime.llm_client.discover_models`):
   best-effort live listing of the models a backend serves — OpenAI/LM Studio/
   vLLM/custom (`/v1/models`), Ollama (`/api/tags`), Anthropic (`/v1/models`,
   incl. `display_name`), Google (`/v1beta/models`, generateContent-only).
@@ -1579,8 +1579,8 @@ existing behavior changes.
 
 ### Added
 
-- **Tool plugin entry-points** (`geny_executor.tools`) — external/host packages
-  can now register custom `Tool`s via the `geny_executor.tools` entry-point
+- **Tool plugin entry-points** (`xgen_agent_runtime.tools`) — external/host packages
+  can now register custom `Tool`s via the `xgen_agent_runtime.tools` entry-point
   group, mirroring the existing preset plugin system. `ToolPluginRegistry`
   (+ `discover_tool_plugins` / `register_tool_plugins`) scans entry-points,
   accepts a `Tool` subclass, a list of them, a zero-arg factory, or a
@@ -1612,7 +1612,7 @@ existing behavior changes.
 
 ### Added
 
-- **Streamable HTTP transport for remote MCP servers** (`geny_executor.tools.mcp`)
+- **Streamable HTTP transport for remote MCP servers** (`xgen_agent_runtime.tools.mcp`)
   — `MCPServerConnection` now connects to remote MCP servers over the modern
   **Streamable HTTP** client (the current MCP standard that replaced SSE),
   instead of silently using the deprecated SSE client for every `http` config.
@@ -1632,7 +1632,7 @@ existing behavior changes.
 
 ### Added
 
-- **Discord + Slack inbound gateway adapters** (`geny_executor.gateway`) — the
+- **Discord + Slack inbound gateway adapters** (`xgen_agent_runtime.gateway`) — the
   gateway is no longer Telegram-only. Both are real WebSocket adapters needing
   no public endpoint:
   - **`DiscordGatewayAdapter`** — Discord Gateway (v10) over WebSocket: HELLO →
@@ -1657,7 +1657,7 @@ existing behavior changes.
 
 ### Added
 
-- **Inbound chat gateway** (`geny_executor.gateway`): the executor now owns the
+- **Inbound chat gateway** (`xgen_agent_runtime.gateway`): the executor now owns the
   bidirectional gateway — receive a message from a chat platform, run an agent
   turn, reply — so a host ships no transport code and only supplies config + a
   handler (`message in → reply text out`).
@@ -1689,7 +1689,7 @@ existing behavior changes.
 
 ### Added
 
-- **Built-in output-channel transports** (`geny_executor.channels`): the
+- **Built-in output-channel transports** (`xgen_agent_runtime.channels`): the
   framework now ships the common `SendMessageChannel` transports instead of
   leaving every one to the host —
   `WebhookSendMessageChannel`, `TelegramSendMessageChannel`,
@@ -1727,7 +1727,7 @@ existing behavior changes.
 ### Added
 
 - **Declarative provider profiles for local (OpenAI-compatible) LLMs**
-  (`geny_executor.llm_client.profiles`): a `ProviderProfile` dataclass
+  (`xgen_agent_runtime.llm_client.profiles`): a `ProviderProfile` dataclass
   describes an OpenAI-compatible backend as *data* (name, aliases, default
   endpoint, token-cap floor, capabilities) and the client class is
   generated from it (`llm_client.openai_compatible`). Adding a local
@@ -1747,9 +1747,9 @@ existing behavior changes.
   from `ProviderCredentials.extras` into `extra_body`
   (`options.num_ctx` + Ollama's native `think` toggle).
 - **`ProviderProfile`, `builtin_profiles`, `BUILTIN_PROFILES`** exported
-  from `geny_executor.llm_client` for host introspection (e.g. a "local
+  from `xgen_agent_runtime.llm_client` for host introspection (e.g. a "local
   model" picker UI).
-- **Context-window auto-probe** (`geny_executor.llm_client.local_probe`):
+- **Context-window auto-probe** (`xgen_agent_runtime.llm_client.local_probe`):
   `probe_ollama_num_ctx(base_url, model)` and `resolve_local_context_window(
   provider, base_url, model)` read a local model's real context window from
   Ollama's native `/api/show` (Modelfile `num_ctx` → GGUF
@@ -1781,7 +1781,7 @@ existing behavior changes.
 
 ### Added
 
-- **Generalized sub-agent type catalog** (`geny_executor.stages.s12_agent`):
+- **Generalized sub-agent type catalog** (`xgen_agent_runtime.stages.s12_agent`):
   `SubagentTypeSpec`, `BUILTIN_SUBAGENT_TYPES` (worker / researcher /
   summarizer / critic — app-neutral specs with strong default system
   prompts + tool shapes), `default_subagent_specs()`, and
@@ -1818,7 +1818,7 @@ existing behavior changes.
     `SubagentTypeOrchestrator.run_subagent` — build, run once, return, close.
     Stateless; delegate a specific task and consume the answer inline.
   - **sub-agent** (persistent): new
-    `geny_executor.stages.s12_agent.persistent_subagent.SubAgentManager`. An
+    `xgen_agent_runtime.stages.s12_agent.persistent_subagent.SubAgentManager`. An
     owner *spawns* a named, kept-alive instance; *assigns* it a task it
     completes **autonomously** in the background; and is **notified on
     completion** via the owner's inbox (`SubAgentInbox`). State accumulates
@@ -1861,7 +1861,7 @@ existing behavior changes.
   `GuardRejectError`. A long tool-loop turn could therefore die with no
   recovery, fully decoupled from the Stage 2 compactor. The guard now:
   - Measures the **projected next request** (system + messages + tools)
-    via the shared `geny_executor.core.token_estimate.estimate_prompt_tokens`,
+    via the shared `xgen_agent_runtime.core.token_estimate.estimate_prompt_tokens`,
     reserving `min_remaining_tokens` of headroom for the response.
   - Returns the new recoverable `action="compact"` on pressure. The
     `GuardStage` compacts `state.messages` (via the wired compactor) and
@@ -1877,9 +1877,9 @@ existing behavior changes.
 
 ### Added
 
-- `geny_executor.core.token_estimate.estimate_prompt_tokens(state)` — the
+- `xgen_agent_runtime.core.token_estimate.estimate_prompt_tokens(state)` — the
   single shared next-request token estimator used by Stage 2 and Stage 4.
-- `geny_executor.core.compaction.run_compaction(...)` — one runner that
+- `xgen_agent_runtime.core.compaction.run_compaction(...)` — one runner that
   compacts, emits a uniform `context.compacted` event (carrying
   `trigger`, before/after counts, estimated tokens saved), and records the
   snapshot to a memory provider's `record_compaction` unless the compactor
@@ -2307,7 +2307,7 @@ real-world env configs from talking to `api.anthropic.com`.
   can see why it was silently ignored. Without `thinking`, all three
   sampling params still pass through unchanged.
 
-Both fixes live in `src/geny_executor/llm_client/anthropic.py` as
+Both fixes live in `src/xgen_agent_runtime/llm_client/anthropic.py` as
 small pure helpers (`_resolve_anthropic_model`, the
 `_THINKING_INCOMPATIBLE_SAMPLING_KEYS` tuple) so they're easy to
 extend (add a future alias / a future incompatible key) without
@@ -2335,7 +2335,7 @@ on the CLI path.
 > `core/errors.py` ("new in 2.1.0" docstrings), `core/pipeline.py`
 > ("stable since 2.1.0" payload contract), `docs/error_codes.md`
 > ("Since: 2.1.0", "Phase 1 (this release, 2.1.0)"), and the
-> `docs/*.md` "current for geny-executor 2.1.0" status lines. The
+> `docs/*.md` "current for xgen-agent-runtime 2.1.0" status lines. The
 > exact release date between 2.0.5 (2026-05-19) and 2.1.1
 > (2026-06-01) was not recoverable. The publish workflow now gates on
 > a matching CHANGELOG section so this cannot recur.
@@ -2371,7 +2371,7 @@ on the CLI path.
   Phase A setup (1–5), Phase B generate+dispatch loop (6–16),
   Phase C surface (17–21). `blank_manifest()` produces the 21-stage
   template with the structurally required stages active. (Pre-2.1.0
-  consumers — e.g. geny-executor-web — still mirror the 16-stage
+  consumers — e.g. xgen-agent-runtime-web — still mirror the 16-stage
   required-stage set and are incompatible with manifests produced
   here.)
 
@@ -2379,7 +2379,7 @@ on the CLI path.
   set (`docs/architecture.md`, `docs/manifest.md`,
   `docs/providers.md`, `docs/hooks.md`, `docs/mcp.md`,
   `docs/memory.md`, `docs/claude_code_cli.md`) is stamped "current
-  for geny-executor 2.1.0": five Stage 6 providers (`anthropic` /
+  for xgen-agent-runtime 2.1.0": five Stage 6 providers (`anthropic` /
   `openai` / `google` / `vllm` / `claude_code_cli`), provider pinned
   at `stages[6].config["provider"]` as the single source of truth,
   and strict-load rejection of the legacy `strategies["provider"]`
@@ -2530,7 +2530,7 @@ returning a "Not logged in" placeholder.
 ### Added
 
 - ``StreamJsonAccumulator`` exported from
-  ``geny_executor.llm_client.translators`` for hosts that want to
+  ``xgen_agent_runtime.llm_client.translators`` for hosts that want to
   pipe a custom stream-json source into the canonical response shape.
 
 ## [2.0.2] — 2026-05-19
@@ -2728,7 +2728,7 @@ unified behind a single `CredentialBundle` channel.
 - If your manifest writer set `stages[6].strategies["provider"]`, move
   the value to `stages[6].config["provider"]`. Strict load will surface
   the mistake.
-- Don't import `geny_executor.llm_client.bridge.ProviderBackedClient` —
+- Don't import `xgen_agent_runtime.llm_client.bridge.ProviderBackedClient` —
   it's gone. The few legitimate consumers (fork-mode skill default
   runner) have been switched.
 
@@ -2886,7 +2886,7 @@ delegate is registered.
 
 ### Added
 
-- `geny_executor.memory.composite.handles._CompositeCuratedHandle` /
+- `xgen_agent_runtime.memory.composite.handles._CompositeCuratedHandle` /
   `_CompositeGlobalHandle` — wrappers that pair a target delegate's
   `NotesHandle` + (optional) `VectorHandle` with the curated / global
   Protocol semantics. `promote_from_session(ref)` /
@@ -2920,7 +2920,7 @@ delegate is registered.
   `scope_providers` slot is populated. Capability gating no longer
   needs to peek at routing internals.
 - `MemoryProviderFactory._build_sql` defers the SQL provider import
-  to call time. `from geny_executor.memory.factory import MemoryProviderFactory`
+  to call time. `from xgen_agent_runtime.memory.factory import MemoryProviderFactory`
   is now safe in environments without `psycopg` installed; SQLite
   DSNs continue to work via stdlib `sqlite3`, and a Postgres DSN
   surfaces the original `ImportError` only at build time.
@@ -3108,7 +3108,7 @@ StreamTab UI, so the stub was pure duplication.
 
 ### Changed
 
-- ``NOTE_CATEGORIES`` (in ``geny_executor.memory.providers.file.layout``)
+- ``NOTE_CATEGORIES`` (in ``xgen_agent_runtime.memory.providers.file.layout``)
   no longer lists ``entities`` — the directory is no longer
   auto-created by ``DirectoryLayout.ensure()``. Existing
   ``entities/*.md`` files on disk are left in place; the index
@@ -3274,7 +3274,7 @@ changes land in the *current* session, not the next one.
 
 ### Added
 
-- `geny_executor.skills.watcher.SkillRegistryWatcher` — poll-based
+- `xgen_agent_runtime.skills.watcher.SkillRegistryWatcher` — poll-based
   hot-reload. Owns a daemon thread that re-scans configured roots
   on a fixed interval, debounces editor write-rename flips, and
   rebuilds the registry in place when an `SKILL.md` changes
@@ -3357,7 +3357,7 @@ catalog grows from five to eight.
   the canonical cron translation table inline so the prompt is
   self-contained. Honest about *not* implementing the cron daemon
   — defers actual scheduling to whatever scheduler tool the host
-  has wired (geny-executor's `cron` extra, Geny's
+  has wired (xgen-agent-runtime's `cron` extra, Geny's
   `ScheduleCron`, etc.).
 
 ### Tests
@@ -3379,7 +3379,7 @@ LLM sees only the result text, not the body.
 
 ### Added
 
-- `geny_executor.skills.fork` module:
+- `xgen_agent_runtime.skills.fork` module:
   - `ForkResult` — tiny dataclass mirroring the relevant bits of
     `ToolResult` so runners stay decoupled from the tool layer.
   - `SkillForkRunner` — async-callable type alias. Hosts implement
@@ -3400,7 +3400,7 @@ LLM sees only the result text, not the body.
   kwarg.
 
 - All three exposed at the package top level
-  (`from geny_executor.skills import make_default_fork_runner` etc.).
+  (`from xgen_agent_runtime.skills import make_default_fork_runner` etc.).
 
 ### Changed
 
@@ -3444,7 +3444,7 @@ behaviour out of the box without authoring SKILL.md files first.
 
 ### Added
 
-- `geny_executor/skills/bundled/<id>/SKILL.md` directory tree. Five
+- `xgen_agent_runtime/skills/bundled/<id>/SKILL.md` directory tree. Five
   shipped skills:
   - **verify** (`category: diagnostic`, shell-block) — captures host
     runtime versions, project files, git state, and environment
@@ -3462,7 +3462,7 @@ behaviour out of the box without authoring SKILL.md files first.
   - **batch** (`category: workflow`) — apply one operation across a
     list of items with a fixed result shape.
 
-- `geny_executor.skills.bundled_skills` module:
+- `xgen_agent_runtime.skills.bundled_skills` module:
   - `bundled_skills_dir()` — resolves the on-package skill tree.
   - `load_bundled_skills(strict=False)` — returns a
     :class:`SkillLoadReport` for the bundled tree.
@@ -3473,7 +3473,7 @@ behaviour out of the box without authoring SKILL.md files first.
   bundled skills with one line:
 
   ```python
-  from geny_executor.skills import load_bundled_skills, SkillRegistry
+  from xgen_agent_runtime.skills import load_bundled_skills, SkillRegistry
   registry = SkillRegistry()
   registry.register_many(load_bundled_skills().loaded)
   ```
@@ -3482,9 +3482,9 @@ behaviour out of the box without authoring SKILL.md files first.
 
 - `pyproject.toml` `[tool.hatch.build.targets.wheel]` and
   `[tool.hatch.build.targets.sdist]` now include
-  `src/geny_executor/skills/bundled/**/*.md` so the SKILL.md
+  `src/xgen_agent_runtime/skills/bundled/**/*.md` so the SKILL.md
   payload ships with installed wheels.
-- `geny_executor/__init__.py` `__version__` bumped to `1.6.1`.
+- `xgen_agent_runtime/__init__.py` `__version__` bumped to `1.6.1`.
 
 ### Tests
 
@@ -3504,7 +3504,7 @@ via `${SKILL_DIR}`.
 
 ### Added
 
-- `geny_executor.skills.shell_blocks` — pure-stdlib parser + executor
+- `xgen_agent_runtime.skills.shell_blocks` — pure-stdlib parser + executor
   for two markdown forms:
   - Fenced: ` ``` ! ` (no language tag) opens a block whose contents
     are fed to the configured shell.
@@ -3585,7 +3585,7 @@ session's working files.
   a path the session is working with — keeps the model's tool roster
   focused on skills relevant to the current task.
 
-- `geny_executor.skills.path_match` — stdlib-only path pattern
+- `xgen_agent_runtime.skills.path_match` — stdlib-only path pattern
   compiler (`compile_patterns`, `match_any`). Subset of gitignore
   syntax we actually need; swap for `pathspec` later if anyone wants
   full gitignore behaviour.
@@ -3670,7 +3670,7 @@ and the bundled-skill catalog (10.4 + 10.6).
   registered in `SkillRegistry` (so user-side slash command paths
   resolve them) but never appear in the model's tool roster.
 
-- `__version__` in `geny_executor.__init__` is now kept in sync with
+- `__version__` in `xgen_agent_runtime.__init__` is now kept in sync with
   `pyproject.toml` (was stuck at `"1.0.0"`).
 
 ### Tests
@@ -3708,7 +3708,7 @@ Patch release.
   forward-compatible.
 
 - `HostSelections` re-exported from the top-level package
-  (`geny_executor.HostSelections`).
+  (`xgen_agent_runtime.HostSelections`).
 
 ## [1.3.2] — 2026-04-29
 
@@ -3758,11 +3758,11 @@ All additive — zero breaking changes vs 1.2.x. Net +25 unit tests.
 
 ### Added — Workspace value object + stack (PR-D.4.1)
 
-- ``geny_executor.workspace.Workspace`` — frozen dataclass bundling
+- ``xgen_agent_runtime.workspace.Workspace`` — frozen dataclass bundling
   ``cwd`` / ``git_branch`` / ``lsp_session_id`` / ``env_vars`` /
   ``metadata``. Composition via ``with_cwd`` / ``with_branch`` /
   ``with_lsp`` / ``with_env`` / ``with_metadata``.
-- ``geny_executor.workspace.WorkspaceStack`` — LIFO push/pop/current
+- ``xgen_agent_runtime.workspace.WorkspaceStack`` — LIFO push/pop/current
   for nested tool scopes (worktree branches, LSP sessions). Snapshot
   returns a frozen copy so AgentTool spawn can hand the chain to a
   sub-agent without leaking the live stack.
@@ -3795,7 +3795,7 @@ worktree/dev tool suites green.
   ``state.shared["workspace_snapshot"]`` to the sub-pipeline's
   state when present. Sub-tools then see the same cwd / branch /
   env the parent had at AgentTool fire time.
-- ``geny_executor.workspace.workspace_stack_to_snapshot`` and
+- ``xgen_agent_runtime.workspace.workspace_stack_to_snapshot`` and
   ``workspace_stack_from_snapshot`` helpers serialize / rehydrate
   a WorkspaceStack across pipeline boundaries.
 - 5 new tests in ``tests/unit/test_workspace_propagation.py``;
@@ -3826,7 +3826,7 @@ All additive — zero breaking changes vs 1.1.x. Net +57 unit tests.
 
 ### Added — settings.json hierarchical loader (PR-B.3.1)
 
-- ``geny_executor.settings`` — new module.
+- ``xgen_agent_runtime.settings`` — new module.
 - ``SettingsLoader(paths)`` — JSON cascade with deep-merge. Lazy
   loading + cached; ``reload`` invalidates. Missing/invalid files
   logged + skipped so a partial config still boots.
@@ -3882,7 +3882,7 @@ existing 21 permission_matrix tests still green.
 ### Added — Auto-compaction frequency policy (PR-B.2.1)
 
 - ``FrequencyPolicy`` ABC + 3 reference impls under
-  ``geny_executor.stages.s19_summarize.frequency_policy``:
+  ``xgen_agent_runtime.stages.s19_summarize.frequency_policy``:
   - ``NeverPolicy`` — disables fires entirely.
   - ``EveryNTurnsPolicy`` — fires on iteration % n == 0.
   - ``OnContextFillPolicy`` — fires when used / max ≥ threshold
@@ -3930,13 +3930,13 @@ subsystems: ``runtime`` / ``slash_commands`` / ``channels`` /
   for ``remove`` so reload doesn't resurrect deleted tasks. Output
   bytes per task in ``root/outputs/<task_id>.bin`` (path-traversal
   safe). Corrupt / partial JSONL lines logged + skipped on load.
-- Exported from ``geny_executor.stages.s13_task_registry``.
+- Exported from ``xgen_agent_runtime.stages.s13_task_registry``.
 
 17 new tests in ``tests/unit/test_s13_file_backed_registry.py``.
 
 ### Added — BackgroundTaskRunner + executors (PR-A.1.3)
 
-- ``geny_executor.runtime`` — new framework-runtime layer that
+- ``xgen_agent_runtime.runtime`` — new framework-runtime layer that
   lives outside the synchronous pipeline path. Service code (FastAPI
   lifespan / CLI bootstrap / SDK bootstrap) instantiates it at
   startup and tears it down at shutdown.
@@ -3999,7 +3999,7 @@ state from a backend populated by a different process.
 
 ### Added — Slash command registry + parser (PR-A.2.1)
 
-- ``geny_executor.slash_commands`` — new subsystem.
+- ``xgen_agent_runtime.slash_commands`` — new subsystem.
 - ``SlashCommand`` ABC, ``SlashContext``, ``SlashResult``,
   ``SlashCategory`` (introspection / control / domain).
 - ``SlashCommandRegistry`` — register / deregister / resolve /
@@ -4017,7 +4017,7 @@ state from a backend populated by a different process.
 ### Added — 6 introspection slash commands (PR-A.2.2)
 
 Built-in commands auto-installed into the default registry on
-``import geny_executor.slash_commands.built_in``:
+``import xgen_agent_runtime.slash_commands.built_in``:
 
 - ``/cost``    — token / USD snapshot from a token accountant strategy.
 - ``/clear``   — reset history via the active history provider.
@@ -4088,7 +4088,7 @@ full set (12) — both batches at once.
 
 ### Added — PushNotificationTool + endpoint registry (PR-A.3.2)
 
-- ``geny_executor.notifications`` — new module with
+- ``xgen_agent_runtime.notifications`` — new module with
   ``NotificationEndpoint`` + ``NotificationEndpointRegistry``.
 - ``PushNotificationTool`` — fires JSON POST to a host-registered
   endpoint. Headers can carry secrets (host-supplied). Structured
@@ -4148,7 +4148,7 @@ MCP_AUTH_FAILED. New ``"mcp"`` feature group.
 - ``MonitorTool`` — bounded subscription to host event_bus,
   collects events for ``duration_seconds`` (capped 300).
 - ``SendUserFileTool`` — delivers a file via host-supplied
-  ``UserFileChannel`` (new ABC under ``geny_executor.channels``).
+  ``UserFileChannel`` (new ABC under ``xgen_agent_runtime.channels``).
 - New ``"operator"`` feature group.
 
 15 new tests in ``tests/unit/test_operator_tools.py``.
@@ -4156,7 +4156,7 @@ MCP_AUTH_FAILED. New ``"mcp"`` feature group.
 ### Added — SendMessageTool + channel registry (PR-A.3.7) — closes P0.3
 
 - ``SendMessageChannel`` ABC + ``SendMessageChannelRegistry`` under
-  ``geny_executor.channels``.
+  ``xgen_agent_runtime.channels``.
 - ``StdoutSendMessageChannel`` reference impl.
 - ``SendMessageTool`` — dispatches by channel name to the registered
   impl. Errors structured for NO_REGISTRY / UNKNOWN_CHANNEL / SEND_FAILED.
@@ -4172,7 +4172,7 @@ catalog growth from 13 → 33).
 
 ### Added — Cron job store + types (PR-A.4.1)
 
-- ``geny_executor.cron`` — new subsystem.
+- ``xgen_agent_runtime.cron`` — new subsystem.
 - ``CronJob`` / ``CronJobStatus`` types.
 - ``CronJobStore`` ABC.
 - ``InMemoryCronJobStore`` (process-lifetime) + ``FileBackedCronJobStore``
@@ -4223,7 +4223,7 @@ Beta`` to ``Development Status :: 5 - Production/Stable``.
 This release bundles the deferred Sub-phase 9c follow-ups (the
 read half of HITL + crash recovery) plus the formal stability
 declaration. There are **no breaking changes** vs 0.46.x — every
-0.46-pinned host can pin ``geny-executor[web]>=1.0.0,<2.0.0`` and
+0.46-pinned host can pin ``xgen-agent-runtime[web]>=1.0.0,<2.0.0`` and
 upgrade with no code changes.
 
 ### Added — S9c.1 Pipeline.resume API for HITL (PR #120)
@@ -4543,7 +4543,7 @@ exercise.
   stages are pass-through / bypass; ``_try_run_stage`` silently
   skips unregistered slots.
 - Manifests load forward (v1 / v2 → v3) automatically.
-- Hosts that pin ``geny-executor[web]>=0.45.0,<0.46.0`` and
+- Hosts that pin ``xgen-agent-runtime[web]>=0.45.0,<0.46.0`` and
   rebuild from manifest will see ``len(introspect_all()) == 21``
   and ``Pipeline.describe()`` returning 21 entries.
 
@@ -4566,7 +4566,7 @@ see no behaviour change.
 
 ### Added — S8.1 Credential store (PR #103)
 
-- ``geny_executor.tools.mcp.credentials`` module:
+- ``xgen_agent_runtime.tools.mcp.credentials`` module:
     * ``CredentialStore`` Protocol — get / set / delete / keys.
     * ``MemoryCredentialStore`` — process-lifetime dict.
     * ``FileCredentialStore`` — JSON-file persistence with
@@ -4579,7 +4579,7 @@ see no behaviour change.
 
 ### Added — S8.2 OAuth 2.0 authorization-code flow (PR #104)
 
-- ``geny_executor.tools.mcp.oauth`` module:
+- ``xgen_agent_runtime.tools.mcp.oauth`` module:
     * ``OAuthAuthConfig`` frozen dataclass + required-field
       validation.
     * ``OAuthToken`` (access/refresh/expires_at/scope/raw) with
@@ -4601,7 +4601,7 @@ see no behaviour change.
 
 ### Added — S8.3 mcp:// URI scheme + manager resource API (PR #105)
 
-- ``geny_executor.tools.mcp.uri`` module:
+- ``xgen_agent_runtime.tools.mcp.uri`` module:
     * ``mcp://<server>[/<resource_id>]`` grammar; server name
       regex ``[A-Za-z0-9_.-]+``; opaque ``resource_id`` passed
       back to the MCP SDK verbatim.
@@ -4627,7 +4627,7 @@ see no behaviour change.
       servers; adds ``server`` key.
     * ``get_mcp_prompt(server, name, arguments)`` — routes;
       ``None`` for unknown / disconnected.
-- ``geny_executor.skills.mcp_bridge`` module:
+- ``xgen_agent_runtime.skills.mcp_bridge`` module:
     * ``mcp_skill_id(server, prompt)`` →
       ``"mcp__<server>__<prompt>"``.
     * ``mcp_prompts_to_skills(manager)`` → ``List[Skill]`` with
@@ -4736,7 +4736,7 @@ the new surfaces, behaviour is identical to 0.41.x.
 ### Added — S7.8 Stage 6 API (PR #96)
 
 - ``ModelRouter`` Strategy ABC in
-  ``geny_executor.stages.s06_api.interface`` — single
+  ``xgen_agent_runtime.stages.s06_api.interface`` — single
   ``route(cfg, state) -> Optional[ModelConfig]`` method.
 - ``PassthroughRouter`` (default, no-op) and ``AdaptiveModelRouter``
   ship as built-in artifact registry entries. Adaptive picks
@@ -4754,12 +4754,12 @@ the new surfaces, behaviour is identical to 0.41.x.
 
 ### Added — S7.9 Stage 15 Memory (PR #97)
 
-- ``geny_executor.stages.s15_memory.insight`` module with the
+- ``xgen_agent_runtime.stages.s15_memory.insight`` module with the
   ``record_insight()`` / ``coerce_insight()`` /
   ``drain_pending_insights()`` helpers and the
   ``PENDING_INSIGHTS_KEY`` / ``INSIGHTS_KEY`` ``state.metadata``
   contract. Re-uses the existing
-  ``geny_executor.memory.provider.Insight`` + ``Importance`` types
+  ``xgen_agent_runtime.memory.provider.Insight`` + ``Importance`` types
   as the canonical record shape — no parallel hierarchy.
 - ``StructuredReflectiveStrategy`` registered as
   ``"structured_reflective"`` in ``MemoryStage``'s strategy slot.
@@ -4773,7 +4773,7 @@ the new surfaces, behaviour is identical to 0.41.x.
 ### Added — S7.10 Stage 8 Think (PR #98)
 
 - ``ThinkingBudgetPlanner`` Strategy ABC in
-  ``geny_executor.stages.s08_think.interface`` — single
+  ``xgen_agent_runtime.stages.s08_think.interface`` — single
   ``plan(state) -> int`` method.
 - ``StaticThinkingBudget`` (default, fixed-value) and
   ``AdaptiveThinkingBudget`` (heuristic-based: base +
@@ -4808,7 +4808,7 @@ the new surfaces, behaviour is identical to 0.40.x.
 
 ### Added — S7.5 Stage 11 Agent (PR #92)
 
-- ``geny_executor.stages.s11_agent.subagent_type`` subpackage:
+- ``xgen_agent_runtime.stages.s11_agent.subagent_type`` subpackage:
     * ``SubagentTypeDescriptor`` — frozen dataclass: ``agent_type``,
       ``factory`` (sync or async, zero-arg), ``description``,
       ``allowed_tools``, ``model_override``, ``extras``.
@@ -4859,7 +4859,7 @@ identically to 0.39.x.
 
 ### Added — S7.1 Stage 3 System (PR #88)
 
-- ``geny_executor.stages.s03_system.persona`` subpackage:
+- ``xgen_agent_runtime.stages.s03_system.persona`` subpackage:
     * ``PersonaResolution`` (frozen dataclass) — single-turn snapshot
       of ``persona_blocks`` + ``system_tail`` + ``cache_key``.
     * ``PersonaProvider`` — ``@runtime_checkable`` Protocol; sync
@@ -4878,7 +4878,7 @@ identically to 0.39.x.
 - ``MCPServerConnection.list_resources()`` + ``read_resource(uri)``
   — async wrappers around the SDK's resource API. Fail-open with
   WARNING logs on transport / protocol failures.
-- ``geny_executor.stages.s02_context.MCPResourceRetriever`` —
+- ``xgen_agent_runtime.stages.s02_context.MCPResourceRetriever`` —
   ``MemoryRetriever`` subclass that lists / filters / reads MCP
   resources (the second MCP primitive after tools) and wraps each
   match as a ``MemoryChunk(source="mcp_resource")``. Global
@@ -4956,7 +4956,7 @@ into a built pipeline via ``attach_runtime``.
 
 ### Added — connection FSM (PR #83)
 
-- ``MCPConnectionState`` (``geny_executor.tools.mcp.state``) — five
+- ``MCPConnectionState`` (``xgen_agent_runtime.tools.mcp.state``) — five
   states: ``PENDING`` / ``CONNECTED`` / ``FAILED`` / ``NEEDS_AUTH``
   / ``DISABLED``.
 - ``MCPServerConnection.state`` + ``last_error`` properties.
@@ -5008,13 +5008,13 @@ scripts around tool dispatch.
 
 ### Added — hook runner (PR #80)
 
-- ``geny_executor.hooks.runner.HookRunner`` — spawns subprocess
+- ``xgen_agent_runtime.hooks.runner.HookRunner`` — spawns subprocess
   hooks via ``asyncio.create_subprocess_exec`` (never
   ``shell=True``), serialises ``HookEventPayload`` to stdin as
   JSON, parses stdout into a ``HookOutcome``. Multiple matching
   hooks combine via ``HookOutcome.combine`` (most-restrictive
   wins) and short-circuit once blocked.
-- ``geny_executor.hooks.config`` — ``HookConfigEntry`` /
+- ``xgen_agent_runtime.hooks.config`` — ``HookConfigEntry`` /
   ``HookConfig`` / ``parse_hook_config`` / ``load_hooks_config``.
   YAML loader with location-suffixed validation errors and
   forward-compat skip for unknown event names.
@@ -5101,7 +5101,7 @@ Phase 4 Weeks 7-8 — Skills system ships in inline-execution form.
 
 ### Added — Skills foundation (PR #76)
 
-- New `geny_executor.skills` subpackage:
+- New `xgen_agent_runtime.skills` subpackage:
   - `Skill` / `SkillMetadata` / `SkillContext` dataclasses.
   - `parse_frontmatter(text) → (dict, body)` — stdlib + pyyaml
     `safe_load`. Handles missing delimiters, non-dict top-level
@@ -5146,7 +5146,7 @@ Protocol, the architectural cornerstone for pluggable tool sources.
 
 ### Added
 
-- **`ToolProvider` ABC** (`geny_executor.tools.provider`) —
+- **`ToolProvider` ABC** (`xgen_agent_runtime.tools.provider`) —
   self-contained, lifecycle-aware tool bundles. Where
   `AdhocToolProvider` is name-keyed lookup, `ToolProvider` is a full
   feature pack: the provider owns its name, its tool roster, and
@@ -5173,7 +5173,7 @@ Hosts that bundle their own tools (Geny's creature / feed / knowledge
 suite, third-party plugins, MCP facades) no longer need to enumerate
 tool names in every manifest. They ship a single `XToolProvider`
 class, the host imports and configures it, the pipeline does the rest.
-This is the "geny-executor first" principle made concrete at the
+This is the "xgen-agent-runtime first" principle made concrete at the
 plugin boundary.
 
 ### Notes
@@ -5198,7 +5198,7 @@ consume any of the new tools see no behaviour change.
   allowlist rejects `file://` / `ftp://` / data URIs.
 - **`WebSearch`** (PR #66) — DuckDuckGo text search via the new
   `[web]` optional extra (`ddgs>=9.11`). Missing dep → clean
-  "pip install 'geny-executor[web]'" hint; never crashes at import.
+  "pip install 'xgen-agent-runtime[web]'" hint; never crashes at import.
   Hard cap 30 results, region + safesearch forwarded.
 - **`TodoWrite`** (PR #68) — Claude Code-style task list updates.
   Full-list rewrite semantics, stable IDs derived from position +
@@ -5351,7 +5351,7 @@ Patch release — removes a ruff F401 (unused import) that blocked
 
 ### Fixed
 
-- **`src/geny_executor/permission/matrix.py`** — removed an unused
+- **`src/xgen_agent_runtime/permission/matrix.py`** — removed an unused
   top-level `PermissionBehavior` import. The symbol is only reached
   at runtime via `rule.behavior` (already imported transitively), so
   dropping the top-level name does not affect behaviour.
@@ -5429,7 +5429,7 @@ opt in to the new surfaces.
 
 ### Added — Permission rule matrix (PR #50)
 
-New `geny_executor.permission` package.
+New `xgen_agent_runtime.permission` package.
 
 - **`PermissionBehavior`** (`ALLOW / DENY / ASK`),
   **`PermissionMode`** (`DEFAULT / PLAN / AUTO / BYPASS`),
@@ -5448,7 +5448,7 @@ New `geny_executor.permission` package.
 
 ### Added — Hook taxonomy + SharedKeys namespace (PR #51)
 
-New `geny_executor.hooks` package and `geny_executor.core.shared_keys`
+New `xgen_agent_runtime.hooks` package and `xgen_agent_runtime.core.shared_keys`
 module.
 
 - **`HookEvent`** enum — 16 kinds (SESSION_START/END,
@@ -5580,7 +5580,7 @@ override or attaching an `llm_client`.
   full `ModelConfig` bundle (model + sampling + thinking settings).
   Reads `self._model_override` first; otherwise builds from state
   defaults. `resolve_model` kept as a thin alias for back-compat.
-- **`geny_executor.llm_client`** — new top-level package with
+- **`xgen_agent_runtime.llm_client`** — new top-level package with
   `BaseClient` + `ClientCapabilities`, per-vendor
   `AnthropicClient` / `OpenAIClient` / `GoogleClient` / `VLLMClient`,
   and a provider-name `ClientRegistry`. Each client speaks the
@@ -5629,7 +5629,7 @@ override or attaching an `llm_client`.
   on the very next request.
 - **`APIRequest` / `APIResponse` / `ContentBlock`** canonical types
   move from `stages.s06_api.types` into the top-level
-  `geny_executor.llm_client.types` module. The old module re-exports
+  `xgen_agent_runtime.llm_client.types` module. The old module re-exports
   from the new location; imports keep working without change.
 
 ### Removed
@@ -5702,7 +5702,7 @@ annotation; it is now a live dispatch list.
 Accepted values for `manifest.tools.built_in`:
 
 * `["*"]` — registers every class in
-  `geny_executor.tools.built_in.BUILT_IN_TOOL_CLASSES` (Read, Write,
+  `xgen_agent_runtime.tools.built_in.BUILT_IN_TOOL_CLASSES` (Read, Write,
   Edit, Bash, Glob, Grep).
 * `["Write", "Read"]` — registers only the named classes.
 * `[]` or missing — no framework tools attached (preserves 0.26.x
@@ -5720,7 +5720,7 @@ identically to 0.26.x.
 ### Added
 
 - **`BUILT_IN_TOOL_CLASSES`** — new public mapping in
-  `geny_executor.tools.built_in` from registry name (`"Write"`) to
+  `xgen_agent_runtime.tools.built_in` from registry name (`"Write"`) to
   tool class (`WriteTool`). Extensible: adding a new file-system or
   search tool to the framework now means dropping a module under
   `tools/built_in/` and one entry in the map.
@@ -5835,7 +5835,7 @@ registered in the default `EvaluateStage`'s slot registry.
 No breaking changes. Pipelines that don't reference
 `binary_classify` from a manifest are byte-identical to 0.24.0.
 The `adaptive` artifact remains strategy-only and its Python-level
-import path (`from geny_executor.stages.s12_evaluate.artifact.adaptive.strategy import BinaryClassifyEvaluation`)
+import path (`from xgen_agent_runtime.stages.s12_evaluate.artifact.adaptive.strategy import BinaryClassifyEvaluation`)
 is unchanged — the 0.25.0 change is purely additive inside the
 default stage's strategy slot.
 
@@ -5905,7 +5905,7 @@ manifest-first hosts.
 ### Added
 
 - **`Pipeline.attach_runtime(*, memory_retriever=None, memory_strategy=None,
-  memory_persistence=None)`** in `geny_executor.core.pipeline`. Walks the
+  memory_persistence=None)`** in `xgen_agent_runtime.core.pipeline`. Walks the
   registered stages and replaces the relevant slot strategies:
   - `memory_retriever` → Stage 2 (Context), slot `retriever`.
   - `memory_strategy` → Stage 15 (Memory), slot `strategy`.
@@ -5985,7 +5985,7 @@ reality).
   default `ToolStage` wires it to `state.add_event`, preserving
   the existing event-listener path (`state._event_listener`).
 - **`ToolEventCallback` type alias** in
-  `geny_executor.stages.s10_tool.interface`, exported alongside
+  `xgen_agent_runtime.stages.s10_tool.interface`, exported alongside
   `ToolExecutor` / `ToolRouter`.
 
 ### Why
@@ -6038,13 +6038,13 @@ Tool / MCP integration hardening release. Bundles four breaking
 changes discovered during the Geny ↔ executor cutover (see
 `Geny/dev_docs/20260420_2/plan/` for the full context). The release
 is intentionally packaged as one breaking bump so downstream Geny
-can pin `geny-executor>=0.22.0,<0.23.0` and cut over in a single
+can pin `xgen-agent-runtime>=0.22.0,<0.23.0` and cut over in a single
 PR rather than chasing four micro-upgrades.
 
 ### Added
 
 - **`ToolError` / `ToolFailure` / `ToolErrorCode`** in
-  `geny_executor.tools.errors`. Structured error model replacing ad-hoc
+  `xgen_agent_runtime.tools.errors`. Structured error model replacing ad-hoc
   string returns. Every host-side error now surfaces a stable payload
   `{error: {code, message, details}}` which the Anthropic tool_result
   bridge renders with a leading `ERROR <code>: <message>` header line.
@@ -6054,7 +6054,7 @@ PR rather than chasing four micro-upgrades.
   default router and available for tool implementations. Converts
   jsonschema failures into `ToolFailure(code=INVALID_INPUT)`. (#22)
 - **`MCPConnectionError(server_name, phase, cause)`** in
-  `geny_executor.tools.mcp.errors` — a single structured exception for
+  `xgen_agent_runtime.tools.mcp.errors` — a single structured exception for
   every phase of MCP server start-up (`connect`, `initialize`,
   `list_tools`, `sdk_missing`). (#24)
 - **`Pipeline.from_manifest_async`** — async sibling of
@@ -6065,7 +6065,7 @@ PR rather than chasing four micro-upgrades.
   **`MCPManager.remove_server(name, *, registry=None)`** — runtime
   hot-swap of MCP servers that also keeps the registry in sync. (#24)
 - **`AdhocToolProvider` Protocol** in
-  `geny_executor.tools.providers` — runtime-checkable Protocol with
+  `xgen_agent_runtime.tools.providers` — runtime-checkable Protocol with
   `list_names()` / `get(name)` that lets hosts supply tools not
   expressible as `AdhocToolDefinition`. (#25)
 - **`ToolsSnapshot.external: List[str]`** — manifest-level whitelist

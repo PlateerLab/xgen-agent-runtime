@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.llm_client.anthropic import (
+from xgen_agent_runtime.llm_client.anthropic import (
     AnthropicClient,
     _ANTHROPIC_MODEL_ALIASES,
     _model_rejects_sampling_params,
@@ -32,7 +32,7 @@ from geny_executor.llm_client.anthropic import (
     _retry_kwargs_after_deprecation,
     _translate_thinking_to_adaptive,
 )
-from geny_executor.llm_client.types import APIRequest
+from xgen_agent_runtime.llm_client.types import APIRequest
 
 
 def _req(**overrides) -> APIRequest:

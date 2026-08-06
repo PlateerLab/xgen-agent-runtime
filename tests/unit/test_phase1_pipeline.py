@@ -7,13 +7,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.core.state import TokenUsage
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider, APIResponse
-from geny_executor.stages.s06_api.types import ContentBlock
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.core.state import TokenUsage
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider, APIResponse
+from xgen_agent_runtime.stages.s06_api.types import ContentBlock
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _make_mock_pipeline(text: str = "Hello from mock!", **kwargs) -> Pipeline:
@@ -237,7 +237,7 @@ async def test_streaming_pipeline_complete_carries_full_result():
 @pytest.mark.asyncio
 async def test_pipeline_error_handling():
     """Pipeline returns error result on exception."""
-    from geny_executor.stages.s06_api.providers import APIProvider
+    from xgen_agent_runtime.stages.s06_api.providers import APIProvider
 
     class FailProvider(APIProvider):
         @property
@@ -252,7 +252,7 @@ async def test_pipeline_error_handling():
     pipeline.register_stage(
         APIStage(
             provider=FailProvider(),
-            retry=__import__("geny_executor.stages.s06_api.retry", fromlist=["NoRetry"]).NoRetry(),
+            retry=__import__("xgen_agent_runtime.stages.s06_api.retry", fromlist=["NoRetry"]).NoRetry(),
         )
     )
     pipeline.register_stage(ParseStage())
@@ -269,7 +269,7 @@ async def test_pipeline_error_handling():
 @pytest.mark.asyncio
 async def test_model_config_propagates_all_params():
     """ModelConfig fields are fully propagated: config → state → request."""
-    from geny_executor.core.config import ModelConfig, PipelineConfig
+    from xgen_agent_runtime.core.config import ModelConfig, PipelineConfig
 
     # 1. Config → State propagation
     model_config = ModelConfig(
@@ -317,7 +317,7 @@ async def test_model_config_propagates_all_params():
 @pytest.mark.asyncio
 async def test_builder_routes_model_kwargs_correctly():
     """PipelineBuilder.with_model() routes kwargs to ModelConfig vs PipelineConfig."""
-    from geny_executor.core.builder import PipelineBuilder
+    from xgen_agent_runtime.core.builder import PipelineBuilder
 
     builder = PipelineBuilder("test", api_key="test-key")
     builder.with_model(
@@ -352,7 +352,7 @@ async def test_builder_routes_model_kwargs_correctly():
 @pytest.mark.asyncio
 async def test_cost_budget_enforced_in_loop():
     """Pipeline stops when cost budget is exceeded."""
-    from geny_executor.core.config import ModelConfig
+    from xgen_agent_runtime.core.config import ModelConfig
 
     # Create pipeline that loops: tool_use → tool_result → continue
     tool_response = APIResponse(
@@ -389,11 +389,11 @@ async def test_cost_budget_enforced_in_loop():
         cost_budget_usd=0.0001,
     )
 
-    from geny_executor.stages.s07_token import TokenStage
-    from geny_executor.stages.s10_tool import ToolStage
-    from geny_executor.stages.s16_loop import LoopStage
-    from geny_executor.tools.registry import ToolRegistry
-    from geny_executor.tools.base import Tool, ToolResult
+    from xgen_agent_runtime.stages.s07_token import TokenStage
+    from xgen_agent_runtime.stages.s10_tool import ToolStage
+    from xgen_agent_runtime.stages.s16_loop import LoopStage
+    from xgen_agent_runtime.tools.registry import ToolRegistry
+    from xgen_agent_runtime.tools.base import Tool, ToolResult
 
     class DummyTool(Tool):
         @property
@@ -440,7 +440,7 @@ async def test_cost_budget_enforced_in_loop():
 @pytest.mark.asyncio
 async def test_stream_config_propagates_to_api_stage():
     """PipelineConfig.stream controls APIStage streaming behavior."""
-    from geny_executor.core.config import PipelineConfig
+    from xgen_agent_runtime.core.config import PipelineConfig
 
     # stream=False should be propagated to state
     config = PipelineConfig(name="test", stream=False)
@@ -494,11 +494,11 @@ async def test_single_turn_completes_after_one_pass():
     provider.add_response(tool_response)
     provider.add_response(final_response)
 
-    from geny_executor.stages.s07_token import TokenStage
-    from geny_executor.stages.s10_tool import ToolStage
-    from geny_executor.stages.s16_loop import LoopStage
-    from geny_executor.tools.registry import ToolRegistry
-    from geny_executor.tools.base import Tool, ToolResult
+    from xgen_agent_runtime.stages.s07_token import TokenStage
+    from xgen_agent_runtime.stages.s10_tool import ToolStage
+    from xgen_agent_runtime.stages.s16_loop import LoopStage
+    from xgen_agent_runtime.tools.registry import ToolRegistry
+    from xgen_agent_runtime.tools.base import Tool, ToolResult
 
     class DummyTool(Tool):
         @property

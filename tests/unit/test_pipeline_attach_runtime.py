@@ -12,19 +12,19 @@ from typing import Any, List
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig
-from geny_executor.stages.s02_context import ContextStage
-from geny_executor.stages.s02_context.interface import MemoryRetriever
-from geny_executor.stages.s02_context.types import MemoryChunk
-from geny_executor.stages.s03_system import SystemStage
-from geny_executor.stages.s03_system.interface import PromptBuilder
-from geny_executor.stages.s10_tool import ToolStage
-from geny_executor.stages.s18_memory import MemoryStage
-from geny_executor.stages.s18_memory.interface import (
+from xgen_agent_runtime import Pipeline, PipelineConfig
+from xgen_agent_runtime.stages.s02_context import ContextStage
+from xgen_agent_runtime.stages.s02_context.interface import MemoryRetriever
+from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
+from xgen_agent_runtime.stages.s03_system import SystemStage
+from xgen_agent_runtime.stages.s03_system.interface import PromptBuilder
+from xgen_agent_runtime.stages.s10_tool import ToolStage
+from xgen_agent_runtime.stages.s18_memory import MemoryStage
+from xgen_agent_runtime.stages.s18_memory.interface import (
     ConversationPersistence,
     MemoryUpdateStrategy,
 )
-from geny_executor.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import ToolContext
 
 
 # ─── Test doubles ───

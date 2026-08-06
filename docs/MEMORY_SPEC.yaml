@@ -1,7 +1,7 @@
-# geny-executor — Memory Specification
+# xgen-agent-runtime — Memory Specification
 #
 # Machine-verifiable rendering of the requirements catalogue from
-# `geny-executor-web/docs/MEMORY_ARCHITECTURE.md` §1.2 (R-A through
+# `xgen-agent-runtime-web/docs/MEMORY_ARCHITECTURE.md` §1.2 (R-A through
 # R-F) and §3.6 (Completeness Criteria C1-C7).
 #
 # This is the *contract* every MemoryProvider implementation must
@@ -13,7 +13,7 @@
 
 version: 1
 spec_date: "2026-04-19"
-source_doc: "geny-executor-web/docs/MEMORY_ARCHITECTURE.md"
+source_doc: "xgen-agent-runtime-web/docs/MEMORY_ARCHITECTURE.md"
 
 # ── 1. Layers (R-A storage layers) ───────────────────────────────────
 # Each layer is a distinct memory plane with its own backend(s) and

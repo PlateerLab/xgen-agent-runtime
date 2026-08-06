@@ -26,11 +26,11 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _last_user_text(request: Any) -> str:
@@ -64,7 +64,7 @@ class _EchoStreamProvider(MockProvider):
         self._delay_s = delay_s
 
     async def create_message_stream(self, request):  # noqa: ANN001
-        from geny_executor.llm_client.types import APIResponse, ContentBlock, TokenUsage
+        from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock, TokenUsage
 
         text = f"echo {_last_user_text(request)}"
         self._call_history.append(request)

@@ -19,14 +19,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from geny_executor.memory.embedding import (
+from xgen_agent_runtime.memory.embedding import (
     EmbeddingClient,
     EmbeddingError,
     LocalHashEmbeddingClient,
     create_embedding_client,
 )
-from geny_executor.memory.embedding.openai import OpenAIEmbeddingClient
-from geny_executor.memory.embedding.voyage import VoyageEmbeddingClient
+from xgen_agent_runtime.memory.embedding.openai import OpenAIEmbeddingClient
+from xgen_agent_runtime.memory.embedding.voyage import VoyageEmbeddingClient
 
 
 @pytest.mark.asyncio

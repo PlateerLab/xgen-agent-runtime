@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 
-from geny_executor.core.state import PipelineState
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
-from geny_executor.memory.strategy import ProviderDrivenStrategy
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.strategy import ProviderDrivenStrategy
 
 
 def _run(coro):

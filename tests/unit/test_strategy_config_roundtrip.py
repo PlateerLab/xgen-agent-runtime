@@ -20,30 +20,30 @@ from typing import Any, Callable, Dict, Tuple
 
 import pytest
 
-from geny_executor.core.schema import ConfigSchema
-from geny_executor.stages.s06_api.artifact.default.retry import (
+from xgen_agent_runtime.core.schema import ConfigSchema
+from xgen_agent_runtime.stages.s06_api.artifact.default.retry import (
     ExponentialBackoffRetry,
     RateLimitAwareRetry,
 )
-from geny_executor.stages.s06_api.artifact.default.router import AdaptiveModelRouter
-from geny_executor.stages.s10_tool.artifact.default.executors import (
+from xgen_agent_runtime.stages.s06_api.artifact.default.router import AdaptiveModelRouter
+from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
     ParallelExecutor,
     PartitionExecutor,
 )
-from geny_executor.stages.s11_tool_review.artifact.default.reviewers import (
+from xgen_agent_runtime.stages.s11_tool_review.artifact.default.reviewers import (
     DestructiveResultReviewer,
     NetworkAuditReviewer,
     SchemaReviewer,
     SensitivePatternReviewer,
     SizeReviewer,
 )
-from geny_executor.stages.s14_evaluate import (
+from xgen_agent_runtime.stages.s14_evaluate import (
     BinaryClassifyEvaluation,
     CriteriaBasedEvaluation,
     EvaluationChain,
     WeightedScorer,
 )
-from geny_executor.stages.s16_loop import (
+from xgen_agent_runtime.stages.s16_loop import (
     BudgetAwareLoopController,
     MultiDimensionalBudgetController,
     StandardLoopController,

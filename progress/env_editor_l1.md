@@ -11,8 +11,8 @@
 ## Summary
 
 v0.13.0 adds the library contracts that the Environment Builder UI in
-geny-executor-web needs. Every change is **additive**: v0.12.0 consumers
-(notably `geny-executor-web v0.7.1` and Geny) remain binary-compatible.
+xgen-agent-runtime-web needs. Every change is **additive**: v0.12.0 consumers
+(notably `xgen-agent-runtime-web v0.7.1` and Geny) remain binary-compatible.
 The library can now:
 
 1. Describe every artifact on disk with metadata (`ArtifactInfo`,
@@ -106,7 +106,7 @@ migrate→build.
 
 ---
 
-## New top-level exports (`geny_executor.__init__`)
+## New top-level exports (`xgen_agent_runtime.__init__`)
 
 - `ArtifactInfo`, `describe_artifact`, `list_artifacts_with_meta`.
 - `ChainIntrospection`, `IntrospectionUnsupported`, `SlotIntrospection`,
@@ -143,5 +143,5 @@ migrate→build.
 - [x] Pipeline → manifest → `Pipeline.from_manifest(manifest)` round-trip
   preserves artifact / tool_binding / model_override / chain_order.
 - [x] `tests/contract/test_stage_uniformity.py` still green.
-- [x] `geny-executor-web v0.7.1` imports (`PipelinePresets`,
+- [x] `xgen-agent-runtime-web v0.7.1` imports (`PipelinePresets`,
   `PipelineMutator`, etc.) unchanged.

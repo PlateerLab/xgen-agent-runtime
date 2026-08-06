@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor import ManifestIssue, build_manifest, validate_manifest
-from geny_executor.core.environment import (
+from xgen_agent_runtime import ManifestIssue, build_manifest, validate_manifest
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     StageManifestEntry,

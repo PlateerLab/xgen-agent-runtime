@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.tool_search_tool import ToolSearchTool, _rank
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.tool_search_tool import ToolSearchTool, _rank
 
 
 def _desc(name: str, description: str = "", schema: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -171,7 +171,7 @@ class TestFallbackWithoutStateView:
 
 class TestRegistry:
     def test_registered_in_catalog(self):
-        from geny_executor.tools.built_in import (
+        from xgen_agent_runtime.tools.built_in import (
             BUILT_IN_TOOL_CLASSES,
             BUILT_IN_TOOL_FEATURES,
             ToolSearchTool as _Registered,
@@ -185,7 +185,7 @@ class TestRegistry:
 
 
 def _make_tool(name: str, description: str):
-    from geny_executor.tools.base import Tool, ToolResult
+    from xgen_agent_runtime.tools.base import Tool, ToolResult
 
     class _T(Tool):
         @property
@@ -207,7 +207,7 @@ def _make_tool(name: str, description: str):
 
 
 def _registry_ctx():
-    from geny_executor.tools.registry import ToolRegistry
+    from xgen_agent_runtime.tools.registry import ToolRegistry
 
     reg = ToolRegistry()
     reg.register(_make_tool("Bash", "Run a shell command."), core=True)
@@ -245,7 +245,7 @@ class TestBrowseMode:
 
     @pytest.mark.asyncio
     async def test_browse_with_everything_exposed(self):
-        from geny_executor.tools.registry import ToolRegistry
+        from xgen_agent_runtime.tools.registry import ToolRegistry
 
         reg = ToolRegistry()
         reg.register(_make_tool("Bash", "shell"), core=True)

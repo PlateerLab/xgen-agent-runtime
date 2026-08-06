@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.gateway import (
+from xgen_agent_runtime.gateway import (
     BUILTIN_GATEWAY_PLATFORMS,
     GatewayReply,
     GatewayRunner,

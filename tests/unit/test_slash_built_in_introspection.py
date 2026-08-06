@@ -6,11 +6,11 @@ from typing import Any, List
 
 import pytest
 
-from geny_executor.slash_commands import (
+from xgen_agent_runtime.slash_commands import (
     SlashCommandRegistry,
     SlashContext,
 )
-from geny_executor.slash_commands.built_in import (
+from xgen_agent_runtime.slash_commands.built_in import (
     ClearCommand,
     ContextCommand,
     CostCommand,

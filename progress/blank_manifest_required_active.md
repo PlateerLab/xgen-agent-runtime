@@ -17,7 +17,7 @@ set of structurally-required stages, but `blank_manifest()` did not
 consume the flag. The relevant line:
 
 ```python
-# src/geny_executor/core/environment.py:317 (pre-fix)
+# src/xgen_agent_runtime/core/environment.py:317 (pre-fix)
 entry = StageManifestEntry(
     order=insp.order,
     name=insp.name,
@@ -26,7 +26,7 @@ entry = StageManifestEntry(
 )
 ```
 
-Downstream symptom, as reported in geny-executor-web: after running
+Downstream symptom, as reported in xgen-agent-runtime-web: after running
 `POST /api/environments` with `mode="blank"`, the returned manifest
 had every stage inactive. The web Environment Builder's
 `coerceRequiredStagesActive()` only ran on `loadTemplate()` for
@@ -40,7 +40,7 @@ silently produced a non-runnable template.
 Single line change, plus docstring:
 
 ```python
-# src/geny_executor/core/environment.py (post-fix)
+# src/xgen_agent_runtime/core/environment.py (post-fix)
 entry = StageManifestEntry(
     order=insp.order,
     name=insp.name,
@@ -61,7 +61,7 @@ required stages on.
 
 ## Changes
 
-**`src/geny_executor/core/environment.py`**
+**`src/xgen_agent_runtime/core/environment.py`**
 
 - `blank_manifest()`: changed `active=False` → `active=insp.required`.
 - Docstring rewritten to describe the new default ("required four on,
@@ -100,11 +100,11 @@ required stages on.
 ## Version bumps
 
 - `pyproject.toml`: `0.13.3` → `0.13.4`
-- `src/geny_executor/__init__.py`: `__version__ = "0.13.4"`
+- `src/xgen_agent_runtime/__init__.py`: `__version__ = "0.13.4"`
 
-## Follow-up (separate PR in geny-executor-web)
+## Follow-up (separate PR in xgen-agent-runtime-web)
 
-- Bump pin: `geny-executor>=0.13.3` → `>=0.13.4`
+- Bump pin: `xgen-agent-runtime>=0.13.3` → `>=0.13.4`
 - Bump web: `0.8.6` → `0.8.7`
 - CHANGELOG entry describing the user-visible behaviour change
   (blank envs now arrive with Input/API/Parse/Yield already on).

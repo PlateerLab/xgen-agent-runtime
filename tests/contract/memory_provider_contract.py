@@ -1,4 +1,4 @@
-"""Reusable contract for `geny_executor.memory.provider.MemoryProvider`.
+"""Reusable contract for `xgen_agent_runtime.memory.provider.MemoryProvider`.
 
 Every concrete MemoryProvider implementation imports
 `MemoryProviderContract` and subclasses it once with a
@@ -17,7 +17,7 @@ from typing import Awaitable, Callable
 
 import pytest
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Capability,
     EmbeddingDescriptor,
     ExecutionSummary,

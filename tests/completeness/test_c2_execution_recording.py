@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import ExecutionSummary, MemoryProvider
+from xgen_agent_runtime.memory.provider import ExecutionSummary, MemoryProvider
 
 
 async def _run_and_record(provider: MemoryProvider, session_id: str) -> None:

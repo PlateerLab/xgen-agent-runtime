@@ -16,21 +16,21 @@ import time
 from typing import Any, Dict, List
 
 
-from geny_executor.core.state import PipelineState
-from geny_executor.tools.base import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.tools.base import (
     Tool,
     ToolCapabilities,
     ToolContext,
     ToolResult,
 )
-from geny_executor.tools.registry import ToolRegistry
-from geny_executor.stages.s10_tool.artifact.default.executors import (
+from xgen_agent_runtime.tools.registry import ToolRegistry
+from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
     ParallelExecutor,
     PartitionExecutor,
     SequentialExecutor,
 )
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -13,8 +13,8 @@ pytest.importorskip("google.genai")
 
 from types import SimpleNamespace  # noqa: E402
 
-from geny_executor.llm_client.google import GoogleClient  # noqa: E402
-from geny_executor.llm_client.base import BaseClient  # noqa: E402
+from xgen_agent_runtime.llm_client.google import GoogleClient  # noqa: E402
+from xgen_agent_runtime.llm_client.base import BaseClient  # noqa: E402
 
 from tests.llm_client.conformance.harness import ConformanceTestSuite  # noqa: E402
 

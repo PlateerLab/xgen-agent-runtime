@@ -22,11 +22,11 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.core.environment import EnvironmentManifest, ToolsSnapshot
+from xgen_agent_runtime.core.environment import EnvironmentManifest, ToolsSnapshot
 from tests._fixtures.manifest_entries import required_stage_entries
-from geny_executor.core.pipeline import Pipeline, ToolResolutionReport
-from geny_executor.llm_client.credentials import ConfigError
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.core.pipeline import Pipeline, ToolResolutionReport
+from xgen_agent_runtime.llm_client.credentials import ConfigError
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 
 
 class _NamedTool(Tool):
@@ -92,7 +92,7 @@ def test_string_entry_resolved_registers_and_reports() -> None:
 def test_string_entry_unresolved_warns_and_builds(caplog) -> None:
     """Plain strings stay optional: unresolved is a warning + report
     entry, never a build failure — even in strict mode."""
-    caplog.set_level(logging.WARNING, logger="geny_executor.core.pipeline")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline")
     manifest = _manifest(external=["ghost"])
     pipeline = Pipeline.from_manifest(
         manifest, adhoc_providers=[_DictProvider({})], strict=True
@@ -108,7 +108,7 @@ def test_string_entry_unresolved_warns_and_builds(caplog) -> None:
 
 
 def test_dict_entry_optional_unresolved_warns_and_builds(caplog) -> None:
-    caplog.set_level(logging.WARNING, logger="geny_executor.core.pipeline")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline")
     manifest = _manifest(external=[{"name": "ghost", "required": False}])
     pipeline = Pipeline.from_manifest(
         manifest, adhoc_providers=[_DictProvider({})], strict=True
@@ -147,7 +147,7 @@ def test_dict_entry_required_unresolved_no_providers_strict_raises() -> None:
 
 
 def test_dict_entry_required_unresolved_lenient_warns_and_reports(caplog) -> None:
-    caplog.set_level(logging.WARNING, logger="geny_executor.core.pipeline")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline")
     manifest = _manifest(external=[{"name": "must_have", "required": True}])
     pipeline = Pipeline.from_manifest(
         manifest, adhoc_providers=[_DictProvider({})], strict=False
@@ -179,7 +179,7 @@ def test_mixed_string_and_dict_entries() -> None:
 
 
 def test_malformed_entries_warn_and_skip(caplog) -> None:
-    caplog.set_level(logging.WARNING, logger="geny_executor.core.pipeline")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline")
     manifest = _manifest(external=[{"required": True}, 42])
     pipeline = Pipeline.from_manifest(
         manifest, adhoc_providers=[_DictProvider({})], strict=True

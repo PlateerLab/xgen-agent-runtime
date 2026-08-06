@@ -10,12 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.channels import (
+from xgen_agent_runtime.channels import (
     BUILTIN_CHANNEL_KINDS,
     build_channel_registry,
     build_send_message_channel,
 )
-from geny_executor.channels.built_in import (
+from xgen_agent_runtime.channels.built_in import (
     DiscordSendMessageChannel,
     NtfySendMessageChannel,
     SlackSendMessageChannel,

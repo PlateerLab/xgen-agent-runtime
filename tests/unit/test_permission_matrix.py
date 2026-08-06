@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List
 
 import pytest
 
-from geny_executor.permission import (
+from xgen_agent_runtime.permission import (
     PermissionBehavior,
     PermissionDecision,
     PermissionMode,

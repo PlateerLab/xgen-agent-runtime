@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from geny_executor.core.environment import StageManifestEntry
+from xgen_agent_runtime.core.environment import StageManifestEntry
 
 
 def required_stage_entries(provider: str = "anthropic") -> List[Dict[str, Any]]:

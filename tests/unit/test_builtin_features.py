@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.tools.built_in import (
+from xgen_agent_runtime.tools.built_in import (
     BUILT_IN_TOOL_CLASSES,
     BUILT_IN_TOOL_FEATURES,
     get_builtin_tools,

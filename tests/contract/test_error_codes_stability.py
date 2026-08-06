@@ -21,7 +21,7 @@ from typing import Dict
 
 import pytest
 
-from geny_executor.core.errors import (
+from xgen_agent_runtime.core.errors import (
     APIError,
     ErrorCategory,
     ExecutorErrorCode,
@@ -32,7 +32,7 @@ from geny_executor.core.errors import (
 # ──────────────────────────────────────────────────────── frozen codes ─
 
 
-# The canonical set of codes shipped in geny-executor ≥ 2.1.0.
+# The canonical set of codes shipped in xgen-agent-runtime ≥ 2.1.0.
 # **Do not edit this dict to make a failing test pass.** If a code
 # value here doesn't match the enum, fix the enum (you accidentally
 # renamed a code) or — if you really mean to remove/rename a code —

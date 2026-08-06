@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.stages.s06_api._translate import (
+from xgen_agent_runtime.stages.s06_api._translate import (
     normalize_stop_reason,
     canonical_tools_to_openai,
     canonical_tools_to_google,
@@ -307,21 +307,21 @@ class TestHelpers:
 
 class TestBuilderInference:
     def test_openai_models_detected(self):
-        from geny_executor.core.builder import PipelineBuilder
+        from xgen_agent_runtime.core.builder import PipelineBuilder
 
         for model in ["gpt-4.1", "gpt-4o-mini", "o3", "o4-mini"]:
             builder = PipelineBuilder("test", api_key="test", model=model)
             assert builder._infer_api_artifact() == "openai", f"Failed for {model}"
 
     def test_google_models_detected(self):
-        from geny_executor.core.builder import PipelineBuilder
+        from xgen_agent_runtime.core.builder import PipelineBuilder
 
         for model in ["gemini-3-flash", "gemini-2.5-pro"]:
             builder = PipelineBuilder("test", api_key="test", model=model)
             assert builder._infer_api_artifact() == "google", f"Failed for {model}"
 
     def test_anthropic_models_default(self):
-        from geny_executor.core.builder import PipelineBuilder
+        from xgen_agent_runtime.core.builder import PipelineBuilder
 
         for model in ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]:
             builder = PipelineBuilder("test", api_key="test", model=model)
@@ -335,10 +335,10 @@ class TestBuilderInference:
 
 class TestUnifiedPricing:
     def test_anthropic_model(self):
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         calc = UnifiedPricingCalculator()
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
@@ -346,10 +346,10 @@ class TestUnifiedPricing:
         assert cost == pytest.approx(3.0 + 15.0)  # $3 input + $15 output
 
     def test_openai_model(self):
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         calc = UnifiedPricingCalculator()
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
@@ -357,10 +357,10 @@ class TestUnifiedPricing:
         assert cost == pytest.approx(2.0 + 8.0)  # $2 input + $8 output
 
     def test_google_model(self):
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         calc = UnifiedPricingCalculator()
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
@@ -368,20 +368,20 @@ class TestUnifiedPricing:
         assert cost == pytest.approx(0.50 + 3.0)  # $0.50 input + $3.0 output
 
     def test_unknown_model_zero(self):
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         calc = UnifiedPricingCalculator()
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
         assert calc.calculate(usage, "unknown-model") == 0.0
 
     def test_anthropic_cache_pricing(self):
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         calc = UnifiedPricingCalculator()
         usage = TokenUsage(
@@ -409,11 +409,11 @@ class TestUnifiedPricing:
         """The confirmed prod bug: a small fresh input + a large cache
         read must not go negative (pre-2.51 subtracted cache_read from an
         already-uncached input_tokens)."""
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             AnthropicPricingCalculator,
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         # Steady-state aggressive-cache turn: 200 new tokens, 8k cache hit.
         usage = TokenUsage(
@@ -431,10 +431,10 @@ class TestUnifiedPricing:
     def test_unlisted_variant_binds_to_longest_prefix(self):
         """audit C4: an unlisted dated variant must bind to its own
         family (opus-4-1), not to whichever key sorts first (opus-4-6)."""
-        from geny_executor.stages.s07_token.artifact.default.pricing import (
+        from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
             UnifiedPricingCalculator,
         )
-        from geny_executor.core.state import TokenUsage
+        from xgen_agent_runtime.core.state import TokenUsage
 
         calc = UnifiedPricingCalculator()
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=0)
@@ -449,8 +449,8 @@ class TestUnifiedPricing:
 
 class TestCacheBypass:
     def test_anthropic_applies_cache(self):
-        from geny_executor.core.state import PipelineState
-        from geny_executor.stages.s05_cache.artifact.default.strategies import (
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
             SystemCacheStrategy,
         )
 
@@ -461,8 +461,8 @@ class TestCacheBypass:
         assert isinstance(state.system, list)
 
     def test_openai_skips_cache(self):
-        from geny_executor.core.state import PipelineState
-        from geny_executor.stages.s05_cache.artifact.default.strategies import (
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
             SystemCacheStrategy,
         )
 
@@ -473,8 +473,8 @@ class TestCacheBypass:
         assert state.system == "You are helpful."
 
     def test_google_skips_cache(self):
-        from geny_executor.core.state import PipelineState
-        from geny_executor.stages.s05_cache.artifact.default.strategies import (
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
             AggressiveCacheStrategy,
         )
 
@@ -491,7 +491,7 @@ class TestCacheBypass:
 
 class TestArtifactSystem:
     def test_list_api_artifacts(self):
-        from geny_executor.core.artifact import list_artifacts
+        from xgen_agent_runtime.core.artifact import list_artifacts
 
         artifacts = list_artifacts("s06_api")
         assert "default" in artifacts

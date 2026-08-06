@@ -1,7 +1,7 @@
 # Migrating hosts to 2.2.0
 
 > Audience: maintainers of Geny, GAPT, and any other host carrying a
-> compensation layer over geny-executor ≤ 2.1.x. The 2026-06-09
+> compensation layer over xgen-agent-runtime ≤ 2.1.x. The 2026-06-09
 > environment-philosophy audit mapped ~3,800 lines of host code that
 > exists only because the library lacked an owned API. 2.2.0 ships
 > those APIs; this guide maps each compensation module to its
@@ -45,7 +45,7 @@ StreamJsonAccumulator.feed = _patched_feed
 After:
 
 ```python
-from geny_executor import EventTypes
+from xgen_agent_runtime import EventTypes
 
 async for event in pipeline.events(replay_from=0):
     if event.type == EventTypes.API_CLI_TOOL_CALL:
@@ -107,7 +107,7 @@ catalogue with every release.
 After:
 
 ```python
-from geny_executor import build_manifest
+from xgen_agent_runtime import build_manifest
 
 manifest = build_manifest(
     "worker_adaptive",                  # or "vtuber" / "default"
@@ -154,7 +154,7 @@ finally:
 After:
 
 ```python
-from geny_executor import ModelOverrides
+from xgen_agent_runtime import ModelOverrides
 
 result = await pipeline.run(
     text, state=state,

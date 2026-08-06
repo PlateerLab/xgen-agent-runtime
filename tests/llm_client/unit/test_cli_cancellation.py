@@ -34,13 +34,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.llm_client._cli_runtime import (
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIProcessRunner,
     CLITimeout,
     aiter_bytes,
 )
-from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
+from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
 
 FAKE_CLAUDE = str(

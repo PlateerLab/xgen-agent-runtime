@@ -8,7 +8,7 @@ import stat
 
 import pytest
 
-from geny_executor.tools.mcp import (
+from xgen_agent_runtime.tools.mcp import (
     CredentialStore,
     FileCredentialStore,
     MemoryCredentialStore,

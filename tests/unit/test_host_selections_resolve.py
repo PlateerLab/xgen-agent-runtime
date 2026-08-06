@@ -13,7 +13,7 @@ library-side source of truth.
 
 from __future__ import annotations
 
-from geny_executor.core.environment import HostSelections
+from xgen_agent_runtime.core.environment import HostSelections
 
 
 class TestResolve:

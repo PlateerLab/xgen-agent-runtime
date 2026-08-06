@@ -7,19 +7,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.core.state import TokenUsage
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s04_guard import GuardStage, CostBudgetGuard, IterationGuard
-from geny_executor.stages.s06_api import APIStage, MockProvider, APIResponse
-from geny_executor.stages.s06_api.types import ContentBlock
-from geny_executor.stages.s06_api.retry import NoRetry
-from geny_executor.stages.s07_token import TokenStage
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s10_tool import ToolStage
-from geny_executor.stages.s16_loop import LoopStage, StandardLoopController, SingleTurnController
-from geny_executor.stages.s21_yield import YieldStage
-from geny_executor.tools import Tool, ToolResult, ToolRegistry
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.core.state import TokenUsage
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s04_guard import GuardStage, CostBudgetGuard, IterationGuard
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider, APIResponse
+from xgen_agent_runtime.stages.s06_api.types import ContentBlock
+from xgen_agent_runtime.stages.s06_api.retry import NoRetry
+from xgen_agent_runtime.stages.s07_token import TokenStage
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s10_tool import ToolStage
+from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController, SingleTurnController
+from xgen_agent_runtime.stages.s21_yield import YieldStage
+from xgen_agent_runtime.tools import Tool, ToolResult, ToolRegistry
 
 
 # ── Test Tools ──

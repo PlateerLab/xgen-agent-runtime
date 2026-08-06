@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate ``docs/events.md`` from the EventTypes catalogue.
 
-The catalogue (``geny_executor.events.catalog``) is the single source
+The catalogue (``xgen_agent_runtime.events.catalog``) is the single source
 of truth for event names and payload fields; this script renders it to
 markdown so the doc can never drift from the code by more than one
 regeneration. Run from the repo root::
@@ -22,7 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from geny_executor.events.catalog import (  # noqa: E402  (path bootstrap above)
+from xgen_agent_runtime.events.catalog import (  # noqa: E402  (path bootstrap above)
     EVENT_CATALOG_VERSION,
     PAYLOADS,
     EventTypes,
@@ -74,7 +74,7 @@ def render() -> str:
     out("<!-- AUTO-GENERATED — do not edit by hand. -->")
     out("<!-- Regenerate: python scripts/gen_event_docs.py -->")
     out("")
-    out(f"> Generated from `geny_executor.events.catalog` on {date.today().isoformat()}.")
+    out(f"> Generated from `xgen_agent_runtime.events.catalog` on {date.today().isoformat()}.")
     out(f"> Catalogue version: **{EVENT_CATALOG_VERSION}** · events: **{len(EventTypes)}**")
     out("")
     out("Every event name the engine emits, value == wire string. The enum")

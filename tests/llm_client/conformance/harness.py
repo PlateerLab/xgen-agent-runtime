@@ -24,8 +24,8 @@ from typing import Literal
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
 
 
 Mode = Literal["mocked", "live"]

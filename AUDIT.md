@@ -1,4 +1,4 @@
-# geny-executor Deep Audit Report
+# xgen-agent-runtime Deep Audit Report
 
 > **HISTORICAL DOCUMENT** (date-stamped 2026-06-10): this audit describes the 16-stage era of 2026-04-09 and predates the 21-stage layout — for the current audit see `docs/reviews/2026-06-09-environment-philosophy-audit.md`.
 

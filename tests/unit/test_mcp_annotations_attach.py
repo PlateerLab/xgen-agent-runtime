@@ -7,15 +7,15 @@ from typing import Any, Dict
 
 import pytest
 
-from geny_executor.tools.base import ToolCapabilities
+from xgen_agent_runtime.tools.base import ToolCapabilities
 from tests._fixtures.manifest_entries import required_stage_entries
-from geny_executor.tools.mcp.adapter import MCPToolAdapter, _annotations_to_capabilities
-from geny_executor.tools.mcp.manager import (
+from xgen_agent_runtime.tools.mcp.adapter import MCPToolAdapter, _annotations_to_capabilities
+from xgen_agent_runtime.tools.mcp.manager import (
     MCPServerConfig,
     MCPServerConnection,
     _serialise_mcp_tool,
 )
-from geny_executor.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ class TestAdapterCapabilities:
 
 def _connected_manager(name: str, *, tools_definitions):
     """Build a manager-with-fake-server that doesn't need a real MCP SDK."""
-    from geny_executor.tools.mcp.manager import MCPManager
+    from xgen_agent_runtime.tools.mcp.manager import MCPManager
 
     mgr = MCPManager()
     cfg = MCPServerConfig(name=name)
@@ -168,8 +168,8 @@ def _connected_manager(name: str, *, tools_definitions):
 class TestPipelineAttachManager:
     @pytest.mark.asyncio
     async def test_attach_replaces_manager_and_seeds_registry(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         # Build a pipeline first via the manifest path so it has an
         # empty registry attached.
@@ -215,8 +215,8 @@ class TestPipelineAttachManager:
 
     @pytest.mark.asyncio
     async def test_attach_skips_disconnected_servers(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         manifest = EnvironmentManifest(stages=required_stage_entries())
         pipeline = await Pipeline.from_manifest_async(manifest)
@@ -251,9 +251,9 @@ class TestPipelineAttachManager:
     async def test_attach_does_not_clobber_existing_names(self):
         """If the registry already has a tool with the same prefixed
         name (e.g. an adhoc bridge), the attach pass keeps it."""
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
-        from geny_executor.tools.base import Tool, ToolResult
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
+        from xgen_agent_runtime.tools.base import Tool, ToolResult
 
         class _Sentinel(Tool):
             @property
@@ -289,8 +289,8 @@ class TestPipelineAttachManager:
 
     @pytest.mark.asyncio
     async def test_attach_after_run_started_raises(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         manifest = EnvironmentManifest(stages=required_stage_entries())
         pipeline = await Pipeline.from_manifest_async(manifest)

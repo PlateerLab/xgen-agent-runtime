@@ -1,7 +1,7 @@
 """LLMSummaryCompactor self-wires from state.model (2.19.0)."""
 import pytest
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s02_context.artifact.default.compactors import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
     LLMSummaryCompactor,
 )
 

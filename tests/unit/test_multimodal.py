@@ -6,16 +6,16 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 
-from geny_executor.stages.s01_input.artifact.default.normalizers import (
+from xgen_agent_runtime.stages.s01_input.artifact.default.normalizers import (
     DefaultNormalizer,
     MultimodalNormalizer,
 )
-from geny_executor.stages.s06_api._translate import (
+from xgen_agent_runtime.stages.s06_api._translate import (
     canonical_messages_to_anthropic,
     canonical_messages_to_openai,
     canonical_messages_to_google,
 )
-from geny_executor.stages.s18_memory._dehydrate import (
+from xgen_agent_runtime.stages.s18_memory._dehydrate import (
     dehydrate_message,
     dehydrate_messages,
 )

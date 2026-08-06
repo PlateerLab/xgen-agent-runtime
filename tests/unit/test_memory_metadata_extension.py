@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Insight,
     MemorySnapshot,
     Note,
@@ -126,7 +126,7 @@ def test_note_as_meta_preserves_metadata():
 
 @pytest.mark.asyncio
 async def test_file_provider_roundtrips_note_metadata(tmp_path: Path):
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(root=tmp_path, scope=Scope.SESSION)
     await provider.initialize()
@@ -152,7 +152,7 @@ async def test_file_provider_roundtrips_note_metadata(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_file_provider_update_replaces_metadata(tmp_path: Path):
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(root=tmp_path, scope=Scope.SESSION)
     await provider.initialize()
@@ -176,7 +176,7 @@ async def test_file_provider_update_replaces_metadata(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_file_provider_update_leaves_metadata_alone_when_none(tmp_path: Path):
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(root=tmp_path, scope=Scope.SESSION)
     await provider.initialize()
@@ -198,7 +198,7 @@ async def test_file_provider_update_leaves_metadata_alone_when_none(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_ephemeral_provider_roundtrips_note_metadata():
-    from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
+    from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
 
     provider = EphemeralMemoryProvider()
     await provider.initialize()
@@ -221,7 +221,7 @@ async def test_ephemeral_provider_roundtrips_note_metadata():
 
 @pytest.mark.asyncio
 async def test_file_stm_roundtrips_turn_metadata(tmp_path: Path):
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(root=tmp_path, scope=Scope.SESSION)
     await provider.initialize()

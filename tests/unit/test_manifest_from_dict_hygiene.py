@@ -18,11 +18,11 @@ from __future__ import annotations
 import copy
 import logging
 
-from geny_executor.core.environment import EnvironmentManifest
+from xgen_agent_runtime.core.environment import EnvironmentManifest
 
 from tests._fixtures.manifest_entries import required_stage_entries
 
-_ENV_LOGGER = "geny_executor.core.environment"
+_ENV_LOGGER = "xgen_agent_runtime.core.environment"
 
 
 def _payload(**overrides):

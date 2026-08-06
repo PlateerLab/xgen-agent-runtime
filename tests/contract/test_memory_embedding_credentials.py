@@ -26,10 +26,10 @@ from pathlib import Path
 
 import pytest
 
-import geny_executor.memory.embedding.client as embedding_client_mod
-from geny_executor.llm_client.credentials import CredentialBundle, ProviderCredentials
-from geny_executor.memory.factory import MemoryProviderFactory
-from geny_executor.memory.providers import FileMemoryProvider
+import xgen_agent_runtime.memory.embedding.client as embedding_client_mod
+from xgen_agent_runtime.llm_client.credentials import CredentialBundle, ProviderCredentials
+from xgen_agent_runtime.memory.factory import MemoryProviderFactory
+from xgen_agent_runtime.memory.providers import FileMemoryProvider
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +82,7 @@ def test_no_bundle_falls_back_to_env_with_one_deprecation_warning(
     tmp_path: Path, monkeypatch, caplog
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    caplog.set_level(logging.WARNING, logger="geny_executor.memory.embedding.client")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.memory.embedding.client")
     factory = MemoryProviderFactory()  # no credentials
 
     provider_a = factory.build(_file_config(tmp_path / "a", {"provider": "openai"}))
@@ -108,7 +108,7 @@ def test_bundle_key_emits_no_deprecation_warning(
     """When the bundle supplies the key the env ladder is never
     consulted, so the deprecation warning must not fire."""
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    caplog.set_level(logging.WARNING, logger="geny_executor.memory.embedding.client")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.memory.embedding.client")
     factory = MemoryProviderFactory(credentials=_bundle("bundle-key"))
 
     factory.build(_file_config(tmp_path, {"provider": "openai"}))
@@ -121,12 +121,12 @@ def test_env_warning_fires_once_even_for_direct_client_construction(
 ) -> None:
     """Direct (factory-less) client construction shares the same
     one-time latch — the warning is per-process, not per-call-site."""
-    from geny_executor.memory.embedding.openai import OpenAIEmbeddingClient
-    from geny_executor.memory.embedding.voyage import VoyageEmbeddingClient
+    from xgen_agent_runtime.memory.embedding.openai import OpenAIEmbeddingClient
+    from xgen_agent_runtime.memory.embedding.voyage import VoyageEmbeddingClient
 
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
     monkeypatch.setenv("VOYAGE_API_KEY", "env-key-2")
-    caplog.set_level(logging.WARNING, logger="geny_executor.memory.embedding.client")
+    caplog.set_level(logging.WARNING, logger="xgen_agent_runtime.memory.embedding.client")
 
     OpenAIEmbeddingClient()
     VoyageEmbeddingClient()

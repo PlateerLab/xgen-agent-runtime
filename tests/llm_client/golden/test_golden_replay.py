@@ -34,8 +34,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.llm_client._cli_runtime import parse_stream_json_line
-from geny_executor.llm_client.translators._cli import (
+from xgen_agent_runtime.llm_client._cli_runtime import parse_stream_json_line
+from xgen_agent_runtime.llm_client.translators._cli import (
     StreamJsonAccumulator,
     parse_json_output_to_response,
 )

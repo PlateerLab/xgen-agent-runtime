@@ -4,7 +4,7 @@
 > **Scope**: Fix a correctness gap in `StageIntrospection`: every stage
 > was reporting `tool_binding_supported=True` and
 > `model_override_supported=True` regardless of whether the runtime
-> actually consumes those fields. Downstream UIs (geny-executor-web
+> actually consumes those fields. Downstream UIs (xgen-agent-runtime-web
 > Environment Builder) rendered Tool/Model editors on every stage and
 > then had to paper over it with "this stage does not support tool
 > bindings" banners, which is a misleading surface.
@@ -19,7 +19,7 @@
 **actual runtime behaviour**, not the dataclass plumbing shape.
 
 Runtime truth (verified by grepping `self.tool_binding` /
-`self.model_override` reads across `src/geny_executor`):
+`self.model_override` reads across `src/xgen_agent_runtime`):
 
 - `s06_api` is the only stage that reads `self.model_override` (in
   `_build_request` — it overrides model name / max_tokens / sampling /
@@ -34,7 +34,7 @@ capability because they're still the LLM-call / tool-call stage.
 
 ## Changes
 
-**`src/geny_executor/core/introspection.py`**
+**`src/xgen_agent_runtime/core/introspection.py`**
 
 - Added `_STAGE_CAPABILITIES: Dict[str, Dict[str, bool]]` — a single
   source of truth keyed by stage module name, mirroring the existing
@@ -83,11 +83,11 @@ capability because they're still the LLM-call / tool-call stage.
 ## Version bumps
 
 - `pyproject.toml`: `0.13.1` → `0.13.2`
-- `src/geny_executor/__init__.py`: `__version__ = "0.13.2"`
+- `src/xgen_agent_runtime/__init__.py`: `__version__ = "0.13.2"`
 
 ## Follow-up (not in this change)
 
-- `geny-executor-web` v0.8.3 should bump its pin to `>=0.13.2` and
+- `xgen-agent-runtime-web` v0.8.3 should bump its pin to `>=0.13.2` and
   gate the Environment Builder's Tool / Model / Chain tabs on the
   new honest flags (plus a non-empty `strategy_chains` check for
   the Chain tab). Tracked separately in the web repo.

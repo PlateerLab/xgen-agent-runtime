@@ -5,9 +5,9 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.state import PipelineState
-from geny_executor.core.stage import Stage
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.core.stage import Stage
 
 
 class _StubStage(Stage):

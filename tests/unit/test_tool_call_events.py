@@ -14,12 +14,12 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from geny_executor.stages.s10_tool.artifact.default.executors import (
+from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
     ParallelExecutor,
     SequentialExecutor,
 )
-from geny_executor.stages.s10_tool.interface import ToolRouter
-from geny_executor.tools.base import ToolContext, ToolResult
+from xgen_agent_runtime.stages.s10_tool.interface import ToolRouter
+from xgen_agent_runtime.tools.base import ToolContext, ToolResult
 
 
 class _RecordingRouter(ToolRouter):
@@ -176,10 +176,10 @@ async def test_stage_wraps_call_events_inside_execute_events():
     ``tool.execute_complete`` must follow last ``tool.call_complete`` —
     the stage remains the outermost bracket, per-call events nest inside.
     """
-    from geny_executor import PipelineState
-    from geny_executor.stages.s10_tool import ToolStage
-    from geny_executor.tools.registry import ToolRegistry
-    from geny_executor.tools.base import Tool
+    from xgen_agent_runtime import PipelineState
+    from xgen_agent_runtime.stages.s10_tool import ToolStage
+    from xgen_agent_runtime.tools.registry import ToolRegistry
+    from xgen_agent_runtime.tools.base import Tool
 
     class _Echo(Tool):
         @property

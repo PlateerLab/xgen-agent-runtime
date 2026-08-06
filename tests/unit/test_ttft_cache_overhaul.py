@@ -22,11 +22,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import pytest
 
-from geny_executor.core.state import PipelineState, TokenUsage
-from geny_executor.llm_client import APIRequest, APIResponse, BaseClient, ClientCapabilities
-from geny_executor.llm_client.types import ContentBlock
-from geny_executor.stages.s03_system import SystemStage
-from geny_executor.stages.s03_system.artifact.default.builders import (
+from xgen_agent_runtime.core.state import PipelineState, TokenUsage
+from xgen_agent_runtime.llm_client import APIRequest, APIResponse, BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.types import ContentBlock
+from xgen_agent_runtime.stages.s03_system import SystemStage
+from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
     ComposablePromptBuilder,
     DateTimeBlock,
     MutablePromptBuilder,
@@ -34,12 +34,12 @@ from geny_executor.stages.s03_system.artifact.default.builders import (
     PinnedFactsBlock,
     RetrievedMemoryBlock,
 )
-from geny_executor.stages.s05_cache.artifact.default.strategies import (
+from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
     AggressiveCacheStrategy,
     SystemCacheStrategy,
     _supports_cache_control,
 )
-from geny_executor.stages.s06_api import APIStage
+from xgen_agent_runtime.stages.s06_api import APIStage
 
 
 class _StubClient:

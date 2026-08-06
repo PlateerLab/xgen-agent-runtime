@@ -12,8 +12,8 @@ from typing import Any, Dict
 import httpx
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.web_fetch_tool import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.web_fetch_tool import (
     _DEFAULT_MAX_CHARS,
     WebFetchTool,
     _extract_text,
@@ -30,7 +30,7 @@ def _install_mock_transport(monkeypatch, handler):
         return real_cls(*args, **kwargs)
 
     monkeypatch.setattr(
-        "geny_executor.tools.built_in.web_fetch_tool.httpx.AsyncClient", _factory
+        "xgen_agent_runtime.tools.built_in.web_fetch_tool.httpx.AsyncClient", _factory
     )
 
 
@@ -180,7 +180,7 @@ class TestExecuteSuccess:
 
         _install_mock_transport(monkeypatch, handler)
         await WebFetchTool().execute({"url": "https://example.com/"}, _ctx())
-        assert "geny-executor-webfetch" in captured["user_agent"]
+        assert "xgen-agent-runtime-webfetch" in captured["user_agent"]
 
     @pytest.mark.asyncio
     async def test_custom_headers_merged(self, monkeypatch):
@@ -320,7 +320,7 @@ class TestExecuteErrors:
 
 
 def test_registered_in_built_in_tool_classes():
-    from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES
+    from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
 
     assert "WebFetch" in BUILT_IN_TOOL_CLASSES
     assert BUILT_IN_TOOL_CLASSES["WebFetch"] is WebFetchTool

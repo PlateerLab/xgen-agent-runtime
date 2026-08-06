@@ -22,10 +22,10 @@ import logging
 
 import pytest
 
-from geny_executor import ConfigError, build_manifest, validate_manifest
-from geny_executor.core.environment import EnvironmentManifest
-from geny_executor.core.mutation import PipelineMutator
-from geny_executor.core.pipeline import Pipeline
+from xgen_agent_runtime import ConfigError, build_manifest, validate_manifest
+from xgen_agent_runtime.core.environment import EnvironmentManifest
+from xgen_agent_runtime.core.mutation import PipelineMutator
+from xgen_agent_runtime.core.pipeline import Pipeline
 
 
 BAD_EVALUATORS = {"strategy": {"evaluators": "not-a-list"}}
@@ -50,7 +50,7 @@ def _evaluate_slot(pipeline: Pipeline):
 
 def test_lenient_build_survives_bad_strategy_config(caplog):
     manifest = _manifest_with_bad_evaluate_config()
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.mutation"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.mutation"):
         pipeline = Pipeline.from_manifest(manifest, api_key="sk-test", strict=False)
 
     # The swap never landed — the slot keeps its default strategy.
@@ -74,7 +74,7 @@ def test_lenient_reconfigure_of_current_impl_also_degrades(caplog):
     assert _evaluate_slot(pipeline).current_impl == "evaluation_chain"
     good_config = dict(_evaluate_slot(pipeline).strategy.get_config())
 
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.mutation"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.mutation"):
         report = PipelineMutator(pipeline).restore(manifest.to_snapshot(), report=True)
 
     assert any("rejected snapshot config" in e for e in report.errors)
@@ -97,7 +97,7 @@ def test_restore_report_records_configure_rejection():
 def test_legacy_report_false_path_returns_success_and_logs(caplog):
     manifest = _manifest_with_bad_evaluate_config()
     pipeline = Pipeline.from_manifest(manifest, api_key="sk-test", strict=False)
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.mutation"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.mutation"):
         result = PipelineMutator(pipeline).restore(manifest.to_snapshot())
     assert result.success is True  # legacy surface unchanged
     assert "rejected snapshot config" in caplog.text

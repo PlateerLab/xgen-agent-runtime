@@ -1,5 +1,5 @@
 """Generalized sub-agent catalog (2.8.0)."""
-from geny_executor.stages.s12_agent import (
+from xgen_agent_runtime.stages.s12_agent import (
     BUILTIN_SUBAGENT_TYPES,
     DEFAULT_PERSISTENT_SUBAGENT_PROMPT,
     SubagentTypeSpec,

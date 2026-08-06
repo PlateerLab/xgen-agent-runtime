@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.memory.provider import Importance
-from geny_executor.stages.s19_summarize import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.memory.provider import Importance
+from xgen_agent_runtime.stages.s19_summarize import (
     FixedImportance,
     HeuristicImportance,
     NoSummarizer,

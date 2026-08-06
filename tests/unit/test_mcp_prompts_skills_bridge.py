@@ -7,19 +7,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from geny_executor.skills import (
+from xgen_agent_runtime.skills import (
     MCP_SKILL_ID_PREFIX,
     MCP_SKILL_SOURCE_TAG,
     Skill,
     mcp_prompts_to_skills,
     mcp_skill_id,
 )
-from geny_executor.tools.mcp.manager import (
+from xgen_agent_runtime.tools.mcp.manager import (
     MCPManager,
     MCPServerConfig,
     MCPServerConnection,
 )
-from geny_executor.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
 
 
 # ── helpers ─────────────────────────────────────────────────────────────

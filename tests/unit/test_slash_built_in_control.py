@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.slash_commands import (
+from xgen_agent_runtime.slash_commands import (
     SlashCategory,
     SlashCommandRegistry,
     SlashContext,
 )
-from geny_executor.slash_commands.built_in import (
+from xgen_agent_runtime.slash_commands.built_in import (
     CancelCommand,
     CompactCommand,
     ConfigCommand,
@@ -19,7 +19,7 @@ from geny_executor.slash_commands.built_in import (
     TasksCommand,
     install_built_in_commands,
 )
-from geny_executor.stages.s13_task_registry import (
+from xgen_agent_runtime.stages.s13_task_registry import (
     InMemoryRegistry,
     TaskRecord,
     TaskStatus,
@@ -226,7 +226,7 @@ class TestPresetInfo:
 
     @pytest.mark.asyncio
     async def test_alias_resolves(self):
-        from geny_executor.slash_commands.registry import (
+        from xgen_agent_runtime.slash_commands.registry import (
             get_default_registry,
         )
         # The default singleton was populated on import.

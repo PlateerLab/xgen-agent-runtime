@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from geny_executor.tools.mcp import (
+from xgen_agent_runtime.tools.mcp import (
     RECONNECTABLE_STATES,
     MCPConnectionState,
     MCPManager,
     MCPServerConfig,
 )
-from geny_executor.tools.mcp.errors import MCPConnectionError
-from geny_executor.tools.mcp.manager import (
+from xgen_agent_runtime.tools.mcp.errors import MCPConnectionError
+from xgen_agent_runtime.tools.mcp.manager import (
     MCPServerConnection,
     _looks_like_auth_failure,
 )

@@ -1,4 +1,4 @@
-"""Tests for tool-plugin entry-point discovery (geny_executor.tools group).
+"""Tests for tool-plugin entry-point discovery (xgen_agent_runtime.tools group).
 
 These mirror the preset-discovery style: fake entry-points are injected by
 monkeypatching ``importlib.metadata.entry_points`` (the symbol imported lazily
@@ -13,14 +13,14 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.tools import (
+from xgen_agent_runtime.tools import (
     TOOL_ENTRY_POINT_GROUP,
     ToolPluginRegistry,
     ToolRegistry,
     discover_tool_plugins,
     register_tool_plugins,
 )
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 
 
 # ─────────────────────────────────────────────────────────────────

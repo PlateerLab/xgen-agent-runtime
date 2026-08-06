@@ -12,9 +12,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from geny_executor.hooks import FIRED_EVENTS, HookEvent
+from xgen_agent_runtime.hooks import FIRED_EVENTS, HookEvent
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "geny_executor"
+SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "xgen_agent_runtime"
 
 # What the engine emits as of 2.2.0: the Stage 10 tool-invocation trio,
 # the permission pair fired from the same dispatch path, and the
@@ -42,7 +42,7 @@ class TestFiredEvents:
         assert FIRED_EVENTS <= set(HookEvent)
 
     def test_exported_from_package(self):
-        import geny_executor.hooks as hooks_pkg
+        import xgen_agent_runtime.hooks as hooks_pkg
 
         assert "FIRED_EVENTS" in hooks_pkg.__all__
 
@@ -55,7 +55,7 @@ class TestFiredEvents:
         in either direction, someone shipped a fire-site without
         updating the contract — or removed one and left the contract
         stale. Update ``FIRED_EVENTS`` (and its docstring) in
-        ``src/geny_executor/hooks/events.py`` together with the code.
+        ``src/xgen_agent_runtime/hooks/events.py`` together with the code.
         """
         pattern = re.compile(r"HookEvent\.([A-Z_]+)")
         referenced: set = set()

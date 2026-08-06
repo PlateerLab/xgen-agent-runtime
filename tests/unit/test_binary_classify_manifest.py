@@ -17,14 +17,14 @@ v0.25.0 adds `binary_classify` to the default stage's registry and gives
 
 from __future__ import annotations
 
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     StageManifestEntry,
     ToolsSnapshot,
 )
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.stages.s14_evaluate.artifact.adaptive.strategy import (
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.stages.s14_evaluate.artifact.adaptive.strategy import (
     BinaryClassifyConfig,
     BinaryClassifyEvaluation,
 )
@@ -114,7 +114,7 @@ def test_default_evaluate_registry_still_has_other_strategies():
     """Adding binary_classify to the default registry must not displace the
     other strategies. Manifest-first consumers rely on every strategy
     being spellable by name. Phase 7 S7.6 added ``evaluation_chain``."""
-    from geny_executor.stages.s14_evaluate.artifact.default.stage import EvaluateStage
+    from xgen_agent_runtime.stages.s14_evaluate.artifact.default.stage import EvaluateStage
 
     stage = EvaluateStage()
     available = stage.get_strategy_slots()["strategy"].available_impls

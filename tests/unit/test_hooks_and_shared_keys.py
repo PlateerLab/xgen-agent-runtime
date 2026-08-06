@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from geny_executor.core.shared_keys import SharedKeys
-from geny_executor.hooks import HookEvent, HookEventPayload, HookOutcome
+from xgen_agent_runtime.core.shared_keys import SharedKeys
+from xgen_agent_runtime.hooks import HookEvent, HookEventPayload, HookOutcome
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import pytest
 
 from tests._fixtures.manifest_entries import required_stage_entries
 
-from geny_executor.skills import (
+from xgen_agent_runtime.skills import (
     Skill,
     SkillMetadata,
     SkillRegistry,
@@ -16,7 +16,7 @@ from geny_executor.skills import (
     SkillToolProvider,
     build_skill_tool,
 )
-from geny_executor.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import ToolContext
 
 
 def _skill(
@@ -253,8 +253,8 @@ class TestSkillToolProvider:
 class TestPipelineIntegration:
     @pytest.mark.asyncio
     async def test_skills_register_through_manifest(self):
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         registry = SkillRegistry()
         registry.register(_skill("refactor"))

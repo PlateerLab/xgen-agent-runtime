@@ -26,12 +26,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor import Pipeline
-from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
-from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline
+from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
+from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 FAKE_CLAUDE = str(Path(__file__).resolve().parents[2] / "_fixtures" / "fake_claude.py")
 
@@ -131,7 +131,7 @@ class TestFeedUserEnvelope:
 
 @pytest.mark.asyncio
 async def test_client_stream_yields_full_agentic_event_sequence():
-    from geny_executor.core.config import ModelConfig
+    from xgen_agent_runtime.core.config import ModelConfig
 
     client = _client("ok_stream_event_tools")
     chunks = []

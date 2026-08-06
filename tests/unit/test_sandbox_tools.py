@@ -12,12 +12,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-import geny_executor.tools._sandbox as sbmod
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.bash_tool import BashTool
-from geny_executor.tools.built_in.edit_tool import EditTool
-from geny_executor.tools.built_in.read_tool import ReadTool
-from geny_executor.tools.built_in.write_tool import WriteTool
+import xgen_agent_runtime.tools._sandbox as sbmod
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
+from xgen_agent_runtime.tools.built_in.edit_tool import EditTool
+from xgen_agent_runtime.tools.built_in.read_tool import ReadTool
+from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
 
 
 class _FakeSandbox:

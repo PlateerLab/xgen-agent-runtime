@@ -6,9 +6,9 @@ from typing import List
 
 import pytest
 
-from geny_executor.hooks.config import HookConfig
-from geny_executor.hooks.events import HookEvent, HookEventPayload, HookOutcome
-from geny_executor.hooks.runner import HookRunner
+from xgen_agent_runtime.hooks.config import HookConfig
+from xgen_agent_runtime.hooks.events import HookEvent, HookEventPayload, HookOutcome
+from xgen_agent_runtime.hooks.runner import HookRunner
 
 
 def _runner(*, enabled: bool = True) -> HookRunner:

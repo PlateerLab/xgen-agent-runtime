@@ -26,16 +26,16 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.memory.factory import MemoryProviderFactory
-from geny_executor.memory.providers import SQLMemoryProvider
-from geny_executor.memory.providers.sql.connection import (
+from xgen_agent_runtime.memory.factory import MemoryProviderFactory
+from xgen_agent_runtime.memory.providers import SQLMemoryProvider
+from xgen_agent_runtime.memory.providers.sql.connection import (
     _PostgresConnection,
     _SQLiteConnection,
     _translate_to_postgres,
     detect_dialect,
     open_connection,
 )
-from geny_executor.memory.providers.sql.schema import (
+from xgen_agent_runtime.memory.providers.sql.schema import (
     Dialect,
     POSTGRES_DDL,
     SQLITE_DDL,

@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.compaction import run_compaction
-from geny_executor.core.context_prune import prune_messages
-from geny_executor.core.message_repair import repair_dangling_tool_calls
-from geny_executor.core.state import PipelineState
-from geny_executor.core.token_estimate import estimate_prompt_tokens
-from geny_executor.stages.s02_context.interface import HistoryCompactor
+from xgen_agent_runtime.core.compaction import run_compaction
+from xgen_agent_runtime.core.context_prune import prune_messages
+from xgen_agent_runtime.core.message_repair import repair_dangling_tool_calls
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
+from xgen_agent_runtime.stages.s02_context.interface import HistoryCompactor
 
 BIG = "리듬게임 판정 데이터 " * 60  # ~1.3k chars, over the dup threshold
 
@@ -215,11 +215,11 @@ async def test_system_mode_catalog_lands_in_stable_region():
     volatile tail out of the cached prefix. Before the fix the catalog was
     appended AFTER the joined string, breaking the split → the volatile
     clock/memory tail was cached → full system re-prefill every turn."""
-    from geny_executor.stages.s03_system.artifact.default.builders import (
+    from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
         ComposablePromptBuilder, DateTimeBlock, PersonaBlock,
     )
-    from geny_executor.stages.s03_system.artifact.default.stage import SystemStage
-    from geny_executor.stages.s05_cache.artifact.default.strategies import (
+    from xgen_agent_runtime.stages.s03_system.artifact.default.stage import SystemStage
+    from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
         AggressiveCacheStrategy,
     )
 
@@ -253,7 +253,7 @@ def test_cache_system_tolerant_split_survives_appended_suffix():
     """Defense-in-depth: even when extra text lands between/after the parts
     (breaking exact equality), the split still finds the volatile tail by
     position, keeps byte-identity, and never caches the volatile bytes."""
-    from geny_executor.stages.s05_cache.artifact.default.strategies import (
+    from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
         AggressiveCacheStrategy,
     )
     stable, volatile = "Persona.", "Current date: 2026-07-23 12:00"

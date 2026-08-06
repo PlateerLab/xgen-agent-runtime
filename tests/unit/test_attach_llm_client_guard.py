@@ -24,18 +24,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig
-from geny_executor.core.environment import (
+from xgen_agent_runtime import Pipeline, PipelineConfig
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     StageManifestEntry,
     ToolsSnapshot,
 )
-from geny_executor.llm_client.credentials import ConfigError, CredentialBundle
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime.llm_client.credentials import ConfigError, CredentialBundle
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 class _FakeClient:

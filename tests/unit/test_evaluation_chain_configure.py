@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s14_evaluate import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s14_evaluate import (
     BinaryClassifyEvaluation,
     EvaluateStage,
     EvaluationChain,

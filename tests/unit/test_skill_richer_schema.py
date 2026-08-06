@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.skills.loader import SkillLoadError, parse_skill_file
+from xgen_agent_runtime.skills.loader import SkillLoadError, parse_skill_file
 
 
 def _write_skill(tmp_path: Path, *, body_extras: str = "") -> Path:

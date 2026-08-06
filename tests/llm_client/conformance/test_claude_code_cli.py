@@ -16,10 +16,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.errors import ErrorCategory, APIError
-from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
-from geny_executor.llm_client.base import BaseClient
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.errors import ErrorCategory, APIError
+from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
+from xgen_agent_runtime.llm_client.base import BaseClient
 
 from tests.llm_client.conformance.harness import ConformanceTestSuite
 

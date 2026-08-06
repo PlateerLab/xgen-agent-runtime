@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.builder import PipelineBuilder
-from geny_executor.core.presets import PipelinePresets
-from geny_executor.stages.s11_tool_review import ToolReviewStage
-from geny_executor.stages.s13_task_registry import TaskRegistryStage
-from geny_executor.stages.s15_hitl import HITLStage
-from geny_executor.stages.s19_summarize import SummarizeStage
-from geny_executor.stages.s20_persist import PersistStage
+from xgen_agent_runtime.core.builder import PipelineBuilder
+from xgen_agent_runtime.core.presets import PipelinePresets
+from xgen_agent_runtime.stages.s11_tool_review import ToolReviewStage
+from xgen_agent_runtime.stages.s13_task_registry import TaskRegistryStage
+from xgen_agent_runtime.stages.s15_hitl import HITLStage
+from xgen_agent_runtime.stages.s19_summarize import SummarizeStage
+from xgen_agent_runtime.stages.s20_persist import PersistStage
 
 
 SCAFFOLD_ORDERS = (11, 13, 15, 19, 20)
@@ -73,28 +73,28 @@ class TestPipelinePresetsScaffoldOptIn:
 
 def _make_provider():
     """Bare-minimum MemoryProvider for preset construction smoke."""
-    from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
+    from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
 
     return EphemeralMemoryProvider()
 
 
 class TestGenyPresetsScaffoldOptIn:
     def test_worker_easy_includes_all_scaffolds(self):
-        from geny_executor.memory.presets import GenyPresets
+        from xgen_agent_runtime.memory.presets import GenyPresets
 
         p = GenyPresets.worker_easy(api_key="k", provider=_make_provider())
         for order in SCAFFOLD_ORDERS:
             assert p.get_stage(order) is not None, f"worker_easy missing scaffold {order}"
 
     def test_worker_adaptive_includes_all_scaffolds(self):
-        from geny_executor.memory.presets import GenyPresets
+        from xgen_agent_runtime.memory.presets import GenyPresets
 
         p = GenyPresets.worker_adaptive(api_key="k", provider=_make_provider())
         for order in SCAFFOLD_ORDERS:
             assert p.get_stage(order) is not None, f"worker_adaptive missing scaffold {order}"
 
     def test_vtuber_includes_all_scaffolds(self):
-        from geny_executor.memory.presets import GenyPresets
+        from xgen_agent_runtime.memory.presets import GenyPresets
 
         p = GenyPresets.vtuber(api_key="k", provider=_make_provider())
         for order in SCAFFOLD_ORDERS:

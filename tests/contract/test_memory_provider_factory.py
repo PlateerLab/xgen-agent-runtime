@@ -16,10 +16,10 @@ from typing import Any, Mapping
 
 import pytest
 
-from geny_executor.memory.composite import CompositeMemoryProvider
-from geny_executor.memory.factory import MemoryProviderFactory
-from geny_executor.memory.provider import Layer
-from geny_executor.memory.providers import (
+from xgen_agent_runtime.memory.composite import CompositeMemoryProvider
+from xgen_agent_runtime.memory.factory import MemoryProviderFactory
+from xgen_agent_runtime.memory.provider import Layer
+from xgen_agent_runtime.memory.providers import (
     EphemeralMemoryProvider,
     FileMemoryProvider,
     SQLMemoryProvider,
@@ -56,7 +56,7 @@ def test_build_ephemeral_returns_correct_class():
 
 
 def test_build_ephemeral_honours_scope():
-    from geny_executor.memory.provider import Scope
+    from xgen_agent_runtime.memory.provider import Scope
 
     factory = MemoryProviderFactory()
     provider = factory.build({"provider": "ephemeral", "scope": "user"})
@@ -166,7 +166,7 @@ async def test_build_composite_two_layers_share_named_provider(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_build_composite_with_scope_provider(tmp_path: Path):
-    from geny_executor.memory.provider import Scope
+    from xgen_agent_runtime.memory.provider import Scope
 
     factory = MemoryProviderFactory()
     provider = factory.build(

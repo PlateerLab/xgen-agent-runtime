@@ -11,10 +11,10 @@ import pytest
 
 pytest.importorskip("openai")
 
-from geny_executor.llm_client import ClientRegistry  # noqa: E402
-from geny_executor.llm_client.base import BaseClient  # noqa: E402
-from geny_executor.llm_client.credentials import ProviderCredentials  # noqa: E402
-from geny_executor.llm_client.profiles import (  # noqa: E402
+from xgen_agent_runtime.llm_client import ClientRegistry  # noqa: E402
+from xgen_agent_runtime.llm_client.base import BaseClient  # noqa: E402
+from xgen_agent_runtime.llm_client.credentials import ProviderCredentials  # noqa: E402
+from xgen_agent_runtime.llm_client.profiles import (  # noqa: E402
     CUSTOM_PROFILE,
     OLLAMA_PROFILE,
     builtin_profiles,
@@ -23,7 +23,7 @@ from geny_executor.llm_client.profiles import (  # noqa: E402
     profiled_provider_names,
     resolve_profile,
 )
-from geny_executor.llm_client.types import APIRequest  # noqa: E402
+from xgen_agent_runtime.llm_client.types import APIRequest  # noqa: E402
 
 
 # ── profile resolution ────────────────────────────────────────────────
@@ -192,7 +192,7 @@ def test_profiled_client_kwargs_num_ctx_alias():
 def test_pipeline_creds_mapper_uses_profile_path():
     # The pipeline-level mapper must route profiled providers through the
     # profile kwargs (base_url + knobs), not the generic API-provider path.
-    from geny_executor.core.pipeline import _creds_to_client_kwargs
+    from xgen_agent_runtime.core.pipeline import _creds_to_client_kwargs
 
     creds = ProviderCredentials(
         base_url="http://localhost:11434/v1", extras={"ollama_num_ctx": 8192}

@@ -23,11 +23,11 @@ import logging
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _make_pipeline(text: str = "mock reply") -> Pipeline:
@@ -198,7 +198,7 @@ async def test_end_turn_folds_turn_cost_into_session():
     state = PipelineState(session_id="fold")
     # Seed cost mid-turn via a stage-side accumulate: emulate by giving
     # the state cost before the run ends using an on-exit hook stage.
-    from geny_executor.core.stage import Stage
+    from xgen_agent_runtime.core.stage import Stage
 
     class _CostStage(Stage):
         @property
@@ -318,7 +318,7 @@ async def test_state_none_after_first_run_warns_once(caplog):
     pipeline = _make_pipeline()
     await pipeline.run("turn one")  # first run: no warning expected
 
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.pipeline"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline"):
         await pipeline.run("turn two")
         await pipeline.run("turn three")
 
@@ -329,7 +329,7 @@ async def test_state_none_after_first_run_warns_once(caplog):
 @pytest.mark.asyncio
 async def test_first_run_with_state_none_does_not_warn(caplog):
     pipeline = _make_pipeline()
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.pipeline"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline"):
         await pipeline.run("only turn")
     assert not [r for r in caplog.records if "discards conversation history" in r.message]
 
@@ -351,7 +351,7 @@ async def test_result_state_exposes_internally_created_state():
 def test_result_state_repr_suppressed():
     """The state handle drags clients/credentials — it must not leak
     into result reprs/logs."""
-    from geny_executor.core.result import PipelineResult
+    from xgen_agent_runtime.core.result import PipelineResult
 
     state = PipelineState(session_id="secret-session")
     result = PipelineResult.from_state(state)

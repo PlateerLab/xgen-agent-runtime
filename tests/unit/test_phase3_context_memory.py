@@ -7,35 +7,35 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineState
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s02_context import (
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineState
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s02_context import (
     ContextStage,
     SimpleLoadStrategy,
     HybridStrategy,
     TruncateCompactor,
 )
-from geny_executor.stages.s02_context.retrievers import StaticRetriever
-from geny_executor.stages.s03_system import (
+from xgen_agent_runtime.stages.s02_context.retrievers import StaticRetriever
+from xgen_agent_runtime.stages.s03_system import (
     SystemStage,
     ComposablePromptBuilder,
     PersonaBlock,
     RulesBlock,
     DateTimeBlock,
 )
-from geny_executor.stages.s05_cache import (
+from xgen_agent_runtime.stages.s05_cache import (
     SystemCacheStrategy,
     AggressiveCacheStrategy,
 )
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s06_api.retry import NoRetry
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s18_memory import (
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s06_api.retry import NoRetry
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s18_memory import (
     MemoryStage,
     InMemoryPersistence,
 )
-from geny_executor.stages.s21_yield import YieldStage
-from geny_executor.session import Session, SessionManager
+from xgen_agent_runtime.stages.s21_yield import YieldStage
+from xgen_agent_runtime.session import Session, SessionManager
 
 
 # ── Context Stage ──

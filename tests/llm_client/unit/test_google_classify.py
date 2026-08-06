@@ -23,8 +23,8 @@ pytest.importorskip("google.genai")
 
 from google.genai import errors as genai_errors  # noqa: E402
 
-from geny_executor.core.errors import APIError, ErrorCategory  # noqa: E402
-from geny_executor.llm_client.google import GoogleClient  # noqa: E402
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory  # noqa: E402
+from xgen_agent_runtime.llm_client.google import GoogleClient  # noqa: E402
 
 
 def _client() -> GoogleClient:

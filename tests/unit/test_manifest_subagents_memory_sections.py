@@ -13,8 +13,8 @@ import logging
 
 import pytest
 
-from geny_executor import validate_manifest
-from geny_executor.core.environment import (
+from xgen_agent_runtime import validate_manifest
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     ToolsSnapshot,
@@ -88,7 +88,7 @@ class TestSerialization:
     def test_sections_are_known_keys_not_warned(self, caplog):
         """The from_dict hygiene pass must not flag the new sections."""
         data = _manifest(subagents=[_SUBAGENT_ENTRY], memory=_MEMORY_BLOCK).to_dict()
-        with caplog.at_level(logging.WARNING, logger="geny_executor.core.environment"):
+        with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.environment"):
             EnvironmentManifest.from_dict(data)
         assert "unknown" not in caplog.text
 

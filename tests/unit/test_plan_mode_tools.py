@@ -7,16 +7,16 @@ from typing import Any
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s10_tool import SequentialExecutor
-from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.plan_mode_tools import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s10_tool import SequentialExecutor
+from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.plan_mode_tools import (
     PLAN_MODE_KEY,
     EnterPlanModeTool,
     ExitPlanModeTool,
 )
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 def _ctx_with_mode(mode_value: Any) -> ToolContext:
@@ -136,7 +136,7 @@ class TestCapabilitiesAndRegistry:
         assert ExitPlanModeTool().capabilities({}).idempotent is True
 
     def test_registered_in_meta_family(self):
-        from geny_executor.tools.built_in import (
+        from xgen_agent_runtime.tools.built_in import (
             BUILT_IN_TOOL_CLASSES,
             BUILT_IN_TOOL_FEATURES,
         )

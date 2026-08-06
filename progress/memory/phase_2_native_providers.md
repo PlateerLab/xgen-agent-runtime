@@ -58,7 +58,7 @@ format-lock suite independent of the behavioural contract suite.
 
 ### Changes
 
-Subpackage `src/geny_executor/memory/providers/file/` — 11 modules,
+Subpackage `src/xgen_agent_runtime/memory/providers/file/` — 11 modules,
 each with one responsibility:
 
 - **`layout.py`** — `DirectoryLayout` dataclass. Resolves every path
@@ -100,7 +100,7 @@ each with one responsibility:
   R-F config fields from `MEMORY_SPEC.yaml` (master enable, embedding
   provider/model/key, chunk size/overlap, retrieval top-k/threshold/
   max-inject, curated toggles, auto-curation schedule, Obsidian index
-  toggle). This is what `geny-executor-web` will introspect to render
+  toggle). This is what `xgen-agent-runtime-web` will introspect to render
   the memory-settings form without any hardcoded field list.
 - **`snapshot.py`** — `build_tarball(root) -> (bytes, sha256_hex)` and
   `restore_tarball(root, payload, checksum)`. Checksum mismatch raises
@@ -122,12 +122,12 @@ each with one responsibility:
 
 Also updated:
 
-- `src/geny_executor/memory/providers/__init__.py` — re-exports
+- `src/xgen_agent_runtime/memory/providers/__init__.py` — re-exports
   `FileMemoryProvider`.
-- `src/geny_executor/memory/__init__.py` — re-exports
+- `src/xgen_agent_runtime/memory/__init__.py` — re-exports
   `FileMemoryProvider`; `__all__` now lists both ephemeral and file
   providers.
-- `pyproject.toml` / `src/geny_executor/__init__.py` — bumped to
+- `pyproject.toml` / `src/xgen_agent_runtime/__init__.py` — bumped to
   `0.15.0`.
 
 ### Tests
@@ -215,7 +215,7 @@ optional installs.
 
 ### Changes
 
-Subpackage `src/geny_executor/memory/embedding/` — 6 modules:
+Subpackage `src/xgen_agent_runtime/memory/embedding/` — 6 modules:
 
 - **`client.py`** — `EmbeddingClient` Protocol (`embed`, `close`,
   `descriptor`) + `EmbeddingError`. Every backend satisfies this
@@ -241,7 +241,7 @@ Subpackage `src/geny_executor/memory/embedding/` — 6 modules:
   missing optional SDKs surface the original `ImportError` with the
   correct install instructions.
 
-Vector store — `src/geny_executor/memory/providers/file/vector_store.py`:
+Vector store — `src/xgen_agent_runtime/memory/providers/file/vector_store.py`:
 
 - **`_FileVectorStore`** — VectorHandle-conformant store. Vectors
   packed as little-endian float32 into `vectordb/index.bin`; metadata
@@ -253,7 +253,7 @@ Vector store — `src/geny_executor/memory/providers/file/vector_store.py`:
   notes and returns a `ReindexPlan(layer=VECTOR, …)` the UI can
   surface.
 
-Provider wiring — `src/geny_executor/memory/providers/file/provider.py`:
+Provider wiring — `src/xgen_agent_runtime/memory/providers/file/provider.py`:
 
 - Constructor now accepts `embedding_client: Optional[EmbeddingClient]`.
   If supplied, `vector()` returns the `_FileVectorStore`; otherwise
@@ -340,7 +340,7 @@ change instead of a per-store rewrite.
 
 ### Changes
 
-Subpackage `src/geny_executor/memory/providers/sql/` — 11 modules:
+Subpackage `src/xgen_agent_runtime/memory/providers/sql/` — 11 modules:
 
 - **`schema.py`** — `SCHEMA_VERSION = "1"` + idempotent
   `CREATE TABLE IF NOT EXISTS` for the canonical seven tables
@@ -407,7 +407,7 @@ Subpackage `src/geny_executor/memory/providers/sql/` — 11 modules:
   cannot leave a hybrid state.
 - **`config.py`** — `sql_provider_config_schema()` mirrors the file
   provider's 21 R-F fields plus a `dsn` field, so the same
-  `geny-executor-web` form renders both providers without a code
+  `xgen-agent-runtime-web` form renders both providers without a code
   fork.
 - **`provider.py`** — `SQLMemoryProvider(MemoryProvider)`. Wires
   the stores; declares `Layer.{STM,LTM,NOTES,INDEX}` +
@@ -422,12 +422,12 @@ Subpackage `src/geny_executor/memory/providers/sql/` — 11 modules:
 
 Also updated:
 
-- `src/geny_executor/memory/providers/__init__.py` — re-exports
+- `src/xgen_agent_runtime/memory/providers/__init__.py` — re-exports
   `SQLMemoryProvider`.
-- `src/geny_executor/memory/__init__.py` — re-exports
+- `src/xgen_agent_runtime/memory/__init__.py` — re-exports
   `SQLMemoryProvider`; `__all__` now lists ephemeral, file, and SQL
   providers.
-- `pyproject.toml` / `src/geny_executor/__init__.py` — bumped to
+- `pyproject.toml` / `src/xgen_agent_runtime/__init__.py` — bumped to
   `0.17.0`.
 
 ### Tests
@@ -518,7 +518,7 @@ Third `MemoryProvider` in the family, and the first that has no
 storage of its own: `CompositeMemoryProvider` fans each of the seven
 layers to a distinct underlying provider through a `LayerRouting`
 table. Ships alongside `MemoryProviderFactory`, the config-in /
-provider-out entry point that `geny-executor-web` and the pipeline
+provider-out entry point that `xgen-agent-runtime-web` and the pipeline
 factory will speak from. With 2d in place, a single deployment can
 route STM to one backend (e.g. ephemeral for low-latency turn state),
 LTM + Notes + Vector + Index to a second (e.g. SQL for durability),
@@ -532,7 +532,7 @@ envelope, descriptor union). Zero new core dependencies.
 
 ### Changes
 
-Subpackage `src/geny_executor/memory/composite/` — 4 modules:
+Subpackage `src/xgen_agent_runtime/memory/composite/` — 4 modules:
 
 - **`routing.py`** — `LayerRouting` frozen dataclass holding
   `layers: Mapping[Layer, MemoryProvider]` plus an optional
@@ -578,7 +578,7 @@ Subpackage `src/geny_executor/memory/composite/` — 4 modules:
 - **`__init__.py`** — re-exports `CompositeMemoryProvider`,
   `LayerRouting`.
 
-New module `src/geny_executor/memory/factory.py`:
+New module `src/xgen_agent_runtime/memory/factory.py`:
 
 - **`MemoryProviderFactory`** — name-keyed registry dispatching to
   builder callables. `build(config)` reads `config["provider"]` and
@@ -598,10 +598,10 @@ New module `src/geny_executor/memory/factory.py`:
 
 Also updated:
 
-- `src/geny_executor/memory/__init__.py` — re-exports
+- `src/xgen_agent_runtime/memory/__init__.py` — re-exports
   `CompositeMemoryProvider`, `LayerRouting`, `MemoryProviderFactory`;
   `__all__` grows to include the composite + factory surface.
-- `pyproject.toml` / `src/geny_executor/__init__.py` — bumped to
+- `pyproject.toml` / `src/xgen_agent_runtime/__init__.py` — bumped to
   `0.18.0`.
 
 ### Tests
@@ -662,7 +662,7 @@ factory dispatch, minus one optional skip).
   `providers` block recurses through `factory.build` so there's only
   one place to add a new backend. The config in
   `factory.py`'s docstring is load-bearing — that's the shape
-  `geny-executor-web` will render the manifest UI against.
+  `xgen-agent-runtime-web` will render the manifest UI against.
 - **Zero net new core dependencies.** Pure Python throughout.
   Everything flows through the Phase 1 Protocol surface.
 
@@ -774,7 +774,7 @@ Real test bodies — five stubs filled in:
 
 Also updated:
 
-- `pyproject.toml` / `src/geny_executor/__init__.py` — bumped to
+- `pyproject.toml` / `src/xgen_agent_runtime/__init__.py` — bumped to
   `0.19.0`.
 
 ### Tests
@@ -791,7 +791,7 @@ is the correct state for Phase 2 closure.
   outside the completeness suite referenced it.
 - **Adapter is test-scope only.** Importing from `src/` is
   intentionally blocked by convention — the fixtures package is
-  outside the wheel. `geny-executor-web` does NOT gain any adapter
+  outside the wheel. `xgen-agent-runtime-web` does NOT gain any adapter
   dependency from this PR.
 - **No runtime changes.** The only `src/` edits are the version bump
   in `__init__.py` and `pyproject.toml`. Every other change lives
@@ -808,7 +808,7 @@ With 2e merged, Phase 2's gate (G2) is satisfied:
 Next: Phase 3 work (C7 adapter parity) swaps the adapter's delegate
 for a real Geny `SessionMemoryManager` wrapper and activates
 `test_c7_native_and_adapter_produce_identical_outputs`. C4 (REST
-surface coverage) is Phase 4 — requires `geny-executor-web`.
+surface coverage) is Phase 4 — requires `xgen-agent-runtime-web`.
 
 ### Version bumps
 
@@ -856,12 +856,12 @@ translates on the fly.
 
 ### Changes
 
-- `src/geny_executor/memory/providers/sql/schema.py`:
+- `src/xgen_agent_runtime/memory/providers/sql/schema.py`:
   - `Dialect` enum (`SQLITE`, `POSTGRES`).
   - `build_ddl(dialect)` parametric DDL builder.
   - `SQLITE_DDL`, `POSTGRES_DDL`, `TABLES`. Backwards-compat alias
     `SQLITE_TABLES = TABLES` keeps existing importers unbroken.
-- `src/geny_executor/memory/providers/sql/connection.py`:
+- `src/xgen_agent_runtime/memory/providers/sql/connection.py`:
   - Common `_SQLConnection` ABC.
   - `_SQLiteConnection` (kept verbatim, now subclass of base).
   - `_PostgresConnection` lazy-imports `psycopg` only at `open()`
@@ -871,34 +871,34 @@ translates on the fly.
     `?` inside single-quoted string literals is preserved.
   - `detect_dialect(dsn)` and `open_connection(dsn, dialect=…)`
     factory helpers.
-- `src/geny_executor/memory/providers/sql/provider.py`:
+- `src/xgen_agent_runtime/memory/providers/sql/provider.py`:
   - `SQLMemoryProvider.__init__` accepts `dialect=` (auto-detects
     from DSN scheme when omitted) and exposes `provider.dialect`.
   - Threads `backend_name` (= `dialect.value`) into the LTM, Notes,
     and Vector stores so `NoteRef.backend` and the descriptor's
     `BackendInfo.backend` reflect the chosen dialect.
   - Descriptor metadata gains a `"dialect"` key.
-- `src/geny_executor/memory/providers/sql/{ltm,notes,stm,vector,index}_store.py`:
+- `src/xgen_agent_runtime/memory/providers/sql/{ltm,notes,stm,vector,index}_store.py`:
   - Switched typed connection parameters from `_SQLiteConnection` to
     the dialect-agnostic `_SQLConnection`.
   - LTM / Notes / Vector accept a `backend_name` constructor kwarg.
-- `src/geny_executor/memory/providers/sql/snapshot.py`:
+- `src/xgen_agent_runtime/memory/providers/sql/snapshot.py`:
   - Uses the dialect-agnostic `_SQLConnection` and the renamed
     `TABLES` tuple.
-- `src/geny_executor/memory/factory.py`:
+- `src/xgen_agent_runtime/memory/factory.py`:
   - `_build_sql()` accepts an optional `dialect` config key
     (`"postgres"` / `"sqlite"`) that overrides the DSN scheme
     detection. Bogus values raise `ValueError` via the `Dialect`
     enum constructor.
   - Docstring extended with Postgres example.
-- `src/geny_executor/memory/providers/sql/__init__.py`:
+- `src/xgen_agent_runtime/memory/providers/sql/__init__.py`:
   - Re-exports `Dialect` so consumers can introspect provider
     dialects without reaching into the schema module.
 - `pyproject.toml`:
   - New `[postgres]` extra: `psycopg[binary]>=3.1`, `pgvector>=0.3.0`.
   - `[all]` extra now includes `[postgres]`.
   - Version `0.19.0` → `0.20.0`.
-- `src/geny_executor/__init__.py`:
+- `src/xgen_agent_runtime/__init__.py`:
   - Version bump.
 - `tests/contract/test_memory_provider_sql_dialect.py` (NEW):
   - 24 tests covering DSN routing, SQL translation edge cases
@@ -921,17 +921,17 @@ change SQLite behaviour.
 
 - **`SQLITE_TABLES` kept as alias** for `TABLES` so any external
   importer (none in this repo, but a fixture-quarantined adapter or
-  `geny-executor-web` could reach for it) keeps working.
+  `xgen-agent-runtime-web` could reach for it) keeps working.
 - **`SQLMemoryProvider.__init__` is additive** — every existing call
   site still works because `dialect=` is optional and defaults to
   DSN-scheme detection (which yields SQLite for filesystem paths,
   preserving prior behaviour).
 - **`_SQLiteConnection` import path is unchanged** — still
-  `from geny_executor.memory.providers.sql.connection import _SQLiteConnection`.
+  `from xgen_agent_runtime.memory.providers.sql.connection import _SQLiteConnection`.
 - **No `psycopg` import at package import time.** The optional
   dependency is only needed when a caller actually opens a Postgres
   connection; a missing install raises a clear hint that points at
-  `pip install geny-executor[postgres]`.
+  `pip install xgen-agent-runtime[postgres]`.
 
 ### What is NOT in this PR
 

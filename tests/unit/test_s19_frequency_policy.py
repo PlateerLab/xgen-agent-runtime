@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.stages.s19_summarize import (
+from xgen_agent_runtime.stages.s19_summarize import (
     EveryNTurnsPolicy,
     FrequencyAwareSummarizerProxy,
     FrequencyContext,
@@ -13,7 +13,7 @@ from geny_executor.stages.s19_summarize import (
     NoSummarizer,
     OnContextFillPolicy,
 )
-from geny_executor.stages.s19_summarize.interface import Summarizer
+from xgen_agent_runtime.stages.s19_summarize.interface import Summarizer
 
 
 def _ctx(

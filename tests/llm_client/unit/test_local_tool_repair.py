@@ -11,8 +11,8 @@ import pytest
 
 pytest.importorskip("openai")
 
-from geny_executor.llm_client.openai import OpenAIClient  # noqa: E402
-from geny_executor.llm_client.openai_compatible import (  # noqa: E402
+from xgen_agent_runtime.llm_client.openai import OpenAIClient  # noqa: E402
+from xgen_agent_runtime.llm_client.openai_compatible import (  # noqa: E402
     OllamaClient,
     _repair_json,
 )

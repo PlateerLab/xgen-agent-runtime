@@ -1,8 +1,8 @@
 # Hosting the Claude Code CLI as a provider
 
-> Status: current for geny-executor 2.1.0.
+> Status: current for xgen-agent-runtime 2.1.0.
 
-The `claude_code_cli` provider routes Stage 6 through a spawned `claude` CLI subprocess. Unlike the SDK providers, the CLI runs the **entire agentic loop internally** — LLM ↔ tools ↔ LLM happens inside the spawned process. To make that loop usable by a host (Geny, CI runner, custom orchestrator), geny-executor exposes:
+The `claude_code_cli` provider routes Stage 6 through a spawned `claude` CLI subprocess. Unlike the SDK providers, the CLI runs the **entire agentic loop internally** — LLM ↔ tools ↔ LLM happens inside the spawned process. To make that loop usable by a host (Geny, CI runner, custom orchestrator), xgen-agent-runtime exposes:
 
 - a stable argv builder with version-compat fixes
 - a per-session **MCP wrap** that surfaces the host's tool registry to the CLI's LLM as `mcp__<server>__<tool>`
@@ -12,7 +12,7 @@ The `claude_code_cli` provider routes Stage 6 through a spawned `claude` CLI sub
 ## Minimum viable setup
 
 ```python
-from geny_executor import CredentialBundle, ProviderCredentials, PipelineBuilder
+from xgen_agent_runtime import CredentialBundle, ProviderCredentials, PipelineBuilder
 
 bundle = CredentialBundle(by_provider={
     "claude_code_cli": ProviderCredentials(

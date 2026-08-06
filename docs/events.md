@@ -3,7 +3,7 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `geny_executor.events.catalog` on 2026-06-20.
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-06-20.
 > Catalogue version: **4** · events: **115**
 
 Every event name the engine emits, value == wire string. The enum

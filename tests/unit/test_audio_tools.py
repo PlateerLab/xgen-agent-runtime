@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from geny_executor.audio.stt import (
+from xgen_agent_runtime.audio.stt import (
     STTError,
     STTResult,
     STTSegment,
@@ -22,10 +22,10 @@ from geny_executor.audio.stt import (
     register_stt_provider,
     unregister_stt_provider,
 )
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
-from geny_executor.tools.built_in import audio_tools
-from geny_executor.tools.built_in.audio_tools import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
+from xgen_agent_runtime.tools.built_in import audio_tools
+from xgen_agent_runtime.tools.built_in.audio_tools import (
     AudioInfoTool,
     AudioListFilesTool,
     AudioTranscribeTool,
@@ -107,8 +107,8 @@ def test_family_registered_and_gated():
 def test_gate_drops_family_without_feature_token():
     """EFFECT PROOF: without feature:stt_enabled the tools are removed
     from the registry (never reach the model); with it they stay."""
-    from geny_executor.core.pipeline import _gate_unconfigured_tools
-    from geny_executor.tools.registry import ToolRegistry
+    from xgen_agent_runtime.core.pipeline import _gate_unconfigured_tools
+    from xgen_agent_runtime.tools.registry import ToolRegistry
 
     for satisfied, expect in ((set(), False), ({"feature:stt_enabled"}, True)):
         reg = ToolRegistry()

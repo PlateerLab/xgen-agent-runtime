@@ -7,8 +7,8 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s17_emit import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s17_emit import (
     EmitResult,
     Emitter,
     OrderedEmitterChain,

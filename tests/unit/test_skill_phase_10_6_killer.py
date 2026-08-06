@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.skills.bundled_skills import load_bundled_skills
-from geny_executor.skills.types import Skill
+from xgen_agent_runtime.skills.bundled_skills import load_bundled_skills
+from xgen_agent_runtime.skills.types import Skill
 
 
 @pytest.fixture(scope="module")

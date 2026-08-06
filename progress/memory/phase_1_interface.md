@@ -24,12 +24,12 @@ snapshot/restore, promotion) as a single Protocol.
 
 Scope in this phase:
 
-1. `geny_executor.memory.provider` — `MemoryProvider` Protocol, 7
+1. `xgen_agent_runtime.memory.provider` — `MemoryProvider` Protocol, 7
    layer handles (STM/LTM/Notes/Vector/Curated/Global/Index), and the
    supporting dataclasses/enums that formalise the 4-axis model
    (Layer × Capability × Backend × Scope) and typed events from the
    spec.
-2. `geny_executor.memory.providers.ephemeral.EphemeralMemoryProvider`
+2. `xgen_agent_runtime.memory.providers.ephemeral.EphemeralMemoryProvider`
    — the first concrete, dependency-free conformance. Doubles as the
    reference implementation and the default test fixture.
 3. Stage 2 (Context) and Stage 15 (Memory) **rewiring** to accept an
@@ -40,7 +40,7 @@ Scope in this phase:
    reusable behavioural assertions, plus the ephemeral subclass.
    Every future provider reuses this exact mixin; divergence is a
    test failure, not a style preference.
-5. Public API exposure via `geny_executor.memory.__init__` (39
+5. Public API exposure via `xgen_agent_runtime.memory.__init__` (39
    symbols) and a version bump to `0.14.0`.
 
 Phase 1 is deliberately **additive**: the provider path runs *next to*
@@ -50,7 +50,7 @@ green.
 
 ## Changes
 
-### `src/geny_executor/memory/provider.py` (new, 812 lines)
+### `src/xgen_agent_runtime/memory/provider.py` (new, 812 lines)
 
 The unified contract. Key pieces, in declaration order:
 
@@ -65,7 +65,7 @@ The unified contract. Key pieces, in declaration order:
   `Note`, `NoteMeta`, `NoteDraft`, `NotePatch`, `NoteRef`, `NoteGraph`,
   `MemorySnapshot`, `ReindexPlan`, `BackendInfo`, `EmbeddingDescriptor`,
   `CostEvent`, `CostModel`, `MemoryDescriptor` (self-describing —
-  carries the `ConfigSchema` that `geny-executor-web` introspects),
+  carries the `ConfigSchema` that `xgen-agent-runtime-web` introspects),
   `MemoryHooks` (callbacks: `should_record_execution`, `should_reflect`,
   `should_auto_promote`).
 - **7 handle Protocols**, all `@runtime_checkable`:
@@ -97,7 +97,7 @@ Design notes:
   contract suite cross-checks that layers declared in the descriptor
   resolve to non-None handles.
 
-### `src/geny_executor/memory/providers/ephemeral.py` (new, 698 lines)
+### `src/xgen_agent_runtime/memory/providers/ephemeral.py` (new, 698 lines)
 
 `EphemeralMemoryProvider` — zero-dependency, in-memory reference
 conforming to `MemoryProvider`. Declares `Layer.STM`, `Layer.LTM`,
@@ -121,11 +121,11 @@ Snapshot/restore round-trips via a JSON payload with a SHA-256
 checksum. `restore()` rejects a payload whose checksum does not match
 the body — contract test `test_snapshot_round_trips` verifies.
 
-### `src/geny_executor/memory/providers/__init__.py` (new)
+### `src/xgen_agent_runtime/memory/providers/__init__.py` (new)
 
 Single-line public export: `EphemeralMemoryProvider`.
 
-### `src/geny_executor/memory/__init__.py` (rewritten)
+### `src/xgen_agent_runtime/memory/__init__.py` (rewritten)
 
 Phase 1+ contract symbols (32 names) are re-exported at the package
 root. Legacy `GenyMemoryRetriever` / `GenyMemoryStrategy` /
@@ -133,7 +133,7 @@ root. Legacy `GenyMemoryRetriever` / `GenyMemoryStrategy` /
 docstring as **validation fixtures for Phase 3 (C7)**, not the
 operating path. Total public surface: 39 symbols.
 
-### `src/geny_executor/stages/s02_context/artifact/default/stage.py` (modified)
+### `src/xgen_agent_runtime/stages/s02_context/artifact/default/stage.py` (modified)
 
 - New kwarg `provider: Optional[MemoryProvider] = None` on the stage
   constructor.
@@ -141,10 +141,10 @@ operating path. Total public surface: 39 symbols.
   addition to the legacy retriever. The two chunk lists are merged
   and deduped by key before Stage 2 hands them to Stage 3.
 - Emits `MemoryEvent.CONTEXT_BUILT.value` with the retrieval result
-  payload so `geny-executor-web` (Phase 4) can display the 6-layer
+  payload so `xgen-agent-runtime-web` (Phase 4) can display the 6-layer
   breakdown without reaching back into the provider.
 
-### `src/geny_executor/stages/s15_memory/artifact/default/stage.py` (modified)
+### `src/xgen_agent_runtime/stages/s15_memory/artifact/default/stage.py` (modified)
 
 - New kwargs `provider: Optional[MemoryProvider] = None` and
   `hooks: Optional[MemoryHooks] = None`.
@@ -189,10 +189,10 @@ Phase 2 will add `test_memory_provider_file.py`, `_sql.py`,
 `_composite.py` with identical bodies but different fixtures — the
 assertion set stays constant.
 
-### `pyproject.toml` / `src/geny_executor/__init__.py` (modified)
+### `pyproject.toml` / `src/xgen_agent_runtime/__init__.py` (modified)
 
 - Version bumped `0.13.5` → `0.14.0` per Phase 0's follow-up note:
-  the bump is tied to shipping `geny_executor.memory.provider`.
+  the bump is tied to shipping `xgen_agent_runtime.memory.provider`.
 
 ## Tests
 
@@ -226,7 +226,7 @@ No legacy test was modified. No legacy test regressed.
 ## Compatibility
 
 - **Public API**: purely additive. 32 new names exported from
-  `geny_executor.memory`; legacy 7 names retained at the same paths.
+  `xgen_agent_runtime.memory`; legacy 7 names retained at the same paths.
   Downstream importers continue to work.
 - **Stage constructors**: both stages gained a `provider=`-style
   kwarg with a `None` default. Existing call sites that use positional
@@ -243,7 +243,7 @@ No legacy test was modified. No legacy test regressed.
 
 ## Version bumps
 
-- `geny-executor`: `0.13.5` → `0.14.0` (minor — new public contract).
+- `xgen-agent-runtime`: `0.13.5` → `0.14.0` (minor — new public contract).
 
 ## Follow-up
 
@@ -263,7 +263,7 @@ Phase 2 (`progress/memory/phase_2_native_providers.md`, to author):
   user can keep STM in SQLite while running notes in Postgres.
 - Concrete curated/global handles + `promote()` semantics end-to-end.
 - `MemoryProviderFactory(descriptor_id, user_id, scope)` with the
-  descriptor registry `geny-executor-web` will read (Phase 4).
+  descriptor registry `xgen-agent-runtime-web` will read (Phase 4).
 - `GenyManagerAdapter` rebuilt strictly as a C7 test fixture under
   `tests/completeness/fixtures/adapter/` — not a runtime module.
 - Flip C2, C3, C5, C6 from skip → real assertions. C1 activates here

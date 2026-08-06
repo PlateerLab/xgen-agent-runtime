@@ -15,21 +15,21 @@ import logging
 
 import pytest
 
-from geny_executor import Pipeline, PipelineConfig, PipelineMutator, PipelineState
-from geny_executor.core.environment import (
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineMutator, PipelineState
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     StageManifestEntry,
     ToolsSnapshot,
 )
-from geny_executor.core.mutation import RestoreReport
-from geny_executor.core.shared_keys import SharedKeys
-from geny_executor.core.snapshot import PipelineSnapshot, StageSnapshot
-from geny_executor.llm_client.credentials import ConfigError, CredentialBundle
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime.core.mutation import RestoreReport
+from xgen_agent_runtime.core.shared_keys import SharedKeys
+from xgen_agent_runtime.core.snapshot import PipelineSnapshot, StageSnapshot
+from xgen_agent_runtime.llm_client.credentials import ConfigError, CredentialBundle
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _make_pipeline() -> Pipeline:
@@ -113,7 +113,7 @@ def test_lenient_from_manifest_records_dropped_stage(caplog):
         ),
         StageManifestEntry(order=21, name="yield", active=True, artifact="default"),
     ]
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.pipeline"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline"):
         pipeline = Pipeline.from_manifest(
             _manifest(entries), credentials=CredentialBundle(), strict=False
         )
@@ -253,7 +253,7 @@ def test_strict_from_manifest_warns_on_restore_skips(caplog):
         StageManifestEntry(order=9, name="parse", active=True, artifact="default"),
         StageManifestEntry(order=21, name="yield", active=True, artifact="default"),
     ]
-    with caplog.at_level(logging.WARNING, logger="geny_executor.core.pipeline"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline"):
         Pipeline.from_manifest(
             _manifest(entries), credentials=CredentialBundle(), strict=True
         )

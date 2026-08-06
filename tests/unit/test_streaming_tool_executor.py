@@ -8,15 +8,15 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.stages.s10_tool import StreamingToolExecutor
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.tools.base import (
+from xgen_agent_runtime.stages.s10_tool import StreamingToolExecutor
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.tools.base import (
     Tool,
     ToolCapabilities,
     ToolContext,
     ToolResult,
 )
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -412,14 +412,14 @@ class TestExecutorSlotRegistration:
         """The stage's ConfigSchema named StreamingToolExecutor since
         Phase 2 W4, but the slot registry never carried it — a manifest
         electing 'streaming' hit strategy.unknown_impl."""
-        from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
         slot = ToolStage().get_strategy_slots()["executor"]
         assert "streaming" in slot.available_impls
         assert slot.registry["streaming"] is StreamingToolExecutor
 
     def test_slot_swap_builds_and_configures(self) -> None:
-        from geny_executor.stages.s10_tool.artifact.default.stage import ToolStage
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 
         stage = ToolStage()
         stage.set_strategy("executor", "streaming", {"max_concurrency": 3})
@@ -468,9 +468,9 @@ class TestExecutorSlotRegistration:
     def test_manifest_elected_streaming_executor_builds_strict(self) -> None:
         """A manifest declaring strategies.executor='streaming' passes
         validate_manifest and builds strict with the executor elected."""
-        from geny_executor import build_manifest, validate_manifest
-        from geny_executor.core.environment import EnvironmentManifest
-        from geny_executor.core.pipeline import Pipeline
+        from xgen_agent_runtime import build_manifest, validate_manifest
+        from xgen_agent_runtime.core.environment import EnvironmentManifest
+        from xgen_agent_runtime.core.pipeline import Pipeline
 
         data = build_manifest("worker_adaptive", provider="anthropic").to_dict()
         for entry in data["stages"]:

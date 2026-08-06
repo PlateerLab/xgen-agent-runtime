@@ -22,14 +22,14 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from geny_executor.memory.composite import CompositeMemoryProvider, LayerRouting
-from geny_executor.memory.embedding import LocalHashEmbeddingClient
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.composite import CompositeMemoryProvider, LayerRouting
+from xgen_agent_runtime.memory.embedding import LocalHashEmbeddingClient
+from xgen_agent_runtime.memory.provider import (
     Layer,
     NoteDraft,
     Scope,
 )
-from geny_executor.memory.providers import FileMemoryProvider
+from xgen_agent_runtime.memory.providers import FileMemoryProvider
 
 
 async def _build_provider(

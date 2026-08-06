@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.workspace import Workspace, WorkspaceStack
+from xgen_agent_runtime.workspace import Workspace, WorkspaceStack
 
 
 # ── Workspace dataclass ──────────────────────────────────────────────

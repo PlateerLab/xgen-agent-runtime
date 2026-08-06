@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.composite import CompositeMemoryProvider, LayerRouting
-from geny_executor.memory.embedding import LocalHashEmbeddingClient
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.composite import CompositeMemoryProvider, LayerRouting
+from xgen_agent_runtime.memory.embedding import LocalHashEmbeddingClient
+from xgen_agent_runtime.memory.provider import (
     Capability,
     Importance,
     Layer,
@@ -25,7 +25,7 @@ from geny_executor.memory.provider import (
     Scope,
     Turn,
 )
-from geny_executor.memory.providers import (
+from xgen_agent_runtime.memory.providers import (
     EphemeralMemoryProvider,
     FileMemoryProvider,
     SQLMemoryProvider,

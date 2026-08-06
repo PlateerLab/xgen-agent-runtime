@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     ArtifactInfo,
     ModelConfig,
     create_stage,
@@ -28,8 +28,8 @@ from geny_executor import (
     list_artifacts,
     list_artifacts_with_meta,
 )
-from geny_executor.core.artifact import STAGE_MODULES, DEFAULT_ARTIFACT
-from geny_executor.tools.stage_binding import StageToolBinding
+from xgen_agent_runtime.core.artifact import STAGE_MODULES, DEFAULT_ARTIFACT
+from xgen_agent_runtime.tools.stage_binding import StageToolBinding
 
 
 # ── describe_artifact / list_artifacts_with_meta ────────────────
@@ -67,7 +67,7 @@ def test_describe_artifact_accepts_all_stage_identifier_forms():
 
 def test_describe_artifact_raises_on_bad_meta_type(monkeypatch):
     """Non-dict ``ARTIFACT_META`` is a programmer error, not silent."""
-    from geny_executor.stages.s01_input.artifact import default as default_mod
+    from xgen_agent_runtime.stages.s01_input.artifact import default as default_mod
 
     monkeypatch.setattr(default_mod, "ARTIFACT_META", ["not", "a", "dict"], raising=False)
     with pytest.raises(TypeError, match="must be a dict"):
@@ -76,7 +76,7 @@ def test_describe_artifact_raises_on_bad_meta_type(monkeypatch):
 
 def test_describe_artifact_captures_unknown_keys_as_extra(monkeypatch):
     """Unknown meta keys land in ``extra`` instead of being dropped."""
-    from geny_executor.stages.s01_input.artifact import default as default_mod
+    from xgen_agent_runtime.stages.s01_input.artifact import default as default_mod
 
     fake_meta = {
         "description": "Test input",
@@ -155,7 +155,7 @@ def test_create_stage_accepts_aliases_and_order():
 
 def test_stage_artifact_name_defaults_to_default_when_unset():
     """Directly-instantiated stages report ``default`` instead of blowing up."""
-    from geny_executor.stages.s01_input.artifact.default.stage import InputStage
+    from xgen_agent_runtime.stages.s01_input.artifact.default.stage import InputStage
 
     bare = InputStage()
     assert bare.artifact_name == "default"

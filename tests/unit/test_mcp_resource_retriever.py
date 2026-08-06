@@ -14,12 +14,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s02_context import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s02_context import (
     MCPResourceRetriever,
 )
-from geny_executor.tools.mcp.manager import MCPManager, MCPServerConfig, MCPServerConnection
-from geny_executor.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.manager import MCPManager, MCPServerConfig, MCPServerConnection
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.embedding import LocalHashEmbeddingClient
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.embedding import LocalHashEmbeddingClient
+from xgen_agent_runtime.memory.provider import (
     Capability,
     ExecutionSummary,
     Layer,
@@ -22,7 +22,7 @@ from geny_executor.memory.provider import (
     RetrievalQuery,
     Scope,
 )
-from geny_executor.memory.providers import SQLMemoryProvider
+from xgen_agent_runtime.memory.providers import SQLMemoryProvider
 
 
 @pytest.fixture

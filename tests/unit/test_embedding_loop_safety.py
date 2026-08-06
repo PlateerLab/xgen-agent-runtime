@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from geny_executor.memory.embedding.client import _LoopBoundClientMixin
+from xgen_agent_runtime.memory.embedding.client import _LoopBoundClientMixin
 
 
 class _FakeSDKClient:

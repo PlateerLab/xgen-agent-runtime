@@ -15,17 +15,17 @@ import dataclasses
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     ModelConfig,
     ModelOverrides,
     Pipeline,
     PipelineConfig,
     PipelineState,
 )
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage, MockProvider
-from geny_executor.stages.s09_parse import ParseStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
+from xgen_agent_runtime.stages.s09_parse import ParseStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _make_pipeline() -> Pipeline:
@@ -61,10 +61,10 @@ def test_non_none_fields_only_lists_set_values():
 
 
 def test_exported_from_package_root():
-    import geny_executor
+    import xgen_agent_runtime
 
-    assert "ModelOverrides" in geny_executor.__all__
-    assert geny_executor.ModelOverrides is ModelOverrides
+    assert "ModelOverrides" in xgen_agent_runtime.__all__
+    assert xgen_agent_runtime.ModelOverrides is ModelOverrides
 
 
 # ── One-run lifetime ─────────────────────────────────────────────────

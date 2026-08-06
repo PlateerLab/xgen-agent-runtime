@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in.notebook_edit_tool import NotebookEditTool
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in.notebook_edit_tool import NotebookEditTool
 
 
 def _minimal_notebook(cells: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
@@ -386,7 +386,7 @@ class TestAtomicity:
 
 class TestRegistry:
     def test_registered(self):
-        from geny_executor.tools.built_in import (
+        from xgen_agent_runtime.tools.built_in import (
             BUILT_IN_TOOL_CLASSES,
             BUILT_IN_TOOL_FEATURES,
             NotebookEditTool,

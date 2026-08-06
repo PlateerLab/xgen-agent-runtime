@@ -1,7 +1,7 @@
-# geny-executor 아키텍처 심층 검토 — Environment Management 철학 대비
+# xgen-agent-runtime 아키텍처 심층 검토 — Environment Management 철학 대비
 
 - **날짜**: 2026-06-09
-- **기준 버전**: geny-executor 2.1.4 (HEAD `c455643`), Geny `874d324`, GAPT (2.1.0 고정)
+- **기준 버전**: xgen-agent-runtime 2.1.4 (HEAD `c455643`), Geny `874d324`, GAPT (2.1.0 고정)
 - **방법**: 14개 병렬 audit agent (9 subsystem 매핑 + 5 관점별 비판 검증), ~640 tool calls.
   모든 주장은 file:line 단위로 코드에서 직접 검증됨. README/PROGRESS 류 문서는 1차 출처로
   사용하지 않음 (코드가 기준).
@@ -216,7 +216,7 @@ attach_runtime 의 runtime-object (llm_client 강등) > manifest (설정당 home
   계약이 없어 장수 세션이 MAX_ITERATIONS 에 걸리거나 이전 turn 의 'error' 가 다음 turn 의
   success 판정을 오염시킴. state docstring 의 "Resets to {} at the start of each run" 은
   코드에 존재하지 않는 거짓말.
-- 라이브러리 자체의 `session/` 패키지는 두 host 모두 import 0 (단, geny-executor-web 은
+- 라이브러리 자체의 `session/` 패키지는 두 host 모두 import 0 (단, xgen-agent-runtime-web 은
   사용 — §3.6).
 
 ### 3.4 Vendor 경계의 비대칭 (1-4 표 참조)
@@ -236,9 +236,9 @@ TOKEN_LIMIT 으로 오분류 → 다음 drift 가 "컨텍스트 줄이세요" �
 hook taxonomy 16개 중 3개만 발화 / `security/` 모듈 (live path 연결 없음) /
 `StreamingToolExecutor` (export 되고 자기 stage 의 schema 설명에 등장하지만 registry 미등록).
 
-### 3.6 geny-executor-web — 방치된 제3 소비자
+### 3.6 xgen-agent-runtime-web — 방치된 제3 소비자
 
-마지막 커밋 2026-04-19 (2.0.0 이전), `geny-executor>=0.20.0` + 존재하지 않는 extras
+마지막 커밋 2026-04-19 (2.0.0 이전), `xgen-agent-runtime>=0.20.0` + 존재하지 않는 extras
 (`[postgres]`, `[memory]`) 에 의존, "16-stage" README, 손으로 미러링한
 `_REQUIRED_ORDERS = {1,6,9,16}` 가 현재 21-stage 와 불일치 (s16 을 required 로 강제하고
 s21_yield 비활성을 허용 — strict from_manifest 가 거부할 manifest 를 생산 가능).
@@ -324,7 +324,7 @@ s21_yield 비활성을 허용 — strict from_manifest 가 거부할 manifest �
 
 ## 5. 함께 결정할 사항
 
-1. **geny-executor-web 의 운명** — (a) 폐기 선언 (그러면 session/, ToolScope/Sandbox,
+1. **xgen-agent-runtime-web 의 운명** — (a) 폐기 선언 (그러면 session/, ToolScope/Sandbox,
    PipelinePresets 의 삭제 추천이 유효해짐) vs (b) canonical introspection/mutation UI 로
    승격 (2.1.4 업그레이드 + 손미러 상수를 introspection API 로 교체). 이 결정이 dead-code
    정리 범위를 좌우한다.

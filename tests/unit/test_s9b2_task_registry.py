@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s13_task_registry import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s13_task_registry import (
     EagerWaitPolicy,
     FireAndForgetPolicy,
     InMemoryRegistry,

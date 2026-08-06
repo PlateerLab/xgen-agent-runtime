@@ -25,20 +25,20 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     StageManifestEntry,
     ToolsSnapshot,
 )
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s14_evaluate import BinaryClassifyEvaluation, EvaluationChain
-from geny_executor.stages.s14_evaluate.artifact.default.strategies import (
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s14_evaluate import BinaryClassifyEvaluation, EvaluationChain
+from xgen_agent_runtime.stages.s14_evaluate.artifact.default.strategies import (
     SignalBasedEvaluation,
 )
-from geny_executor.stages.s16_loop import MultiDimensionalBudgetController
-from geny_executor.stages.s16_loop.interface import LoopDecision
+from xgen_agent_runtime.stages.s16_loop import MultiDimensionalBudgetController
+from xgen_agent_runtime.stages.s16_loop.interface import LoopDecision
 
 
 def _geny_worker_manifest() -> EnvironmentManifest:
@@ -158,7 +158,7 @@ class TestManifestRoundTrip:
         """Snapshot → manifest → pipeline → snapshot must keep the configs:
         this is what lets operators export a live environment and get back
         what is actually running (manifest = source of truth)."""
-        from geny_executor.core.mutation import PipelineMutator
+        from xgen_agent_runtime.core.mutation import PipelineMutator
 
         snapshot = PipelineMutator(pipeline).snapshot()
         s14 = next(s for s in snapshot.stages if s.order == 14)

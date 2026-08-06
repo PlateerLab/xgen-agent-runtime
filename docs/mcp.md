@@ -1,8 +1,8 @@
 # MCP Integration
 
-> Status: current for geny-executor 2.1.0.
+> Status: current for xgen-agent-runtime 2.1.0.
 
-geny-executor supports the [Model Context Protocol](https://modelcontextprotocol.io/) at **two distinct boundaries**, and it's important to know which one you want:
+xgen-agent-runtime supports the [Model Context Protocol](https://modelcontextprotocol.io/) at **two distinct boundaries**, and it's important to know which one you want:
 
 | Boundary | Where the MCP server lives | Who serves it | Who consumes it | Use when |
 |---|---|---|---|---|
@@ -16,8 +16,8 @@ These two are independent. A single session can use both.
 ### Connecting
 
 ```python
-from geny_executor.tools.mcp import MCPManager
-from geny_executor.tools import ToolRegistry
+from xgen_agent_runtime.tools.mcp import MCPManager
+from xgen_agent_runtime.tools import ToolRegistry
 
 mcp = MCPManager()
 await mcp.connect(
@@ -115,7 +115,7 @@ Full integration details + a bridge skeleton: [claude_code_cli.md](claude_code_c
 | `claude_code_cli` spawned CLI's LLM calling **your** tools | Per-session CLI MCP wrap |
 | Both at once for a single session | Both — they don't conflict |
 
-The host-attached path is the standard MCP client story. The CLI wrap is geny-executor-specific machinery that makes the `claude_code_cli` provider useful as a Stage 6 backend in an agentic pipeline.
+The host-attached path is the standard MCP client story. The CLI wrap is xgen-agent-runtime-specific machinery that makes the `claude_code_cli` provider useful as a Stage 6 backend in an agentic pipeline.
 
 ## Error handling
 

@@ -12,14 +12,14 @@ import json
 
 import pytest
 
-from geny_executor.memory.provider import MemoryHooks, Turn
-from geny_executor.memory.providers.file.stm_store import (
+from xgen_agent_runtime.memory.provider import MemoryHooks, Turn
+from xgen_agent_runtime.memory.providers.file.stm_store import (
     MAX_RECORD_BYTES,
     MAX_STM_BYTES,
     _bound_record_line,
     _JSONLSTMStore,
 )
-from geny_executor.stages.s20_persist.artifact.default.persisters import (
+from xgen_agent_runtime.stages.s20_persist.artifact.default.persisters import (
     FilePersister,
 )
 

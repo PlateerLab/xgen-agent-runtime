@@ -1,10 +1,10 @@
 # Architecture
 
-> Status: current for geny-executor 2.2.0.
+> Status: current for xgen-agent-runtime 2.2.0.
 
 ## Design principles
 
-geny-executor is a **harness** — a deliberately explicit pipeline that exposes every step of agent execution rather than hiding it behind framework magic. The two architectural commitments that drop out of this:
+xgen-agent-runtime is a **harness** — a deliberately explicit pipeline that exposes every step of agent execution rather than hiding it behind framework magic. The two architectural commitments that drop out of this:
 
 1. **Configuration is artifact.** A pipeline is fully described by an `EnvironmentManifest` (JSON). The manifest names every stage, picks one strategy per slot, and pins config values. Loading the manifest reconstructs the pipeline deterministically.
 2. **Dual abstraction.** Two orthogonal extension points: swap an entire stage (Level 1) or swap a strategy *inside* a stage (Level 2). Both happen by editing the manifest — no code changes for the common reconfigurations.
@@ -57,7 +57,7 @@ A turn enters at Stage 1, traverses Phase A once, loops through Phase B until St
 | 20 | **Persist** | Save session snapshot | `passthrough`, `file`, `sqlite` |
 | 21 | **Yield** | Format the final result | `default`, `structured`, `streaming` |
 
-The exact strategy class list per stage lives next to each stage's `artifact/` folder. Browse `src/geny_executor/stages/<sNN_name>/artifact/`.
+The exact strategy class list per stage lives next to each stage's `artifact/` folder. Browse `src/xgen_agent_runtime/stages/<sNN_name>/artifact/`.
 
 ## Dual abstraction
 
@@ -86,7 +86,7 @@ Strategies are wired through `StrategySlot` (`core/slot.py`) which a stage owns 
 
 `PipelineState` (`core/state.py`) is the per-turn working set: messages, pending tool calls, memory blocks, usage, completion signal, custom shared dict. Stages mutate state in place; the pipeline serialises mutations across iterations.
 
-Every stage transition emits an event onto the pipeline's event bus: lifecycle (`pipeline.*`, `stage.*`), per-stage domain events (`api.*`, `tool.*`, `hitl.*`, `memory.*`, …), and streaming chunks (`text.delta`, `thinking.delta`, …). Since 2.2.0 the complete taxonomy is published as the `EventTypes` enum (`geny_executor.events.catalog`) with field-level payload docs — see [events.md](events.md) for the generated catalogue.
+Every stage transition emits an event onto the pipeline's event bus: lifecycle (`pipeline.*`, `stage.*`), per-stage domain events (`api.*`, `tool.*`, `hitl.*`, `memory.*`, …), and streaming chunks (`text.delta`, `thinking.delta`, …). Since 2.2.0 the complete taxonomy is published as the `EventTypes` enum (`xgen_agent_runtime.events.catalog`) with field-level payload docs — see [events.md](events.md) for the generated catalogue.
 
 Subscribe with `pipeline.on(event_type, handler)`, stream a single run with `pipeline.run_stream(...)`, or attach a multi-subscriber tap with `pipeline.events(replay_from=...)` (2.2.0). Error events carry a stable `code` field (since 2.1.0) — see [error_codes.md](error_codes.md).
 
@@ -135,21 +135,21 @@ The internal loop dispatches through `state.tool_dispatcher` — a thin handle o
 
 The 2.2.0 cycle (audit 2026-06-09) promoted the patterns hosts had been hand-rolling into owned library APIs:
 
-- **`EventTypes` catalogue** (`geny_executor.events.catalog`) — the published, versioned enumeration of every event name the engine emits, value == wire string, with per-event payload field docs (`PAYLOADS`). Append-only within a major version; a completeness test keeps emit sites and catalogue in lockstep. Generated reference: [events.md](events.md).
+- **`EventTypes` catalogue** (`xgen_agent_runtime.events.catalog`) — the published, versioned enumeration of every event name the engine emits, value == wire string, with per-event payload field docs (`PAYLOADS`). Append-only within a major version; a completeness test keeps emit sites and catalogue in lockstep. Generated reference: [events.md](events.md).
 
 - **`pipeline.events(replay_from=...)`** — multi-subscriber async-iterator tap over the unified event stream (bus events + bridged state events, stamped with `seq` / `run_id` / `session_id`). A bounded ring journal supports cursor replay so a UI attaching mid-session catches up without polling.
 
 - **Full chunk forwarding** — Stage 6 forwards every canonical streaming chunk as events (`text.delta`, `thinking.delta`, `api.tool_use`, `api.input_json_delta`, `api.content_block_stop`, `api.tool_result`, CLI-executed tool calls as `api.cli_tool_call`), not just text deltas. Structured `api.error` events carry the stable `code`.
 
-- **`build_manifest(preset, *, provider, model, ...)`** (`geny_executor.core.manifest_factory`) — library-owned preset→manifest factory. Returns a ready-to-build 21-stage `EnvironmentManifest` that passes `from_manifest(strict=True)` and round-trips `to_dict`/`from_dict` unchanged. Unknown preset/provider fails at factory time.
+- **`build_manifest(preset, *, provider, model, ...)`** (`xgen_agent_runtime.core.manifest_factory`) — library-owned preset→manifest factory. Returns a ready-to-build 21-stage `EnvironmentManifest` that passes `from_manifest(strict=True)` and round-trips `to_dict`/`from_dict` unchanged. Unknown preset/provider fails at factory time.
 
-- **`validate_manifest(manifest) -> list[ManifestIssue]`** (`geny_executor.core.environment`) — write-time contract checking: unknown stages/strategies, configs no strategy consumes, misplaced keys, missing required stages. `error` findings block `strict` builds; `warning` findings log. Pure and offline — env editors call it on save.
+- **`validate_manifest(manifest) -> list[ManifestIssue]`** (`xgen_agent_runtime.core.environment`) — write-time contract checking: unknown stages/strategies, configs no strategy consumes, misplaced keys, missing required stages. `error` findings block `strict` builds; `warning` findings log. Pure and offline — env editors call it on save.
 
 - **`Pipeline.aclose()`** — required host teardown: cancels pending HITL futures, closes live `events()` taps, disconnects MCP servers (reaps stdio children), shuts down tool providers. Idempotent and best-effort.
 
 - **`Pipeline.refresh_runtime(**kwargs)`** — between-turn runtime update with `attach_runtime` semantics, legal at any turn boundary (raises if a run is in progress). Replaces host-side private-setter queues for credential rotation / tool-context swaps.
 
-- **`ModelOverrides`** (`geny_executor.core.config`) — frozen per-run override value passed as `run(...)` / `run_stream(..., overrides=...)`. Non-`None` fields win over manifest/config for exactly one run and emit `config.override_applied` events; the next run reverts automatically.
+- **`ModelOverrides`** (`xgen_agent_runtime.core.config`) — frozen per-run override value passed as `run(...)` / `run_stream(..., overrides=...)`. Non-`None` fields win over manifest/config for exactly one run and emit `config.override_applied` events; the next run reverts automatically.
 
 - **`PipelineState.begin_turn()`** — the per-turn reset contract for long-lived states (loop counters, decisions, per-turn outputs, in-flight tool work) — called automatically when a reused state re-enters `run()` / `run_stream()`; sticky session fields are untouched.
 

@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.skills.loader import SkillLoadError, parse_skill_file
-from geny_executor.skills.registry import SkillRegistry
-from geny_executor.skills.skill_tool import (
+from xgen_agent_runtime.skills.loader import SkillLoadError, parse_skill_file
+from xgen_agent_runtime.skills.registry import SkillRegistry
+from xgen_agent_runtime.skills.skill_tool import (
     SkillTool,
     SkillToolProvider,
     _DOLLAR_PLACEHOLDER,
     _render_body,
 )
-from geny_executor.skills.types import Skill, SkillMetadata
-from geny_executor.tools.base import ToolContext
+from xgen_agent_runtime.skills.types import Skill, SkillMetadata
+from xgen_agent_runtime.tools.base import ToolContext
 
 
 def _write_skill(tmp_path: Path, *, frontmatter: str, body: str = "body\n") -> Path:

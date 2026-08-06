@@ -1,6 +1,6 @@
 """L1.B — Session-less stage introspection.
 
-Verifies the public surface of :mod:`geny_executor.core.introspection`:
+Verifies the public surface of :mod:`xgen_agent_runtime.core.introspection`:
 
     * ``introspect_stage`` returns a populated :class:`StageIntrospection` for
       every default artifact in the 16-stage pipeline, without touching any
@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor import (
+from xgen_agent_runtime import (
     ChainIntrospection,
     ConfigSchema,
     IntrospectionUnsupported,
@@ -32,7 +32,7 @@ from geny_executor import (
     introspect_all,
     introspect_stage,
 )
-from geny_executor.core.artifact import STAGE_MODULES
+from xgen_agent_runtime.core.artifact import STAGE_MODULES
 
 
 # ── introspect_stage on every default artifact ─────────────────

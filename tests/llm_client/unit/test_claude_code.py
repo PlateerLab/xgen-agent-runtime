@@ -15,10 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.errors import APIError, ErrorCategory
-from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
-from geny_executor.llm_client.registry import ClientRegistry
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
+from xgen_agent_runtime.llm_client.registry import ClientRegistry
 
 
 FAKE_CLAUDE = str(
@@ -126,7 +126,7 @@ def test_send_with_missing_binary_raises_cli_not_found(monkeypatch: pytest.Monke
 
 
 def _make_request(stream: bool = False, **kwargs):
-    from geny_executor.llm_client.types import APIRequest
+    from xgen_agent_runtime.llm_client.types import APIRequest
 
     base = dict(
         model="sonnet",
@@ -500,7 +500,7 @@ async def test_cli_version_attached_to_response_raw() -> None:
 async def test_cli_version_probed_once_per_instance() -> None:
     """The handshake is lazy and cached — one ``--version`` spawn per
     client instance, not per call."""
-    from geny_executor.llm_client._cli_runtime import CLIProcessRunner
+    from xgen_agent_runtime.llm_client._cli_runtime import CLIProcessRunner
 
     made: list[dict] = []
 
@@ -552,7 +552,7 @@ async def test_runner_factory_receives_spawn_parameters() -> None:
     """Hosts wrap process spawning (docker sandbox) via the factory —
     the supported replacement for monkey-patching
     ``CLIProcessRunner._spawn``, which pinned GAPT to 2.1.0."""
-    from geny_executor.llm_client._cli_runtime import CLIProcessRunner
+    from xgen_agent_runtime.llm_client._cli_runtime import CLIProcessRunner
 
     made: list[dict] = []
 
@@ -617,7 +617,7 @@ def test_session_hint_updatable_between_turns_via_configure() -> None:
 
 
 def test_session_hint_per_request_wins_over_client_default() -> None:
-    from geny_executor.llm_client.translators._cli import claude_code_argv
+    from xgen_agent_runtime.llm_client.translators._cli import claude_code_argv
 
     c = _client(session_hint={"session_id": "client-default", "resume": True})
     req = _hl_request(c)
@@ -634,7 +634,7 @@ def test_session_hint_per_request_wins_over_client_default() -> None:
 
 
 def _cli_result(stderr: bytes, returncode: int = 1):
-    from geny_executor.llm_client._cli_runtime import CLIResult
+    from xgen_agent_runtime.llm_client._cli_runtime import CLIResult
 
     return CLIResult(returncode=returncode, stdout=b"", stderr=stderr, duration_ms=5)
 
@@ -643,7 +643,7 @@ def test_classify_incidental_auth_noise_is_not_auth_failed() -> None:
     """Regression: the old heuristic matched bare 'auth'+'fail'
     substrings anywhere, so an MCP server named 'oauth-helper' failing
     to start was classified CLI_AUTH_FAILED (fatal, non-retryable)."""
-    from geny_executor.llm_client.claude_code import _classify_cli_result
+    from xgen_agent_runtime.llm_client.claude_code import _classify_cli_result
 
     err = _classify_cli_result(
         _cli_result(b"MCP server 'oauth-helper' failed to start: connection refused")
@@ -661,14 +661,14 @@ def test_classify_incidental_auth_noise_is_not_auth_failed() -> None:
     ],
 )
 def test_classify_real_auth_phrases_still_map(stderr: bytes) -> None:
-    from geny_executor.llm_client.claude_code import _classify_cli_result
+    from xgen_agent_runtime.llm_client.claude_code import _classify_cli_result
 
     err = _classify_cli_result(_cli_result(stderr))
     assert err.category is ErrorCategory.CLI_AUTH_FAILED
 
 
 def test_classify_appends_cli_version_when_known() -> None:
-    from geny_executor.llm_client.claude_code import _classify_cli_result
+    from xgen_agent_runtime.llm_client.claude_code import _classify_cli_result
 
     err = _classify_cli_result(_cli_result(b"boom"), cli_version="2.1.149")
     assert "cli_version=2.1.149" in str(err)
@@ -682,8 +682,8 @@ def test_classify_appends_cli_version_when_known() -> None:
 def test_pipeline_credentials_kwargs_mapping() -> None:
     """``_creds_to_client_kwargs`` knows how to build a ClaudeCodeCLIClient
     from a CredentialBundle entry shaped by Geny's CredentialBundleBuilder."""
-    from geny_executor.core.pipeline import _creds_to_client_kwargs
-    from geny_executor.llm_client.credentials import ProviderCredentials
+    from xgen_agent_runtime.core.pipeline import _creds_to_client_kwargs
+    from xgen_agent_runtime.llm_client.credentials import ProviderCredentials
 
     creds = ProviderCredentials(
         api_key="sk-x",

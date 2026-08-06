@@ -1,8 +1,8 @@
 # LLM Providers
 
-> Status: current for geny-executor 2.1.0. Five providers shipped.
+> Status: current for xgen-agent-runtime 2.1.0. Five providers shipped.
 
-geny-executor abstracts the LLM call site behind a single contract: `BaseClient` (`llm_client/base.py`). A host supplies credentials via one `CredentialBundle`; the manifest picks which provider Stage 6 calls. Switching providers is a manifest edit, not a code change.
+xgen-agent-runtime abstracts the LLM call site behind a single contract: `BaseClient` (`llm_client/base.py`). A host supplies credentials via one `CredentialBundle`; the manifest picks which provider Stage 6 calls. Switching providers is a manifest edit, not a code change.
 
 ## The five providers
 
@@ -37,7 +37,7 @@ Hosts read the capability set up-front so the UI can grey out features the chose
 ## CredentialBundle + ProviderCredentials
 
 ```python
-from geny_executor import CredentialBundle, ProviderCredentials
+from xgen_agent_runtime import CredentialBundle, ProviderCredentials
 
 bundle = CredentialBundle(by_provider={
     "anthropic": ProviderCredentials(api_key="sk-ant-..."),
@@ -70,8 +70,8 @@ The bundle is single-channel: every legacy `api_key=` kwarg path is auto-wrapped
 ## ClientRegistry — adding a custom provider
 
 ```python
-from geny_executor.llm_client.registry import ClientRegistry
-from geny_executor.llm_client.base import BaseClient
+from xgen_agent_runtime.llm_client.registry import ClientRegistry
+from xgen_agent_runtime.llm_client.base import BaseClient
 
 class MyProviderClient(BaseClient):
     capabilities = ClientCapabilities(...)

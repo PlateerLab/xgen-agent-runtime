@@ -14,15 +14,15 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     NoteDraft,
     RetrievalQuery,
     Turn,
 )
-from geny_executor.memory.providers import FileMemoryProvider
-from geny_executor.memory.providers.file import frontmatter
-from geny_executor.memory.providers.file.layout import DirectoryLayout
+from xgen_agent_runtime.memory.providers import FileMemoryProvider
+from xgen_agent_runtime.memory.providers.file import frontmatter
+from xgen_agent_runtime.memory.providers.file.layout import DirectoryLayout
 
 
 @pytest.fixture

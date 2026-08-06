@@ -14,16 +14,16 @@ import logging
 
 import pytest
 
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     StageManifestEntry,
 )
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.llm_client.credentials import ConfigError, CredentialBundle
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.llm_client.credentials import ConfigError, CredentialBundle
 
 from tests._fixtures.manifest_entries import required_stage_entries
 
-_PIPE_LOGGER = "geny_executor.core.pipeline"
+_PIPE_LOGGER = "xgen_agent_runtime.core.pipeline"
 
 
 def _manifest(extra_entries=(), *, drop_orders=()) -> EnvironmentManifest:

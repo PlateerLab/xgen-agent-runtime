@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.permission import (
+from xgen_agent_runtime.permission import (
     PermissionBehavior,
     PermissionMode,
     PermissionRule,

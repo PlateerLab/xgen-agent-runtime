@@ -15,9 +15,9 @@ import json
 import httpx
 import pytest
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
-from geny_executor.tools.built_in.atlassian_tools import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
+from xgen_agent_runtime.tools.built_in.atlassian_tools import (
     ATLASSIAN_TOOL_CLASSES,
     AtlassianNotConnectedError,
     ConfluencePageTool,

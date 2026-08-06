@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.skills import (
+from xgen_agent_runtime.skills import (
     Skill,
     SkillContext,
     SkillLoadError,

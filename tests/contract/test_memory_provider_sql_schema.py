@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     Layer,
     NoteDraft,
@@ -26,8 +26,8 @@ from geny_executor.memory.provider import (
     Scope,
     Turn,
 )
-from geny_executor.memory.providers import SQLMemoryProvider
-from geny_executor.memory.providers.sql.schema import SQLITE_TABLES
+from xgen_agent_runtime.memory.providers import SQLMemoryProvider
+from xgen_agent_runtime.memory.providers.sql.schema import SQLITE_TABLES
 
 
 @pytest.fixture

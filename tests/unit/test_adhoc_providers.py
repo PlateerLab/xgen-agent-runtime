@@ -21,18 +21,18 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.core.environment import EnvironmentManifest, ToolsSnapshot
+from xgen_agent_runtime.core.environment import EnvironmentManifest, ToolsSnapshot
 from tests._fixtures.manifest_entries import required_stage_entries
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.mcp.state import MCPConnectionState
-from geny_executor.tools.mcp.errors import MCPConnectionError
-from geny_executor.tools.mcp.manager import (
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.errors import MCPConnectionError
+from xgen_agent_runtime.tools.mcp.manager import (
     MCPManager,
     MCPServerConnection,
 )
-from geny_executor.tools.providers import AdhocToolProvider
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.providers import AdhocToolProvider
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ── Helpers ────────────────────────────────────────────────
@@ -238,7 +238,7 @@ class TestFromManifestExternalProviders:
         registry, not at None. Otherwise state.tools stays empty, the
         LLM never learns about the tools, and the model falls back to
         emitting XML-style tool calls as plain text."""
-        from geny_executor.core.environment import StageManifestEntry
+        from xgen_agent_runtime.core.environment import StageManifestEntry
 
         entries = [StageManifestEntry(order=3, name="system")]
         manifest = EnvironmentManifest(
@@ -261,7 +261,7 @@ class TestFromManifestExternalProviders:
         rebinding, the router's lookup returns `unknown_tool` for
         every LLM-emitted tool_use block — the call fails instantly
         (0 ms) even though the schema was delivered to the model."""
-        from geny_executor.core.environment import StageManifestEntry
+        from xgen_agent_runtime.core.environment import StageManifestEntry
 
         entries = [
             StageManifestEntry(order=3, name="system"),

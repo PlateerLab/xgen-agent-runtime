@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.memory.provider import EmbeddingDescriptor, NoteRef, Scope
+from xgen_agent_runtime.memory.provider import EmbeddingDescriptor, NoteRef, Scope
 
 
 # ── fake qdrant SDK (installed into sys.modules before import) ───────
@@ -157,7 +157,7 @@ def qdrant_store(monkeypatch):
         async def embed(self, texts):
             return [[float(len(t) % 7), 1.0, 0.0, 0.5] for t in texts]
 
-    from geny_executor.memory.vector import DocumentChunk, QdrantVectorStore
+    from xgen_agent_runtime.memory.vector import DocumentChunk, QdrantVectorStore
 
     store = QdrantVectorStore(
         url="http://fake:6333", collection="kb_test", client=_Embed(),
@@ -309,13 +309,13 @@ async def test_remove_missing_collection_is_noop(qdrant_store):
 @pytest.mark.asyncio
 async def test_file_provider_uses_injected_vector_store(tmp_path, qdrant_store):
     store, _ = qdrant_store
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     provider = FileMemoryProvider(tmp_path, vector_store=store)
     assert provider.vector() is store
 
     # Note writes flow through the injected store via the indexer seam.
-    from geny_executor.memory.provider import Importance, NoteDraft
+    from xgen_agent_runtime.memory.provider import Importance, NoteDraft
 
     await provider.notes().write(
         NoteDraft(title="지식 노트", body="qdrant로 색인될 본문",
@@ -337,8 +337,8 @@ async def test_retriever_curated_layer_uses_vector_plane(qdrant_store):
     ref = NoteRef(filename="kb-doc.md", scope=Scope.USER, category="knowledge")
     await store.index_document(ref, [DocumentChunk(text="지식 청크", metadata={"page": 3})])
 
-    from geny_executor.memory.provider import MemoryHooks
-    from geny_executor.memory.retriever import MemoryAwareRetriever
+    from xgen_agent_runtime.memory.provider import MemoryHooks
+    from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever
 
     class _Notes:
         async def search(self, query, limit=5):

@@ -1,8 +1,8 @@
 # Memory (Stage 2 / 18)
 
-> Status: current for geny-executor 2.1.0.
+> Status: current for xgen-agent-runtime 2.1.0.
 
-Memory in geny-executor is split across two stages:
+Memory in xgen-agent-runtime is split across two stages:
 
 | Stage | Role |
 |---|---|
@@ -48,10 +48,10 @@ Backends are pluggable via `MemoryProvider`:
 
 ## Vector retrieval (optional)
 
-Install the `[memory]` extra (`pip install geny-executor[memory]`) for numpy-backed cosine similarity. The default embedder is host-supplied — the executor ships the retrieval contract but not a specific embedding model, so you can route through Anthropic, OpenAI, or a local model without locking the pipeline in.
+Install the `[memory]` extra (`pip install xgen-agent-runtime[memory]`) for numpy-backed cosine similarity. The default embedder is host-supplied — the executor ships the retrieval contract but not a specific embedding model, so you can route through Anthropic, OpenAI, or a local model without locking the pipeline in.
 
 ```python
-from geny_executor.memory import VectorMemoryProvider
+from xgen_agent_runtime.memory import VectorMemoryProvider
 
 provider = VectorMemoryProvider(
     backend="sqlite",
@@ -62,7 +62,7 @@ provider = VectorMemoryProvider(
 
 ## Memory tools
 
-Built-in tools in `geny_executor.tools.built_in.memory_tools` give the LLM first-class memory access:
+Built-in tools in `xgen_agent_runtime.tools.built_in.memory_tools` give the LLM first-class memory access:
 
 | Tool | Surface |
 |---|---|

@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import geny_executor.tools._sandbox as sb_mod
-from geny_executor.stages.s01_input.artifact.default.normalizers import MultimodalNormalizer
-from geny_executor.tools.built_in.workspace_tools import (
+import xgen_agent_runtime.tools._sandbox as sb_mod
+from xgen_agent_runtime.stages.s01_input.artifact.default.normalizers import MultimodalNormalizer
+from xgen_agent_runtime.tools.built_in.workspace_tools import (
     SandboxFetchTool,
     SandboxInfoTool,
     SandboxPutTool,

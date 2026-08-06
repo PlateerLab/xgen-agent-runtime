@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     MANIFEST_VERSION,
     EnvironmentManifest,
 )

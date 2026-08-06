@@ -17,9 +17,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
-from geny_executor.tools.built_in.browser_tools import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
+from xgen_agent_runtime.tools.built_in.browser_tools import (
     BROWSER_TOOL_CLASSES,
     BrowserActTool,
     BrowserCloseTool,
@@ -28,7 +28,7 @@ from geny_executor.tools.built_in.browser_tools import (
     _parse_target,
     _runtime,
 )
-from geny_executor.tools.built_in.doc_tools import (
+from xgen_agent_runtime.tools.built_in.doc_tools import (
     DOC_TOOL_CLASSES,
     DocAnalyzeTool,
     DocApplyEditsTool,
@@ -527,7 +527,7 @@ class TestDocTools:
 
     @pytest.mark.asyncio
     async def test_render_png_pages(self, docx_path, tmp_path):
-        from geny_executor.tools.built_in.doc_tools import DocRenderTool
+        from xgen_agent_runtime.tools.built_in.doc_tools import DocRenderTool
 
         ctx = ToolContext(working_dir=str(tmp_path))
         result = await DocRenderTool().execute(
@@ -541,7 +541,7 @@ class TestDocTools:
 
     @pytest.mark.asyncio
     async def test_render_pdf(self, docx_path, tmp_path):
-        from geny_executor.tools.built_in.doc_tools import DocRenderTool
+        from xgen_agent_runtime.tools.built_in.doc_tools import DocRenderTool
 
         ctx = ToolContext(working_dir=str(tmp_path))
         result = await DocRenderTool().execute({"path": "doc.docx", "to": "pdf"}, ctx)

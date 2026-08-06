@@ -1,13 +1,13 @@
-# geny-executor
+# xgen-agent-runtime
 
-[![PyPI version](https://img.shields.io/pypi/v/geny-executor.svg)](https://pypi.org/project/geny-executor/)
-[![Python 3.11+](https://img.shields.io/pypi/pyversions/geny-executor.svg)](https://pypi.org/project/geny-executor/)
+[![PyPI version](https://img.shields.io/pypi/v/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
+[![Python 3.11+](https://img.shields.io/pypi/pyversions/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/CocoRoF/geny-executor/actions/workflows/ci.yml/badge.svg)](https://github.com/CocoRoF/geny-executor/actions/workflows/ci.yml)
+[![CI](https://github.com/CocoRoF/xgen-agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/CocoRoF/xgen-agent-runtime/actions/workflows/ci.yml)
 
 **하네스 엔지니어링 기반 Agent 파이프라인 라이브러리 — 21단계, 5개 LLM provider, MCP 네이티브, 완전 introspectable.**
 
-geny-executor는 **21단계 파이프라인**과 **이중 추상화 (Dual Abstraction)** 아키텍처(stage slot × strategy slot)를 구현합니다. Claude Code의 agent loop과 Anthropic의 하네스 설계 원칙에서 영감을 받았습니다. LangChain 없음. LangGraph 없음. 모든 단계가 명시적이며 관찰 가능하고, 변경/교체 가능한 파이프라인입니다.
+xgen-agent-runtime는 **21단계 파이프라인**과 **이중 추상화 (Dual Abstraction)** 아키텍처(stage slot × strategy slot)를 구현합니다. Claude Code의 agent loop과 Anthropic의 하네스 설계 원칙에서 영감을 받았습니다. LangChain 없음. LangGraph 없음. 모든 단계가 명시적이며 관찰 가능하고, 변경/교체 가능한 파이프라인입니다.
 
 [English README](README.md) · [아키텍처](docs/architecture.md) · [Providers](docs/providers.md) · [Error codes](docs/error_codes.md) · [Claude Code CLI 호스트](docs/claude_code_cli.md)
 
@@ -20,7 +20,7 @@ geny-executor는 **21단계 파이프라인**과 **이중 추상화 (Dual Abstra
 | 프로젝트 | 무엇인가 | 스택에서의 역할 |
 |---|---|---|
 | [**Geny**](https://github.com/CocoRoF/Geny) | 멀티 에이전트 VTuber + 자율 워커 플랫폼 | 최상위 제품 — 아래 전부를 사용 |
-| ➡️ [**geny-executor**](https://github.com/CocoRoF/geny-executor) | 21단계 manifest 기반 에이전트 파이프라인 · PyPI · Apache-2.0 | 모든 것이 돌아가는 엔진 |
+| ➡️ [**xgen-agent-runtime**](https://github.com/CocoRoF/xgen-agent-runtime) | 21단계 manifest 기반 에이전트 파이프라인 · PyPI · Apache-2.0 | 모든 것이 돌아가는 엔진 |
 | [**GAPT**](https://github.com/CocoRoF/geny-adapted-project-toolkit) | 셀프호스트 AI DevOps 플랫폼 — 샌드박스·편집·빌드·배포 | 에이전트가 실제 레포를 안전하게 다루는 곳 |
 | [**geny-avatar**](https://github.com/CocoRoF/geny-avatar) | AI 텍스처 생성 기반 2D 라이브 아바타 에디터 | Geny 의 얼굴이 만들어지는 곳 |
 
@@ -34,7 +34,7 @@ geny-executor는 **21단계 파이프라인**과 **이중 추상화 (Dual Abstra
    에이전트 엔진     아바타        샌드박스 + 배포
       │             │              │
       ▼             ▼              ▼
- geny-executor  geny-avatar      GAPT
+ xgen-agent-runtime  geny-avatar      GAPT
   (엔진)        (아바타 에디터)  (AI DevOps 플랫폼)
 ```
 
@@ -47,9 +47,9 @@ geny-executor는 **21단계 파이프라인**과 **이중 추상화 (Dual Abstra
 
 ---
 
-## 왜 geny-executor 인가?
+## 왜 xgen-agent-runtime 인가?
 
-| 문제 | geny-executor의 답 |
+| 문제 | xgen-agent-runtime의 답 |
 |---|---|
 | 프레임워크가 너무 많이 숨김 | 21단계 stage 하나하나가 명시적이고 introspectable, 각각 swap 가능. |
 | 한 부분만 바꾸려면 전체 다시 써야 함 | **이중 추상화**: stage 통째로 교체하거나 stage 내부의 strategy만 교체. manifest-driven으로 config = artifact. |
@@ -105,15 +105,15 @@ Phase C — Surface (1회)
 ## 설치
 
 ```bash
-pip install geny-executor
+pip install xgen-agent-runtime
 ```
 
 선택적 extras:
 
 ```bash
-pip install geny-executor[memory]   # vector retrieval용 numpy
-pip install geny-executor[all]      # 전체
-pip install geny-executor[dev]      # 개발/테스트 도구
+pip install xgen-agent-runtime[memory]   # vector retrieval용 numpy
+pip install xgen-agent-runtime[all]      # 전체
+pip install xgen-agent-runtime[dev]      # 개발/테스트 도구
 ```
 
 **요구사항**: Python 3.11+. 최소 1개 provider의 자격증명 (Anthropic API key, OpenAI API key, …) 또는 로컬 CLI binary (`claude_code_cli` provider용 `claude`).
@@ -126,7 +126,7 @@ pip install geny-executor[dev]      # 개발/테스트 도구
 
 ```python
 import asyncio
-from geny_executor import PipelinePresets
+from xgen_agent_runtime import PipelinePresets
 
 async def main():
     pipeline = PipelinePresets.minimal(api_key="sk-ant-...")
@@ -139,7 +139,7 @@ asyncio.run(main())
 ### 채팅 파이프라인 (history + system prompt + 선택적 tools)
 
 ```python
-from geny_executor import PipelinePresets
+from xgen_agent_runtime import PipelinePresets
 
 pipeline = PipelinePresets.chat(
     api_key="sk-ant-...",
@@ -154,8 +154,8 @@ print(f"비용: ${result.total_cost_usd:.4f}")
 ### 풀 agent (21단계 전체 — tools, evaluation, memory, loop control)
 
 ```python
-from geny_executor import PipelinePresets
-from geny_executor.tools import ToolRegistry, Tool, ToolResult, ToolContext
+from xgen_agent_runtime import PipelinePresets
+from xgen_agent_runtime.tools import ToolRegistry, Tool, ToolResult, ToolContext
 
 class SearchTool(Tool):
     @property
@@ -188,7 +188,7 @@ result = await pipeline.run("최신 Python 릴리즈 버전 찾기")
 ### Builder로 커스텀 파이프라인
 
 ```python
-from geny_executor import PipelineBuilder
+from xgen_agent_runtime import PipelineBuilder
 
 pipeline = (
     PipelineBuilder("my-agent", api_key="sk-ant-...")
@@ -211,7 +211,7 @@ result = await pipeline.run("복잡한 멀티스텝 작업")
 ### Manifest 기반 파이프라인 (호스트 권장)
 
 ```python
-from geny_executor import Pipeline, CredentialBundle, ProviderCredentials, EnvironmentManifest
+from xgen_agent_runtime import Pipeline, CredentialBundle, ProviderCredentials, EnvironmentManifest
 
 manifest = EnvironmentManifest.load("./envs/my_env.json")
 credentials = CredentialBundle(by_provider={
@@ -244,7 +244,7 @@ result = await pipeline.run("안녕!")
 모든 executor exception은 stable한 `exec.<component>.<reason>` 코드를 carry함:
 
 ```python
-from geny_executor import APIError, ExecutorErrorCode, ErrorCategory
+from xgen_agent_runtime import APIError, ExecutorErrorCode, ErrorCategory
 
 try:
     result = await pipeline.run("...")
@@ -263,7 +263,7 @@ except APIError as e:
   "data": {
     "error": "Claude Code CLI is not authenticated …",
     "code": "exec.cli.auth_failed",
-    "exception_type": "geny_executor.core.errors.APIError"
+    "exception_type": "xgen_agent_runtime.core.errors.APIError"
   }
 }
 ```
@@ -277,8 +277,8 @@ except APIError as e:
 여러 호출에 걸친 상태 유지:
 
 ```python
-from geny_executor import PipelinePresets
-from geny_executor.session import SessionManager
+from xgen_agent_runtime import PipelinePresets
+from xgen_agent_runtime.session import SessionManager
 
 manager = SessionManager()
 pipeline = PipelinePresets.chat(api_key="sk-ant-...")
@@ -324,7 +324,7 @@ async for event in pipeline.run_stream("단계별로 풀어줘"):
 ## Tools + MCP
 
 ```python
-from geny_executor.tools import Tool, ToolResult, ToolContext, ToolRegistry
+from xgen_agent_runtime.tools import Tool, ToolResult, ToolContext, ToolRegistry
 
 class Calculator(Tool):
     @property
@@ -344,7 +344,7 @@ registry.register(Calculator())
 호스트가 MCP 서버 attach:
 
 ```python
-from geny_executor.tools.mcp import MCPManager
+from xgen_agent_runtime.tools.mcp import MCPManager
 
 mcp = MCPManager()
 await mcp.connect("filesystem", command="npx", args=["-y", "@anthropic/mcp-filesystem"])
@@ -371,7 +371,7 @@ for tool in mcp.list_tools():
 ## 커스텀 stage + strategy
 
 ```python
-from geny_executor.core.stage import Strategy
+from xgen_agent_runtime.core.stage import Strategy
 
 class MyContextStrategy(Strategy):
     name = "my_context"
@@ -385,8 +385,8 @@ class MyContextStrategy(Strategy):
 ```
 
 ```python
-from geny_executor.core.stage import Stage
-from geny_executor.core.state import PipelineState
+from xgen_agent_runtime.core.stage import Stage
+from xgen_agent_runtime.core.state import PipelineState
 
 class LoggingStage(Stage[dict, dict]):
     name = "logging"
@@ -405,8 +405,8 @@ pipeline.register_stage(LoggingStage())
 ## 프로젝트 구조
 
 ```
-geny-executor/
-├── src/geny_executor/
+xgen-agent-runtime/
+├── src/xgen_agent_runtime/
 │   ├── __init__.py          # Public API
 │   ├── py.typed             # PEP 561 type marker
 │   ├── core/                # Pipeline engine, errors, manifest, mutation, snapshot
@@ -435,14 +435,14 @@ geny-executor/
 ## 개발
 
 ```bash
-git clone https://github.com/CocoRoF/geny-executor.git
-cd geny-executor
+git clone https://github.com/CocoRoF/xgen-agent-runtime.git
+cd xgen-agent-runtime
 
 pip install -e ".[dev]"
 
 pytest                                                       # 전체 (~30s, 3100+ tests)
 pytest tests/contract/test_error_codes_stability.py          # error code 안정성 검사
-pytest --cov=geny_executor --cov-report=term-missing         # 커버리지
+pytest --cov=xgen_agent_runtime --cov-report=term-missing         # 커버리지
 
 ruff check src/ tests/
 ruff format src/ tests/
@@ -460,7 +460,7 @@ ruff format src/ tests/
 | **2.0.0** | Provider 추상화 (`ClientRegistry`, `CredentialBundle`). Stage 6 provider의 manifest single source of truth. |
 | **1.x** | 원형 16단계 파이프라인; Anthropic only. |
 
-전체 히스토리는 [CHANGELOG](https://github.com/CocoRoF/geny-executor/releases) 참조.
+전체 히스토리는 [CHANGELOG](https://github.com/CocoRoF/xgen-agent-runtime/releases) 참조.
 
 ---
 
@@ -481,5 +481,5 @@ ruff format src/ tests/
 - [OpenAI SDK](https://github.com/openai/openai-python)
 - [Google GenAI SDK](https://github.com/googleapis/python-genai)
 - [vLLM](https://github.com/vllm-project/vllm)
-- [Claude Code CLI](https://docs.anthropic.com/claude/code/) — geny-executor가 `claude_code_cli` provider로 host
+- [Claude Code CLI](https://docs.anthropic.com/claude/code/) — xgen-agent-runtime가 `claude_code_cli` provider로 host
 - [MCP](https://modelcontextprotocol.io/) — Model Context Protocol; 호스트-attached 서버 + per-session CLI wrap 둘 다 first-class

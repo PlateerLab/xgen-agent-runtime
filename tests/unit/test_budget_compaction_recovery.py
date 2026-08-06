@@ -27,16 +27,16 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.core.compaction import run_compaction
-from geny_executor.core.errors import GuardRejectError
-from geny_executor.core.state import PipelineState
-from geny_executor.core.token_estimate import (
+from xgen_agent_runtime.core.compaction import run_compaction
+from xgen_agent_runtime.core.errors import GuardRejectError
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.core.token_estimate import (
     estimate_message_tokens,
     estimate_prompt_tokens,
 )
-from geny_executor.stages.s02_context.interface import HistoryCompactor
-from geny_executor.stages.s04_guard.artifact.default.guards import TokenBudgetGuard
-from geny_executor.stages.s04_guard.artifact.default.stage import GuardStage
+from xgen_agent_runtime.stages.s02_context.interface import HistoryCompactor
+from xgen_agent_runtime.stages.s04_guard.artifact.default.guards import TokenBudgetGuard
+from xgen_agent_runtime.stages.s04_guard.artifact.default.stage import GuardStage
 
 
 # ── helpers ─────────────────────────────────────────────────────────
@@ -258,7 +258,7 @@ class TestRunCompaction:
 class TestFileProviderRecord:
     @pytest.mark.asyncio
     async def test_writes_compaction_note(self, tmp_path: Path):
-        from geny_executor.memory.providers.file.provider import FileMemoryProvider
+        from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
         prov = FileMemoryProvider(root=tmp_path, session_id="s1")
         await prov.initialize()
@@ -281,7 +281,7 @@ class TestFileProviderRecord:
 
     @pytest.mark.asyncio
     async def test_noop_when_nothing_to_record(self, tmp_path: Path):
-        from geny_executor.memory.providers.file.provider import FileMemoryProvider
+        from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
         prov = FileMemoryProvider(root=tmp_path, session_id="s1")
         await prov.initialize()
@@ -293,10 +293,10 @@ class TestFileProviderRecord:
 
 class TestPipelineAutowire:
     def test_init_state_wires_guard_from_context(self):
-        from geny_executor.core.pipeline import Pipeline
-        from geny_executor.core.config import PipelineConfig
-        from geny_executor.stages.s02_context.artifact.default.stage import ContextStage
-        from geny_executor.stages.s02_context.artifact.default.compactors import (
+        from xgen_agent_runtime.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.config import PipelineConfig
+        from xgen_agent_runtime.stages.s02_context.artifact.default.stage import ContextStage
+        from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
             SummaryCompactor,
         )
 
@@ -311,9 +311,9 @@ class TestPipelineAutowire:
         assert guard._budget_compactor is ctx._compactor
 
     def test_explicit_recovery_not_clobbered(self):
-        from geny_executor.core.pipeline import Pipeline
-        from geny_executor.core.config import PipelineConfig
-        from geny_executor.stages.s02_context.artifact.default.stage import ContextStage
+        from xgen_agent_runtime.core.pipeline import Pipeline
+        from xgen_agent_runtime.core.config import PipelineConfig
+        from xgen_agent_runtime.stages.s02_context.artifact.default.stage import ContextStage
 
         pipe = Pipeline(PipelineConfig(name="t"))
         ctx = ContextStage()
@@ -332,7 +332,7 @@ class TestPipelineAutowire:
 
 
 def test_llm_summary_registered_in_s02_slot():
-    from geny_executor.stages.s02_context.artifact.default.stage import ContextStage
+    from xgen_agent_runtime.stages.s02_context.artifact.default.stage import ContextStage
 
     stage = ContextStage()
     registry = stage._slots["compactor"].registry

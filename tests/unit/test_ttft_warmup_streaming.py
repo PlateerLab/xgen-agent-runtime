@@ -16,8 +16,8 @@ from typing import Any, List
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.llm_client.anthropic import AnthropicClient
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.llm_client.anthropic import AnthropicClient
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ class _WarmableClient:
 class TestPipelineWarmup:
     @pytest.mark.asyncio
     async def test_warmup_calls_backend_and_reports(self):
-        from geny_executor import Pipeline
+        from xgen_agent_runtime import Pipeline
 
         pipeline = Pipeline()
         client = _WarmableClient()
@@ -52,7 +52,7 @@ class TestPipelineWarmup:
 
     @pytest.mark.asyncio
     async def test_warmup_memo_feeds_first_state_and_invalidate_drops_it(self):
-        from geny_executor import Pipeline
+        from xgen_agent_runtime import Pipeline
 
         pipeline = Pipeline()
         client = _WarmableClient()
@@ -68,7 +68,7 @@ class TestPipelineWarmup:
 
     @pytest.mark.asyncio
     async def test_warmup_never_raises_without_client(self):
-        from geny_executor import Pipeline
+        from xgen_agent_runtime import Pipeline
 
         report = await Pipeline().warmup()
         assert report["provider"] is None and report["warmed"] is False
@@ -171,8 +171,8 @@ class TestAnthropicThinkingStream:
 class TestLifecycleHookOrdering:
     @pytest.mark.asyncio
     async def test_slow_hook_does_not_block_run_but_order_is_kept(self):
-        from geny_executor import Pipeline
-        from geny_executor.hooks.events import HookEvent
+        from xgen_agent_runtime import Pipeline
+        from xgen_agent_runtime.hooks.events import HookEvent
 
         seen: List[Any] = []
 
@@ -182,13 +182,13 @@ class TestLifecycleHookOrdering:
                 seen.append(payload.event)
                 return []
 
-        from geny_executor.stages.s01_input import InputStage
-        from geny_executor.stages.s21_yield import YieldStage
+        from xgen_agent_runtime.stages.s01_input import InputStage
+        from xgen_agent_runtime.stages.s21_yield import YieldStage
         from tests.unit.test_ttft_cache_overhaul import _StreamClient
 
         pipeline = Pipeline()
         pipeline.register_stage(InputStage())
-        from geny_executor.stages.s06_api import APIStage
+        from xgen_agent_runtime.stages.s06_api import APIStage
 
         pipeline.register_stage(APIStage())
         pipeline.register_stage(YieldStage())

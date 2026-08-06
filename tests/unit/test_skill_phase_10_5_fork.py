@@ -6,18 +6,18 @@ from typing import Any, Dict
 
 import pytest
 
-from geny_executor.skills.fork import (
+from xgen_agent_runtime.skills.fork import (
     ForkResult,
     make_default_fork_runner,
 )
-from geny_executor.skills.registry import SkillRegistry
-from geny_executor.skills.skill_tool import (
+from xgen_agent_runtime.skills.registry import SkillRegistry
+from xgen_agent_runtime.skills.skill_tool import (
     SkillTool,
     SkillToolProvider,
     build_skill_tool,
 )
-from geny_executor.skills.types import Skill, SkillMetadata
-from geny_executor.tools.base import ToolContext
+from xgen_agent_runtime.skills.types import Skill, SkillMetadata
+from xgen_agent_runtime.tools.base import ToolContext
 
 
 def _ctx() -> ToolContext:

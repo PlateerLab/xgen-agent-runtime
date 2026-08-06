@@ -1,0 +1,125 @@
+"""Canonical LLM request / response types.
+
+These mirror the Anthropic Messages API shape and serve as the single
+provider-neutral format flowing through every ``BaseClient`` subclass.
+Formerly lived at ``xgen_agent_runtime.stages.s06_api.types``; that module
+now re-exports from here during the PR-3→PR-4 migration window.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from xgen_agent_runtime.core.state import TokenUsage
+
+
+@dataclass
+class APIRequest:
+    """Canonical request bundle (Anthropic-shaped)."""
+
+    model: str
+    messages: List[Dict[str, Any]]
+    max_tokens: int = 8192
+    system: Any = ""  # str or List[content blocks]
+    temperature: float = 0.0
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Dict[str, Any]] = None
+    stop_sequences: Optional[List[str]] = None
+    stream: bool = False
+
+    thinking: Optional[Dict[str, Any]] = None
+
+    #: Structured output request. Canonical shapes:
+    #:   {"type": "text"}                                       (default)
+    #:   {"type": "json_object"}
+    #:   {"type": "json_schema", "json_schema": {...}}
+    response_format: Optional[Dict[str, Any]] = None
+
+    #: Session continuity hint for backends that support it.
+    #:   {"session_id": "...", "resume": bool}
+    session_hint: Optional[Dict[str, Any]] = None
+
+    #: Per-request MCP server configuration. CLI-based backends
+    #: (claude_code_cli) serialize this to ``--mcp-config <json>``;
+    #: SDK-based backends ignore it. Hosts use this to surface their
+    #: tool registry to the CLI's LLM without going through the
+    #: cumbersome per-client static ``mcp_config_path``. Shape::
+    #:
+    #:     {"mcpServers": {"<name>": {"type": "stdio",
+    #:                                "command": "...",
+    #:                                "args": [...],
+    #:                                "env": {...}}}}
+    mcp_config: Optional[Dict[str, Any]] = None
+
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class ContentBlock:
+    """A single content block in an API response."""
+
+    type: str  # "text", "tool_use", "thinking"
+    text: Optional[str] = None
+
+    tool_use_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    tool_input: Optional[Dict[str, Any]] = None
+
+    thinking_text: Optional[str] = None
+
+    raw: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class APIResponse:
+    """Canonical response bundle."""
+
+    content: List[ContentBlock] = field(default_factory=list)
+    stop_reason: str = ""
+
+    usage: TokenUsage = field(default_factory=TokenUsage)
+
+    model: str = ""
+    message_id: str = ""
+
+    raw: Optional[Any] = None
+
+    @property
+    def text(self) -> str:
+        parts = []
+        for block in self.content:
+            if block.type == "text" and block.text:
+                parts.append(block.text)
+        return "\n".join(parts) if parts else ""
+
+    @property
+    def tool_calls(self) -> List[ContentBlock]:
+        return [b for b in self.content if b.type == "tool_use"]
+
+    @property
+    def structured(self) -> Optional[Any]:
+        """Provider-enforced structured output, when the request carried a
+        ``response_format`` and the backend enforced it natively.
+
+        Claude Code CLI surfaces it as the result envelope's
+        ``structured_output`` (both wire modes preserve the envelope in
+        ``raw``). Providers without native enforcement return the JSON as
+        text — callers should fall back to parsing ``.text``."""
+        if isinstance(self.raw, dict):
+            return self.raw.get("structured_output")
+        return None
+
+    @property
+    def thinking_blocks(self) -> List[ContentBlock]:
+        return [b for b in self.content if b.type == "thinking"]
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return self.stop_reason == "tool_use" or bool(self.tool_calls)
+
+    @property
+    def cost_usd(self) -> Optional[float]:
+        return self.usage.cost_usd

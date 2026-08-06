@@ -13,13 +13,13 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.provider import (
     Importance,
     NoteDraft,
     Scope,
 )
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
 
 def _run(coro):

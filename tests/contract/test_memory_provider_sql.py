@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.provider import MemoryProvider
-from geny_executor.memory.providers import SQLMemoryProvider
+from xgen_agent_runtime.memory.provider import MemoryProvider
+from xgen_agent_runtime.memory.providers import SQLMemoryProvider
 from tests.contract.memory_provider_contract import MemoryProviderContract
 
 

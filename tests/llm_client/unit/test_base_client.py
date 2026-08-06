@@ -26,14 +26,14 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.errors import APIError, ErrorCategory
-from geny_executor.llm_client.base import (
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.llm_client.base import (
     BaseClient,
     ClientCapabilities,
     _resolve_sdk_version,
 )
-from geny_executor.llm_client.types import APIRequest, APIResponse
+from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +278,7 @@ def test_claude_code_cli_strips_manifest_pinned_temperature() -> None:
     """The audit's headline decoy (§3.5): CLI backend declared it drops
     temperature/max_tokens and nothing consumed the declaration. Now the
     pinned values produce observable events instead of silence."""
-    from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
+    from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
     events: List[Dict[str, Any]] = []
     client = ClaudeCodeCLIClient(
@@ -298,7 +298,7 @@ def test_claude_code_cli_strips_manifest_pinned_temperature() -> None:
 
 def test_openai_declared_drops_emit() -> None:
     pytest.importorskip("openai")
-    from geny_executor.llm_client.openai import OpenAIClient
+    from xgen_agent_runtime.llm_client.openai import OpenAIClient
 
     events: List[Dict[str, Any]] = []
     client = OpenAIClient(api_key="sk-mock", event_sink=events.append)
@@ -316,7 +316,7 @@ def test_vllm_declared_tool_drops_strip_tools_from_request() -> None:
     """vLLM declares drops=('…','tools','tool_choice') — before 2.2.0
     the tools rode through to the server anyway (decoy declaration)."""
     pytest.importorskip("openai")
-    from geny_executor.llm_client.vllm import VLLMClient
+    from xgen_agent_runtime.llm_client.vllm import VLLMClient
 
     events: List[Dict[str, Any]] = []
     client = VLLMClient(
@@ -335,7 +335,7 @@ def test_vllm_configure_capabilities_restores_tools() -> None:
     enforcement — the drops tuple stays conservative, the instance flag
     wins. 2.1.x honoured this; 2.2.0 must too."""
     pytest.importorskip("openai")
-    from geny_executor.llm_client.vllm import VLLMClient
+    from xgen_agent_runtime.llm_client.vllm import VLLMClient
 
     events: List[Dict[str, Any]] = []
     client = VLLMClient(
@@ -365,7 +365,7 @@ def test_vllm_configure_capabilities_restores_tools() -> None:
 
 
 def test_anthropic_declares_no_drops_temperature_survives() -> None:
-    from geny_executor.llm_client.anthropic import AnthropicClient
+    from xgen_agent_runtime.llm_client.anthropic import AnthropicClient
 
     events: List[Dict[str, Any]] = []
     client = AnthropicClient(api_key="sk-mock", event_sink=events.append)
@@ -436,7 +436,7 @@ async def test_invoke_with_heal_logs_warning_not_info(
             raise RuntimeError("rename me")
         return "ok"
 
-    with caplog.at_level(logging.WARNING, logger="geny_executor.llm_client.base"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.llm_client.base"):
         await client._invoke_with_heal(
             vendor_call, {"model": "m", "old_name": 1}, purpose="unit"
         )

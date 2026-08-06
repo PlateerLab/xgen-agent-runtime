@@ -25,17 +25,17 @@ import json
 
 import pytest
 
-from geny_executor import CredentialBundle, ProviderCredentials
-from geny_executor.core.environment import EnvironmentManifest
-from geny_executor.core.pipeline import (
+from xgen_agent_runtime import CredentialBundle, ProviderCredentials
+from xgen_agent_runtime.core.environment import EnvironmentManifest
+from xgen_agent_runtime.core.pipeline import (
     Pipeline,
     _mcp_servers_to_cli_config,
     _merge_cli_mcp_config,
     _provider_wants_mcp_passthrough,
 )
-from geny_executor.llm_client.types import APIRequest
-from geny_executor.llm_client.translators._cli import claude_code_argv
-from geny_executor.tools.mcp.manager import MCPServerConfig
+from xgen_agent_runtime.llm_client.types import APIRequest
+from xgen_agent_runtime.llm_client.translators._cli import claude_code_argv
+from xgen_agent_runtime.tools.mcp.manager import MCPServerConfig
 
 
 # ─────────────────────────────────── provider detection ─
@@ -254,7 +254,7 @@ async def test_cli_passthrough_merges_with_host_bridge_config() -> None:
 @pytest.mark.asyncio
 async def test_sdk_provider_still_host_connects(monkeypatch) -> None:
     """Regression: SDK providers keep the host-side MCPManager path."""
-    from geny_executor.tools.mcp import manager as mcp_manager_mod
+    from xgen_agent_runtime.tools.mcp import manager as mcp_manager_mod
 
     calls = {}
 

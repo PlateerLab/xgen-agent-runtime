@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from geny_executor.memory.providers.file.graph_edges import (
+from xgen_agent_runtime.memory.providers.file.graph_edges import (
     TAG_FANOUT_MAX,
     derive_graph_edges,
 )

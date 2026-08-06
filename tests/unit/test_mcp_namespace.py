@@ -11,12 +11,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.errors import ToolErrorCode, ToolFailure
-from geny_executor.tools.mcp.state import MCPConnectionState
-from geny_executor.tools.mcp.adapter import MCPToolAdapter
-from geny_executor.tools.mcp.manager import MCPServerConfig, MCPServerConnection
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.errors import ToolErrorCode, ToolFailure
+from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
+from xgen_agent_runtime.tools.mcp.adapter import MCPToolAdapter
+from xgen_agent_runtime.tools.mcp.manager import MCPServerConfig, MCPServerConnection
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 # ── Helpers ──────────────────────────────────────────────
@@ -152,7 +152,7 @@ class TestRegistryCollision:
     def test_collision_emits_warning(self, caplog):
         reg = ToolRegistry()
         reg.register(_DummyTool("x"))
-        with caplog.at_level(logging.WARNING, logger="geny_executor.tools.registry"):
+        with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.tools.registry"):
             reg.register(_DummyTool("x"))
         assert any("collision" in r.message for r in caplog.records)
         # Second registration still wins
@@ -162,13 +162,13 @@ class TestRegistryCollision:
         reg = ToolRegistry()
         tool = _DummyTool("x")
         reg.register(tool)
-        with caplog.at_level(logging.WARNING, logger="geny_executor.tools.registry"):
+        with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.tools.registry"):
             reg.register(tool)
         assert not any("collision" in r.message for r in caplog.records)
 
     def test_distinct_names_do_not_warn(self, caplog):
         reg = ToolRegistry()
-        with caplog.at_level(logging.WARNING, logger="geny_executor.tools.registry"):
+        with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.tools.registry"):
             reg.register(_DummyTool("a"))
             reg.register(_DummyTool("b"))
         assert not any("collision" in r.message for r in caplog.records)
@@ -182,7 +182,7 @@ class TestRegistryCollision:
             server=conn,
             definition={"name": "read_file", "description": "d"},
         )
-        with caplog.at_level(logging.WARNING, logger="geny_executor.tools.registry"):
+        with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.tools.registry"):
             reg.register(adapter)
         # Prefix means this is a different slot — no warning fires
         assert not any("collision" in r.message for r in caplog.records)

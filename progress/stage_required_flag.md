@@ -3,7 +3,7 @@
 > **Completed**: 2026-04-17
 > **Scope**: Expose a stage-level `required` flag so UIs can distinguish
 > truly optional plumbing from the four stages every pipeline must keep
-> active. Downstream UIs (geny-executor-web Environment Builder) were
+> active. Downstream UIs (xgen-agent-runtime-web Environment Builder) were
 > allowing users to deactivate every stage — including Input / API /
 > Parse / Yield — which produces manifests that cannot build a working
 > pipeline.
@@ -36,7 +36,7 @@ may be toggled off.
 
 ## Changes
 
-**`src/geny_executor/core/introspection.py`**
+**`src/xgen_agent_runtime/core/introspection.py`**
 
 - Added `_STAGE_REQUIRED: Set[str]` — a single source of truth keyed
   by stage module name, mirroring the existing `_STAGE_CAPABILITIES`
@@ -78,11 +78,11 @@ may be toggled off.
 ## Version bumps
 
 - `pyproject.toml`: `0.13.2` → `0.13.3`
-- `src/geny_executor/__init__.py`: `__version__ = "0.13.3"`
+- `src/xgen_agent_runtime/__init__.py`: `__version__ = "0.13.3"`
 
 ## Follow-up (not in this change)
 
-- `geny-executor-web` v0.8.5 should bump its pin to `>=0.13.3`, read
+- `xgen-agent-runtime-web` v0.8.5 should bump its pin to `>=0.13.3`, read
   `required` in the Environment Builder's StageCard to disable the
   Active checkbox, and auto-correct manifests that saved a required
   stage as `active=false`. Tracked separately in the web repo.

@@ -15,14 +15,14 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from geny_executor.memory.factory import MemoryProviderFactory
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.factory import MemoryProviderFactory
+from xgen_agent_runtime.memory.provider import (
     MemoryHooks,
     NoteDraft,
     Scope,
     Turn,
 )
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
 
 
 def _run(coro):
@@ -34,8 +34,8 @@ def _run(coro):
 
 def test_every_provider_implements_set_hooks():
     """Every concrete provider class advertises `set_hooks`."""
-    from geny_executor.memory.composite.provider import CompositeMemoryProvider
-    from geny_executor.memory.providers.file.provider import FileMemoryProvider
+    from xgen_agent_runtime.memory.composite.provider import CompositeMemoryProvider
+    from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
     for cls in (FileMemoryProvider, EphemeralMemoryProvider, CompositeMemoryProvider):
         assert hasattr(cls, "set_hooks"), f"{cls.__name__} missing set_hooks"
@@ -43,7 +43,7 @@ def test_every_provider_implements_set_hooks():
 
     # SQL provider is import-gated on optional `psycopg`; lazy import.
     try:
-        from geny_executor.memory.providers.sql.provider import SQLMemoryProvider
+        from xgen_agent_runtime.memory.providers.sql.provider import SQLMemoryProvider
 
         assert hasattr(SQLMemoryProvider, "set_hooks")
         assert callable(SQLMemoryProvider.set_hooks)
@@ -100,7 +100,7 @@ def test_composite_set_hooks_forwards_to_session_delegate():
             meta = await provider.notes().write(
                 NoteDraft(title="T", body="b", filename="t.md", category="topics")
             )
-            from geny_executor.memory.provider import NotePatch
+            from xgen_agent_runtime.memory.provider import NotePatch
             await provider.notes().update("t.md", NotePatch(body="b2"))
             return meta
 
@@ -175,7 +175,7 @@ def test_ephemeral_set_hooks_holds_hook_bag():
 
 def test_set_hooks_swap_is_idempotent_and_replaces():
     with tempfile.TemporaryDirectory() as td:
-        from geny_executor.memory.providers.file.provider import FileMemoryProvider
+        from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
 
         p = FileMemoryProvider(root=Path(td), scope=Scope.SESSION)
 

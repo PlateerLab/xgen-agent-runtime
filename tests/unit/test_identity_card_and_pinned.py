@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.facts import Fact, FactLedger, LedgerState, render_identity_card
-from geny_executor.memory.provider import MemoryHooks, NoteDraft, Scope
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
-from geny_executor.memory.retriever import MemoryAwareRetriever as GenyMemoryRetriever
+from xgen_agent_runtime.memory.facts import Fact, FactLedger, LedgerState, render_identity_card
+from xgen_agent_runtime.memory.provider import MemoryHooks, NoteDraft, Scope
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever as GenyMemoryRetriever
 
 
 def _fact(kind: str, statement: str, fid: str = None, importance: str = "critical") -> Fact:
@@ -118,7 +118,7 @@ class TestIdentityCardLayer:
         with tempfile.TemporaryDirectory() as td:
             p = FileMemoryProvider(root=Path(td), scope=Scope.SESSION)
             await p.initialize()
-            from geny_executor.memory.provider import Importance
+            from xgen_agent_runtime.memory.provider import Importance
             await p.notes().write(NoteDraft(
                 title="사용자 이름과 호칭", body="이름 장하렴, 호칭 사장님 절대 고정.",
                 category="critical", filename="name.md",

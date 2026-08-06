@@ -7,7 +7,7 @@ from typing import List
 
 import pytest
 
-from geny_executor.slash_commands import (
+from xgen_agent_runtime.slash_commands import (
     ParsedSlash,
     SlashCategory,
     SlashCommand,
@@ -16,7 +16,7 @@ from geny_executor.slash_commands import (
     SlashResult,
     parse_slash,
 )
-from geny_executor.slash_commands.registry import (
+from xgen_agent_runtime.slash_commands.registry import (
     get_default_registry,
     reset_default_registry,
 )

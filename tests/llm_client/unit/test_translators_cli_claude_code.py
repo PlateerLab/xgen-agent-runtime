@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 
 import pytest
 
-from geny_executor.llm_client.translators._cli import (
+from xgen_agent_runtime.llm_client.translators._cli import (
     assemble_response_from_stream_json,
     build_stream_json_stdin,
     claude_code_argv,
@@ -18,7 +18,7 @@ from geny_executor.llm_client.translators._cli import (
     stream_json_line_to_canonical_event,
     thinking_to_effort,
 )
-from geny_executor.llm_client.types import APIRequest
+from xgen_agent_runtime.llm_client.types import APIRequest
 
 
 # ---------------------------------------------------------------------------
@@ -588,7 +588,7 @@ def test_accumulator_stream_event_yields_token_deltas() -> None:
     """End-to-end: feeding a sequence of stream_event lines that
     mirror the actual CLI output produces a list of text_delta events
     matching the per-token chunks the CLI emitted."""
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="claude-opus-4-7")
     chunks = ["우", "주는 시간과 공간", "한 전체이다."]
@@ -612,7 +612,7 @@ def test_accumulator_stream_event_thinking_delta_wire_key() -> None:
     ``text`` (verified by the golden capture). Reading only ``text``
     silently dropped every thinking token — and the terminal envelope
     masked the loss by re-recording the full block."""
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m")
     events = accum.feed({
@@ -631,7 +631,7 @@ def test_accumulator_stream_event_thinking_delta_wire_key() -> None:
 def test_accumulator_rate_limit_event_is_known() -> None:
     """``rate_limit_event`` appears in every recorded golden — it must be
     bookkeeping-only, never inflating the unknown-shape counters."""
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m")
     events = accum.feed({
@@ -648,7 +648,7 @@ def test_accumulator_rate_limit_event_is_known() -> None:
 
 
 def test_accumulator_counts_unknown_lines_and_samples() -> None:
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m")
     for i in range(5):
@@ -663,7 +663,7 @@ def test_accumulator_counts_unknown_lines_and_samples() -> None:
 
 
 def test_accumulator_counts_malformed_lines() -> None:
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m")
     assert accum.feed({"__malformed__": "this is not json"}) == []
@@ -677,10 +677,10 @@ def test_accumulator_warns_once_per_instance(caplog) -> None:
     401-spam failure mode; one signal per CLI call is the contract."""
     import logging
 
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m", cli_version="9.9.9-test")
-    with caplog.at_level(logging.WARNING, logger="geny_executor.llm_client.translators._cli"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.llm_client.translators._cli"):
         for i in range(4):
             accum.feed({"type": "future_thing", "n": i})
 
@@ -693,7 +693,7 @@ def test_accumulator_warns_once_per_instance(caplog) -> None:
 def test_accumulator_finalize_merges_telemetry_into_raw() -> None:
     """Counts merge into APIResponse.raw WITHOUT clobbering the terminal
     result envelope's own fields."""
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m")
     accum.feed({"type": "mystery_line"})
@@ -716,7 +716,7 @@ def test_accumulator_finalize_merges_telemetry_into_raw() -> None:
 def test_accumulator_clean_stream_attaches_no_telemetry_keys() -> None:
     """A clean stream keeps raw byte-for-byte equal to the result
     envelope — no telemetry noise on the happy path."""
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="m")
     accum.feed({"type": "result", "stop_reason": "end_turn", "usage": {}})
@@ -730,7 +730,7 @@ def test_accumulator_skips_duplicate_text_when_envelope_follows_stream() -> None
     ``assistant`` envelope with the full text. The accumulator must
     consume the deltas (so the UI streams) and skip the envelope's
     text (so the final response isn't doubled)."""
-    from geny_executor.llm_client.translators._cli import StreamJsonAccumulator
+    from xgen_agent_runtime.llm_client.translators._cli import StreamJsonAccumulator
 
     accum = StreamJsonAccumulator(model="claude-opus-4-7")
     accum.feed(

@@ -13,16 +13,16 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from geny_executor.core.state import PipelineState
-from geny_executor.memory.provider import Importance, Scope
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
-from geny_executor.memory.providers.file.provider import FileMemoryProvider
-from geny_executor.stages.s19_summarize.artifact.default.stage import SummarizeStage
-from geny_executor.stages.s19_summarize.artifact.default.summarizers import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.memory.provider import Importance, Scope
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.file.provider import FileMemoryProvider
+from xgen_agent_runtime.stages.s19_summarize.artifact.default.stage import SummarizeStage
+from xgen_agent_runtime.stages.s19_summarize.artifact.default.summarizers import (
     RuleBasedSummarizer,
 )
-from geny_executor.stages.s19_summarize.interface import SUMMARY_HISTORY_KEY
-from geny_executor.stages.s19_summarize.types import SummaryRecord
+from xgen_agent_runtime.stages.s19_summarize.interface import SUMMARY_HISTORY_KEY
+from xgen_agent_runtime.stages.s19_summarize.types import SummaryRecord
 
 
 def _run(coro):

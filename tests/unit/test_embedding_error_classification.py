@@ -16,15 +16,15 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.memory.embedding.client import (
+from xgen_agent_runtime.memory.embedding.client import (
     EMBEDDING_ERROR_CATEGORIES,
     EmbeddingError,
 )
-from geny_executor.memory.embedding.openai import (
+from xgen_agent_runtime.memory.embedding.openai import (
     OpenAIEmbeddingClient,
     _classify_openai_error,
 )
-from geny_executor.memory.embedding.voyage import (
+from xgen_agent_runtime.memory.embedding.voyage import (
     VoyageEmbeddingClient,
     _category_for_status,
 )
@@ -141,7 +141,7 @@ def test_voyage_status_classification(status: int, expected: str) -> None:
 def test_embed_batches_split_by_byte_budget() -> None:
     """A batch whose inputs SUM past the request budget is split so it
     can't 400 (audit D2, the confirmed prod incident)."""
-    from geny_executor.memory.embedding.client import iter_embed_batches
+    from xgen_agent_runtime.memory.embedding.client import iter_embed_batches
 
     # 100 inputs of ~4000 bytes each = ~400k bytes → must split under 280k.
     texts = ["x" * 4000 for _ in range(100)]
@@ -174,11 +174,11 @@ async def test_voyage_transport_stub_can_raise_classified_error() -> None:
 
 import asyncio  # noqa: E402
 
-from geny_executor.memory.embedding import openai as _openai_mod  # noqa: E402
+from xgen_agent_runtime.memory.embedding import openai as _openai_mod  # noqa: E402
 
 
 def test_bound_input_passes_short_text():
-    from geny_executor.memory.embedding.openai import _bound_input, _MAX_EMBED_BYTES
+    from xgen_agent_runtime.memory.embedding.openai import _bound_input, _MAX_EMBED_BYTES
 
     t = "짧은 한글 노트 " * 10
     assert len(t.encode("utf-8")) <= _MAX_EMBED_BYTES
@@ -186,7 +186,7 @@ def test_bound_input_passes_short_text():
 
 
 def test_bound_input_truncates_over_budget_on_utf8_boundary():
-    from geny_executor.memory.embedding.openai import (
+    from xgen_agent_runtime.memory.embedding.openai import (
         _bound_input, _MAX_EMBED_BYTES, _TRUNCATE_TO_BYTES,
     )
 

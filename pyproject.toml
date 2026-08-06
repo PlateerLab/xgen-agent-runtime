@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "geny-executor"
-version = "2.64.6"
+name = "xgen-agent-runtime"
+version = "2.65.0"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -56,7 +56,7 @@ dependencies = [
     # statistics in the affect emitter.
     "numpy>=1.24",
 
-    # Scheduled task daemon (geny_executor.cron) — croniter parses +
+    # Scheduled task daemon (xgen_agent_runtime.cron) — croniter parses +
     # iterates cron expressions.
     "croniter>=2.0",
 
@@ -73,7 +73,7 @@ dependencies = [
     "pgvector>=0.3.0",
 ]
 
-# Optional dev tooling — `pip install geny-executor[dev]` for tests
+# Optional dev tooling — `pip install xgen-agent-runtime[dev]` for tests
 # and lint. End-users never need these; they stay as an extras group
 # so the runtime install footprint isn't bloated by pytest/ruff.
 [project.optional-dependencies]
@@ -81,11 +81,11 @@ qdrant = ["qdrant-client>=1.12.0"]
 # Browser* built-ins — an-web semantic web engine (embedded V8; needs
 # Python >= 3.12 and glibc, so it stays out of the core install).
 browser = [
-    "an-web>=0.9.1; python_version >= '3.12'",
+    "xgen-an-web>=0.10.0; python_version >= '3.12'",
 ]
 # Doc* built-ins — edit2docs document engine (docx/xlsx/pptx).
 docs = [
-    "edit2docs>=0.14.0",
+    "xgen-edit2docs>=0.15.0",
 ]
 # Ssh* built-ins — remote command/SFTP over SSH. Pure-async (asyncssh),
 # lazy-imported so the core install stays lean.
@@ -102,24 +102,24 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/CocoRoF/geny-executor"
-Repository = "https://github.com/CocoRoF/geny-executor"
-Issues = "https://github.com/CocoRoF/geny-executor/issues"
-Documentation = "https://github.com/CocoRoF/geny-executor#readme"
+Homepage = "https://github.com/PlateerLab/xgen-agent-runtime"
+Repository = "https://github.com/PlateerLab/xgen-agent-runtime"
+Issues = "https://github.com/PlateerLab/xgen-agent-runtime/issues"
+Documentation = "https://github.com/PlateerLab/xgen-agent-runtime#readme"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/geny_executor"]
+packages = ["src/xgen_agent_runtime"]
 # Phase 10.4 — bundled skills ship as `SKILL.md` files inside the
 # package tree. Hatch's default rules pick up *.py only; force-include
 # the markdown so installed wheels still have the bundled catalog.
 artifacts = [
-    "src/geny_executor/skills/bundled/**/*.md",
+    "src/xgen_agent_runtime/skills/bundled/**/*.md",
 ]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/geny_executor/",
-    "src/geny_executor/skills/bundled/**/*.md",
+    "src/xgen_agent_runtime/",
+    "src/xgen_agent_runtime/skills/bundled/**/*.md",
     "tests/",
     "README.md",
     "README_ko.md",
@@ -176,8 +176,8 @@ no_error_summary = false
 #   core.manifest_factory — Optional flows into dict(...) for chain_order
 [[tool.mypy.overrides]]
 module = [
-    "geny_executor.core.pipeline",
-    "geny_executor.core.mutation",
-    "geny_executor.core.manifest_factory",
+    "xgen_agent_runtime.core.pipeline",
+    "xgen_agent_runtime.core.mutation",
+    "xgen_agent_runtime.core.manifest_factory",
 ]
 ignore_errors = true

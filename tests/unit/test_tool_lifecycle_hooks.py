@@ -13,10 +13,10 @@ from typing import Any, Dict, List
 
 import pytest
 
-from geny_executor.stages.s10_tool.artifact.default.routers import RegistryRouter
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.errors import ToolErrorCode, ToolFailure
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.errors import ToolErrorCode, ToolFailure
+from xgen_agent_runtime.tools.registry import ToolRegistry
 
 
 class _InstrumentedTool(Tool):

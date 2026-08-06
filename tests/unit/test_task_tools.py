@@ -7,17 +7,17 @@ from typing import AsyncIterator, List
 
 import pytest
 
-from geny_executor.runtime import (
+from xgen_agent_runtime.runtime import (
     BackgroundTaskExecutor,
     BackgroundTaskRunner,
 )
-from geny_executor.stages.s13_task_registry import (
+from xgen_agent_runtime.stages.s13_task_registry import (
     InMemoryRegistry,
     TaskRecord,
     TaskStatus,
 )
-from geny_executor.tools.base import ToolContext
-from geny_executor.tools.built_in import (
+from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.built_in import (
     BUILT_IN_TOOL_CLASSES,
     TaskCreateTool,
     TaskGetTool,

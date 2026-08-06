@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.memory.embedding.local import LocalHashEmbeddingClient
-from geny_executor.memory.provider import (
+from xgen_agent_runtime.memory.embedding.local import LocalHashEmbeddingClient
+from xgen_agent_runtime.memory.provider import (
     EmbeddingDescriptor,
     Importance,
     Layer,
@@ -27,7 +27,7 @@ from geny_executor.memory.provider import (
     NoteDraft,
     Scope,
 )
-from geny_executor.memory.providers import FileMemoryProvider, SQLMemoryProvider
+from xgen_agent_runtime.memory.providers import FileMemoryProvider, SQLMemoryProvider
 
 
 def _vector_capable_providers(tmp_path: Path):

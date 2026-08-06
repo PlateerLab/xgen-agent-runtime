@@ -10,15 +10,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from geny_executor.gateway import (
+from xgen_agent_runtime.gateway import (
     BUILTIN_GATEWAY_PLATFORMS,
     DiscordGatewayAdapter,
     InboundMessage,
     SlackGatewayAdapter,
     build_platform_adapter,
 )
-from geny_executor.gateway.discord import parse_discord_message
-from geny_executor.gateway.slack import parse_slack_event
+from xgen_agent_runtime.gateway.discord import parse_discord_message
+from xgen_agent_runtime.gateway.slack import parse_slack_event
 
 
 def _http_recorder(reply):

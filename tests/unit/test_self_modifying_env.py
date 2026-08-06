@@ -13,14 +13,14 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     StageManifestEntry,
     ToolsSnapshot,
 )
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.stages.s03_system.builders import MutablePromptBuilder
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.stages.s03_system.builders import MutablePromptBuilder
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 from tests._fixtures.manifest_entries import required_stage_entries
 
 
@@ -162,7 +162,7 @@ def _tool_stage(pipeline: Pipeline):
 async def test_env_controller_survives_dispatch_context() -> None:
     """The env tool reads ctx.environment; the Tool stage builds a fresh
     ToolContext per call — that context MUST carry environment + extras."""
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     prov = _Provider({"read": _NamedTool("read")})
     pipeline = await _build(prov)
@@ -179,7 +179,7 @@ async def test_env_controller_survives_dispatch_context() -> None:
 
 @pytest.mark.asyncio
 async def test_set_setting_reaches_next_dispatch() -> None:
-    from geny_executor.core.state import PipelineState
+    from xgen_agent_runtime.core.state import PipelineState
 
     prov = _Provider({"read": _NamedTool("read")})
     pipeline = await _build(prov)

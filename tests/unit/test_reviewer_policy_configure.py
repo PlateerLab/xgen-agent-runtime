@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s11_tool_review.artifact.default.reviewers import (
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s11_tool_review.artifact.default.reviewers import (
     DestructiveResultReviewer,
     SensitivePatternReviewer,
     SizeReviewer,
 )
-from geny_executor.stages.s11_tool_review.artifact.default.stage import ToolReviewStage
-from geny_executor.stages.s11_tool_review.interface import (
+from xgen_agent_runtime.stages.s11_tool_review.artifact.default.stage import ToolReviewStage
+from xgen_agent_runtime.stages.s11_tool_review.interface import (
     SEVERITY_ERROR,
     SEVERITY_INFO,
     SEVERITY_WARN,

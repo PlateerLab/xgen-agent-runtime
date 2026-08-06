@@ -18,9 +18,9 @@ import json
 
 import pytest
 
-from geny_executor.llm_client.base import APIRequest
-from geny_executor.llm_client.claude_code import ClaudeCodeCLIClient
-from geny_executor.llm_client.translators._cli import (
+from xgen_agent_runtime.llm_client.base import APIRequest
+from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
+from xgen_agent_runtime.llm_client.translators._cli import (
     build_stream_json_stdin,
     messages_have_images,
 )

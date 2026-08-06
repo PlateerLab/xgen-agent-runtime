@@ -21,7 +21,7 @@ from typing import Any, Dict
 
 import pytest
 
-from geny_executor.tools.base import (
+from xgen_agent_runtime.tools.base import (
     PermissionDecision,
     Tool,
     ToolCapabilities,

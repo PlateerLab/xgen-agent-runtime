@@ -18,12 +18,12 @@ import asyncio
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
-from geny_executor.history.service import HistoryService
-from geny_executor.history.monitor import PerformanceMonitor
-from geny_executor.history.cost import CostAnalyzer
-from geny_executor.history.ab_test import ABTestRunner
-from geny_executor.history.replay import ExecutionReplayer, DebugExecutor
-from geny_executor.history.models import (
+from xgen_agent_runtime.history.service import HistoryService
+from xgen_agent_runtime.history.monitor import PerformanceMonitor
+from xgen_agent_runtime.history.cost import CostAnalyzer
+from xgen_agent_runtime.history.ab_test import ABTestRunner
+from xgen_agent_runtime.history.replay import ExecutionReplayer, DebugExecutor
+from xgen_agent_runtime.history.models import (
     StageTimingRecord,
     ToolCallRecord,
     WaterfallData,

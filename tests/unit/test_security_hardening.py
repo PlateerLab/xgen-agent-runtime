@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.security import SSRFError, validate_url
+from xgen_agent_runtime.security import SSRFError, validate_url
 
 
 class TestSSRFGuard:
@@ -40,8 +40,8 @@ class TestWebFetchSSRF:
     @pytest.mark.asyncio
     async def test_webfetch_rejects_metadata_ip(self, monkeypatch):
         monkeypatch.delenv("GENY_ALLOW_PRIVATE_URLS", raising=False)
-        from geny_executor.tools.built_in.web_fetch_tool import WebFetchTool
-        from geny_executor.tools.base import ToolContext
+        from xgen_agent_runtime.tools.built_in.web_fetch_tool import WebFetchTool
+        from xgen_agent_runtime.tools.base import ToolContext
 
         tool = WebFetchTool()
         res = await tool.execute(
@@ -57,8 +57,8 @@ class TestBashEnvScrub:
         monkeypatch.delenv("GENY_BASH_INHERIT_ENV", raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-should-not-leak")
         monkeypatch.setenv("GENY_AUTH_SECRET", "top-secret")
-        from geny_executor.tools.built_in.bash_tool import BashTool
-        from geny_executor.tools.base import ToolContext
+        from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
+        from xgen_agent_runtime.tools.base import ToolContext
 
         tool = BashTool()
         ctx = ToolContext(working_dir=str(tmp_path))
@@ -71,8 +71,8 @@ class TestBashEnvScrub:
 
     @pytest.mark.asyncio
     async def test_inject_env_reaches_shell(self, monkeypatch, tmp_path):
-        from geny_executor.tools.built_in.bash_tool import BashTool
-        from geny_executor.tools.base import ToolContext
+        from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
+        from xgen_agent_runtime.tools.base import ToolContext
 
         tool = BashTool()
         ctx = ToolContext(working_dir=str(tmp_path), env_vars={"MY_VAR": "injected"})
@@ -83,8 +83,8 @@ class TestBashEnvScrub:
     async def test_opt_in_full_inherit(self, monkeypatch, tmp_path):
         monkeypatch.setenv("GENY_BASH_INHERIT_ENV", "1")
         monkeypatch.setenv("SOME_HOST_VAR", "visible-when-opted-in")
-        from geny_executor.tools.built_in.bash_tool import BashTool
-        from geny_executor.tools.base import ToolContext
+        from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
+        from xgen_agent_runtime.tools.base import ToolContext
 
         tool = BashTool()
         res = await tool.execute(
@@ -95,12 +95,12 @@ class TestBashEnvScrub:
 
 class TestMCPAllowlist:
     def _conn(self, **cfg):
-        from geny_executor.tools.mcp.manager import MCPServerConnection, MCPServerConfig
+        from xgen_agent_runtime.tools.mcp.manager import MCPServerConnection, MCPServerConfig
         return MCPServerConnection(MCPServerConfig(**cfg))
 
     def test_stdio_command_blocked_when_not_allowlisted(self, monkeypatch):
         monkeypatch.setenv("GENY_MCP_ALLOWED_COMMANDS", "npx,uvx")
-        from geny_executor.tools.mcp.manager import MCPConnectionError
+        from xgen_agent_runtime.tools.mcp.manager import MCPConnectionError
         conn = self._conn(name="evil", transport="stdio", command="/usr/bin/malware")
         with pytest.raises(MCPConnectionError):
             conn._enforce_allowlist()
@@ -117,7 +117,7 @@ class TestMCPAllowlist:
 
     def test_http_host_blocked(self, monkeypatch):
         monkeypatch.setenv("GENY_MCP_ALLOWED_URL_HOSTS", "mcp.trusted.com")
-        from geny_executor.tools.mcp.manager import MCPConnectionError
+        from xgen_agent_runtime.tools.mcp.manager import MCPConnectionError
         conn = self._conn(name="evil", transport="http", url="https://evil.example.com/rpc")
         with pytest.raises(MCPConnectionError):
             conn._enforce_allowlist()

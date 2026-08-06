@@ -1,13 +1,13 @@
-# geny-executor
+# xgen-agent-runtime
 
-[![PyPI version](https://img.shields.io/pypi/v/geny-executor.svg)](https://pypi.org/project/geny-executor/)
-[![Python 3.11+](https://img.shields.io/pypi/pyversions/geny-executor.svg)](https://pypi.org/project/geny-executor/)
+[![PyPI version](https://img.shields.io/pypi/v/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
+[![Python 3.11+](https://img.shields.io/pypi/pyversions/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/CocoRoF/geny-executor/actions/workflows/ci.yml/badge.svg)](https://github.com/CocoRoF/geny-executor/actions/workflows/ci.yml)
+[![CI](https://github.com/PlateerLab/xgen-agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime/actions/workflows/ci.yml)
 
 **A harness-engineered agent pipeline library — 21 stages, 5 LLM providers, MCP-native, fully introspectable.**
 
-geny-executor implements a **21-stage pipeline** with **dual-abstraction architecture** (stage slots × strategy slots). Inspired by Claude Code's agent loop and Anthropic's harness design principles. No LangChain. No LangGraph. Just an explicit, modular pipeline where every step is observable, mutatable, and swappable.
+xgen-agent-runtime implements a **21-stage pipeline** with **dual-abstraction architecture** (stage slots × strategy slots). Inspired by Claude Code's agent loop and Anthropic's harness design principles. No LangChain. No LangGraph. Just an explicit, modular pipeline where every step is observable, mutatable, and swappable.
 
 [한국어 README](README_ko.md) · [Architecture](docs/architecture.md) · [Providers](docs/providers.md) · [Error codes](docs/error_codes.md) · [Claude Code CLI host](docs/claude_code_cli.md)
 
@@ -19,10 +19,10 @@ These projects are built to work together. **Geny** is the product at the top of
 
 | Project | What it is | Role in the stack |
 |---|---|---|
-| [**Geny**](https://github.com/CocoRoF/Geny) | Multi-agent VTuber + autonomous-worker platform | The product — uses every project below |
-| ➡️ [**geny-executor**](https://github.com/CocoRoF/geny-executor) | 21-stage, manifest-driven agent pipeline · PyPI · Apache-2.0 | The engine everything runs on |
-| [**GAPT**](https://github.com/CocoRoF/geny-adapted-project-toolkit) | Self-hosted AI DevOps platform — sandbox · edit · build · deploy | Where agents safely touch real repos |
-| [**geny-avatar**](https://github.com/CocoRoF/geny-avatar) | 2D live-avatar editor with AI texture generation | Where Geny's faces are made |
+| [**Geny**](https://github.com/PlateerLab/xgen-agent-runtime) | Multi-agent VTuber + autonomous-worker platform | The product — uses every project below |
+| ➡️ [**xgen-agent-runtime**](https://github.com/PlateerLab/xgen-agent-runtime) | 21-stage, manifest-driven agent pipeline · PyPI · Apache-2.0 | The engine everything runs on |
+| [**GAPT**](https://github.com/PlateerLab/xgen-agent-runtime) | Self-hosted AI DevOps platform — sandbox · edit · build · deploy | Where agents safely touch real repos |
+| [**geny-avatar**](https://github.com/PlateerLab/xgen-agent-runtime) | 2D live-avatar editor with AI texture generation | Where Geny's faces are made |
 
 <details>
 <summary>How they fit together</summary>
@@ -34,7 +34,7 @@ These projects are built to work together. **Geny** is the product at the top of
  agent engine    avatars      sandbox + deploy
       │             │              │
       ▼             ▼              ▼
- geny-executor  geny-avatar      GAPT
+ xgen-agent-runtime  geny-avatar      GAPT
   (the engine)  (avatar editor)  (AI DevOps platform)
 ```
 
@@ -47,9 +47,9 @@ These projects are built to work together. **Geny** is the product at the top of
 
 ---
 
-## Why geny-executor?
+## Why xgen-agent-runtime?
 
-| Problem | geny-executor's answer |
+| Problem | xgen-agent-runtime's answer |
 |---|---|
 | Frameworks hide too much behind abstractions | Every one of the 21 stages is explicit, inspectable, and individually swappable. |
 | Hard to customize one part without rewriting everything | **Dual abstraction**: swap a whole stage *or* swap a strategy inside a stage. Manifest-driven so config = artifact. |
@@ -105,15 +105,15 @@ The full stage list with strategy options lives in [`docs/architecture.md`](docs
 ## Installation
 
 ```bash
-pip install geny-executor
+pip install xgen-agent-runtime
 ```
 
 Optional extras:
 
 ```bash
-pip install geny-executor[memory]   # numpy for vector retrieval
-pip install geny-executor[all]      # everything
-pip install geny-executor[dev]      # dev/test tooling
+pip install xgen-agent-runtime[memory]   # numpy for vector retrieval
+pip install xgen-agent-runtime[all]      # everything
+pip install xgen-agent-runtime[dev]      # dev/test tooling
 ```
 
 **Requirements**: Python 3.11+. At least one provider's credentials (Anthropic API key, OpenAI API key, …) or a local CLI binary (`claude` for `claude_code_cli`).
@@ -126,7 +126,7 @@ pip install geny-executor[dev]      # dev/test tooling
 
 ```python
 import asyncio
-from geny_executor import PipelinePresets
+from xgen_agent_runtime import PipelinePresets
 
 async def main():
     pipeline = PipelinePresets.minimal(api_key="sk-ant-...")
@@ -139,7 +139,7 @@ asyncio.run(main())
 ### Chat pipeline (history + system prompt + optional tools)
 
 ```python
-from geny_executor import PipelinePresets
+from xgen_agent_runtime import PipelinePresets
 
 pipeline = PipelinePresets.chat(
     api_key="sk-ant-...",
@@ -154,8 +154,8 @@ print(f"Cost: ${result.total_cost_usd:.4f}")
 ### Full agent (all 21 stages — tools, evaluation, memory, loop control)
 
 ```python
-from geny_executor import PipelinePresets
-from geny_executor.tools import ToolRegistry, Tool, ToolResult, ToolContext
+from xgen_agent_runtime import PipelinePresets
+from xgen_agent_runtime.tools import ToolRegistry, Tool, ToolResult, ToolContext
 
 class SearchTool(Tool):
     @property
@@ -188,7 +188,7 @@ result = await pipeline.run("Find the latest Python release version")
 ### Custom pipeline with builder
 
 ```python
-from geny_executor import PipelineBuilder
+from xgen_agent_runtime import PipelineBuilder
 
 pipeline = (
     PipelineBuilder("my-agent", api_key="sk-ant-...")
@@ -211,7 +211,7 @@ result = await pipeline.run("Complex multi-step task here")
 ### Manifest-driven pipeline (recommended for hosts)
 
 ```python
-from geny_executor import Pipeline, CredentialBundle, ProviderCredentials, EnvironmentManifest
+from xgen_agent_runtime import Pipeline, CredentialBundle, ProviderCredentials, EnvironmentManifest
 
 manifest = EnvironmentManifest.load("./envs/my_env.json")
 credentials = CredentialBundle(by_provider={
@@ -244,7 +244,7 @@ A session picks its provider via `stages[6].config["provider"]` in the manifest.
 Every executor exception carries a stable `exec.<component>.<reason>` code:
 
 ```python
-from geny_executor import APIError, ExecutorErrorCode, ErrorCategory
+from xgen_agent_runtime import APIError, ExecutorErrorCode, ErrorCategory
 
 try:
     result = await pipeline.run("...")
@@ -263,7 +263,7 @@ Structured event payloads also carry the code:
   "data": {
     "error": "Claude Code CLI is not authenticated …",
     "code": "exec.cli.auth_failed",
-    "exception_type": "geny_executor.core.errors.APIError"
+    "exception_type": "xgen_agent_runtime.core.errors.APIError"
   }
 }
 ```
@@ -277,8 +277,8 @@ Codes are **stable across releases** — see [`docs/error_codes.md`](docs/error_
 Persistent state across multiple interactions:
 
 ```python
-from geny_executor import PipelinePresets
-from geny_executor.session import SessionManager
+from xgen_agent_runtime import PipelinePresets
+from xgen_agent_runtime.session import SessionManager
 
 manager = SessionManager()
 pipeline = PipelinePresets.chat(api_key="sk-ant-...")
@@ -324,7 +324,7 @@ async for event in pipeline.run_stream("Solve step by step"):
 ## Tools + MCP
 
 ```python
-from geny_executor.tools import Tool, ToolResult, ToolContext, ToolRegistry
+from xgen_agent_runtime.tools import Tool, ToolResult, ToolContext, ToolRegistry
 
 class Calculator(Tool):
     @property
@@ -344,7 +344,7 @@ registry.register(Calculator())
 Connect a host-attached MCP server:
 
 ```python
-from geny_executor.tools.mcp import MCPManager
+from xgen_agent_runtime.tools.mcp import MCPManager
 
 mcp = MCPManager()
 await mcp.connect("filesystem", command="npx", args=["-y", "@anthropic/mcp-filesystem"])
@@ -371,7 +371,7 @@ For the **CLI-side** MCP wrap (your tool registry exposed *into* a spawned Claud
 ## Custom stages + strategies
 
 ```python
-from geny_executor.core.stage import Strategy
+from xgen_agent_runtime.core.stage import Strategy
 
 class MyContextStrategy(Strategy):
     name = "my_context"
@@ -385,8 +385,8 @@ class MyContextStrategy(Strategy):
 ```
 
 ```python
-from geny_executor.core.stage import Stage
-from geny_executor.core.state import PipelineState
+from xgen_agent_runtime.core.stage import Stage
+from xgen_agent_runtime.core.state import PipelineState
 
 class LoggingStage(Stage[dict, dict]):
     name = "logging"
@@ -405,8 +405,8 @@ pipeline.register_stage(LoggingStage())
 ## Project structure
 
 ```
-geny-executor/
-├── src/geny_executor/
+xgen-agent-runtime/
+├── src/xgen_agent_runtime/
 │   ├── __init__.py          # Public API surface
 │   ├── py.typed             # PEP 561 type marker
 │   ├── core/                # Pipeline engine, errors, manifest, mutation, snapshot
@@ -435,14 +435,14 @@ geny-executor/
 ## Development
 
 ```bash
-git clone https://github.com/CocoRoF/geny-executor.git
-cd geny-executor
+git clone https://github.com/PlateerLab/xgen-agent-runtime
+cd xgen-agent-runtime
 
 pip install -e ".[dev]"
 
 pytest                                                       # full suite (~30s, 3100+ tests)
 pytest tests/contract/test_error_codes_stability.py          # error code stability check
-pytest --cov=geny_executor --cov-report=term-missing         # coverage
+pytest --cov=xgen_agent_runtime --cov-report=term-missing         # coverage
 
 ruff check src/ tests/
 ruff format src/ tests/
@@ -460,7 +460,7 @@ ruff format src/ tests/
 | **2.0.0** | Provider abstraction (`ClientRegistry`, `CredentialBundle`). Manifest single source of truth for Stage 6 provider. |
 | **1.x** | Original 16-stage pipeline; Anthropic-only. |
 
-See [CHANGELOG](https://github.com/CocoRoF/geny-executor/releases) for the full history.
+See [CHANGELOG](https://github.com/PlateerLab/xgen-agent-runtime/releases) for the full history.
 
 ---
 
@@ -473,7 +473,7 @@ See [CHANGELOG](https://github.com/CocoRoF/geny-executor/releases) for the full 
 ## Related projects
 
 **The Geny ecosystem** (sibling projects built on this engine) → see [The Geny ecosystem](#the-geny-ecosystem) above:
-[Geny](https://github.com/CocoRoF/Geny) · [GAPT](https://github.com/CocoRoF/geny-adapted-project-toolkit) · [geny-avatar](https://github.com/CocoRoF/geny-avatar)
+[Geny](https://github.com/PlateerLab/xgen-agent-runtime) · [GAPT](https://github.com/PlateerLab/xgen-agent-runtime) · [geny-avatar](https://github.com/PlateerLab/xgen-agent-runtime)
 
 **Built on & interoperates with:**
 
@@ -481,5 +481,5 @@ See [CHANGELOG](https://github.com/CocoRoF/geny-executor/releases) for the full 
 - [OpenAI SDK](https://github.com/openai/openai-python)
 - [Google GenAI SDK](https://github.com/googleapis/python-genai)
 - [vLLM](https://github.com/vllm-project/vllm)
-- [Claude Code CLI](https://docs.anthropic.com/claude/code/) — geny-executor hosts it via the `claude_code_cli` provider
+- [Claude Code CLI](https://docs.anthropic.com/claude/code/) — xgen-agent-runtime hosts it via the `claude_code_cli` provider
 - [MCP](https://modelcontextprotocol.io/) — Model Context Protocol; both host-attached servers and per-session CLI wraps are first-class

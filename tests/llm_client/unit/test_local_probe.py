@@ -7,7 +7,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
 
-from geny_executor.llm_client.local_probe import (  # noqa: E402
+from xgen_agent_runtime.llm_client.local_probe import (  # noqa: E402
     _extract_num_ctx,
     _ollama_native_root,
     probe_ollama_num_ctx,

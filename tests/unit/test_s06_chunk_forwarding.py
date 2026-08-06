@@ -15,14 +15,14 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import pytest
 
-from geny_executor import Pipeline, PipelineState
-from geny_executor.core.errors import APIError, ErrorCategory, ExecutorErrorCode
-from geny_executor.llm_client import APIRequest, APIResponse, BaseClient, ClientCapabilities
-from geny_executor.llm_client.types import ContentBlock
-from geny_executor.core.state import TokenUsage
-from geny_executor.stages.s01_input import InputStage
-from geny_executor.stages.s06_api import APIStage
-from geny_executor.stages.s21_yield import YieldStage
+from xgen_agent_runtime import Pipeline, PipelineState
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
+from xgen_agent_runtime.llm_client import APIRequest, APIResponse, BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.types import ContentBlock
+from xgen_agent_runtime.core.state import TokenUsage
+from xgen_agent_runtime.stages.s01_input import InputStage
+from xgen_agent_runtime.stages.s06_api import APIStage
+from xgen_agent_runtime.stages.s21_yield import YieldStage
 
 
 def _response(text: str = "done") -> APIResponse:
@@ -234,7 +234,7 @@ class TestApiErrorEnvelope:
 
         # NoRetry-equivalent: RATE_LIMIT is retryable by the default
         # strategy, so use the non-retrying stage config via retry arg.
-        from geny_executor.stages.s06_api.artifact.default.retry import NoRetry
+        from xgen_agent_runtime.stages.s06_api.artifact.default.retry import NoRetry
 
         state = _stage_state(_FailingClient([]))
         with pytest.raises(Exception):

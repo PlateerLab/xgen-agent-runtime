@@ -25,13 +25,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from geny_executor.core.environment import EnvironmentManifest, ToolsSnapshot
-from geny_executor.core.pipeline import Pipeline, _resolve_core_flag
-from geny_executor.core.state import PipelineState
-from geny_executor.stages.s03_system.artifact.default.stage import SystemStage
-from geny_executor.tools.base import Tool, ToolContext, ToolResult
-from geny_executor.tools.built_in.tool_search_tool import ToolSearchTool
-from geny_executor.tools.registry import ToolRegistry
+from xgen_agent_runtime.core.environment import EnvironmentManifest, ToolsSnapshot
+from xgen_agent_runtime.core.pipeline import Pipeline, _resolve_core_flag
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s03_system.artifact.default.stage import SystemStage
+from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in.tool_search_tool import ToolSearchTool
+from xgen_agent_runtime.tools.registry import ToolRegistry
 from tests._fixtures.manifest_entries import required_stage_entries
 
 
@@ -382,18 +382,18 @@ class TestAgentLoopEndToEnd:
         core schemas; the LLM calls ToolSearch; request 2 (same turn,
         next loop iteration) carries the activated deferred schema and
         the LLM calls the discovered tool successfully."""
-        from geny_executor import Pipeline, PipelineConfig
-        from geny_executor.core.state import TokenUsage
-        from geny_executor.stages.s01_input import InputStage
-        from geny_executor.stages.s04_guard import GuardStage, IterationGuard
-        from geny_executor.stages.s06_api import APIStage, APIResponse, MockProvider
-        from geny_executor.stages.s06_api.retry import NoRetry
-        from geny_executor.stages.s06_api.types import ContentBlock
-        from geny_executor.stages.s07_token import TokenStage
-        from geny_executor.stages.s09_parse import ParseStage
-        from geny_executor.stages.s10_tool import ToolStage
-        from geny_executor.stages.s16_loop import LoopStage, StandardLoopController
-        from geny_executor.stages.s21_yield import YieldStage
+        from xgen_agent_runtime import Pipeline, PipelineConfig
+        from xgen_agent_runtime.core.state import TokenUsage
+        from xgen_agent_runtime.stages.s01_input import InputStage
+        from xgen_agent_runtime.stages.s04_guard import GuardStage, IterationGuard
+        from xgen_agent_runtime.stages.s06_api import APIStage, APIResponse, MockProvider
+        from xgen_agent_runtime.stages.s06_api.retry import NoRetry
+        from xgen_agent_runtime.stages.s06_api.types import ContentBlock
+        from xgen_agent_runtime.stages.s07_token import TokenStage
+        from xgen_agent_runtime.stages.s09_parse import ParseStage
+        from xgen_agent_runtime.stages.s10_tool import ToolStage
+        from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController
+        from xgen_agent_runtime.stages.s21_yield import YieldStage
 
         def _tool_use(name: str, tool_input: dict, tool_id: str) -> APIResponse:
             return APIResponse(

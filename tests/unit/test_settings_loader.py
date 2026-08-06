@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from geny_executor.settings import (
+from xgen_agent_runtime.settings import (
     SettingsLoader,
     get_default_loader,
     register_section,
     reset_default_loader,
 )
-from geny_executor.settings.section_registry import (
+from xgen_agent_runtime.settings.section_registry import (
     list_section_names,
     reset_section_registry,
 )

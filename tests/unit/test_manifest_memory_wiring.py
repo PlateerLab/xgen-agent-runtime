@@ -13,24 +13,24 @@ from __future__ import annotations
 
 import pytest
 
-from geny_executor.core.environment import (
+from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
     StageManifestEntry,
     ToolsSnapshot,
 )
-from geny_executor.core.pipeline import Pipeline
-from geny_executor.core.state import PipelineState
-from geny_executor.llm_client.credentials import (
+from xgen_agent_runtime.core.pipeline import Pipeline
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.llm_client.credentials import (
     ConfigError,
     CredentialBundle,
     ProviderCredentials,
 )
-from geny_executor.memory.factory import provider_from_manifest_memory
-from geny_executor.memory.providers.ephemeral import EphemeralMemoryProvider
-from geny_executor.memory.providers.file import FileMemoryProvider
-from geny_executor.memory.retriever import MemoryAwareRetriever
-from geny_executor.memory.strategy import ProviderDrivenStrategy
+from xgen_agent_runtime.memory.factory import provider_from_manifest_memory
+from xgen_agent_runtime.memory.providers.ephemeral import EphemeralMemoryProvider
+from xgen_agent_runtime.memory.providers.file import FileMemoryProvider
+from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever
+from xgen_agent_runtime.memory.strategy import ProviderDrivenStrategy
 
 from tests._fixtures.manifest_entries import required_stage_entries
 
@@ -166,7 +166,7 @@ class TestFromManifestMemoryWiring:
         import logging
 
         m = _manifest(memory={"provider": "file"})
-        with caplog.at_level(logging.WARNING, logger="geny_executor.core.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.core.pipeline"):
             p = Pipeline.from_manifest(m, credentials=_bundle(), strict=False)
         assert p.memory_provider is None
         assert "manifest.memory failed to build" in caplog.text

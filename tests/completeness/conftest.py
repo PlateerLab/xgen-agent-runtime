@@ -20,8 +20,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
 import pytest
 
-from geny_executor.memory.provider import MemoryProvider
-from geny_executor.memory.providers import (
+from xgen_agent_runtime.memory.provider import MemoryProvider
+from xgen_agent_runtime.memory.providers import (
     EphemeralMemoryProvider,
     FileMemoryProvider,
     SQLMemoryProvider,

@@ -15,11 +15,11 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.state import PipelineState
-from geny_executor.llm_client import BaseClient
-from geny_executor.llm_client.types import APIRequest, APIResponse, ContentBlock
-from geny_executor.stages.s06_api.artifact.default.stage import APIStage
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.llm_client import BaseClient
+from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
+from xgen_agent_runtime.stages.s06_api.artifact.default.stage import APIStage
 
 
 def _response() -> APIResponse:

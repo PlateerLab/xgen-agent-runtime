@@ -22,9 +22,9 @@ import pytest
 
 import anthropic as anthropic_sdk
 
-from geny_executor.core.config import ModelConfig
-from geny_executor.core.errors import ErrorCategory
-from geny_executor.llm_client.anthropic import (
+from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime.core.errors import ErrorCategory
+from xgen_agent_runtime.llm_client.anthropic import (
     AnthropicClient,
     _classify_bad_request_message,
 )
@@ -183,7 +183,7 @@ async def test_send_heals_deprecation_and_emits_drift_event(
         messages=SimpleNamespace(create=create)
     )
 
-    with caplog.at_level(logging.WARNING, logger="geny_executor.llm_client.base"):
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.llm_client.base"):
         resp = await client.create_message(
             model_config=ModelConfig(model="claude-sonnet-4-6", temperature=0.7),
             messages=[{"role": "user", "content": "x"}],

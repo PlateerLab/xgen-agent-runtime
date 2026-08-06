@@ -3,7 +3,7 @@
 > **Started**: 2026-04-19
 > **Owner**: memory initiative
 > **Target tag**: `v0.14.0-spec` (no runtime change yet — docs + red tests only)
-> **Predecessor doc**: `geny-executor-web/docs/MEMORY_ARCHITECTURE.md`
+> **Predecessor doc**: `xgen-agent-runtime-web/docs/MEMORY_ARCHITECTURE.md`
 > **Gate**: G0 — Spec YAML present, red pytest scenarios C1–C7 present.
 
 ---
@@ -73,11 +73,11 @@ deliverables are:
 
 ## Compatibility
 
-- **No runtime change**: no source under `src/geny_executor/` is
+- **No runtime change**: no source under `src/xgen_agent_runtime/` is
   modified by Phase 0.
 - **No public API touched**: `pyproject.toml` is *not* bumped here;
   the next bump (`0.14.0`) occurs at the end of Phase 1 when the
-  `geny_executor.memory.provider` module ships.
+  `xgen_agent_runtime.memory.provider` module ships.
 - **Test runner**: `tests/completeness/` joins the existing
   `testpaths = ["tests"]` glob. The skip-by-default pattern keeps CI
   green. Meta-test `test_spec_loads.py` actively guards the spec.
@@ -89,7 +89,7 @@ deliverables are:
 ## Follow-up
 
 - Phase 1 (`progress/memory/phase_1_interface.md`):
-  - Land `geny_executor.memory.provider` (Protocol + handles).
+  - Land `xgen_agent_runtime.memory.provider` (Protocol + handles).
   - Implement `EphemeralMemoryProvider`.
   - Flip `test_c1_six_layer_retrieval.py` from skip → real assertion.
 - Phase 2 will incrementally activate C2, C3, C5, C6, C7.
