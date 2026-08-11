@@ -178,7 +178,8 @@ class DocGuideTool(_DocToolBase):
             "START HERE for .docx/.xlsx/.pptx work — the document skill. "
             "No topic: the GENERATE|EDIT|INSPECT map. topic: deep guide "
             "(build, generate, edit, edit.text, edit.chart, edit.xml, "
-            "render, recipes.slides, recipes.colors). Free, instant."
+            "render, recipes.slides, recipes.colors). Pass path to scope "
+            "to a file's format. Free, instant."
         )
 
     @property
@@ -189,6 +190,13 @@ class DocGuideTool(_DocToolBase):
                 "topic": {
                     "type": "string",
                     "description": "Optional topic or prefix (e.g. 'recipes').",
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Optional document path — scopes the topic list to "
+                        "that file's format (.docx / .xlsx / .pptx)."
+                    ),
                 },
             },
         }
@@ -212,7 +220,21 @@ class DocGuideTool(_DocToolBase):
                 ),
                 is_error=True,
             )
-        res = guide_fn(input.get("topic"), names=_GUIDE_NAME_MAP)
+        # 문서 포맷으로 토픽 목록을 좁힌다. `.docx` 를 다루는 중에 슬라이드
+        # 토픽(arrange, recipes.slides)이 목록에 섞여 있으면, 에이전트는 그
+        # 파일에 쓸 수 없는 도구를 읽고 시도한다 — 실패하는 한 턴이 늘어난다.
+        fmt = None
+        raw_path = input.get("path")
+        if raw_path:
+            ext = str(raw_path).lower().rsplit(".", 1)[-1]
+            if ext in ("docx", "xlsx", "pptx"):
+                fmt = ext
+        try:
+            res = guide_fn(input.get("topic"), names=_GUIDE_NAME_MAP, fmt=fmt)
+        except TypeError:  # pragma: no cover — 엔진이 fmt 를 모르는 구버전
+            # 조용히 예전 동작으로 돌아간다. 포맷 스코핑은 편의이지 계약이
+            # 아니라서, 이것 때문에 문서 작업 전체가 막히면 안 된다.
+            res = guide_fn(input.get("topic"), names=_GUIDE_NAME_MAP)
         return ToolResult(
             content=res["guide"],
             metadata={"topic": res.get("topic", ""), "topics": res.get("topics", [])},
