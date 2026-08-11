@@ -8,14 +8,11 @@ credentials via :class:`CredentialBundle` (built from
 
 from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIProcessRunner,
-    ContainerCLIRunner,
-    SandboxHandle,
 )
 from xgen_agent_runtime.llm_client.anthropic import AnthropicClient
 from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.claude_code import (
     ClaudeCodeCLIClient,
-    build_container_cli_client,
 )
 from xgen_agent_runtime.llm_client.credentials import (
     ConfigError,
@@ -50,13 +47,10 @@ __all__ = [
     "ClientCapabilities",
     "ClientRegistry",
     "ConfigError",
-    "ContainerCLIRunner",
     "ContentBlock",
     "CredentialBundle",
     "ProviderCredentials",
     "ProviderProfile",
-    "SandboxHandle",
-    "build_container_cli_client",
     "builtin_profiles",
     "probe_ollama_num_ctx",
     "resolve_local_context_window",

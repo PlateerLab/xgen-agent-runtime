@@ -96,7 +96,7 @@ class GrepTool(Tool):
         if context.sandbox is not None:
             import shlex
 
-            from xgen_agent_runtime.tools._sandbox import sb_run
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
 
             wd = context.working_dir or "/workspace"
             spath = input.get("path", "") or "."

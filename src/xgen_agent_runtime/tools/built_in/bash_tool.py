@@ -97,10 +97,10 @@ class BashTool(Tool):
         timeout_ms = min(input.get("timeout", _DEFAULT_TIMEOUT_MS), _MAX_TIMEOUT_MS)
         timeout_s = timeout_ms / 1000.0
 
-        # Sandbox: run the command inside the container (docker exec) instead
+        # Sandbox: run the command in the agent's XGeny session instead
         # of on the host. Same output shaping as the host path below.
         if context.sandbox is not None:
-            from xgen_agent_runtime.tools._sandbox import sb_run
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
 
             try:
                 exit_code, stdout, stderr = await sb_run(

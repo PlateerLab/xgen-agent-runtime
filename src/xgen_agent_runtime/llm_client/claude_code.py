@@ -49,8 +49,6 @@ from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIProtocolError,
     CLIResult,
     CLITimeout,
-    ContainerCLIRunner,
-    SandboxHandle,
     aiter_bytes,
     detect_binary,
 )
@@ -217,8 +215,8 @@ class ClaudeCodeCLIClient(BaseClient):
             Optional ``Callable[..., CLIProcessRunner]`` receiving
             ``binary=``, ``cwd=``, ``env_extras=``, ``timeout_s=``.
             The supported seam for hosts that wrap process spawning
-            (GAPT's docker sandbox) — absorbs the
-            ``CLIProcessRunner._spawn`` monkey-patch that pinned GAPT to
+            (a host-managed process sandbox) — absorbs the
+            ``CLIProcessRunner._spawn`` monkey-patch that pinned hosts to
             2.1.0. The version-handshake probe routes through the same
             factory so the recorded version matches the binary that
             actually runs.
@@ -808,52 +806,3 @@ class ClaudeCodeCLIClient(BaseClient):
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
-
-
-def build_container_cli_client(
-    *,
-    sandbox: SandboxHandle,
-    workdir: str = "/workspace",
-    launcher: str = "docker",
-    container_binary: str = "claude",
-    **client_kwargs: Any,
-) -> "ClaudeCodeCLIClient":
-    """Build a :class:`ClaudeCodeCLIClient` whose every process spawn — the
-    per-request CLI run *and* the one-time ``--version`` handshake — happens
-    inside ``sandbox``'s container via :class:`ContainerCLIRunner`.
-
-    This is the supported, host-agnostic way to run the agent CLI in a
-    sandbox; it absorbs the bespoke ``SandboxedCLIProcessRunner`` that hosts
-    (GAPT) previously had to carry. The host does **not** need the agent
-    binary installed — it lives in the container image — only the ``launcher``
-    (``docker`` by default).
-
-    ``client_kwargs`` are forwarded verbatim to :class:`ClaudeCodeCLIClient`
-    (``api_key``, ``auth_mode``, ``mcp_config``, ``allow_tools``,
-    ``workspace_dir``, ...). ``runner_factory`` must not be passed — it is set
-    here.
-
-    Example::
-
-        client = build_container_cli_client(
-            sandbox=workspace_sandbox,   # has .container_name + async .ensure()
-            api_key=api_key,
-            mcp_config=mcp_config,
-        )
-        pipeline.attach_runtime(llm_client=client, hook_runner=hook_runner)
-    """
-    if "runner_factory" in client_kwargs:
-        raise TypeError(
-            "build_container_cli_client sets runner_factory itself; do not pass it in client_kwargs"
-        )
-
-    def _factory(**runner_kwargs: Any) -> CLIProcessRunner:
-        return ContainerCLIRunner(
-            sandbox=sandbox,
-            workdir=workdir,
-            launcher=launcher,
-            container_binary=container_binary,
-            **runner_kwargs,
-        )
-
-    return ClaudeCodeCLIClient(**client_kwargs, runner_factory=_factory)

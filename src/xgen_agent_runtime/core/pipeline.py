@@ -164,12 +164,9 @@ def _creds_to_client_kwargs(provider: str, creds: ProviderCredentials) -> Dict[s
             "extra_args",
             "timeout_s",
             "strict_wire",
-            # Extra env vars handed to every CLI spawn (host runner AND the
-            # sandbox ContainerCLIRunner via ``--env``). The host's escape
+            # Extra env vars handed to every CLI spawn. The host's escape
             # hatch for credential channels the constructor doesn't model —
-            # e.g. ``CLAUDE_CODE_OAUTH_TOKEN`` for a long-lived setup token,
-            # which (unlike the rotating OAuth file) is safe to share across
-            # many sandbox containers.
+            # e.g. ``CLAUDE_CODE_OAUTH_TOKEN`` for a long-lived setup token.
             "env_extras",
         ):
             if key in extras:
@@ -859,14 +856,10 @@ class Pipeline:
             False  # flips once run()/run_stream() begins; gates attach_runtime
         )
         self._attached_llm_client: Any = None  # set by attach_runtime; propagated in _init_state
-        self._attached_sandbox: Any = (
-            None  # SandboxHandle; wraps a resolved claude_code_cli client in a container runner
-        )
-        # When False, an attached sandbox is used for TOOL execution (ctx.sandbox)
-        # only — the claude_code_cli client is NOT wrapped in a ContainerCLIRunner,
-        # so the CLI keeps running on the host (OAuth-safe). Tools still run in the
-        # sandbox via docker exec. Default True preserves full CLI-in-container.
-        self._containerize_cli: bool = True
+        # XgenySandbox — the session the agent's TOOLS execute in (ctx.sandbox).
+        # It never wraps the LLM client: the CLI keeps running here and reaches
+        # the sandbox through its tools, like every other provider.
+        self._attached_sandbox: Any = None
         self._credentials: CredentialBundle = CredentialBundle()  # set by from_manifest_async
         self._subagent_registry: Any = None  # set by attach_runtime; populates state + agent stage
         self._attached_session_runtime: Any = None  # v0.30.0 plugin slot; propagated in _init_state
@@ -1679,7 +1672,6 @@ class Pipeline:
         env_persistence: Optional[Any] = None,
         pack_persistence: Optional[Any] = None,
         env_settings_schemas: Optional[Any] = None,
-        containerize_cli: Optional[bool] = None,
         override_manifest: bool = False,
     ) -> None:
         """Inject session-scoped runtime objects into a manifest-built pipeline.
@@ -1835,7 +1827,6 @@ class Pipeline:
             env_persistence=env_persistence,
             pack_persistence=pack_persistence,
             env_settings_schemas=env_settings_schemas,
-            containerize_cli=containerize_cli,
             override_manifest=override_manifest,
         )
 
@@ -1898,7 +1889,6 @@ class Pipeline:
         env_persistence: Optional[Any] = None,
         pack_persistence: Optional[Any] = None,
         env_settings_schemas: Optional[Any] = None,
-        containerize_cli: Optional[bool] = None,
         override_manifest: bool = False,
     ) -> None:
         """Shared wiring behind :meth:`attach_runtime` / :meth:`refresh_runtime`.
@@ -1942,15 +1932,6 @@ class Pipeline:
             self._pack_persistence = pack_persistence
             if self._environment is not None:
                 self._environment.attach_pack_persistence(pack_persistence)
-
-        if containerize_cli is not None:
-            # Whether an attached sandbox also runs the claude_code_cli client
-            # in-container. False → CLI stays on host (OAuth-safe), tools still
-            # sandboxed. Bump the generation so the client rebuilds accordingly.
-            if bool(containerize_cli) != self._containerize_cli:
-                self._client_generation += 1
-                self._warm_llm_client = None
-            self._containerize_cli = bool(containerize_cli)
 
         if env_settings_schemas is not None:
             # Host descriptor of configurable tool settings (groups + fields +
@@ -2011,19 +1992,14 @@ class Pipeline:
             self._warm_llm_client = None
 
         if sandbox is not None:
-            # A sandbox handle (container_name + async ensure()). When the
-            # pipeline resolves a ``claude_code_cli`` client from the
-            # credential bundle, it wraps it in a ContainerCLIRunner so the
-            # agent CLI spawns inside the sandbox container — see
-            # ``_build_client_for``. Ignored for SDK providers (they never
-            # spawn the CLI). Bump the generation so reused states rebuild
-            # their client through the sandbox on the next turn.
+            # An XgenySandbox (``workdir`` + async ``ensure()``/``exec()``) —
+            # where this agent's code runs. Bump the generation so reused
+            # states pick it up on the next turn.
             self._attached_sandbox = sandbox
             self._client_generation += 1
             self._warm_llm_client = None
-            # Also stamp it onto the Tool stage's context so the built-in
-            # fs/shell tools run inside the container on the SDK-provider path
-            # (the CLI path runs its own tools in-container already).
+            # Stamp it onto the Tool stage's context — that is the whole
+            # wiring: every built-in fs/shell tool reads ``ctx.sandbox``.
             self._set_tool_stage_sandbox(sandbox)
 
         if session_runtime is not None:
@@ -3337,22 +3313,6 @@ class Pipeline:
                 if entry not in allow:
                     allow.append(entry)
             kwargs["allow_tools"] = tuple(allow)
-        # Sandbox wrap: when a SandboxHandle is attached and this is the CLI
-        # provider, build the client so every spawn (and the --version probe)
-        # runs inside the sandbox container via ContainerCLIRunner. Reuses the
-        # exact kwargs resolved above (api_key, mcp_config, allow_tools,
-        # workspace_dir, ...) — the host never replicates them. SDK providers
-        # ignore the sandbox (they don't spawn a CLI).
-        if (
-            provider == "claude_code_cli"
-            and self._attached_sandbox is not None
-            and self._containerize_cli
-        ):
-            from xgen_agent_runtime.llm_client.claude_code import (
-                build_container_cli_client,
-            )
-
-            return build_container_cli_client(sandbox=self._attached_sandbox, **kwargs)
         return client_cls(**kwargs)
 
     async def _try_run_stage(self, order: int, current: Any, state: PipelineState) -> Any:

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import xgen_agent_runtime.tools._sandbox as sb_mod
+import xgen_agent_runtime.tools._xgeny_sandbox as sb_mod
 from xgen_agent_runtime.stages.s01_input.artifact.default.normalizers import MultimodalNormalizer
 from xgen_agent_runtime.tools.built_in.workspace_tools import (
     SandboxFetchTool,
@@ -58,7 +58,7 @@ def test_workspace_info_guards(tmp_path):
 
 
 class _FakeSandboxFS:
-    """In-memory 'container' filesystem keyed by resolved container path."""
+    """세션 안의 절대 경로로 키를 잡는 인메모리 파일시스템."""
 
     def __init__(self):
         self.files: dict[str, bytes] = {}
@@ -69,11 +69,11 @@ def fake_sandbox(monkeypatch):
     fs = _FakeSandboxFS()
 
     async def fake_write(sandbox, path, data, *, workdir):
-        fs.files[sb_mod.container_path(path, workdir)] = data
+        fs.files[sb_mod.sandbox_path(sandbox, path, workdir)] = data
         return len(data)
 
     async def fake_read(sandbox, path, *, workdir):
-        cpath = sb_mod.container_path(path, workdir)
+        cpath = sb_mod.sandbox_path(sandbox, path, workdir)
         if cpath not in fs.files:
             raise FileNotFoundError(path)
         return fs.files[cpath]

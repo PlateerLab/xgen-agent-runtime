@@ -103,12 +103,9 @@ from xgen_agent_runtime.llm_client import (
     ClientCapabilities,
     ClientRegistry,
     ConfigError,
-    ContainerCLIRunner,
     ContentBlock,
     CredentialBundle,
     ProviderCredentials,
-    SandboxHandle,
-    build_container_cli_client,
 )
 from xgen_agent_runtime.memory import (
     GenyPresets,
@@ -206,12 +203,9 @@ __all__ = [
     "ClientCapabilities",
     "ClientRegistry",
     "ConfigError",
-    "ContainerCLIRunner",
     "ContentBlock",
     "CredentialBundle",
     "ProviderCredentials",
-    "SandboxHandle",
-    "build_container_cli_client",
     # Errors
     "GenyExecutorError",
     "PipelineError",

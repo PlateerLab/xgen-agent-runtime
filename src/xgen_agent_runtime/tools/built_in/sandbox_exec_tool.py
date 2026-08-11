@@ -1,8 +1,8 @@
-"""SandboxExecTool — a tool whose implementation is *code that runs inside a
-sandbox container* (``docker exec``).
+"""SandboxExecTool — a tool whose implementation is *code that runs inside the
+agent's XGeny sandbox session*.
 
 This is the execution core of **Sandbox Tool Packs**: an agent authors a script
-in an isolated GAPT workspace, and this tool dispatches the tool's input into
+in its isolated sandbox workspace, and this tool dispatches the tool's input into
 that script — inside the sandbox, never on the host — and returns its output.
 
 Invocation contract (tool ↔ script), language-agnostic + shell-testable:
@@ -13,8 +13,8 @@ Invocation contract (tool ↔ script), language-agnostic + shell-testable:
   * a non-zero exit code (or anything on stderr with a non-zero exit) →
     ``ToolResult(is_error=True)``.
 
-The tool carries a :class:`SandboxHandle` (``container_name`` + async
-``ensure()``). It has **no host fallback** — without a sandbox it errors, by
+The tool carries an :class:`XgenySandbox` (``workdir`` + async ``ensure()``
++ ``exec()``). It has **no host fallback** — without a sandbox it errors, by
 design: a sandboxed tool's whole point is isolation.
 
 The spec (everything except the live sandbox handle) is serializable via
@@ -28,7 +28,7 @@ import asyncio
 import json
 from typing import Any, Dict, Optional, Sequence
 
-from xgen_agent_runtime.tools._sandbox import sandbox_exec
+from xgen_agent_runtime.tools._xgeny_sandbox import sandbox_path
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 
 _NO_SANDBOX = (
@@ -42,7 +42,7 @@ _STDERR_CAP = 2000
 
 
 class SandboxExecTool(Tool):
-    """A Tool that runs an authored script inside a sandbox via ``docker exec``."""
+    """A Tool that runs an authored script inside the agent's XGeny sandbox session."""
 
     def __init__(
         self,
@@ -109,13 +109,14 @@ class SandboxExecTool(Tool):
         argv = [self._runtime, self._entrypoint, *self._argv]
         payload = json.dumps(input or {}, ensure_ascii=False).encode("utf-8")
         try:
-            rc, out, err = await sandbox_exec(
-                sandbox,
+            await sandbox.ensure()
+            result = await sandbox.exec(
                 argv,
-                cwd=self._workdir,
-                input_bytes=payload,
+                cwd=sandbox_path(sandbox, ".", self._workdir),
+                stdin=payload,
                 timeout_s=self._timeout_s,
             )
+            rc, out, err = result.rc, result.stdout, result.stderr
         except asyncio.TimeoutError:
             return ToolResult(
                 content=f"sandboxed tool '{self._name}' timed out after {self._timeout_s:g}s",

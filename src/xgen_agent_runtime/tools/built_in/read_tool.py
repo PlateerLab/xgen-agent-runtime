@@ -65,9 +65,9 @@ class ReadTool(Tool):
         offset = input.get("offset", 0)
         limit = input.get("limit", _DEFAULT_LIMIT)
 
-        # Sandbox: read the file inside the container (docker exec cat).
+        # Sandbox: read the file from the agent's XGeny session.
         if context.sandbox is not None:
-            from xgen_agent_runtime.tools._sandbox import sb_read_bytes
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
 
             wd = context.working_dir or "/workspace"
             try:

@@ -24,15 +24,18 @@ from xgen_agent_runtime.tools.providers import AdhocToolProvider
 from xgen_agent_runtime.tools.scope import ToolScope, ToolScopeRule, ToolScopeManager
 from xgen_agent_runtime.tools.sandbox import ToolSandbox, SandboxConfig, SandboxPolicy
 
-# Container-exec primitives (``docker exec`` into a SandboxHandle) — public so
-# hosts can build sandboxed tools. ``_sandbox`` only depends on stdlib, so this
-# import is cycle-safe (unlike importing the built_in package here).
+# XGeny sandbox primitives — the session an agent's code runs in. Public so
+# hosts can build sandboxed tools. ``_xgeny_sandbox`` only depends on stdlib, so
+# this import is cycle-safe (unlike importing the built_in package here).
 # ``SandboxExecTool`` itself lives in ``xgen_agent_runtime.tools.built_in`` to keep
 # this module free of the built-in import cycle.
-from xgen_agent_runtime.tools._sandbox import (
-    SandboxExecError,
-    container_path,
-    sandbox_exec,
+from xgen_agent_runtime.tools._xgeny_sandbox import (
+    ExecResult,
+    SandboxError,
+    SandboxPathError,
+    XgenySandbox,
+    sandbox_path,
+    sandbox_root,
     sb_read_bytes,
     sb_run,
     sb_write_bytes,
@@ -76,13 +79,16 @@ __all__ = [
     "ToolSandbox",
     "SandboxConfig",
     "SandboxPolicy",
-    # Container exec (docker exec into a SandboxHandle) — for sandboxed tools
-    "sandbox_exec",
+    # XGeny sandbox session — for sandboxed tools
+    "ExecResult",
+    "SandboxError",
+    "SandboxPathError",
+    "XgenySandbox",
+    "sandbox_path",
+    "sandbox_root",
     "sb_run",
     "sb_read_bytes",
     "sb_write_bytes",
-    "container_path",
-    "SandboxExecError",
     # Plugin discovery (entry-point group: xgen_agent_runtime.tools)
     "TOOL_ENTRY_POINT_GROUP",
     "ToolPluginRegistry",
