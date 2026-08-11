@@ -46,9 +46,9 @@ class WriteTool(Tool):
         file_path = input.get("file_path", "")
         content = input.get("content", "")
 
-        # Sandbox: write the file inside the container (docker exec).
+        # Sandbox: write the file into the agent's XGeny session.
         if context.sandbox is not None:
-            from xgen_agent_runtime.tools._sandbox import sb_write_bytes
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_write_bytes
 
             wd = context.working_dir or "/workspace"
             try:

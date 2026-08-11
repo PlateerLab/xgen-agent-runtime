@@ -19,7 +19,7 @@ here provide the concrete state on demand (progressive disclosure):
 * ``SandboxPut``     — copy a file: files workspace → sandbox
 * ``SandboxFetch``   — copy a file: sandbox → files workspace
 
-Transfers stream through the existing ``_sandbox`` primitives (docker exec,
+Transfers stream through the ``_xgeny_sandbox`` primitives (session I/O,
 binary-safe) and are path-guarded to the session storage on the host side.
 """
 
@@ -196,7 +196,7 @@ class SandboxInfoTool(Tool):
                 }
             )
         workdir = (input.get("workdir") or DEFAULT_SANDBOX_WORKDIR).strip()
-        from xgen_agent_runtime.tools._sandbox import sb_run
+        from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
 
         try:
             rc, out, err = await sb_run(sandbox, "ls -la", workdir=workdir, timeout_s=20)
@@ -277,7 +277,7 @@ class SandboxPutTool(Tool):
 
         workdir = (input.get("workdir") or DEFAULT_SANDBOX_WORKDIR).strip()
         dest = (input.get("dest") or src.name).strip()
-        from xgen_agent_runtime.tools._sandbox import container_path, sb_write_bytes
+        from xgen_agent_runtime.tools._xgeny_sandbox import sandbox_path, sb_write_bytes
 
         try:
             written = await sb_write_bytes(sandbox, dest, src.read_bytes(), workdir=workdir)
@@ -287,7 +287,7 @@ class SandboxPutTool(Tool):
             content={
                 "copied": True,
                 "source": src.relative_to(root).as_posix(),
-                "sandbox_path": container_path(dest, workdir),
+                "sandbox_path": sandbox_path(sandbox, dest, workdir),
                 "bytes": written,
             }
         )
@@ -341,7 +341,7 @@ class SandboxFetchTool(Tool):
 
         workdir = (input.get("workdir") or DEFAULT_SANDBOX_WORKDIR).strip()
         source = input["source"]
-        from xgen_agent_runtime.tools._sandbox import sb_read_bytes
+        from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
 
         try:
             data = await sb_read_bytes(sandbox, source, workdir=workdir)

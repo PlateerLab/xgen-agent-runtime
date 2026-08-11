@@ -65,7 +65,7 @@ class EditTool(Tool):
 
         # Sandbox: read-modify-write the file inside the container.
         if context.sandbox is not None:
-            from xgen_agent_runtime.tools._sandbox import sb_read_bytes, sb_write_bytes
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes, sb_write_bytes
 
             wd = context.working_dir or "/workspace"
             try:

@@ -4,6 +4,50 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] — 2026-08-11
+
+### Removed — GAPT 컨테이너 샌드박스 (BREAKING)
+
+XGEN 은 GAPT 와 무관하다. 그런데 샌드박스 표면 전체가 GAPT 의 `docker exec`
+전제 위에 얹혀 있었고, **XGEN 의 어떤 호스트도 그것을 쓰지 않았다** (xgen-workflow
+의 import 를 전수 확인: 사용처 0건). 남겨 두면 새 실행 기반을 그 위에 또 얹게 된다.
+
+- `tools/_sandbox.py` — `docker exec` 전송 + 호스트↔컨테이너 경로 변환 3종
+  (`resolve_container_workdir` / `map_into_container` / `container_path`)
+- `llm_client._cli_runtime.ContainerCLIRunner`, `llm_client._cli_runtime.SandboxHandle`
+- `llm_client.claude_code.build_container_cli_client`
+- `Pipeline.attach_runtime(containerize_cli=)` — 샌드박스가 LLM 클라이언트의
+  스폰 방식을 바꾸던 결합. 이제 **어떤 프로바이더든 클라이언트는 호스트에서 돌고,
+  샌드박스에는 도구를 통해서만 닿는다.** 백엔드마다 격리 방식이 갈리면
+  "이 백엔드에서만 되는 도구"가 생긴다.
+- 공개 export: `sandbox_exec`, `SandboxExecError`, `container_path`
+
+### Added — XGeny 샌드박스 세션
+
+- `tools/_xgeny_sandbox.py` — `XgenySandbox` 프로토콜(`workdir` + async
+  `ensure`/`exec`/`read_bytes`/`write_bytes`), `ExecResult`, `sandbox_path`.
+  런타임은 프로토콜만 알고 그 뒤(HTTP·인프로세스·로컬)는 호스트가 정한다.
+- 파일 읽기·쓰기가 **1급 연산**이다. GAPT 는 `cat` / `sh -c 'cat > …'` 서브프로세스로
+  흉내냈는데, 그러면 파일 하나 읽는 데 프로세스가 뜨고 "없는 파일"과 "권한 없음"이
+  똑같이 "명령 실패"로 뭉개진다.
+- 경로 가드가 `sandbox_path` **한 곳**에 있다 — 세션 밖으로 나가는 경로는 전부
+  여기를 지난다. 도구마다 각자 막으면 새 도구가 매번 빠뜨린다.
+
+### Changed
+
+- 내장 도구 7종(Bash/Read/Write/Edit/Glob/Grep/workspace_*)이 새 프리미티브를 쓴다.
+  분기 조건(`if context.sandbox is not None`)은 그대로 — 앞으로 추가될 도구도
+  같은 자리에서 갈라진다.
+- `SandboxExecTool` 이 `XgenySandbox` 로 실행한다 (계약·직렬화 형식 불변).
+- `ToolContext.sandbox` 타입 문서 갱신. 필드 이름과 의미는 그대로다.
+
+### Migration
+
+호스트는 `container_name` 대신 `workdir` 을 갖고 `exec`/`read_bytes`/`write_bytes`
+를 구현하는 객체를 `ToolContext.sandbox`(또는 `attach_runtime(sandbox=)`)에 넘긴다.
+경로 변환 계층은 필요 없다 — 에이전트를 태우는 쪽과 코드를 돌리는 쪽이 같은 절대
+경로를 쓰도록 호스트가 두 루트를 맞춘다.
+
 ## [2.69.0] — 2026-08-11
 
 ### Fixed (ported from geny-executor 2.64.8 ~ 2.65.2)

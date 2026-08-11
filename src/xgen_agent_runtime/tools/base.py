@@ -153,12 +153,12 @@ class ToolContext:
     # behaves exactly as it did pre-Phase-7. Typed as ``Any`` to avoid
     # a hard import dependency on the permission subsystem.
     permission_rules: List[Any] = field(default_factory=list)
-    # Sandbox handle (``container_name`` + async ``ensure()``). When set, the
-    # built-in fs/shell tools (bash/read/write/edit/grep/glob/ls) run their I/O
-    # *inside* the container (``docker exec``) instead of on the host — so an
-    # SDK-provider agent (anthropic/openai/…) is sandboxed the same way the
-    # claude_code_cli path already is. ``None`` (default) = host execution,
-    # unchanged. Typed ``Any`` to avoid importing the llm_client SandboxHandle.
+    # The agent's XGeny sandbox session (``xgen_agent_runtime.tools.
+    # _xgeny_sandbox.XgenySandbox``: ``workdir`` + async ``ensure``/``exec``/
+    # ``read_bytes``/``write_bytes``). When set, the built-in fs/shell tools
+    # (bash/read/write/edit/grep/glob/ls) do their I/O *there* instead of on
+    # this host. ``None`` (default) = host execution. Typed ``Any`` so this
+    # module stays free of the protocol import.
     sandbox: Optional[Any] = None
     # Self-modifying environment: the live PipelineEnvironment controller for
     # this session. The built-in ``env_*`` tools read it to view/edit the
