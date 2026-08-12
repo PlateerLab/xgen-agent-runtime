@@ -35,8 +35,10 @@ from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
 class LocalSandbox:
     """디렉터리 하나를 세션으로 삼는 :class:`XgenySandbox` 구현."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, extra_roots=()) -> None:
         self.workdir = str(root)
+        # 호스트가 명시적으로 연 형제 트리 (사용자 클라우드 등).
+        self.extra_roots = [str(r) for r in extra_roots]
         self.ensured = 0
 
     async def ensure(self) -> None:
@@ -153,3 +155,49 @@ class TestHostIsNotTouched:
         await WriteTool().execute({"file_path": "leak.txt", "content": "x"}, ctx)
         assert list(host.iterdir()) == []
         assert (Path(sandbox.workdir) / "leak.txt").exists()
+
+
+class TestExplicitlyOpenedTrees:
+    """에이전트는 자기 workspace 말고도 다룰 것이 있다 — 사용자 계정의 클라우드.
+
+    그걸 workdir 안으로 밀어 넣으면 에이전트 산출물과 사용자 파일이 한 트리에
+    섞이고, 한쪽의 삭제 전파가 다른 쪽을 지운다. 형제 트리로 두고 명시적으로 연다.
+    """
+
+    def test_a_sibling_tree_is_reachable_when_opened(self, tmp_path):
+        cloud = tmp_path / "user" / "51" / "workspace"
+        cloud.mkdir(parents=True)
+        sb = LocalSandbox(tmp_path / "session", extra_roots=[str(cloud)])
+        (tmp_path / "session").mkdir(exist_ok=True)
+        assert sandbox_path(sb, str(cloud / "a.txt")) == str(cloud / "a.txt")
+
+    def test_it_is_refused_when_not_opened(self, tmp_path):
+        cloud = tmp_path / "user" / "51" / "workspace"
+        sb = LocalSandbox(tmp_path / "session")
+        (tmp_path / "session").mkdir(exist_ok=True)
+        with pytest.raises(SandboxPathError):
+            sandbox_path(sb, str(cloud / "a.txt"))
+
+    def test_opening_one_tree_does_not_open_the_rest(self, tmp_path):
+        """열어 준 것만 열린다 — 상위 디렉터리가 통째로 열리면 안 된다."""
+        cloud = tmp_path / "user" / "51" / "workspace"
+        other = tmp_path / "user" / "99" / "workspace"
+        sb = LocalSandbox(tmp_path / "session", extra_roots=[str(cloud)])
+        (tmp_path / "session").mkdir(exist_ok=True)
+        with pytest.raises(SandboxPathError):
+            sandbox_path(sb, str(other / "secret.txt"))
+
+    async def test_tools_can_write_into_an_opened_tree(self, tmp_path):
+        cloud = tmp_path / "user" / "51" / "workspace"
+        cloud.mkdir(parents=True)
+        root = tmp_path / "session"
+        root.mkdir()
+        sb = LocalSandbox(root, extra_roots=[str(cloud)])
+        ctx = ToolContext(
+            session_id="t", working_dir=str(root),
+            allowed_paths=[str(root), str(cloud)], sandbox=sb,
+        )
+        await WriteTool().execute(
+            {"file_path": str(cloud / "note.txt"), "content": "클라우드"}, ctx
+        )
+        assert (cloud / "note.txt").read_text(encoding="utf-8") == "클라우드"

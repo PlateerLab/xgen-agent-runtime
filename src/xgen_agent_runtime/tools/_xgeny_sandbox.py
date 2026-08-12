@@ -26,6 +26,7 @@ __all__ = [
     "SandboxError",
     "SandboxPathError",
     "XgenySandbox",
+    "sandbox_extra_roots",
     "sandbox_path",
     "sandbox_root",
     "sb_read_bytes",
@@ -67,8 +68,19 @@ class XgenySandbox(Protocol):
     클라이언트다. 테스트는 같은 모양의 로컬 구현을 쓴다.
     """
 
-    #: 세션의 작업 루트 — **절대 경로**. 이 밖으로는 나갈 수 없다.
+    #: 세션의 작업 루트 — **절대 경로**. 기본적으로 이 밖으로는 나갈 수 없다.
     workdir: str
+
+    #: 그 밖에 **명시적으로** 열어 주는 트리들 (선택). 호스트가 붙여 준다.
+    #:
+    #: 에이전트는 자기 workspace 말고도 다룰 것이 있다 — 사용자 계정의 클라우드
+    #: 스토리지가 그렇다. 그것까지 ``workdir`` 안으로 밀어 넣으면 에이전트의
+    #: 산출물과 사용자 파일이 한 트리에 섞이고, 한쪽의 삭제 전파가 다른 쪽
+    #: 파일을 지운다. 그래서 형제 트리로 두고 여기서 연다.
+    #:
+    #: ``ToolContext.allowed_paths`` 와 같은 역할이다 — 로컬 실행에서 그것이
+    #: 하던 일을, 러너 실행에서는 이 목록이 한다.
+    extra_roots: Sequence[str]
 
     async def ensure(self) -> None:
         """세션을 살아 있게 만든다. 멱등 — 몇 번 불러도 같다."""
@@ -102,12 +114,31 @@ def sandbox_root(sandbox: Any) -> str:
     return "/" + root.strip("/") if root != "/" else "/"
 
 
+def sandbox_extra_roots(sandbox: Any) -> Tuple[str, ...]:
+    """호스트가 명시적으로 열어 준 형제 트리들 (없으면 빈 튜플)."""
+    raw = getattr(sandbox, "extra_roots", None) or ()
+    out = []
+    for r in raw:
+        r = str(r or "").strip()
+        if r:
+            out.append("/" + r.strip("/") if r != "/" else "/")
+    return tuple(out)
+
+
+def _within(resolved: str, root: str) -> bool:
+    return resolved == root or resolved.startswith(root.rstrip("/") + "/")
+
+
 def sandbox_path(sandbox: Any, path: str, workdir: str = "") -> str:
     """도구가 준 경로 → 세션 안의 절대 경로.
 
-    상대 경로는 ``workdir``(없으면 세션 루트) 기준으로 푼다. 결과가 루트 밖이면
-    :class:`SandboxPathError` — ``..`` 나 절대경로로 세션을 빠져나가는 것을
-    여기서 한 번에 막는다.
+    상대 경로는 ``workdir``(없으면 세션 루트) 기준으로 푼다. 결과가 허용된
+    트리 밖이면 :class:`SandboxPathError` — ``..`` 나 절대경로로 빠져나가는
+    것을 여기서 한 번에 막는다.
+
+    허용되는 곳은 세션 루트와 :func:`sandbox_extra_roots` 다. 후자는 호스트가
+    **명시적으로** 연 것만 들어온다 (사용자 클라우드 등) — 목록이 한 곳에서만
+    늘어나야 "무엇이 열려 있는가" 를 답할 수 있다.
 
     ``workdir`` 은 보통 ``ToolContext.working_dir`` 이다. 호스트가 양쪽 루트를
     같은 문자열로 맞추므로 그 값은 세션 안에서도 그대로 유효하다 — 이것이
@@ -121,9 +152,11 @@ def sandbox_path(sandbox: Any, path: str, workdir: str = "") -> str:
     if not posixpath.isabs(target):
         target = posixpath.join(base, target)
     resolved = posixpath.normpath(target)
-    if resolved != root and not resolved.startswith(root.rstrip("/") + "/"):
+    allowed = (root, *sandbox_extra_roots(sandbox))
+    if not any(_within(resolved, r) for r in allowed):
         raise SandboxPathError(
-            f"경로가 샌드박스 세션 밖을 가리킵니다: {path!r} → {resolved!r} (루트 {root!r})"
+            f"경로가 샌드박스 세션 밖을 가리킵니다: {path!r} → {resolved!r} "
+            f"(허용: {', '.join(allowed)})"
         )
     return resolved
 

@@ -4,6 +4,21 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] — 2026-08-12
+
+### Added — 명시적으로 열어 주는 형제 트리
+
+``XgenySandbox.extra_roots`` (선택). 에이전트는 자기 workspace 말고도 다룰 것이
+있다 — 사용자 계정의 클라우드 스토리지가 그렇다. 그걸 ``workdir`` 안으로 밀어
+넣으면 에이전트의 산출물과 사용자 파일이 한 트리에 섞이고, 한쪽의 삭제 전파가
+다른 쪽 파일을 지운다. 그래서 형제 트리로 두고 여기서 연다.
+
+``ToolContext.allowed_paths`` 와 같은 역할이다 — 로컬 실행에서 그것이 하던 일을
+러너 실행에서는 이 목록이 한다. 열어 준 것만 열린다: 상위 디렉터리가 통째로
+열리지 않는다.
+
+기본값은 없음이라 기존 호스트의 동작은 그대로다.
+
 ## [3.0.0] — 2026-08-11
 
 ### Removed — GAPT 컨테이너 샌드박스 (BREAKING)
