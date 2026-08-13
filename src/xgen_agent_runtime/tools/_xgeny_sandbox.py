@@ -28,6 +28,7 @@ __all__ = [
     "XgenySandbox",
     "sandbox_extra_roots",
     "sandbox_path",
+    "sandbox_readonly_roots",
     "sandbox_root",
     "sb_read_bytes",
     "sb_run",
@@ -82,6 +83,15 @@ class XgenySandbox(Protocol):
     #: 하던 일을, 러너 실행에서는 이 목록이 한다.
     extra_roots: Sequence[str]
 
+    #: 그중 **읽기 전용**인 것들 (선택). ``extra_roots`` 의 부분집합이다.
+    #:
+    #: 공유받은 폴더가 여기 들어온다 — 읽기로 공유받았으면 읽을 수는 있지만
+    #: 쓸 수 없다. 목록이 비어 있으면 전부 읽고 쓸 수 있다 (예전 동작).
+    #:
+    #: ⚠ 보안 경계가 아니다 (:func:`sandbox_readonly_roots` 참고). 셸은 이
+    #: 검사를 지나가지 않는다 — 진짜 관문은 인덱스 커밋이다.
+    readonly_roots: Sequence[str]
+
     async def ensure(self) -> None:
         """세션을 살아 있게 만든다. 멱등 — 몇 번 불러도 같다."""
         ...
@@ -125,11 +135,34 @@ def sandbox_extra_roots(sandbox: Any) -> Tuple[str, ...]:
     return tuple(out)
 
 
+def sandbox_readonly_roots(sandbox: Any) -> Tuple[str, ...]:
+    """읽기 전용으로 열린 형제 트리들.
+
+    프로토콜의 **선택적 확장**이다 — 없으면 빈 튜플이고 모든 형제 트리는
+    읽고 쓸 수 있다 (예전 동작 그대로).
+
+    ⚠ **이건 보안 경계가 아니라 빠른 피드백이다.** 셸은 파일시스템에 직접
+    쓰므로 이 검사를 지나가지 않는다. 진짜 관문은 인덱스 커밋이고, 거기서
+    거부되면 그 변경은 원본에 반영되지 않는다.
+
+    그래도 여기서 막는 이유: 커밋은 턴이 끝날 때 일어난다. 그때 처음 알면
+    에이전트는 이미 그 파일을 고쳤다고 믿고 30분을 더 일한 뒤다. 쓰기 도구가
+    그 자리에서 "읽기 전용입니다"를 말해 주면 에이전트가 방향을 바꾼다.
+    """
+    raw = getattr(sandbox, "readonly_roots", None) or ()
+    out = []
+    for r in raw:
+        r = str(r or "").strip()
+        if r:
+            out.append("/" + r.strip("/") if r != "/" else "/")
+    return tuple(out)
+
+
 def _within(resolved: str, root: str) -> bool:
     return resolved == root or resolved.startswith(root.rstrip("/") + "/")
 
 
-def sandbox_path(sandbox: Any, path: str, workdir: str = "") -> str:
+def sandbox_path(sandbox: Any, path: str, workdir: str = "", *, write: bool = False) -> str:
     """도구가 준 경로 → 세션 안의 절대 경로.
 
     상대 경로는 ``workdir``(없으면 세션 루트) 기준으로 푼다. 결과가 허용된
@@ -158,6 +191,14 @@ def sandbox_path(sandbox: Any, path: str, workdir: str = "") -> str:
             f"경로가 샌드박스 세션 밖을 가리킵니다: {path!r} → {resolved!r} "
             f"(허용: {', '.join(allowed)})"
         )
+    if write:
+        for ro in sandbox_readonly_roots(sandbox):
+            if _within(resolved, ro):
+                raise SandboxPathError(
+                    f"읽기 전용으로 열린 경로입니다: {resolved!r} — 읽을 수는 "
+                    f"있지만 쓸 수 없습니다 (공유받은 폴더는 공유한 사람이 "
+                    f"권한을 정합니다)"
+                )
     return resolved
 
 
@@ -205,4 +246,4 @@ async def sb_read_bytes(sandbox: Any, path: str, *, workdir: str = "") -> bytes:
 
 async def sb_write_bytes(sandbox: Any, path: str, data: bytes, *, workdir: str = "") -> int:
     await sandbox.ensure()
-    return await sandbox.write_bytes(sandbox_path(sandbox, path, workdir), data)
+    return await sandbox.write_bytes(sandbox_path(sandbox, path, workdir, write=True), data)
