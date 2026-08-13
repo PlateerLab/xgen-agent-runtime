@@ -35,10 +35,12 @@ from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
 class LocalSandbox:
     """디렉터리 하나를 세션으로 삼는 :class:`XgenySandbox` 구현."""
 
-    def __init__(self, root: Path, extra_roots=()) -> None:
+    def __init__(self, root: Path, extra_roots=(), readonly_roots=()) -> None:
         self.workdir = str(root)
         # 호스트가 명시적으로 연 형제 트리 (사용자 클라우드 등).
         self.extra_roots = [str(r) for r in extra_roots]
+        # 그중 읽기 전용인 것 (읽기로 공유받은 폴더).
+        self.readonly_roots = [str(r) for r in readonly_roots]
         self.ensured = 0
 
     async def ensure(self) -> None:
@@ -201,3 +203,69 @@ class TestExplicitlyOpenedTrees:
             {"file_path": str(cloud / "note.txt"), "content": "클라우드"}, ctx
         )
         assert (cloud / "note.txt").read_text(encoding="utf-8") == "클라우드"
+
+
+class TestReadOnlyTrees:
+    """읽기로 공유받은 폴더 — 읽을 수는 있지만 쓸 수 없다.
+
+    ⚠ 이건 **보안 경계가 아니라 빠른 피드백**이다. 셸은 파일시스템에 직접
+    쓰므로 이 검사를 지나가지 않는다. 진짜 관문은 인덱스 커밋이고, 거기서
+    거부되면 원본에 반영되지 않는다.
+
+    그래도 여기서 막는 이유: 커밋은 턴이 끝날 때다. 그때 처음 알면 에이전트는
+    이미 고쳤다고 믿고 한참 더 일한 뒤다.
+    """
+
+    def _shared(self, tmp_path):
+        shared = tmp_path / "user" / "7" / "workspace" / "공유폴더"
+        shared.mkdir(parents=True)
+        root = tmp_path / "session"
+        root.mkdir(exist_ok=True)
+        return shared, root
+
+    def test_reading_is_allowed(self, tmp_path):
+        shared, root = self._shared(tmp_path)
+        sb = LocalSandbox(root, extra_roots=[str(shared)], readonly_roots=[str(shared)])
+        assert sandbox_path(sb, str(shared / "a.txt")) == str(shared / "a.txt")
+
+    def test_writing_is_refused(self, tmp_path):
+        shared, root = self._shared(tmp_path)
+        sb = LocalSandbox(root, extra_roots=[str(shared)], readonly_roots=[str(shared)])
+        with pytest.raises(SandboxPathError, match="읽기 전용"):
+            sandbox_path(sb, str(shared / "a.txt"), write=True)
+
+    async def test_the_write_tool_refuses(self, tmp_path):
+        shared, root = self._shared(tmp_path)
+        sb = LocalSandbox(root, extra_roots=[str(shared)], readonly_roots=[str(shared)])
+        ctx = ToolContext(
+            session_id="t", working_dir=str(root),
+            allowed_paths=[str(root), str(shared)], sandbox=sb,
+        )
+        result = await WriteTool().execute(
+            {"file_path": str(shared / "x.txt"), "content": "몰래"}, ctx
+        )
+        assert result.is_error, "읽기 전용 트리에 썼다"
+        assert not (shared / "x.txt").exists()
+
+    def test_my_own_workdir_is_never_readonly(self, tmp_path):
+        """자기 작업 폴더까지 잠기면 에이전트가 아무것도 못 한다."""
+        shared, root = self._shared(tmp_path)
+        sb = LocalSandbox(root, extra_roots=[str(shared)], readonly_roots=[str(shared)])
+        assert sandbox_path(sb, "out.txt", write=True) == str(root / "out.txt")
+
+    def test_a_writable_sibling_stays_writable(self, tmp_path):
+        """읽기 전용 목록에 없는 형제 트리는 그대로 쓸 수 있어야 한다."""
+        shared, root = self._shared(tmp_path)
+        cloud = tmp_path / "user" / "51" / "workspace"
+        cloud.mkdir(parents=True)
+        sb = LocalSandbox(
+            root, extra_roots=[str(shared), str(cloud)], readonly_roots=[str(shared)],
+        )
+        assert sandbox_path(sb, str(cloud / "a.txt"), write=True) == str(cloud / "a.txt")
+
+    def test_no_readonly_list_means_everything_is_writable(self, tmp_path):
+        """이 확장을 모르는 구현(속성 없음)에서 예전 동작 그대로."""
+        shared, root = self._shared(tmp_path)
+        sb = LocalSandbox(root, extra_roots=[str(shared)])
+        del sb.readonly_roots
+        assert sandbox_path(sb, str(shared / "a.txt"), write=True) == str(shared / "a.txt")
