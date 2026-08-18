@@ -61,9 +61,9 @@ from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, T
 from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
 
 _INSTALL_HINT = (
-    "The edit2docs engine is not installed. Install it with: "
-    "pip install 'xgen-agent-runtime[docs]'. Host operators: add "
-    "'edit2docs>=0.4.0' to the deployment image."
+    "The document engine is not installed. Host operators: add "
+    "'xgen-edit2docs' (import name xgen_edit2docs) — or the legacy "
+    "'edit2docs>=0.4.0' — to the deployment image."
 )
 
 _SUPPORTED_EXTS = (".docx", ".xlsx", ".pptx")
@@ -75,12 +75,23 @@ _DOCS_LLM_FEATURE_KEY = "feature:docs_llm"
 
 
 def _load_edit2docs():
-    """Import edit2docs lazily. Raises RuntimeError with an install hint."""
+    """Import the document engine lazily. Raises RuntimeError with an install hint.
+
+    XGEN 패키지 이관에서 엔진의 배포/임포트 이름이 ``xgen_edit2docs`` 로
+    바뀌었다 — 여기가 옛 이름만 찾는 바람에 엔진이 설치돼 있어도 모든 문서
+    도구가 "not installed" 로 죽었다 (2026-08-18 177 실측). 두 이름 모두
+    받는다; API 표면(analyze_doc/build_doc/… lazy 맵)은 동일하다.
+    """
     try:
-        import edit2docs  # noqa: PLC0415
+        import xgen_edit2docs as engine  # noqa: PLC0415
+        return engine
+    except ImportError:
+        pass
+    try:
+        import edit2docs as engine  # noqa: PLC0415
+        return engine
     except ImportError as exc:  # pragma: no cover - depends on env
         raise RuntimeError(_INSTALL_HINT) from exc
-    return edit2docs
 
 
 def _resolve_doc_path(path: str, context: ToolContext, *, must_exist: bool = True) -> Path:

@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.2] — 2026-08-18
+
+### Fixed — 문서 엔진 임포트 이름 (XGEN 패키지 이관 회귀)
+
+doc_tools 가 옛 이름 ``edit2docs`` 만 임포트해서, 엔진이 XGEN 이름
+(``xgen_edit2docs``)으로 설치된 배포에서는 **모든 문서 도구(DocBuild/DocRead/
+DocEdit/…)가 "engine not installed" 로 죽었다** (2026-08-18 177 실측 — 엔진은
+이미지에 있었다). ``xgen_edit2docs`` → ``edit2docs`` 순으로 폴백한다; 두
+패키지의 API 표면(lazy 심볼 맵)은 동일함을 확인했다. 설치 힌트도 두 이름을
+안내한다.
+
 ## [3.3.1] — 2026-08-18
 
 ### Added — 백그라운드 압축 게이트 (`ContextStage(background_compaction=...)`)
