@@ -87,6 +87,7 @@ class ContextStage(Stage[Any, Any]):
         stateless: bool = False,
         provider: Optional[MemoryProvider] = None,
         retrieval_timeout_s: float = 10.0,
+        compaction_enabled: bool = True,
     ):
         self._slots: Dict[str, StrategySlot] = {
             "strategy": StrategySlot(
@@ -123,6 +124,15 @@ class ContextStage(Stage[Any, Any]):
         self._stateless = stateless
         self._provider = provider
         self._retrieval_timeout_s = max(0.0, float(retrieval_timeout_s))
+        # Host-level compaction switch. False → this stage NEVER compacts
+        # (no proactive run, no background scheduling, no deterministic
+        # prune — those only run inside the compaction path). Retrieval /
+        # strategy / memory injection are unaffected. Note the Stage 4
+        # guard auto-wires its budget recovery from this stage's compactor
+        # each turn (Pipeline._init_state); hosts turning compaction off
+        # should also not register a token-budget guard, or accept that
+        # its "compact" signal degrades to a hard reject.
+        self._compaction_enabled = bool(compaction_enabled)
         # In-flight background compaction (TTFT program, finding B3):
         # {"task": asyncio.Task[_CompactionShadow], "len": int, "tail_id": int}
         self._bg_compaction: Optional[Dict[str, Any]] = None
@@ -187,6 +197,20 @@ class ContextStage(Stage[Any, Any]):
                     default=10.0,
                     min_value=0,
                 ),
+                ConfigField(
+                    name="compaction_enabled",
+                    type="boolean",
+                    label="Compaction enabled",
+                    description=(
+                        "Master switch for history compaction in this stage. "
+                        "Off → no proactive compaction, no background summary, "
+                        "no deterministic prune; retrieval and memory injection "
+                        "still run. The Stage 4 guard's budget recovery is also "
+                        "skipped (Pipeline auto-wire respects this flag)."
+                    ),
+                    default=True,
+                    ui_widget="toggle",
+                ),
             ],
         )
 
@@ -194,6 +218,7 @@ class ContextStage(Stage[Any, Any]):
         return {
             "stateless": self._stateless,
             "retrieval_timeout_s": self._retrieval_timeout_s,
+            "compaction_enabled": self._compaction_enabled,
         }
 
     def update_config(self, config: Dict[str, Any]) -> None:
@@ -204,6 +229,8 @@ class ContextStage(Stage[Any, Any]):
                 self._retrieval_timeout_s = max(0.0, float(config["retrieval_timeout_s"]))
             except (TypeError, ValueError):
                 pass
+        if "compaction_enabled" in config:
+            self._compaction_enabled = bool(config["compaction_enabled"])
 
     def should_bypass(self, state: PipelineState) -> bool:
         return self._stateless
@@ -341,21 +368,24 @@ class ContextStage(Stage[Any, Any]):
         # BACKGROUND (overlapping this turn's generation) and applied
         # at the next turn's Stage 2. Past 90% — or for cheap non-LLM
         # compactors — compaction stays synchronous as the safety net.
-        if await self._apply_bg_compaction(state):
-            state.shared.pop("_prompt_tokens_memo", None)
         estimated_tokens = estimate_prompt_tokens(state)
-        budget = state.context_window_budget
-        if estimated_tokens > budget * 0.8:
-            defer_to_background = (
-                isinstance(self._compactor, LLMSummaryCompactor)
-                and estimated_tokens <= budget * 0.9
-            )
-            if defer_to_background:
-                self._schedule_bg_compaction(state)
-            else:
-                await run_compaction(
-                    state, self._compactor, trigger="proactive", provider=self._provider
+        if self._compaction_enabled:
+            if await self._apply_bg_compaction(state):
+                state.shared.pop("_prompt_tokens_memo", None)
+                estimated_tokens = estimate_prompt_tokens(state)
+            budget = state.context_window_budget
+            if estimated_tokens > budget * 0.8:
+                defer_to_background = (
+                    isinstance(self._compactor, LLMSummaryCompactor)
+                    and estimated_tokens <= budget * 0.9
                 )
+                if defer_to_background:
+                    self._schedule_bg_compaction(state)
+                else:
+                    await run_compaction(
+                        state, self._compactor, trigger="proactive", provider=self._provider
+                    )
+                    estimated_tokens = estimate_prompt_tokens(state)
 
         state.add_event(
             "context.built",
