@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.1] — 2026-08-18
+
+### Added — 백그라운드 압축 게이트 (`ContextStage(background_compaction=...)`)
+
+80–90% 구간의 LLM 요약 유예(TTFT)는 **다음 턴의 Stage 2 에서 적용**되는
+설계다 — 턴마다 파이프라인을 새로 만드는 원샷 호스트(xgen-workflow agent
+노드)에는 다음 턴이 없어서, 유예된 요약이 매번 버려지고(낭비 LLM 콜)
+pending 태스크가 루프 teardown 에 새어 나갔다. `background_compaction=False`
+면 80% 트리거가 항상 동기로 압축한다. 기본값 True — 상주 호스트 동작 불변.
+
+### Fixed
+
+- `Pipeline.aclose()` 가 Stage 2 의 유예 압축 태스크를 취소한다 (1.5단계) —
+  "Task was destroyed but it is pending" 누수 봉합. `ContextStage.
+  cancel_bg_compaction()` 훅 신설 (멱등).
+
 ## [3.3.0] — 2026-08-18
 
 ### Added — 압축 마스터 스위치 (`ContextStage(compaction_enabled=...)`)

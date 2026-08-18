@@ -1033,6 +1033,16 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: cancelling HITL token %r failed", token, exc_info=True)
 
+        # 1.5. Cancel a pending background compaction summary (Stage 2) —
+        # a one-shot host closing its loop mid-flight otherwise leaves a
+        # destroyed-but-pending task behind (3.3.1).
+        context_stage = self._stages.get(2)
+        if context_stage is not None and hasattr(context_stage, "cancel_bg_compaction"):
+            try:
+                context_stage.cancel_bg_compaction()
+            except Exception:  # noqa: BLE001 — teardown must not raise
+                logger.warning("aclose: cancelling background compaction failed", exc_info=True)
+
         # 2. Wake every events() tap with the close sentinel; the tap
         # generators see it and return, detaching their queues.
         for tap_queue in list(self._event_taps):

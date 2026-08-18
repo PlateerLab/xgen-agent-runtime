@@ -88,6 +88,7 @@ class ContextStage(Stage[Any, Any]):
         provider: Optional[MemoryProvider] = None,
         retrieval_timeout_s: float = 10.0,
         compaction_enabled: bool = True,
+        background_compaction: bool = True,
     ):
         self._slots: Dict[str, StrategySlot] = {
             "strategy": StrategySlot(
@@ -133,6 +134,14 @@ class ContextStage(Stage[Any, Any]):
         # should also not register a token-budget guard, or accept that
         # its "compact" signal degrades to a hard reject.
         self._compaction_enabled = bool(compaction_enabled)
+        # Background deferral of the LLM summary (TTFT). One-shot hosts —
+        # a fresh pipeline per turn (xgen-workflow agent node) — must turn
+        # this OFF: the deferred summary is applied at the NEXT turn's
+        # Stage 2, and with no next turn on the same pipeline the work is
+        # discarded (wasted LLM call) and the pending task leaks into
+        # loop teardown. False → the 80% trigger always compacts
+        # synchronously.
+        self._background_compaction = bool(background_compaction)
         # In-flight background compaction (TTFT program, finding B3):
         # {"task": asyncio.Task[_CompactionShadow], "len": int, "tail_id": int}
         self._bg_compaction: Optional[Dict[str, Any]] = None
@@ -211,6 +220,20 @@ class ContextStage(Stage[Any, Any]):
                     default=True,
                     ui_widget="toggle",
                 ),
+                ConfigField(
+                    name="background_compaction",
+                    type="boolean",
+                    label="Background compaction",
+                    description=(
+                        "Defer the LLM summary to a background task in the "
+                        "80–90% band (TTFT). Turn OFF for one-shot hosts that "
+                        "build a fresh pipeline per turn — the deferred result "
+                        "would be discarded and the task leaks into teardown; "
+                        "off = the 80% trigger always compacts synchronously."
+                    ),
+                    default=True,
+                    ui_widget="toggle",
+                ),
             ],
         )
 
@@ -219,6 +242,7 @@ class ContextStage(Stage[Any, Any]):
             "stateless": self._stateless,
             "retrieval_timeout_s": self._retrieval_timeout_s,
             "compaction_enabled": self._compaction_enabled,
+            "background_compaction": self._background_compaction,
         }
 
     def update_config(self, config: Dict[str, Any]) -> None:
@@ -231,6 +255,8 @@ class ContextStage(Stage[Any, Any]):
                 pass
         if "compaction_enabled" in config:
             self._compaction_enabled = bool(config["compaction_enabled"])
+        if "background_compaction" in config:
+            self._background_compaction = bool(config["background_compaction"])
 
     def should_bypass(self, state: PipelineState) -> bool:
         return self._stateless
@@ -376,7 +402,8 @@ class ContextStage(Stage[Any, Any]):
             budget = state.context_window_budget
             if estimated_tokens > budget * 0.8:
                 defer_to_background = (
-                    isinstance(self._compactor, LLMSummaryCompactor)
+                    self._background_compaction
+                    and isinstance(self._compactor, LLMSummaryCompactor)
                     and estimated_tokens <= budget * 0.9
                 )
                 if defer_to_background:
@@ -399,6 +426,21 @@ class ContextStage(Stage[Any, Any]):
         return input
 
     # ── background compaction (TTFT program, finding B3) ─────────────
+
+    def cancel_bg_compaction(self) -> None:
+        """Cancel a pending background summary (pipeline teardown hook).
+
+        Without this, a one-shot host that closed its loop while a
+        deferred summary was still running got "Task was destroyed but
+        it is pending" on teardown. Idempotent; safe with no task.
+        """
+        info = self._bg_compaction
+        self._bg_compaction = None
+        if info is None:
+            return
+        task = info.get("task")
+        if task is not None and not task.done():
+            task.cancel()
 
     def _schedule_bg_compaction(self, state: PipelineState) -> None:
         """Kick off the LLM summary on a message SNAPSHOT, off the hot path.
