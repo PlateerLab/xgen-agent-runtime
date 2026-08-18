@@ -3101,11 +3101,19 @@ class Pipeline:
             and hasattr(guard_stage, "attach_budget_recovery")
             and not getattr(guard_stage, "_budget_recovery_explicit", False)
         ):
-            compactor = getattr(context_stage, "_compactor", None)
-            provider = getattr(context_stage, "_provider", None)
-            if compactor is not None:
-                guard_stage._budget_compactor = compactor
-                guard_stage._memory_provider = provider
+            # The Context stage's compaction switch is authoritative for the
+            # whole pipeline: with compaction disabled there, the guard must
+            # not compact behind the host's back either — its "compact"
+            # signal degrades to the pre-2.5.0 hard reject.
+            if getattr(context_stage, "_compaction_enabled", True):
+                compactor = getattr(context_stage, "_compactor", None)
+                provider = getattr(context_stage, "_provider", None)
+                if compactor is not None:
+                    guard_stage._budget_compactor = compactor
+                    guard_stage._memory_provider = provider
+            else:
+                guard_stage._budget_compactor = None
+                guard_stage._memory_provider = None
 
         self._has_started = True
         # Claim the concurrent-run guard now that all fallible setup is

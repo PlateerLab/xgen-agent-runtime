@@ -458,6 +458,7 @@ async def _probe_s18_persistence_path() -> None:
 LIVENESS: Dict[Tuple[int, str], Entry] = {
     (2, "stateless"): Probe(_probe_s02_stateless),
     (2, "retrieval_timeout_s"): Probe(_probe_s02_retrieval_timeout_s),
+    (2, "compaction_enabled"): CoveredBy("tests/unit/test_compaction_toggle.py"),
     (3, "prompt"): Probe(_probe_s03_prompt),
     (3, "template_vars"): Probe(_probe_s03_template_vars),
     (3, "volatile_placement"): Probe(_probe_s03_volatile_placement),

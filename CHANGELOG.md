@@ -4,6 +4,26 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.0] — 2026-08-18
+
+### Added — 압축 마스터 스위치 (`ContextStage(compaction_enabled=...)`)
+
+호스트가 사용자에게 "컨텍스트 자동 압축" 토글을 내줄 수 있도록, Stage 2 에
+파이프라인 전체의 압축 스위치를 넣었다. **끄면 어디서도 압축하지 않는다**:
+
+- proactive 80% 압축·백그라운드 요약 스케줄·결정적 프루닝이 전부 꺼진다
+  (프루닝은 압축 경로 안에서만 돌므로 함께 꺼진다).
+- Stage 4 guard 의 예산 회복 auto-wire 가 이 플래그를 존중한다 — 꺼진
+  파이프라인에서 guard 의 "compact" 신호는 몰래 압축하는 대신 2.5.0 이전의
+  hard reject 로 강등된다. 이미 배선된 guard 도 재동기화 때 걷어낸다.
+- retrieval / 전략 / 메모리 주입은 스위치와 무관하게 그대로 동작한다.
+
+기본값 True — 기존 호스트의 동작은 그대로다. `update_config` 로 턴 사이에
+켜고 끌 수 있고, config schema 에 선언되어 liveness 게이트의 감시를 받는다.
+
+또한 sync 압축 뒤의 `context.built` 이벤트가 압축 **후** 추정치를 싣는다
+(이전에는 압축 전 값이 실려 관측이 어긋났다).
+
 ## [3.1.0] — 2026-08-12
 
 ### Added — 명시적으로 열어 주는 형제 트리
