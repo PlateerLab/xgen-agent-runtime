@@ -127,6 +127,102 @@ def test_guard_autowire_respects_disabled_flag() -> None:
     assert guard_on._budget_compactor is None, "재동기화가 기존 배선을 걷어내야 한다"
 
 
+def _band_state(budget: int = 1_000) -> PipelineState:
+    """80–90% 구간의 상태 — 백그라운드 유예 경계를 정확히 밟는다."""
+    from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
+
+    state = PipelineState()
+    state.context_window_budget = budget
+    for i in range(20):
+        role = "user" if i % 2 == 0 else "assistant"
+        state.messages.append({"role": role, "content": f"m{i} " + ("가" * 165)})
+    est = estimate_prompt_tokens(state)
+    assert budget * 0.8 < est <= budget * 0.9, f"테스트 전제 붕괴: est={est}"
+    return state
+
+
+def test_background_compaction_off_forces_sync() -> None:
+    """원샷 호스트 계약: bg OFF → 80–90% 구간에서도 **즉시** 압축한다.
+
+    LLMSummaryCompactor 는 클라이언트가 없으면 정적 플레이스홀더로 강등되므로
+    (self-wire 폴백), 동기 경로가 네트워크 없이 완결된다.
+    """
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+        LLMSummaryCompactor,
+    )
+
+    stage = ContextStage(
+        compactor=LLMSummaryCompactor(keep_recent=4), background_compaction=False
+    )
+    state = _band_state()
+    before = len(state.messages)
+
+    asyncio.run(stage.execute(None, state))
+
+    assert len(state.messages) < before, "bg OFF 인데 동기 압축이 안 됐다"
+    assert not _events(state, "context.compaction_scheduled"), "bg OFF 인데 스케줄됐다"
+    assert stage._bg_compaction is None
+
+
+def test_background_compaction_on_defers_in_band() -> None:
+    """기본값(bg ON)은 80–90% 구간에서 유예한다 — TTFT 동작 보존 확인."""
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+        LLMSummaryCompactor,
+    )
+
+    async def _run() -> tuple:
+        stage = ContextStage(compactor=LLMSummaryCompactor(keep_recent=4))
+        state = _band_state()
+        before = len(state.messages)
+        await stage.execute(None, state)
+        scheduled = bool(_events(state, "context.compaction_scheduled"))
+        pending = stage._bg_compaction
+        # 정리 — 테스트가 태스크를 남기지 않도록.
+        stage.cancel_bg_compaction()
+        return before, len(state.messages), scheduled, pending
+
+    before, after, scheduled, pending = asyncio.run(_run())
+    assert after == before, "유예 구간인데 즉시 압축됐다"
+    assert scheduled and pending is not None
+
+
+def test_cancel_bg_compaction_reaps_pending_task() -> None:
+    async def _run() -> asyncio.Task:
+        stage = ContextStage()
+        task = asyncio.create_task(asyncio.sleep(30))
+        stage._bg_compaction = {"task": task, "len": 1, "tail_id": 0}
+        stage.cancel_bg_compaction()
+        assert stage._bg_compaction is None
+        await asyncio.sleep(0)  # cancellation 전파
+        return task
+
+    task = asyncio.run(_run())
+    assert task.cancelled(), "pending bg 태스크가 회수되지 않았다"
+
+
+def test_pipeline_aclose_cancels_bg_compaction() -> None:
+    """원샷 호스트의 turn teardown(aclose)이 유예 태스크를 정리한다."""
+    from xgen_agent_runtime.core.builder import PipelineBuilder
+
+    async def _run() -> asyncio.Task:
+        pipeline = (
+            PipelineBuilder("t", api_key="k", model="claude-sonnet-4-6")
+            .with_system(prompt="s")
+            .with_context()
+            .with_loop(max_turns=1)
+            .build()
+        )
+        ctx = pipeline._stages.get(2)
+        task = asyncio.create_task(asyncio.sleep(30))
+        ctx._bg_compaction = {"task": task, "len": 1, "tail_id": 0}
+        await pipeline.aclose()
+        await asyncio.sleep(0)
+        return task
+
+    task = asyncio.run(_run())
+    assert task.cancelled(), "aclose 가 bg 압축 태스크를 회수하지 않았다"
+
+
 def test_disabled_still_retrieves_memory() -> None:
     """The switch only kills compaction — retrieval/injection must survive."""
     from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
