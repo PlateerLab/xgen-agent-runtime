@@ -232,6 +232,22 @@ class ToolStage(Stage[Any, Any]):
             # so the built-in ``env`` tool reaches it through real dispatch
             # (not just direct calls). Without this it would see ``None``.
             environment=getattr(self._context, "environment", None),
+            # The agent's XGeny sandbox session. THIS is what makes Bash /
+            # Read / Write / Edit / Glob / Grep run inside the agent's own
+            # isolated sandbox instead of on the serving pod. The host
+            # attaches it via ``attach_runtime(tool_context=...)``; if it is
+            # dropped here every file/shell tool silently degrades to the
+            # pod (context.sandbox is None -> local subprocess), which is a
+            # correctness + tenancy bug, not a graceful fallback. Read live
+            # off ``self._context`` so a session attached after the stage
+            # was constructed still routes correctly.
+            sandbox=getattr(self._context, "sandbox", None),
+            # Structured-event sink so long-running tools (Bash streaming,
+            # delegation) can surface progress; ``None`` is the no-op default.
+            event_emit=getattr(self._context, "event_emit", None),
+            # The LLM tool_use block this dispatch belongs to — lets nested
+            # tool calls (sub-agents, tasks) attribute their events correctly.
+            parent_tool_use_id=getattr(self._context, "parent_tool_use_id", None),
         )
 
         # 2.2.0 (audit §1-5 — policy via config): the permission posture
