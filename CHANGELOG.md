@@ -4,6 +4,39 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.4.0] — 2026-08-20
+
+### Security/Fixed — 남은 도구들이 서빙 파드에서 돌던(+비밀 유출) 경로 봉합
+
+v3.3.3 은 Bash/Read/Write/Edit/Glob/Grep 을 sandbox 로 돌렸지만, **sandbox 분기가
+없는 나머지 도구는 여전히 파드에서** 돌았다. 실제 XGeny 배포는 `allowed_paths=
+None` 이라 로컬 폴백의 경로 가드가 no-op — 그래서 각 누락은 "우아한 강등"이 아니라
+**파드 파일시스템 무제한 접근/비밀 유출**이었다. 감사로 전수 발견해 봉합한다:
+
+- **REPL** (`dev_tools`): 파드에서 임의 Python 실행 + `env=` 미지정으로 **백엔드
+  os.environ 전체(API키·DB URL) 유출**. → sandbox 경유(`python3 -c` via `sb_run`),
+  파드 폴백 시 `_scrubbed_env`. 설명의 부정확한 "sandboxed" 도 정정.
+- **NotebookEdit** (`notebook_edit_tool`): filesystem 패밀리인데 홀로 sandbox 분기가
+  없어 파드 `.ipynb` 를 읽고/썼다(형제 Write 가 만든 노트북을 못 봄). → EditTool 과
+  동형으로 `sb_read_bytes`/`sb_write_bytes`.
+- **Skill 셸 블록** (`skills/shell_blocks`): `dict(os.environ)` 로 파드 셸 실행 —
+  스킬 `${arg}` 치환으로 에이전트 주입까지 가능한 비밀 유출. → sandbox 경유 +
+  `_scrubbed_env`.
+- **local_bash 백그라운드 태스크** (`task_executors`): `env=` 없이 파드 셸(전체 env).
+  ToolContext 가 없어 sandbox 는 불가하나 `_scrubbed_env` 로 유출 차단(태스크 env 는
+  payload 로만).
+- **Worktree git** (`worktree_tools`): `git` 에 파드 전체 env 전달 → `_scrubbed_env`
+  (sandbox 라우팅은 후속).
+- **Grep** sandbox 분기가 `glob` 필터를 무시하던 버그 → `--include` 추가.
+
+회귀 가드: `test_xgeny_sandbox_tools.py::TestP0ToolsRouteToSandbox` — NotebookEdit/
+REPL/skill-shell 이 sandbox 프로토콜(read/write/exec)로 가고 호스트를 안 만짐을
+spy 로 증명.
+
+미이식(문서화): 런타임 native 위임(`DelegateOrchestrator`)의 sandbox 미전파 —
+XGeny 는 클라이언트 위임(`build_run_tool_context(sandbox=)`)이 보상하므로 무영향;
+doc/audio 도구는 클라이언트 바이트 셔틀로 보상. 향후 defense-in-depth 로 정리.
+
 ## [3.3.3] — 2026-08-20
 
 ### Fixed — 도구 디스패치가 sandbox 를 잃어 Bash 가 서빙 파드에서 돌던 버그 (P0)

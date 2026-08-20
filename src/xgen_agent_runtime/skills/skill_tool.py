@@ -275,6 +275,9 @@ class SkillTool(Tool):
             env=context.env_vars,
             timeout_s=self._skill.metadata.shell_timeout_s,
             trust_shell=trusted,
+            # Route skill shell blocks into the agent's sandbox session (not
+            # the serving pod) when one is attached.
+            sandbox=context.sandbox,
         )
         body = shell_summary.rendered_body
 

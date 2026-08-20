@@ -93,10 +93,17 @@ def _err(code: str, message: str) -> ToolResult:
 
 
 async def _git(*args: str, cwd: str) -> tuple[int, str, str]:
+    # SCRUBBED env — git honors env-driven config/hooks, so never hand it the
+    # backend's full secret-bearing os.environ. (NOTE: this still runs git on
+    # the host, not the sandbox — a worktree created here is not visible to the
+    # sandbox-routed Bash. Sandbox-routing worktree ops is a tracked follow-up.)
+    from xgen_agent_runtime.tools.built_in.bash_tool import _scrubbed_env
+
     proc = await asyncio.create_subprocess_exec(
         "git",
         *args,
         cwd=cwd,
+        env=_scrubbed_env(None),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
