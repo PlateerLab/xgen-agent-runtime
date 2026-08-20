@@ -102,7 +102,7 @@ class LSPTool(Tool):
 
 
 class REPLTool(Tool):
-    """Run a Python expression in a sandboxed subprocess."""
+    """Run a Python snippet in the agent's sandbox session."""
 
     @property
     def name(self) -> str:
@@ -111,8 +111,10 @@ class REPLTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a Python expression in a fresh subprocess. "
-            "Returns stdout / stderr / exit_code. Bounded by timeout."
+            "Execute a Python snippet in your sandbox session (the same "
+            "isolated environment your Bash tool runs in — packages you "
+            "installed there are importable). Returns stdout / stderr / "
+            "exit_code. Bounded by timeout."
         )
 
     @property
@@ -130,16 +132,51 @@ class REPLTool(Tool):
         return ToolCapabilities(concurrency_safe=True, destructive=False)
 
     async def execute(self, input, context):
+        import shlex
+
         expr = input.get("expression", "")
         if not expr:
             return _err("BAD_INPUT", "expression is required")
         timeout = int(input.get("timeout_seconds", 5))
+
+        # Sandbox: run the snippet inside the agent's session (same interpreter
+        # its Bash uses). NEVER on the serving pod — that would run arbitrary
+        # Python with the backend's full secret-bearing env.
+        if context.sandbox is not None:
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
+
+            command = f"python3 -c {shlex.quote(expr)}"
+            try:
+                exit_code, stdout_s, stderr_s = await sb_run(
+                    context.sandbox,
+                    command,
+                    workdir=context.working_dir or "/workspace",
+                    env=context.env_vars,
+                    timeout_s=float(timeout),
+                )
+            except asyncio.TimeoutError:
+                return _err("REPL_TIMEOUT", f"expression exceeded {timeout}s")
+            except Exception as exc:  # noqa: BLE001
+                return _err("SPAWN_FAILED", str(exc))
+            return ToolResult(
+                content={
+                    "stdout": stdout_s[:64_000],
+                    "stderr": stderr_s[:8_000],
+                    "exit_code": exit_code,
+                }
+            )
+
+        # No sandbox (feature disabled / non-agent context): run on the host,
+        # but with a SCRUBBED env — never hand the model the backend's secrets.
+        from xgen_agent_runtime.tools.built_in.bash_tool import _scrubbed_env
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",
                 expr,
                 cwd=context.working_dir or ".",
+                env=_scrubbed_env(context.env_vars),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

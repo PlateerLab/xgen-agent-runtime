@@ -27,7 +27,9 @@ from xgen_agent_runtime.tools._xgeny_sandbox import (
 )
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
+from xgen_agent_runtime.tools.built_in.dev_tools import REPLTool
 from xgen_agent_runtime.tools.built_in.edit_tool import EditTool
+from xgen_agent_runtime.tools.built_in.notebook_edit_tool import NotebookEditTool
 from xgen_agent_runtime.tools.built_in.read_tool import ReadTool
 from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
 
@@ -269,3 +271,97 @@ class TestReadOnlyTrees:
         sb = LocalSandbox(root, extra_roots=[str(shared)])
         del sb.readonly_roots
         assert sandbox_path(sb, str(shared / "a.txt"), write=True) == str(shared / "a.txt")
+
+
+class _SpySandbox(LocalSandbox):
+    """LocalSandbox that counts protocol calls — proves a tool went through
+    the sandbox (read_bytes/write_bytes/exec) and not the host filesystem."""
+
+    def __init__(self, root, **kw):
+        super().__init__(root, **kw)
+        self.reads = 0
+        self.writes = 0
+        self.execs = 0
+
+    async def read_bytes(self, path: str) -> bytes:
+        self.reads += 1
+        return await super().read_bytes(path)
+
+    async def write_bytes(self, path: str, data: bytes) -> int:
+        self.writes += 1
+        return await super().write_bytes(path, data)
+
+    async def exec(self, argv, **kw):
+        self.execs += 1
+        return await super().exec(argv, **kw)
+
+
+def _spy_ctx(root):
+    sb = _SpySandbox(root)
+    return sb, ToolContext(session_id="t", working_dir=sb.workdir,
+                           allowed_paths=[sb.workdir], sandbox=sb)
+
+
+_MIN_NB = (
+    '{"cells": [{"cell_type": "code", "source": ["print(1)\\n"], '
+    '"metadata": {}, "outputs": [], "execution_count": null}], '
+    '"metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+)
+
+
+class TestP0ToolsRouteToSandbox:
+    """The tools just fixed (NotebookEdit / REPL / skill shell) must go through
+    the sandbox protocol, never the serving pod's filesystem/interpreter."""
+
+    async def test_notebookedit_reads_and_writes_via_sandbox(self, tmp_path):
+        root = tmp_path / "session"
+        root.mkdir()
+        (root / "nb.ipynb").write_text(_MIN_NB, encoding="utf-8")
+        sb, ctx = _spy_ctx(root)
+        r = await NotebookEditTool().execute(
+            {"file_path": "nb.ipynb",
+             "operations": [{"op": "replace", "cell_index": 0, "new_source": "print(2)\n"}]},
+            ctx,
+        )
+        assert not r.is_error, r.content
+        # routed through the sandbox protocol, not host open()/os.replace
+        assert sb.reads >= 1 and sb.writes >= 1
+        import json
+        nb = json.loads((root / "nb.ipynb").read_text(encoding="utf-8"))
+        assert "print(2)" in "".join(nb["cells"][0]["source"])
+
+    async def test_notebookedit_missing_file_is_a_clean_error(self, tmp_path):
+        root = tmp_path / "session"
+        root.mkdir()
+        sb, ctx = _spy_ctx(root)
+        r = await NotebookEditTool().execute(
+            {"file_path": "nope.ipynb",
+             "operations": [{"op": "replace", "cell_index": 0, "source": "x"}]},
+            ctx,
+        )
+        assert r.is_error and "not found" in str(r.content)
+
+    async def test_repl_runs_in_the_sandbox_not_the_pod(self, tmp_path):
+        root = tmp_path / "session"
+        root.mkdir()
+        sb, ctx = _spy_ctx(root)
+        # Write a file from Python — it must land in the SANDBOX cwd.
+        r = await REPLTool().execute(
+            {"expression": "open('proof.txt','w').write('sbx')"}, ctx
+        )
+        assert sb.execs >= 1
+        assert (root / "proof.txt").read_text(encoding="utf-8") == "sbx"
+
+    async def test_skill_shell_block_runs_in_the_sandbox(self, tmp_path):
+        from xgen_agent_runtime.skills.shell_blocks import execute_blocks
+
+        root = tmp_path / "session"
+        root.mkdir()
+        sb = _SpySandbox(root)
+        summary = await execute_blocks(
+            "before !`echo hi > marker.txt && echo done` after",
+            cwd=sb.workdir, sandbox=sb,
+        )
+        assert sb.execs >= 1
+        assert (root / "marker.txt").exists()
+        assert "done" in summary.rendered_body

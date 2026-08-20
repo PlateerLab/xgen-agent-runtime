@@ -110,8 +110,11 @@ class GrepTool(Tool):
             elif ctx_lines:
                 opts.append(f"-C{int(ctx_lines)}")
             excludes = "--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ --exclude-dir=.venv"
+            # Honor the file glob (the local branch does) — without this an
+            # in-sandbox Grep(pattern, glob="*.py") searched every file.
+            include = f" --include={shlex.quote(file_glob)}" if file_glob else ""
             cmd = (
-                f"grep {' '.join(opts)} {excludes} -e {shlex.quote(pattern_str)} "
+                f"grep {' '.join(opts)} {excludes}{include} -e {shlex.quote(pattern_str)} "
                 f"-- {shlex.quote(spath)} 2>/dev/null | head -n {_MAX_MATCHES}"
             )
             rc, out, _err = await sb_run(context.sandbox, cmd, workdir=wd)

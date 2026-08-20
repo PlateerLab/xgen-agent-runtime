@@ -48,12 +48,22 @@ _VALID_CELL_TYPES = ("code", "markdown", "raw")
 _VALID_OPS = ("replace", "insert", "delete")
 
 
-def _load_notebook(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as fh:
-        nb = json.load(fh)
+def _parse_notebook(data: bytes) -> Dict[str, Any]:
+    """Parse + validate a notebook from raw bytes (backend-agnostic)."""
+    nb = json.loads(data.decode("utf-8"))
     if not isinstance(nb, dict) or not isinstance(nb.get("cells"), list):
         raise ValueError("notebook JSON missing top-level 'cells' list")
     return nb
+
+
+def _serialize_notebook(payload: Dict[str, Any]) -> bytes:
+    """Serialize a notebook to bytes with the same shape ``_atomic_write`` uses."""
+    return (json.dumps(payload, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
+
+
+def _load_notebook(path: str) -> Dict[str, Any]:
+    with open(path, "rb") as fh:
+        return _parse_notebook(fh.read())
 
 
 def _atomic_write(path: str, payload: Dict[str, Any]) -> None:
@@ -246,29 +256,54 @@ class NotebookEditTool(Tool):
                 is_error=True,
             )
 
-        try:
-            resolved = resolve_and_validate(raw_path, context.working_dir, context.allowed_paths)
-        except (PermissionError, ValueError) as exc:
-            return ToolResult(content=str(exc), is_error=True)
-
-        if not resolved.exists():
-            return ToolResult(content=f"notebook not found: {resolved}", is_error=True)
-        if resolved.is_dir():
-            return ToolResult(content=f"not a file: {resolved}", is_error=True)
-        if resolved.suffix.lower() != ".ipynb":
+        if not str(raw_path).lower().endswith(".ipynb"):
             return ToolResult(
-                content=f"NotebookEdit only edits .ipynb files (got {resolved.suffix!r})",
+                content=f"NotebookEdit only edits .ipynb files (got {raw_path!r})",
                 is_error=True,
             )
 
-        try:
-            notebook = _load_notebook(str(resolved))
-        except json.JSONDecodeError as exc:
-            return ToolResult(content=f"notebook JSON parse error: {exc}", is_error=True)
-        except ValueError as exc:
-            return ToolResult(content=str(exc), is_error=True)
-        except OSError as exc:
-            return ToolResult(content=f"read error: {exc}", is_error=True)
+        sandbox = context.sandbox
+        wd = context.working_dir or "/workspace"
+        resolved = None  # set on the local path; None means sandbox mode
+
+        # Sandbox: read-modify-write the notebook inside the agent's session
+        # (mirrors EditTool). NEVER touch the serving pod's filesystem.
+        if sandbox is not None:
+            from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
+
+            try:
+                raw_bytes = await sb_read_bytes(sandbox, str(raw_path), workdir=wd)
+            except FileNotFoundError:
+                return ToolResult(content=f"notebook not found: {raw_path}", is_error=True)
+            except PermissionError as exc:
+                return ToolResult(content=str(exc), is_error=True)
+            except Exception as exc:  # noqa: BLE001
+                return ToolResult(content=f"read error: {exc}", is_error=True)
+            try:
+                notebook = _parse_notebook(raw_bytes)
+            except (json.JSONDecodeError, ValueError) as exc:
+                return ToolResult(content=f"notebook parse error: {exc}", is_error=True)
+            target_label = str(raw_path)
+        else:
+            try:
+                resolved = resolve_and_validate(raw_path, context.working_dir, context.allowed_paths)
+            except (PermissionError, ValueError) as exc:
+                return ToolResult(content=str(exc), is_error=True)
+
+            if not resolved.exists():
+                return ToolResult(content=f"notebook not found: {resolved}", is_error=True)
+            if resolved.is_dir():
+                return ToolResult(content=f"not a file: {resolved}", is_error=True)
+
+            try:
+                notebook = _load_notebook(str(resolved))
+            except json.JSONDecodeError as exc:
+                return ToolResult(content=f"notebook JSON parse error: {exc}", is_error=True)
+            except ValueError as exc:
+                return ToolResult(content=str(exc), is_error=True)
+            except OSError as exc:
+                return ToolResult(content=f"read error: {exc}", is_error=True)
+            target_label = str(resolved)
 
         cells: List[Dict[str, Any]] = notebook["cells"]
         before_count = len(cells)
@@ -303,13 +338,23 @@ class NotebookEditTool(Tool):
         after_count = len(cells)
 
         if save:
-            try:
-                _atomic_write(str(resolved), notebook)
-            except OSError as exc:
-                return ToolResult(content=f"write error: {exc}", is_error=True)
+            if sandbox is not None:
+                from xgen_agent_runtime.tools._xgeny_sandbox import sb_write_bytes
+
+                try:
+                    await sb_write_bytes(
+                        sandbox, str(raw_path), _serialize_notebook(notebook), workdir=wd
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return ToolResult(content=f"write error: {exc}", is_error=True)
+            else:
+                try:
+                    _atomic_write(str(resolved), notebook)
+                except OSError as exc:
+                    return ToolResult(content=f"write error: {exc}", is_error=True)
 
         summary = (
-            f"NotebookEdit: {resolved}\n"
+            f"NotebookEdit: {target_label}\n"
             f"  cells {before_count} → {after_count} "
             f"({len(raw_ops)} operation{'s' if len(raw_ops) != 1 else ''})\n"
             f"  {('saved' if save else 'not saved (save=false)')}\n"

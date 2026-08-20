@@ -60,7 +60,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -164,14 +164,16 @@ def _run_one(
     """Synchronous subprocess invocation. Called from a default
     executor by the async ``execute_blocks`` so the pipeline event
     loop never blocks."""
-    import os
     import subprocess
+
+    from xgen_agent_runtime.tools.built_in.bash_tool import _scrubbed_env
 
     shell_path = shutil.which(shell) or shell
     cmd = [shell_path, "-c", block.command]
-    full_env = dict(os.environ)
-    if env:
-        full_env.update(env)
+    # SCRUBBED env — never hand skill shell blocks the backend's full
+    # secret-bearing os.environ (they run agent-influenced commands, and
+    # ``${arg}`` substitution can splice agent input into the body).
+    full_env = _scrubbed_env(env)
     try:
         proc = subprocess.run(
             cmd,
@@ -213,6 +215,7 @@ async def execute_blocks(
     env: Optional[Dict[str, str]] = None,
     timeout_s: float = 30.0,
     trust_shell: bool = True,
+    sandbox: Optional[Any] = None,
 ) -> ShellRunSummary:
     r"""Find every shell block in ``body``, execute it, and return the
     body with blocks replaced by their captured output.
@@ -256,6 +259,24 @@ async def execute_blocks(
                     skipped_reason="skill body is untrusted (trust_shell=False)",
                 )
             )
+    elif sandbox is not None:
+        # Route blocks through the agent's sandbox session — never the pod.
+        from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
+
+        for b in blocks:
+            try:
+                exit_code, stdout_s, stderr_s = await sb_run(
+                    sandbox, b.command,
+                    workdir=cwd or "/workspace", env=env, timeout_s=timeout_s,
+                )
+                outcomes.append(ShellRunOutcome(
+                    block=b, exit_code=exit_code, stdout=stdout_s, stderr=stderr_s))
+            except asyncio.TimeoutError:
+                outcomes.append(ShellRunOutcome(
+                    block=b, exit_code=-1, stdout="", stderr="", timed_out=True))
+            except Exception as exc:  # noqa: BLE001
+                outcomes.append(ShellRunOutcome(
+                    block=b, exit_code=-1, stdout="", stderr=f"sandbox exec failed: {exc}"))
     else:
         loop = asyncio.get_running_loop()
         for b in blocks:

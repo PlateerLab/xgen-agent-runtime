@@ -62,8 +62,16 @@ class LocalBashExecutor(BackgroundTaskExecutor):
         command = record.payload.get("command")
         if not command:
             raise ValueError("local_bash task requires payload['command']")
+        # SCRUBBED env — a background task has no ToolContext/sandbox handle, so
+        # it can't route to the agent's session, but it must NOT inherit the
+        # backend's full secret-bearing os.environ. Any per-task env travels in
+        # the payload (never platform secrets).
+        from xgen_agent_runtime.tools.built_in.bash_tool import _scrubbed_env
+
+        payload_env = record.payload.get("env")
         proc = await asyncio.create_subprocess_shell(
             command,
+            env=_scrubbed_env(payload_env if isinstance(payload_env, dict) else None),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
