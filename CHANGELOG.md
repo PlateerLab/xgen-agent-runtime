@@ -4,6 +4,34 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.3] — 2026-08-20
+
+### Fixed — 도구 디스패치가 sandbox 를 잃어 Bash 가 서빙 파드에서 돌던 버그 (P0)
+
+`ToolStage.build_dispatch_context` 는 매 도구 호출마다 `ToolContext` 를 새로
+조립하는데, 그 재조립 kwargs 에 **`sandbox` 가 빠져 있었다**. 그래서
+`context.sandbox` 는 모든 실제 디스패치에서 `None` 이 되고, Bash·Read·Write·
+Edit·Glob·Grep 이 각자의 로컬-서브프로세스 경로로 떨어져 **에이전트의 격리
+세션이 아니라 대화를 태우는 서빙 파드에서 실행**됐다 (정합성 + 테넌시 버그).
+호스트는 `attach_runtime(tool_context=...)` 로 sandbox 를 올바르게 붙였지만
+이 seam 에서 매번 버려졌다. 이제 `sandbox`(+ `event_emit`,
+`parent_tool_use_id`)를 `self._context` 에서 라이브로 읽어 전파한다.
+
+두 번째 유실 지점도 수정: `ToolSandbox.execute_tool` 은 `SandboxConfig.
+env_vars` 가 설정되면 6개 필드만으로 `ToolContext` 를 재조립해 sandbox 를
+비롯한 런타임 핸들을 통째로 떨궜다 — `dataclasses.replace` 로 바꿔 바뀌는
+두 필드만 덮고 나머지(이후 추가될 필드 포함)를 자동 보존한다.
+
+`BashTool`: sandbox 미부착(기능 비활성/비-에이전트 컨텍스트)으로 파드에서
+도는 경우를 더는 조용히 넘기지 않는다 — 경고 로그 + 결과 메타데이터
+(`sandboxed=False`, `execution_environment="host"`). 설명도 실행 환경(전용
+격리 sandbox, 작업/홈 폴더 전체 쓰기, pip/uv/npm 의존성 설치)을 정확히 밝힌다.
+
+회귀 가드: `test_stage10_sandbox_propagation.py` — 기존 테스트가 `ToolContext`
+를 직접 만들어 `router.route` 만 쳐서 이 seam 을 건너뛰었기에 버그가 새어
+나갔다. 새 테스트는 반드시 `build_dispatch_context` / `ToolSandbox.execute_tool`
+경유로 sandbox 전파를 검증한다.
+
 ## [3.3.2] — 2026-08-18
 
 ### Fixed — 문서 엔진 임포트 이름 (XGEN 패키지 이관 회귀)

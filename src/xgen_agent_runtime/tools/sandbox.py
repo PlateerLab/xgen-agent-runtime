@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
@@ -52,17 +52,21 @@ class ToolSandbox:
             if error:
                 return ToolResult(content=error, is_error=True)
 
-        # 2. Enrich context with sandbox env vars
+        # 2. Enrich context with sandbox env vars.
+        # Override ONLY the two fields this wrapper actually changes and
+        # carry every other field through untouched via ``replace``. A
+        # field-by-field rebuild silently dropped the runtime handles the
+        # host attaches — most critically ``sandbox`` (file/shell tools
+        # then run on the pod instead of the agent's session), but also
+        # ``environment``/``hook_runner``/``permission_rules``/``event_emit``
+        # — and would keep dropping any field added to ToolContext later.
         if self._config.env_vars:
             ctx_env = dict(context.env_vars or {})
             ctx_env.update(self._config.env_vars)
-            context = ToolContext(
-                session_id=context.session_id,
-                working_dir=context.working_dir,
-                storage_path=context.storage_path,
+            context = replace(
+                context,
                 env_vars=ctx_env,
                 allowed_paths=self._config.allowed_paths or context.allowed_paths,
-                metadata=context.metadata,
             )
 
         # 3. Execute with timeout
