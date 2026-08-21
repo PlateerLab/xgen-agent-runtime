@@ -604,11 +604,16 @@ class AnthropicClient(BaseClient):
                 )
 
         if raw.usage:
+            # ⚠ ``or 0`` 가 핵심 — SDK Usage 모델은 응답에 없는 필드를 **None**
+            # 으로 준다 (getattr 기본값은 속성이 존재하면 무력). Bedrock 응답은
+            # 캐시 필드를 생략하므로 None 이 그대로 흐르면 토큰 회계(int 가산·
+            # 비교)가 매 턴 TypeError 로 죽는다.
             usage = TokenUsage(
-                input_tokens=getattr(raw.usage, "input_tokens", 0),
-                output_tokens=getattr(raw.usage, "output_tokens", 0),
-                cache_creation_input_tokens=getattr(raw.usage, "cache_creation_input_tokens", 0),
-                cache_read_input_tokens=getattr(raw.usage, "cache_read_input_tokens", 0),
+                input_tokens=getattr(raw.usage, "input_tokens", 0) or 0,
+                output_tokens=getattr(raw.usage, "output_tokens", 0) or 0,
+                cache_creation_input_tokens=getattr(raw.usage, "cache_creation_input_tokens", 0)
+                or 0,
+                cache_read_input_tokens=getattr(raw.usage, "cache_read_input_tokens", 0) or 0,
             )
         else:
             usage = TokenUsage()

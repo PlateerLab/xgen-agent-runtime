@@ -4,6 +4,24 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.5.1] — 2026-08-21
+
+### Fixed — Bedrock 실전 검증에서 발견된 wire 결함 2건
+
+xgen-workflow 의 8-provider 관통 검증(목 Bedrock endpoint 실왕복)이 잡아낸
+결함 수리. 둘 다 실 Bedrock 트래픽에서 반드시 발화한다.
+
+- **usage None 흡수**: anthropic SDK 의 Usage 모델은 응답에 없는 캐시 필드를
+  **None** 으로 준다 — `getattr(x, f, 0)` 는 속성이 존재하면 무력하다. Bedrock
+  응답은 캐시 필드를 생략하므로 None 이 TokenUsage 로 흘러 토큰 회계가 매 턴
+  `int += None` TypeError 로 죽었다. 추출 지점에서 `or 0` 강제.
+- **bare Bedrock ID 승격**: `anthropic.claude-…-v1:0`(geo 프리픽스 없음 —
+  AWS ListFoundationModels/콘솔이 주는 형태이자 XGEN 카탈로그 시드의 형태)를
+  그대로 wire 에 보내면 Claude 4.x 급은 on-demand 거부로 죽는다. 이제 bare
+  ID 는 리전 geo 의 inference-profile ID 로 승격(버전 접미사 보존)하고,
+  geo-프리픽스 ID 와 `arn:` (application inference profile / provisioned)만
+  통과시킨다.
+
 ## [3.5.0] — 2026-08-21
 
 ### Added — LLM 프로바이더 확장: AWS Bedrock · Google Vertex AI · OpenAI Codex CLI

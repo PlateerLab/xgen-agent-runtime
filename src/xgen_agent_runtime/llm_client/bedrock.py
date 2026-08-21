@@ -64,6 +64,22 @@ def looks_like_bedrock_id(model: str) -> bool:
     return any(model.startswith(p) for p in _GEO_PREFIXES)
 
 
+def _is_final_bedrock_id(model: str) -> bool:
+    """True iff *model* must be sent to the wire untouched.
+
+    Geo-prefixed inference-profile IDs (``us.anthropic.…``) and ARNs
+    (application inference profiles / provisioned throughput) are final.
+    Bare ``anthropic.claude-…-v1:0`` is NOT — Claude 4.x-class models reject
+    on-demand invocation ("on-demand throughput isn't supported"), so bare
+    IDs are promoted to the region's system inference profile. AWS 콘솔의
+    ListFoundationModels 가 돌려주는 형태가 정확히 이 bare ID 라서, 관리자
+    카탈로그 등록 경로가 그대로 이 함정을 밟는다.
+    """
+    if model.startswith("arn:"):
+        return True
+    return any(model.startswith(p) for p in _GEO_PREFIXES)
+
+
 def core_model_id(model: str) -> str:
     """Strip Bedrock decorations down to the canonical Anthropic ID.
 
@@ -88,8 +104,11 @@ def to_bedrock_model_id(model: str, *, region: str) -> str:
     Full Bedrock IDs pass through untouched — the caller already chose
     (e.g. an admin catalog entry copied from the AWS console).
     """
-    if looks_like_bedrock_id(model):
+    if _is_final_bedrock_id(model):
         return model
+    if model.startswith("anthropic."):
+        # bare Bedrock ID → 버전 접미사를 보존한 채 geo 프리픽스만 승격.
+        return f"{_region_geo(region)}.{model}"
     canonical = _resolve_anthropic_model(model)
     return f"{_region_geo(region)}.anthropic.{canonical}-v1:0"
 
