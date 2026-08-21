@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "3.4.0"
+version = "3.5.0"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -42,7 +42,9 @@ classifiers = [
 ]
 dependencies = [
     # Core runtime
-    "anthropic>=0.52.0",
+    # [bedrock] extra pulls boto3/botocore for AWS SigV4 — the Bedrock
+    # client (llm_client/bedrock.py) rides the same Messages API surface.
+    "anthropic[bedrock]>=0.52.0",
     "mcp>=1.0.0,<3",
     "pydantic>=2.0",
     "jsonschema>=4.0",
@@ -71,6 +73,9 @@ dependencies = [
     # hosts can swap providers via settings.json without re-installing.
     "openai>=1.50.0",
     "google-genai>=1.0.0",
+    # Vertex service-account auth (llm_client/vertex.py) imports
+    # google.oauth2 directly — declare what we import.
+    "google-auth>=2.30",
 
     # SQL provider — sqlite is in stdlib; postgres needs psycopg + pgvector.
     "psycopg[binary]>=3.1",

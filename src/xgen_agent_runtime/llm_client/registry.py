@@ -74,6 +74,29 @@ def _claude_code_cli_factory() -> Type[BaseClient]:
     return ClaudeCodeCLIClient
 
 
+def _bedrock_factory() -> Type[BaseClient]:
+    from xgen_agent_runtime.llm_client.bedrock import BedrockClient
+
+    return BedrockClient
+
+
+def _vertex_factory() -> Type[BaseClient]:
+    try:
+        from xgen_agent_runtime.llm_client.vertex import VertexClient
+    except ImportError as e:
+        raise ImportError(
+            "Vertex client requires 'google-genai' (and 'google-auth' for "
+            "service-account keys). Install with: pip install google-genai google-auth"
+        ) from e
+    return VertexClient
+
+
+def _codex_cli_factory() -> Type[BaseClient]:
+    from xgen_agent_runtime.llm_client.codex import CodexCLIClient
+
+    return CodexCLIClient
+
+
 def _profile_factory(provider_name: str) -> Callable[[], Type[BaseClient]]:
     """Factory for a profile-driven OpenAI-compatible local client.
 
@@ -96,6 +119,9 @@ ClientRegistry.register("openai", _openai_factory)
 ClientRegistry.register("google", _google_factory)
 ClientRegistry.register("vllm", _vllm_factory)
 ClientRegistry.register("claude_code_cli", _claude_code_cli_factory)
+ClientRegistry.register("bedrock", _bedrock_factory)
+ClientRegistry.register("vertex", _vertex_factory)
+ClientRegistry.register("codex_cli", _codex_cli_factory)
 
 
 # Branded local (OpenAI-compatible) providers, generated from profiles.

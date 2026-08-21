@@ -15,6 +15,20 @@ def test_available_lists_four_builtins():
     assert {"anthropic", "openai", "google", "vllm"} <= names
 
 
+def test_available_lists_cloud_and_cli_providers():
+    names = set(ClientRegistry.available())
+    # 3.5.0 — Bedrock/Vertex API providers + the second CLI backend.
+    assert {"bedrock", "vertex", "codex_cli", "claude_code_cli"} <= names
+
+
+def test_get_bedrock_and_codex_return_classes():
+    bedrock = ClientRegistry.get("bedrock")
+    assert issubclass(bedrock, BaseClient) and bedrock.provider == "bedrock"
+    codex = ClientRegistry.get("codex_cli")
+    assert issubclass(codex, BaseClient) and codex.provider == "codex_cli"
+    assert codex.capabilities.is_subprocess is True
+
+
 def test_available_lists_branded_local_providers():
     names = set(ClientRegistry.available())
     # Profile-driven OpenAI-compatible local backends + the custom alias.

@@ -166,6 +166,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/91/b3d41643f1f639927e8c5fb02c3bd8bffe6f1f29e219b3bd4c61e267b15c/anthropic-0.121.0-py3-none-any.whl", hash = "sha256:6048713fa441e59e1cba8363171cd2a86273b25bd213e9c7ac70a523af88b011", size = 1035493, upload-time = "2026-08-07T17:11:08.508Z" },
 ]
 
+[package.optional-dependencies]
+bedrock = [
+    { name = "boto3" },
+    { name = "botocore" },
+]
+
 [[package]]
 name = "anyio"
 version = "4.13.0"
@@ -4080,13 +4086,14 @@ wheels = [
 
 [[package]]
 name = "xgen-agent-runtime"
-version = "3.1.0"
+version = "3.5.0"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
+    { name = "anthropic", extra = ["bedrock"] },
     { name = "asyncssh" },
     { name = "croniter" },
     { name = "ddgs" },
+    { name = "google-auth" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "jsonschema" },
@@ -4115,11 +4122,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.52.0" },
+    { name = "anthropic", extras = ["bedrock"], specifier = ">=0.52.0" },
     { name = "asyncssh", specifier = ">=2.14" },
     { name = "asyncssh", marker = "extra == 'dev'", specifier = ">=2.14" },
     { name = "croniter", specifier = ">=2.0" },
     { name = "ddgs", specifier = ">=9.11" },
+    { name = "google-auth", specifier = ">=2.30" },
     { name = "google-genai", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.0" },

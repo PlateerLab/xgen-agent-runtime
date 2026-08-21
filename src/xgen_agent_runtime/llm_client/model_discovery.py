@@ -187,9 +187,15 @@ async def discover_models(
 
     # The Claude Code CLI exposes no model-list command — version-robust
     # aliases (sonnet/opus/haiku) are the host's correct fallback.
-    if p == "claude_code_cli":
+    if p in ("claude_code_cli", "codex_cli"):
         return ModelDiscovery(
             provider=p, source="unavailable", error="cli has no model-list command"
+        )
+    if p in ("bedrock", "vertex"):
+        # Listing needs cloud-SDK auth (SigV4 / OAuth) that this HTTP-only
+        # prober does not model — hosts list via their own admin catalog.
+        return ModelDiscovery(
+            provider=p, source="unavailable", error="use the host's admin catalog"
         )
 
     try:
