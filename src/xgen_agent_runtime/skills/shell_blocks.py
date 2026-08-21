@@ -266,17 +266,25 @@ async def execute_blocks(
         for b in blocks:
             try:
                 exit_code, stdout_s, stderr_s = await sb_run(
-                    sandbox, b.command,
-                    workdir=cwd or "/workspace", env=env, timeout_s=timeout_s,
+                    sandbox,
+                    b.command,
+                    workdir=cwd or "/workspace",
+                    env=env,
+                    timeout_s=timeout_s,
                 )
-                outcomes.append(ShellRunOutcome(
-                    block=b, exit_code=exit_code, stdout=stdout_s, stderr=stderr_s))
+                outcomes.append(
+                    ShellRunOutcome(block=b, exit_code=exit_code, stdout=stdout_s, stderr=stderr_s)
+                )
             except asyncio.TimeoutError:
-                outcomes.append(ShellRunOutcome(
-                    block=b, exit_code=-1, stdout="", stderr="", timed_out=True))
+                outcomes.append(
+                    ShellRunOutcome(block=b, exit_code=-1, stdout="", stderr="", timed_out=True)
+                )
             except Exception as exc:  # noqa: BLE001
-                outcomes.append(ShellRunOutcome(
-                    block=b, exit_code=-1, stdout="", stderr=f"sandbox exec failed: {exc}"))
+                outcomes.append(
+                    ShellRunOutcome(
+                        block=b, exit_code=-1, stdout="", stderr=f"sandbox exec failed: {exc}"
+                    )
+                )
     else:
         loop = asyncio.get_running_loop()
         for b in blocks:
