@@ -84,11 +84,13 @@ def _load_edit2docs():
     """
     try:
         import xgen_edit2docs as engine  # noqa: PLC0415
+
         return engine
     except ImportError:
         pass
     try:
         import edit2docs as engine  # noqa: PLC0415
+
         return engine
     except ImportError as exc:  # pragma: no cover - depends on env
         raise RuntimeError(_INSTALL_HINT) from exc

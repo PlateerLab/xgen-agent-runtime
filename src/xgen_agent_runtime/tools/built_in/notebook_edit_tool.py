@@ -286,7 +286,9 @@ class NotebookEditTool(Tool):
             target_label = str(raw_path)
         else:
             try:
-                resolved = resolve_and_validate(raw_path, context.working_dir, context.allowed_paths)
+                resolved = resolve_and_validate(
+                    raw_path, context.working_dir, context.allowed_paths
+                )
             except (PermissionError, ValueError) as exc:
                 return ToolResult(content=str(exc), is_error=True)
 

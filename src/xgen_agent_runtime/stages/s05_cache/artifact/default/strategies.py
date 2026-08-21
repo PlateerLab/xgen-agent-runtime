@@ -33,7 +33,10 @@ def _supports_cache_control(state: PipelineState) -> bool:
     client = state.llm_client
     provider = str(getattr(client, "provider", "") or "") if client is not None else ""
     if provider:
-        return provider == "anthropic"
+        # Bedrock serves the same Anthropic Messages API (cache_control
+        # included) — without this, every Bedrock session silently loses
+        # prompt caching and full-prefills each turn (finding A1's twin).
+        return provider in ("anthropic", "bedrock")
     # No client attached (unit tests, dry construction): fall back to the
     # model-string heuristic, alias-aware this time.
     model = state.model or ""

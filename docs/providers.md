@@ -1,10 +1,10 @@
 # LLM Providers
 
-> Status: current for xgen-agent-runtime 2.1.0. Five providers shipped.
+> Status: current for xgen-agent-runtime 3.5.0.
 
 xgen-agent-runtime abstracts the LLM call site behind a single contract: `BaseClient` (`llm_client/base.py`). A host supplies credentials via one `CredentialBundle`; the manifest picks which provider Stage 6 calls. Switching providers is a manifest edit, not a code change.
 
-## The five providers
+## Providers
 
 | Provider id | Client class | Backend | Strengths | Notes |
 |---|---|---|---|---|
@@ -13,6 +13,10 @@ xgen-agent-runtime abstracts the LLM call site behind a single contract: `BaseCl
 | `google` | `GoogleClient` | Google GenAI (Gemini) | streaming, function calling, thinking blocks | |
 | `vllm` | `VLLMClient` | OpenAI-compatible local endpoint | streaming, free-form model id | Inherits `OpenAIClient`; tool support is opt-in via `configure_capabilities()`. |
 | `claude_code_cli` | `ClaudeCodeCLIClient` | `claude` CLI subprocess | full agentic loop **internally**, host MCP wrap, OAuth + API-key auth, file/shell built-ins | See [claude_code_cli.md](claude_code_cli.md) — non-trivial integration. |
+| `bedrock` | `BedrockClient` | AWS Bedrock (Anthropic Messages API, SigV4) | everything `anthropic` supports, incl. prompt caching | Inherits `AnthropicClient`. Credentials via `extras` (`aws_region` / `aws_access_key_id` / `aws_secret_access_key` / `aws_session_token` / `aws_profile`); omitted keys use the boto3 default chain (IAM role). Plain Anthropic model ids are promoted to region-scoped inference-profile ids. Requires `anthropic[bedrock]`. |
+| `vertex` | `VertexClient` | Google Vertex AI (Gemini) | everything `google` supports | Inherits `GoogleClient`. Credentials via `extras` (`project` / `location` / `credentials_json` service-account key) or an express-mode `api_key`. |
+| `codex_cli` | `CodexCLIClient` | `codex` CLI subprocess (`exec --json`) | agentic loop internally, MCP via `-c mcp_servers.*` overrides, session resume, `--output-schema` structured output | Second CLI backend; message-granularity streaming. Subscription (ChatGPT login) or `OPENAI_API_KEY` — channels are mutually exclusive per call. |
+| `ollama` / `lmstudio` / `custom` (alias `local`) | profile-driven `OpenAICompatibleClient` | OpenAI-compatible local endpoints | free-form model ids, tool-arg JSON repair | `custom` requires `base_url`. |
 
 The legacy `copilot_cli` provider was removed in 2.0.6 — `gh copilot` is text-only with no streaming / tools / MCP, and could not host Stage 10 dispatch.
 
@@ -22,17 +26,18 @@ Every client advertises its capability set via `ClientCapabilities` (`llm_client
 
 ```python
 class ClientCapabilities:
-    supports_streaming: bool
-    supports_tools: bool
-    supports_thinking: bool
-    supports_tool_choice: bool
-    supports_mcp_passthrough: bool
-    supports_token_usage: bool
-    supports_json_schema: bool
-    dropped_fields: tuple[str, ...]     # silently-discarded request fields
+    supports_thinking / supports_tools / supports_streaming
+    supports_tool_choice / supports_stop_sequences / supports_top_k
+    supports_system_prompt / supports_structured_output
+    supports_session_continuity / supports_mcp_passthrough
+    supports_budget_limit / supports_token_usage / supports_cost_usage
+    is_subprocess: bool
+    requires_workspace: bool
+    streaming_granularity: "token" | "message" | "none"
+    drops: tuple[str, ...]     # authoritative — stripped with a parameter_dropped event
 ```
 
-Hosts read the capability set up-front so the UI can grey out features the chosen provider can't honour. `dropped_fields` documents what's silently ignored (e.g. `top_k` on OpenAI, `temperature` on `claude_code_cli`).
+Hosts read the capability set up-front so the UI can grey out features the chosen provider can't honour. `drops` documents what is stripped before send (e.g. `top_k` on OpenAI, `temperature` on the CLI backends) — since 2.2.0 the strip is enforced, not advisory.
 
 ## CredentialBundle + ProviderCredentials
 

@@ -136,6 +136,67 @@ def _creds_to_client_kwargs(provider: str, creds: ProviderCredentials) -> Dict[s
             kwargs["default_headers"] = dict(creds.default_headers)
         return kwargs
 
+    if provider == "bedrock":
+        # AWS SigV4 credentials travel in ``extras`` (a single ``api_key``
+        # string cannot express them). Omitted keys defer to the boto3
+        # default chain — key-less (role-based) deploys stay valid, so an
+        # extras dict carrying only a region still counts as configured.
+        extras = dict(creds.extras or {})
+        kwargs = {}
+        for key in (
+            "aws_region",
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "aws_profile",
+        ):
+            if extras.get(key):
+                kwargs[key] = extras[key]
+        if creds.base_url is not None:
+            kwargs["base_url"] = creds.base_url  # VPC endpoint override
+        if creds.default_headers is not None:
+            kwargs["default_headers"] = dict(creds.default_headers)
+        return kwargs
+
+    if provider == "vertex":
+        extras = dict(creds.extras or {})
+        kwargs = {}
+        for key in ("project", "location", "credentials_json"):
+            if extras.get(key):
+                kwargs[key] = extras[key]
+        if creds.api_key:
+            kwargs["api_key"] = creds.api_key  # express-mode key
+        if creds.base_url is not None:
+            kwargs["base_url"] = creds.base_url
+        if creds.default_headers is not None:
+            kwargs["default_headers"] = dict(creds.default_headers)
+        return kwargs
+
+    if provider == "codex_cli":
+        extras = dict(creds.extras or {})
+        kwargs = {"api_key": creds.api_key}
+        if creds.binary_path:
+            kwargs["binary_path"] = creds.binary_path
+        if getattr(creds, "auth_mode", "auto") != "auto":
+            kwargs["auth_mode"] = creds.auth_mode
+        for key in (
+            "workspace_dir",
+            "workspace_root",
+            "sandbox_mode",
+            "bypass_sandbox",
+            "mcp_config",
+            "extra_args",
+            "timeout_s",
+            "strict_wire",
+            "env_extras",
+        ):
+            if key in extras:
+                if key == "workspace_root":
+                    kwargs["workspace_dir"] = extras[key]
+                else:
+                    kwargs[key] = extras[key]
+        return kwargs
+
     if provider == "claude_code_cli":
         extras = dict(creds.extras or {})
         kwargs = {"api_key": creds.api_key}

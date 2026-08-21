@@ -26,7 +26,19 @@ def _lookup_prices(pricing: Dict[str, Dict[str, float]], model: str) -> Optional
     for key in pricing:
         if model.startswith(key) and (best_key is None or len(key) > len(best_key)):
             best_key = key
-    return pricing[best_key] if best_key is not None else None
+    if best_key is not None:
+        return pricing[best_key]
+    # Bedrock ids decorate the canonical Anthropic id
+    # (``us.anthropic.claude-…-v1:0``) — undecorate once and retry so
+    # Bedrock sessions price like their Anthropic-API twins. (Bedrock
+    # list prices for Anthropic models match the Anthropic API.)
+    if "anthropic." in model or ":" in model:
+        from xgen_agent_runtime.llm_client.bedrock import core_model_id
+
+        core = core_model_id(model)
+        if core != model:
+            return _lookup_prices(pricing, core)
+    return None
 
 
 def _price_usage(usage: TokenUsage, prices: Dict[str, float]) -> float:

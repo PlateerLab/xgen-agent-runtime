@@ -4,6 +4,59 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.5.0] — 2026-08-21
+
+### Added — LLM 프로바이더 확장: AWS Bedrock · Google Vertex AI · OpenAI Codex CLI
+
+XGEN 의 "다양한 프로바이더" 요구를 엔진 레벨에서 흡수한다. 셋 모두
+`ClientRegistry` 에 정식 등록되고 `_creds_to_client_kwargs` 가 다중 필드
+자격증명(extras)을 각 생성자 표면으로 나른다.
+
+- **`bedrock`** (`llm_client/bedrock.py`) — `AnthropicClient` 상속,
+  `AsyncAnthropicBedrock`(SigV4; 키 생략 시 boto3 기본 체인 = IAM role 배포 유효).
+  모델 ID 이중 표기 흡수: 순수 Anthropic ID/별칭은 리전 geo 프리픽스의
+  inference-profile ID 로 승격(`us.anthropic.…-v1:0`), 완전한 Bedrock ID 는
+  그대로 통과. **패밀리 게이트(오퍼스 4.7 sampling 거부·adaptive thinking)는
+  코어 ID 기준으로 계속 발화** — 장식된 ID 에서 프리픽스 매칭이 조용히 죽는
+  함정을 `_build_kwargs` 코어-빌드→ID-치환 순서로 봉합.
+  - `s05_cache` 마커 게이트가 `anthropic` 하드코딩이라 **Bedrock 세션 전체가
+    프롬프트 캐싱 없이 매턴 풀 프리필**되던 결함(TTFT A1 쌍둥이)을 함께 봉합
+    (`provider in ("anthropic","bedrock")`).
+  - `s07_token` 가격 조회에 Bedrock ID 정규화 재시도 추가(동일 단가).
+  - 의존성: `anthropic[bedrock]` (boto3/botocore).
+- **`vertex`** (`llm_client/vertex.py`) — `GoogleClient` 상속,
+  `genai.Client(vertexai=True, …)`. 인증 3채널: 서비스계정 JSON
+  (`google-auth`, cloud-platform scope) / express 모드 API 키(프로젝트 자체
+  바인딩이라 project 미전달) / ADC. `project` 미지정 + 키 없음은 생성 시점
+  ValueError (모델 오류로 오독되는 첫 호출 실패 금지).
+- **`codex_cli`** (`llm_client/codex.py` + `translators/_codex.py`) — 두 번째
+  CLI 백엔드. 프로세스 계층은 벤더 중립 `CLIProcessRunner` 그대로 재사용.
+  - `codex exec --json` JSONL 어휘(신형 `item.*`/`turn.*` + 구형 `{id,msg}`
+    봉투 양쪽)를 canonical 이벤트로 번역, 미지 라인은 세고 보고
+    (`llm_client.unknown_wire_shape` 재사용, `strict_wire` 카나리 지원).
+  - 프롬프트는 argv 가 아니라 stdin(`-`) — 평탄화 히스토리가 argv 한계를
+    넘는다. 세션 연속성은 `exec resume <thread_id>` + `thread.started` 캡처.
+  - MCP 서버는 `-c mcp_servers.*` TOML 오버라이드로 주입 — `$CODEX_HOME` 을
+    바꾸지 않아 사용자의 ChatGPT 로그인(auth.json)이 보존된다.
+  - 인증 채널 배타: 구독(oauth) 모드에서는 `OPENAI_API_KEY` 를 절대 주입하지
+    않는다(청구 채널 뒤집힘 방지 — Claude 백엔드와 동일 계약).
+  - 구조화 출력: `response_format=json_schema` → 임시 스키마 파일 +
+    `--output-schema`.
+  - `streaming_granularity="message"` 정직 선언 (Codex 는 완료 아이템 단위).
+- `model_discovery`: `bedrock`/`vertex`(호스트 카탈로그 위임)·`codex_cli`
+  (목록 명령 없음) unavailable 분기.
+- 테스트 47종 신설: Bedrock 모델 ID 정규화·게이트 발화, Vertex 인증 채널
+  선택, Codex argv/stdin/누산기/원샷/인증실패/에코 (fake_codex 바이너리),
+  registry·creds 매핑 배선.
+
+### 주의(소비자)
+
+- Codex 의 실제 wire 는 릴리스 간 드리프트가 있다 — 어휘는 두 세대를 흡수하고
+  미지 라인은 관용+보고하지만, **실 CLI 카나리(strict_wire)로 조기 검증**을
+  권장한다.
+- Vertex 위 Anthropic 모델(`AsyncAnthropicVertex`)은 이번 범위 밖 — 필요 시
+  별도 provider 로 추가한다.
+
 ## [3.4.0] — 2026-08-20
 
 ### Security/Fixed — 남은 도구들이 서빙 파드에서 돌던(+비밀 유출) 경로 봉합

@@ -104,8 +104,7 @@ class XgenySandbox(Protocol):
         stdin: Optional[bytes] = None,
         env: Optional[Mapping[str, str]] = None,
         timeout_s: float = 120.0,
-    ) -> ExecResult:
-        ...
+    ) -> ExecResult: ...
 
     async def read_bytes(self, path: str) -> bytes:
         """없으면 :class:`FileNotFoundError`."""
