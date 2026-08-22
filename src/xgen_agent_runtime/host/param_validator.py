@@ -8,6 +8,7 @@
 에러 메시지는 다른 에러 코드와 동일하게 `[ERROR104: ...]` 문자열로 그대로
 채팅 출력에 내보낸다 — agent_xgen(스트리밍/논스트리밍 양쪽), agent_geny 공용.
 """
+
 import logging
 from typing import Any, Optional, Tuple
 
@@ -80,7 +81,9 @@ def validate_agent_params(
             range_text = _format_range(bounds)
             hint = ""
             if bounds[1] == 1.0:
-                hint = " (OpenAI/vLLM/Google은 0 ~ 2를 허용하지만 이 provider는 0 ~ 1만 허용합니다.)"
+                hint = (
+                    " (OpenAI/vLLM/Google은 0 ~ 2를 허용하지만 이 provider는 0 ~ 1만 허용합니다.)"
+                )
             return (
                 f"[ERROR104: {param_label} {value}은(는) {label}이(가) 지원하지 않는 값입니다. "
                 f"{label}의 허용 범위는 {range_text} 입니다.{hint} "

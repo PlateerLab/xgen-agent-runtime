@@ -130,7 +130,11 @@ def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, st
     name = _sanitize_name(spec.get("name"))
     description = str(spec.get("description", "") or "")
     schema = spec.get("input_schema") or spec.get("args_schema")
-    input_schema = _object_schema(schema.get("properties", {}), schema.get("required")) if isinstance(schema, dict) else dict(_EMPTY_SCHEMA)
+    input_schema = (
+        _object_schema(schema.get("properties", {}), schema.get("required"))
+        if isinstance(schema, dict)
+        else dict(_EMPTY_SCHEMA)
+    )
 
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         try:
@@ -148,7 +152,9 @@ def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, st
             result_sink[name] = text
         return ToolResult(content=text)
 
-    return build_tool(name=name, description=description, input_schema=input_schema, execute=_execute)
+    return build_tool(
+        name=name, description=description, input_schema=input_schema, execute=_execute
+    )
 
 
 def _flatten(value: Any) -> List[Any]:
@@ -170,14 +176,20 @@ def _adapt_one(obj: Any, result_sink: Optional[Dict[str, str]]) -> List[Tool]:
     if isinstance(obj, dict):
         # Skill payload: the real tool travels under "dispatch_tool".
         if obj.get("dispatch_tool") is not None:
-            return [t for item in _flatten(obj["dispatch_tool"]) for t in _adapt_one(item, result_sink)]
+            return [
+                t for item in _flatten(obj["dispatch_tool"]) for t in _adapt_one(item, result_sink)
+            ]
         if obj.get("name") and callable(obj.get("func") or obj.get("function")):
             return [_wrap_callable_dict(obj, result_sink)]
-        logger.warning("geny_bridge: cannot adapt tool dict with keys %s — skipping", sorted(obj.keys()))
+        logger.warning(
+            "geny_bridge: cannot adapt tool dict with keys %s — skipping", sorted(obj.keys())
+        )
         return []
     if _looks_like_langchain_tool(obj):
         return [_wrap_langchain(obj, result_sink)]
-    logger.warning("geny_bridge: cannot adapt tool object of type %s — skipping", type(obj).__name__)
+    logger.warning(
+        "geny_bridge: cannot adapt tool object of type %s — skipping", type(obj).__name__
+    )
     return []
 
 

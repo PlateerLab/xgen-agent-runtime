@@ -25,7 +25,7 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Tuple
 
 from xgen_agent_runtime.memory.provider import Importance, NoteDraft, NotePatch
 from xgen_agent_runtime.memory.strategy import ProviderDrivenStrategy
@@ -101,7 +101,10 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
         return f"{sid}__user"
 
     async def _resolve_filename(
-        self, provider: Any, state: Any, first_user: str,
+        self,
+        provider: Any,
+        state: Any,
+        first_user: str,
     ) -> Tuple[str, Any]:
         """세션의 대화 노트 파일명 확정 + 기존 노트 반환.
 
@@ -185,23 +188,25 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
         notes = provider.notes()
         if existing is None:
             title = f"대화: {first_user[:48]}" + ("…" if len(first_user) > 48 else "")
-            await notes.write(NoteDraft(
-                title=title,
-                body=body_block,
-                category=CONVERSATIONS_CATEGORY,
-                tags=["conversation", "auto"],
-                importance=Importance.LOW,
-                filename=filename,
-                frontmatter={
-                    "session_id": sid,
-                    "date_first": day,
-                    "date_last": day,
-                    "turn_count": len(fresh),
-                    "kinds": sorted(kinds_new),
-                    "counterparts": ["user"],
-                    "event_ids": event_ids_new[:200],
-                },
-            ))
+            await notes.write(
+                NoteDraft(
+                    title=title,
+                    body=body_block,
+                    category=CONVERSATIONS_CATEGORY,
+                    tags=["conversation", "auto"],
+                    importance=Importance.LOW,
+                    filename=filename,
+                    frontmatter={
+                        "session_id": sid,
+                        "date_first": day,
+                        "date_last": day,
+                        "turn_count": len(fresh),
+                        "kinds": sorted(kinds_new),
+                        "counterparts": ["user"],
+                        "event_ids": event_ids_new[:200],
+                    },
+                )
+            )
         else:
             # frontmatter 는 patch 시 교체 — 기존 값을 읽어 누적 병합.
             fm = dict(getattr(existing, "frontmatter", {}) or {})
@@ -212,10 +217,13 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
             fm["kinds"] = sorted(set(fm.get("kinds") or []) | kinds_new)
             fm.setdefault("counterparts", ["user"])
             fm["event_ids"] = (list(fm.get("event_ids") or []) + event_ids_new)[:200]
-            await notes.update(filename, NotePatch(
-                append_body="\n\n" + body_block,
-                frontmatter=fm,
-            ))
+            await notes.update(
+                filename,
+                NotePatch(
+                    append_body="\n\n" + body_block,
+                    frontmatter=fm,
+                ),
+            )
         state.metadata[_ARCHIVED_KEY] = watermark
 
     # ── strategy hook ────────────────────────────────────────────

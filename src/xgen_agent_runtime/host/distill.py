@@ -69,6 +69,7 @@ class DistillSpec:
 
 # ── pass 카운터 (에버그린 케이던스) ────────────────────────────────
 
+
 def _state_path(workflow_id: str, host: Any) -> str:
     # vault 루트는 host 로 얻는다(서버=editor vault, 커넥터=로컬 .memory).
     return os.path.join(host.agent_vault_root(workflow_id), DISTILL_STATE_FILENAME)
@@ -95,6 +96,7 @@ def _save_state(workflow_id: str, state: Dict[str, Any], host: Any) -> None:
 
 # ── 증류 본체 ─────────────────────────────────────────────────────
 
+
 async def _distill_async(spec: DistillSpec, provider: Any, llm: Any) -> Dict[str, Any]:
     """facts → rollup(L1) → daily(L2, 0콜) → evergreen(L3, 임계) 순서.
 
@@ -103,7 +105,12 @@ async def _distill_async(spec: DistillSpec, provider: Any, llm: Any) -> Dict[str
     """
     from xgen_agent_runtime.memory import FactExtraction, MemoryRollup
 
-    report: Dict[str, Any] = {"facts_changes": 0, "digest": False, "daily": False, "evergreen": False}
+    report: Dict[str, Any] = {
+        "facts_changes": 0,
+        "digest": False,
+        "daily": False,
+        "evergreen": False,
+    }
 
     # ① Fact Ledger — 스키마 구속 추출 (critical/__facts__.md, 매 턴 주입 대상)
     try:
@@ -118,7 +125,9 @@ async def _distill_async(spec: DistillSpec, provider: Any, llm: Any) -> Dict[str
             if fact_report.changes:
                 logger.info(
                     "distill: fact ledger updated (workflow=%s, %d change(s), %d active)",
-                    spec.workflow_id, fact_report.changes, fact_report.active_facts,
+                    spec.workflow_id,
+                    fact_report.changes,
+                    fact_report.active_facts,
                 )
         elif fact_report.skipped_reason:
             logger.debug("distill: facts skipped (%s)", fact_report.skipped_reason)
@@ -162,7 +171,8 @@ async def _distill_async(spec: DistillSpec, provider: Any, llm: Any) -> Dict[str
         vector = provider.vector()
         if vector is not None and hasattr(vector, "index_missing"):
             backfilled = await _asyncio.wait_for(
-                vector.index_missing(provider.notes()), timeout=60.0,
+                vector.index_missing(provider.notes()),
+                timeout=60.0,
             )
             if backfilled:
                 report["vector_backfill"] = backfilled
@@ -187,7 +197,10 @@ def run_distillation(spec: DistillSpec, llm: Any = None) -> Optional[Dict[str, A
 
     if llm is None:
         llm = spec.host.build_turn_memory_llm(
-            spec.provider, spec.model, spec.api_key, spec.base_url,
+            spec.provider,
+            spec.model,
+            spec.api_key,
+            spec.base_url,
             cli_auth_mode=spec.cli_auth_mode,
             cli_oauth_token=spec.cli_oauth_token,
             cli_binary_path=spec.cli_binary_path,
@@ -249,7 +262,11 @@ def launch_distillation(spec: DistillSpec) -> bool:
                 state["last_report"] = report
                 logger.info(
                     "distill: pass done (workflow=%s, facts=%s, digest=%s, daily=%s, evergreen=%s)",
-                    wf, report["facts_changes"], report["digest"], report["daily"], report["evergreen"],
+                    wf,
+                    report["facts_changes"],
+                    report["digest"],
+                    report["daily"],
+                    report["evergreen"],
                 )
             else:
                 # LLM 구성 불가(claude_code 구독 등) / provider 실패 — 스킵 기록

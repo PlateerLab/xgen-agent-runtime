@@ -20,7 +20,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any, Callable, Dict, Iterator, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 from xgen_agent_runtime import ClientRegistry, Pipeline, PipelineBuilder, PipelineState
 from xgen_agent_runtime.tools import ToolRegistry
@@ -64,7 +64,9 @@ def build_client(
     """
     key = _map_provider(provider)
     if key == "custom" and not base_url:
-        raise ValueError("vLLM/custom provider requires a Base URL (parameter or VLLM_API_BASE_URL config)")
+        raise ValueError(
+            "vLLM/custom provider requires a Base URL (parameter or VLLM_API_BASE_URL config)"
+        )
     client_cls = ClientRegistry.get(key)
     kwargs: Dict[str, Any] = {"api_key": api_key}
     if base_url:
@@ -83,8 +85,15 @@ def build_client(
 # 는 그 "샌드박스 격리 모드"의 차단만 미러한다 (이때 파일 작업은 브릿지의
 # path-guard 된 executor Read/Write/Bash 가 workspace 안에서 담당).
 _CLI_LOCAL_TOOLS = (
-    "Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit",
-    "Glob", "Grep", "LS",
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "LS",
 )
 
 #: CLI 의 **세션 한정 스케줄** 도구 — 항상 차단한다.
@@ -131,7 +140,9 @@ def build_cli_client(
     if auth_mode == "api_key" and not api_key:
         raise ValueError("Claude Code(api_key 모드): ANTHROPIC_API_KEY 가 설정되어 있지 않습니다")
     if auth_mode == "setup_token" and not oauth_token:
-        raise ValueError("Claude Code(setup_token 모드): CLAUDE_CODE_OAUTH_TOKEN 이 설정되어 있지 않습니다")
+        raise ValueError(
+            "Claude Code(setup_token 모드): CLAUDE_CODE_OAUTH_TOKEN 이 설정되어 있지 않습니다"
+        )
 
     from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
@@ -390,7 +401,9 @@ def build_pipeline(
         # replaces by order). Validation lands on ParsedResponse; the terminal
         # settle for the node's text output happens in settle_structured().
         from xgen_agent_runtime.stages.s09_parse import ParseStage
-        from xgen_agent_runtime.stages.s09_parse.artifact.default.parsers import StructuredOutputParser
+        from xgen_agent_runtime.stages.s09_parse.artifact.default.parsers import (
+            StructuredOutputParser,
+        )
 
         pipeline.register_stage(ParseStage(parser=StructuredOutputParser(schema=output_schema)))
 
@@ -448,7 +461,9 @@ def build_pipeline(
             )
             # 턴-종료 증류(distillation) 스펙 — teardown 이 백그라운드로 발사.
             pipeline._memory_distill_spec = memory_distill_spec
-            logger.info("geny_bridge: memory wired (context retriever + memory strategy + prompt blocks)")
+            logger.info(
+                "geny_bridge: memory wired (context retriever + memory strategy + prompt blocks)"
+            )
         except Exception:  # noqa: BLE001 — 메모리는 실행을 깨지 않는다
             logger.exception("geny_bridge: memory attach failed (memoryless run)")
     return pipeline
@@ -482,7 +497,9 @@ def settle_structured(text: str, schema: Dict[str, Any]) -> str:
         jsonschema.validate(parsed, schema)
         return json.dumps(parsed, ensure_ascii=False)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("geny_bridge: structured output settle failed (%s) — returning raw text", exc)
+        logger.warning(
+            "geny_bridge: structured output settle failed (%s) — returning raw text", exc
+        )
         return text
 
 
@@ -502,7 +519,9 @@ def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
         "tool_name": name,
-        "tool_input": tool_input if isinstance(tool_input, str) else json.dumps(tool_input or {}, ensure_ascii=False, default=str),
+        "tool_input": tool_input
+        if isinstance(tool_input, str)
+        else json.dumps(tool_input or {}, ensure_ascii=False, default=str),
         "timestamp": datetime.now().isoformat(),
     }
     indicator = _indicator(name)
@@ -579,21 +598,23 @@ def _record_execution(
     try:
         from xgen_agent_runtime.host.execution_record import record_turn_execution
 
-        loop.run_until_complete(asyncio.wait_for(
-            record_turn_execution(
-                provider,
-                input_text=input_text,
-                output_text=output_text,
-                success=success,
-                duration_ms=duration_ms,
-                session_id=str(getattr(state, "session_id", "") or ""),
-                provider_name=str(getattr(spec, "provider", "") or "") if spec else "",
-                model=str(getattr(spec, "model", "") or "") if spec else "",
-                error=error,
-                cancelled=cancelled,
-            ),
-            timeout=10.0,
-        ))
+        loop.run_until_complete(
+            asyncio.wait_for(
+                record_turn_execution(
+                    provider,
+                    input_text=input_text,
+                    output_text=output_text,
+                    success=success,
+                    duration_ms=duration_ms,
+                    session_id=str(getattr(state, "session_id", "") or ""),
+                    provider_name=str(getattr(spec, "provider", "") or "") if spec else "",
+                    model=str(getattr(spec, "model", "") or "") if spec else "",
+                    error=error,
+                    cancelled=cancelled,
+                ),
+                timeout=10.0,
+            )
+        )
     except Exception:  # noqa: BLE001 — 기록은 best-effort
         logger.debug("geny_bridge: execution record failed (turn unaffected)", exc_info=True)
 
@@ -688,7 +709,10 @@ def stream_turn(
                 turn_error = str(event.data.get("error", "unknown error"))
                 yield f"\n[ERROR] {turn_error}"
             elif tool_events and event.type == "tool.call_start":
-                yield {"type": "agent_event", "data": _tool_call_event(event.data.get("name", ""), event.data.get("input"))}
+                yield {
+                    "type": "agent_event",
+                    "data": _tool_call_event(event.data.get("name", ""), event.data.get("input")),
+                }
             elif tool_events and event.type == "tool.call_complete":
                 name = event.data.get("name", "")
                 yield {
@@ -711,8 +735,15 @@ def stream_turn(
                 tool_use_id = event.data.get("id") or ""
                 if tool_use_id:
                     cli_tool_names[tool_use_id] = name
-                yield {"type": "agent_event", "data": _tool_call_event(name, event.data.get("input"))}
-            elif tool_events and event.type == "api.tool_result" and event.data.get("source") == "cli":
+                yield {
+                    "type": "agent_event",
+                    "data": _tool_call_event(name, event.data.get("input")),
+                }
+            elif (
+                tool_events
+                and event.type == "api.tool_result"
+                and event.data.get("source") == "cli"
+            ):
                 name = cli_tool_names.pop(event.data.get("tool_use_id", ""), "") or "cli_tool"
                 yield {
                     "type": "agent_event",
@@ -732,8 +763,10 @@ def stream_turn(
         except Exception:  # noqa: BLE001
             pass
         _record_execution(
-            pipeline, loop,
-            input_text=text, state=state,
+            pipeline,
+            loop,
+            input_text=text,
+            state=state,
             output_text="".join(out_parts),
             success=turn_completed and not turn_error,
             duration_ms=int((time.monotonic() - turn_started) * 1000),
@@ -782,8 +815,10 @@ def run_turn(
         except Exception:  # noqa: BLE001
             pass
         _record_execution(
-            pipeline, loop,
-            input_text=text, state=state,
+            pipeline,
+            loop,
+            input_text=text,
+            state=state,
             output_text=turn_output,
             success=turn_success,
             duration_ms=int((time.monotonic() - turn_started) * 1000),

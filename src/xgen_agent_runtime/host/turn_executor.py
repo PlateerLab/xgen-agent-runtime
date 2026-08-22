@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # 본체가 쓰는 모듈-수준 상수/헬퍼(항상 실행) — 서버에서 resolve. lazy 트리거라
 # 순환 없음(execute 가 turn_executor 를 지연 import). Phase 2 에서 패키지로 이전.
@@ -69,11 +69,16 @@ class AgentTurnExecutor:
             # provider 런타임 에러 매핑(geny-executor 내부)은 executor 측 과제 — 여기서는
             # 노드에서 아는 값만 실행 전에 막는다.
             from xgen_agent_runtime.host.param_validator import validate_agent_params
-            param_error = validate_agent_params(provider, temperature=kwargs.get("temperature", 0.7))
+
+            param_error = validate_agent_params(
+                provider, temperature=kwargs.get("temperature", 0.7)
+            )
             if param_error:
                 logger.error(
                     "agents/geny: 파라미터 검증 실패 (provider=%s, temperature=%r): %s",
-                    provider, kwargs.get("temperature"), param_error,
+                    provider,
+                    kwargs.get("temperature"),
+                    param_error,
                 )
                 return iter([param_error]) if streaming else param_error
 
@@ -81,7 +86,11 @@ class AgentTurnExecutor:
             api_key = host.resolve_api_key(provider, kwargs)
             base_url = host.resolve_base_url(provider, kwargs)
             credentials = host.resolve_credentials(provider, kwargs)
-            schema = _coerce_schema(kwargs.get("output_schema")) if kwargs.get("output_schema") is not None else None
+            schema = (
+                _coerce_schema(kwargs.get("output_schema"))
+                if kwargs.get("output_schema") is not None
+                else None
+            )
 
             # Tools port + embedded tools carried on Context dicts (tool-search mode).
             # tool_exposure="search" → Tools 포트는 deferred 등록(2.42.0 노출 모델,
@@ -89,12 +98,18 @@ class AgentTurnExecutor:
             # 연결된 지식소스의 1차 도구이므로 항상 core 로 즉시 노출한다.
             exposure = (kwargs.get("tool_exposure") or "all").strip()
             result_sink: Dict[str, str] = {}
-            registry = adapt_tools(kwargs.get("tools"), result_sink=result_sink, core=(exposure != "search"))
+            registry = adapt_tools(
+                kwargs.get("tools"), result_sink=result_sink, core=(exposure != "search")
+            )
             rag_block, embedded_tools = collect_rag(
-                text, kwargs.get("context"), context_builder=host.rag_context_builder,
+                text,
+                kwargs.get("context"),
+                context_builder=host.rag_context_builder,
             )
             if embedded_tools:
-                registry = adapt_tools(embedded_tools, result_sink=result_sink, registry=registry, core=True)
+                registry = adapt_tools(
+                    embedded_tools, result_sink=result_sink, registry=registry, core=True
+                )
             # Connector-hosted Local MCP 도구 자동 주입 — 실행자(user_id)의 데스크톱 커넥터가
             # 로컬 MCP 서버 도구를 노출하고 있으면 registry 에 core 로 합산한다(그래프 노드
             # 없이 실행 시점 자동). 커넥터 미연결 시 빈 리스트 → no-op. 실패는 방어적으로 무시.
@@ -105,16 +120,22 @@ class AgentTurnExecutor:
                     # client_surface 게이트(host 내부): 대화 출처가 데스크톱 커넥터일
                     # 때만 로컬 도구를 주입한다 (web 대화엔 커넥터가 연결돼 있어도 no-op).
                     connector_tools = host.build_connector_mcp_tools(
-                        kwargs.get("user_id"), kwargs.get("client_surface"))
+                        kwargs.get("user_id"), kwargs.get("client_surface")
+                    )
                     if connector_tools:
-                        registry = adapt_tools(connector_tools, result_sink=result_sink, registry=registry, core=True)
-                        logger.info("agents/geny: Connector MCP 도구 %d개 자동 주입", len(connector_tools))
+                        registry = adapt_tools(
+                            connector_tools, result_sink=result_sink, registry=registry, core=True
+                        )
+                        logger.info(
+                            "agents/geny: Connector MCP 도구 %d개 자동 주입", len(connector_tools)
+                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("agents/geny: Connector MCP 도구 주입 실패 (무시): %s", exc)
             if registry:
                 logger.info(
                     "agents/geny: %d tool(s) registered (%d deferred) from Tools/Context ports",
-                    len(registry), len(registry.list_deferred()),
+                    len(registry),
+                    len(registry.list_deferred()),
                 )
 
             # RAG results join the user turn (agent_xgen convention), so the
@@ -129,11 +150,16 @@ class AgentTurnExecutor:
                 # preload 된 과거 대화는 내장 메모리의 STM 기록/대화 아카이브
                 # 대상에서 제외 — 두 전략의 워터마크를 preload 길이로 초기화
                 # (없으면 매 턴 과거 이력이 통째로 재기록되어 중복 폭증).
-                from xgen_agent_runtime.host.conversation_archive import _ARCHIVED_KEY, STM_RECORDED_KEY
+                from xgen_agent_runtime.host.conversation_archive import (
+                    _ARCHIVED_KEY,
+                    STM_RECORDED_KEY,
+                )
 
                 state.metadata[STM_RECORDED_KEY] = len(history)
                 state.metadata[_ARCHIVED_KEY] = len(history)
-                logger.info("agents/geny: preloaded %d history message(s) from Memory port", len(history))
+                logger.info(
+                    "agents/geny: preloaded %d history message(s) from Memory port", len(history)
+                )
 
             # ── 내장 메모리 (에이전트당 하나) ──────────────────────
             # enable_memory 기본 True — 메모리 노드와 무관하게 geny-executor 파일
@@ -183,7 +209,8 @@ class AgentTurnExecutor:
                 # 로컬 모드에서는 러너 세션이 없다 — 클라우드 fs_* 스킬이 쓸 트리를
                 # 이 파드에 복원한다(pod_local; 턴 끝 publish 도 파드 경로).
                 _cloud_mount = host.prepare_cloud(
-                    kwargs.get("user_id"), str(kwargs.get("workflow_id") or ""),
+                    kwargs.get("user_id"),
+                    str(kwargs.get("workflow_id") or ""),
                     pod_local=_connector_ws is not None,
                 )
             except Exception as _cexc:  # noqa: BLE001 — 클라우드가 실행을 막으면 안 된다
@@ -206,9 +233,15 @@ class AgentTurnExecutor:
                 # 존재를 인식하게 한다. 진단 보조라 실패는 조용히 무시(실행 안 막음).
                 try:
                     _note = host.cloud_not_mounted_note(
-                        kwargs.get("user_id"), str(kwargs.get("workflow_id") or ""))
+                        kwargs.get("user_id"), str(kwargs.get("workflow_id") or "")
+                    )
                     if _note:
-                        system_prompt = system_prompt + "\n## 사용자 클라우드 스토리지 (XgenCloud)\n" + _note + "\n"
+                        system_prompt = (
+                            system_prompt
+                            + "\n## 사용자 클라우드 스토리지 (XgenCloud)\n"
+                            + _note
+                            + "\n"
+                        )
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -219,7 +252,10 @@ class AgentTurnExecutor:
             if _cloud_mount:
                 try:
                     _cloud_skill = host.build_cloud_skill(
-                        _cloud_mount[0], _cloud_mount[1], None, kwargs.get("user_id"),
+                        _cloud_mount[0],
+                        _cloud_mount[1],
+                        None,
+                        kwargs.get("user_id"),
                     )
                 except Exception as _cfexc:  # noqa: BLE001
                     logger.warning("agents/geny: FileCloud 스킬 실패 (스킵): %s", _cfexc)
@@ -240,12 +276,16 @@ class AgentTurnExecutor:
             # 를 하지 않는다: 진실은 사용자 PC 폴더이고 인덱스 반영은 커넥터 동기화
             # 엔진이 한다(이중 기록 금지).
             _sandbox = host.make_sandbox(
-                str(kwargs.get("workflow_id") or ""), kwargs.get("user_id"), _connector_ws,
+                str(kwargs.get("workflow_id") or ""),
+                kwargs.get("user_id"),
+                _connector_ws,
             )
             if _connector_ws is not None:
                 logger.info(
                     "agents/geny: 커넥터 로컬 워크스페이스 실행 (user=%s, workflow=%s, dir=%s)",
-                    kwargs.get("user_id"), kwargs.get("workflow_id"), _connector_ws.get("dir"),
+                    kwargs.get("user_id"),
+                    kwargs.get("workflow_id"),
+                    _connector_ws.get("dir"),
                 )
             # 연결된 클라우드를 이 세션에서 다룰 수 있게 연다.
             #
@@ -264,7 +304,8 @@ class AgentTurnExecutor:
             if _sandbox is not None and _connector_ws is None and kwargs.get("user_id"):
                 try:
                     _shared_mounts = host.open_shared(
-                        _sandbox, kwargs.get("user_id"),
+                        _sandbox,
+                        kwargs.get("user_id"),
                         workflow_id=str(kwargs.get("workflow_id") or ""),
                     )
                 except Exception as _shexc:  # noqa: BLE001
@@ -291,9 +332,9 @@ class AgentTurnExecutor:
                         kwargs.get("user_id"),
                         # 스케줄 발화 턴에는 JobSchedule 을 빼고 준다 — 작업이 매
                         # 실행마다 새 작업을 낳는 자기복제 방지.
-                        in_scheduled_run=str(
-                            kwargs.get("interaction_id") or ""
-                        ).startswith("workflow_schedule_"),
+                        in_scheduled_run=str(kwargs.get("interaction_id") or "").startswith(
+                            "workflow_schedule_"
+                        ),
                         # notify 옵션의 귀착지 — 이 작업을 요청한 바로 이 대화.
                         interaction_id=str(kwargs.get("interaction_id") or ""),
                     )
@@ -324,7 +365,9 @@ class AgentTurnExecutor:
                 from xgen_agent_runtime.host._constants import MEMORY_PROMPT_BLOCK
                 from xgen_agent_runtime.host.memory_tools import build_memory_tools
 
-                memory_provider = host.build_memory_provider(str(kwargs.get("workflow_id") or ""), interaction_id)
+                memory_provider = host.build_memory_provider(
+                    str(kwargs.get("workflow_id") or ""), interaction_id
+                )
                 if memory_provider is not None and provider == "claude_code":
                     # CLI 백엔드: memory_* 는 내부 MCP 브릿지가 광고한다
                     # (mcp__connector__memory_* 이름). 자동 계층(주입/기록)과 별개로
@@ -356,7 +399,9 @@ class AgentTurnExecutor:
                         system_prompt = system_prompt + MEMORY_PROMPT_BLOCK
                         logger.info("agents/geny: 내장 메모리 활성 (self-serve 도구 6개 등록)")
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning("agents/geny: 메모리 도구 등록 실패 (자동 계층만 동작): %s", exc)
+                        logger.warning(
+                            "agents/geny: 메모리 도구 등록 실패 (자동 계층만 동작): %s", exc
+                        )
 
             # ── built-in 도구 패밀리 (web/documents/browser/ssh/workflow) ──
             # geny-executor 옵셔널 전부 채택 (Geny 동형) — SDK 경로 전용. CLI 백엔드는
@@ -453,7 +498,8 @@ class AgentTurnExecutor:
                             __import__(
                                 "editor.geny_bridge.cloud_mount", fromlist=["describe"]
                             ).describe(_cloud_mount[1])
-                            if _cloud_mount else {}
+                            if _cloud_mount
+                            else {}
                         )
 
                         run_tool_context = host.build_run_tool_context(
@@ -517,23 +563,37 @@ class AgentTurnExecutor:
                     )
                     system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK
                 except Exception as _sexc:  # noqa: BLE001
-                    logger.warning(
-                        "agents/geny: self-evolution 도구 등록 실패 (스킵): %s", _sexc
-                    )
-            elif provider == "claude_code" and _se_allowed and kwargs.get("user_id") not in (None, 0, "0", ""):
+                    logger.warning("agents/geny: self-evolution 도구 등록 실패 (스킵): %s", _sexc)
+            elif (
+                provider == "claude_code"
+                and _se_allowed
+                and kwargs.get("user_id") not in (None, 0, "0", "")
+            ):
                 # CLI 표면에선 mcp__connector__WorkflowSelf 로 광고된다. 하네스가
                 # 자체 "Workflow"(서브에이전트 조율) 도구를 갖고 있어 이름이 비슷할
                 # 뿐 전혀 다른 물건이다 — 이 각주가 없으면 모델이 그래프 편집
                 # 요청을 하네스 Workflow 로 오인하고 "안 된다" 고 답한다 (프로드 실증).
-                system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK + (
-                    "\n(Note: on this backend the graph-editing tool appears as"
-                    " mcp__connector__WorkflowSelf. Your harness's own 'Workflow'"
-                    " tool is subagent orchestration — NOT XGEN graph editing.)"
+                system_prompt = (
+                    system_prompt
+                    + SELF_EVOLUTION_PROMPT_BLOCK
+                    + (
+                        "\n(Note: on this backend the graph-editing tool appears as"
+                        " mcp__connector__WorkflowSelf. Your harness's own 'Workflow'"
+                        " tool is subagent orchestration — NOT XGEN graph editing.)"
+                    )
                 )
-            elif provider == "codex" and _se_allowed and kwargs.get("user_id") not in (None, 0, "0", ""):
-                system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK + (
-                    "\n(Note: on this backend the WorkflowSelf tool is served by"
-                    " the 'connector' MCP server.)"
+            elif (
+                provider == "codex"
+                and _se_allowed
+                and kwargs.get("user_id") not in (None, 0, "0", "")
+            ):
+                system_prompt = (
+                    system_prompt
+                    + SELF_EVOLUTION_PROMPT_BLOCK
+                    + (
+                        "\n(Note: on this backend the WorkflowSelf tool is served by"
+                        " the 'connector' MCP server.)"
+                    )
                 )
 
             # ── 위임 (sub-worker/sub-agent/백그라운드 작업) — Geny 위임 스택 ──
@@ -632,13 +692,15 @@ class AgentTurnExecutor:
                             run_tool_context = host.build_run_tool_context(
                                 interaction_id=interaction_id,
                                 run_dir=(
-                                    _sandbox.workdir if _sandbox is not None
+                                    _sandbox.workdir
+                                    if _sandbox is not None
                                     else host.delegation_workspace(wf_id)
                                 ),
                                 extras=delegation_extras,
                                 storage_dir=(
                                     os.path.join(host.workspace_storage_root(wf_id), "executor")
-                                    if wf_id else None
+                                    if wf_id
+                                    else None
                                 ),
                                 sandbox=_sandbox,
                             )
@@ -659,12 +721,20 @@ class AgentTurnExecutor:
 
             # 턴-종료 증류 스펙 — 이 턴의 LLM 자격증명 그대로 (memory_distill 기본 ON).
             memory_distill_spec = None
-            if memory_provider is not None and provider == "codex" and bool(kwargs.get("memory_distill", True)):
+            if (
+                memory_provider is not None
+                and provider == "codex"
+                and bool(kwargs.get("memory_distill", True))
+            ):
                 # Codex v1: 증류용 MemoryLLM 경로(build_turn_memory_llm)가 codex
                 # 클라이언트 구성을 모른다 — 자동 계층(주입/STM 기록)은 그대로
                 # 동작하고 턴-종료 증류만 스킵한다.
                 logger.info("agents/geny: codex 백엔드 — 메모리 증류 스킵 (v1 미지원)")
-            if memory_provider is not None and provider != "codex" and bool(kwargs.get("memory_distill", True)):
+            if (
+                memory_provider is not None
+                and provider != "codex"
+                and bool(kwargs.get("memory_distill", True))
+            ):
                 from xgen_agent_runtime.host.distill import DistillSpec
 
                 # claude_code 는 인증 채널 해석을 노드가 소유(_build_cli_runtime
@@ -674,7 +744,9 @@ class AgentTurnExecutor:
                 cli_binary_path = ""
                 distill_api_key = api_key
                 if provider == "claude_code":
-                    cli_auth_mode = (host.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key").strip()
+                    cli_auth_mode = (
+                        host.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key"
+                    ).strip()
                     if cli_auth_mode == "setup_token":
                         cli_oauth_token = host.setting("CLAUDE_CODE_OAUTH_TOKEN") or ""
                     else:
@@ -718,7 +790,8 @@ class AgentTurnExecutor:
                 # 스태시(_cloud_skill)를 브릿지가 읽는다. 여기에 인자로도 넣었다가
                 # 시그니처에 없어 CLI 백엔드 전체가 기동 실패했다 (프로드 실증).
                 llm_client, cli_cleanup = host.build_cli_runtime(
-                    "claude_code", kwargs,
+                    "claude_code",
+                    kwargs,
                     cloud_workspace=(_cloud_mount[1] if _cloud_mount else ""),
                     shared_workspaces=[_p for _o, _p, _m in _shared_mounts],
                 )
@@ -727,7 +800,10 @@ class AgentTurnExecutor:
                 # 그러면 같은 workspace 에 작성자가 둘이 된다.
                 _cli_wf = str(kwargs.get("workflow_id") or "")
                 if _sandbox is None and _cli_wf and not host.setting("CLAUDE_CODE_WORKSPACE_ROOT"):
-                    _hydrated_ws, _hydrated_wf = host.agent_workspace_dir(_cli_wf, create=False), _cli_wf
+                    _hydrated_ws, _hydrated_wf = (
+                        host.agent_workspace_dir(_cli_wf, create=False),
+                        _cli_wf,
+                    )
             elif provider == "codex":
                 # Codex 도 CLI 가 루프를 소유한다 — registry 도구는 보이지 않는다.
                 if registry:
@@ -738,12 +814,17 @@ class AgentTurnExecutor:
                     )
                     registry = None
                 llm_client, cli_cleanup = host.build_cli_runtime(
-                    "codex", kwargs, cloud_workspace=(_cloud_mount[1] if _cloud_mount else ""),
+                    "codex",
+                    kwargs,
+                    cloud_workspace=(_cloud_mount[1] if _cloud_mount else ""),
                 )
                 # 영속 workspace 사용 시 턴 끝 publish 표식 — claude 경로와 동일 규약.
                 _codex_wf = str(kwargs.get("workflow_id") or "")
                 if _codex_wf and not host.setting("CODEX_WORKSPACE_ROOT"):
-                    _hydrated_ws, _hydrated_wf = host.agent_workspace_dir(_codex_wf, create=False), _codex_wf
+                    _hydrated_ws, _hydrated_wf = (
+                        host.agent_workspace_dir(_codex_wf, create=False),
+                        _codex_wf,
+                    )
 
             # ── 컨텍스트 예산 (컨텍스트 자동 압축 토글) ─────────────────
             # system_prompt 가 최종형이 된 지점 — 여기서 윈도우를 해석하고,
@@ -761,7 +842,8 @@ class AgentTurnExecutor:
                 )
 
                 budget_window = resolve_window(
-                    provider, model,
+                    provider,
+                    model,
                     int(kwargs.get("context_window") or 0),
                     base_url=base_url,
                     vllm_probe=host.fetch_vllm_max_model_len,
@@ -785,7 +867,9 @@ class AgentTurnExecutor:
                         text, rag_block, clamped = fit.text, fit.rag_block, True
                         logger.warning(
                             "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
-                            fit.window, fit.budget, fit.total_before,
+                            fit.window,
+                            fit.budget,
+                            fit.total_before,
                         )
 
             user_text = f"{text}\n\n{rag_block}" if rag_block else text

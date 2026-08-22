@@ -44,7 +44,10 @@ def history_messages(memory_value: Any) -> List[Dict[str, Any]]:
     if isinstance(memory_value, tuple) and memory_value:
         memory_value = memory_value[0]
     if not isinstance(memory_value, list):
-        logger.debug("geny_bridge: memory port value is %s, expected list — ignoring", type(memory_value).__name__)
+        logger.debug(
+            "geny_bridge: memory port value is %s, expected list — ignoring",
+            type(memory_value).__name__,
+        )
         return []
 
     history: List[Dict[str, Any]] = []

@@ -83,19 +83,27 @@ class LocalHostServices:
             return explicit
         return (self._ctx.get("base_urls") or {}).get(provider) or None
 
-    def resolve_credentials(self, provider: str, params: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    def resolve_credentials(
+        self, provider: str, params: Mapping[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         creds = params.get("credentials") or (self._ctx.get("credentials") or {}).get(provider)
         return dict(creds) if isinstance(creds, dict) and creds else None
 
     # ── B. execution host: sandbox + workspace ───────────────────────────
     def probe_connector_workspace(
-        self, user_id: Any, workflow_id: str, workflow_name: str,
-        client_surface: Any, provider: str,
+        self,
+        user_id: Any,
+        workflow_id: str,
+        workflow_name: str,
+        client_surface: Any,
+        provider: str,
     ) -> Optional[dict]:
         # 이미 로컬이다 — 되돌아볼 커넥터가 없다.
         return None
 
-    def make_sandbox(self, workflow_id: str, user_id: Any, connector_ws: Optional[dict]) -> Optional[Any]:
+    def make_sandbox(
+        self, workflow_id: str, user_id: Any, connector_ws: Optional[dict]
+    ) -> Optional[Any]:
         # None → 런타임 도구가 이 PC(사이드카 호스트)에서 직접 실행된다. 그게 로컬.
         return None
 
@@ -171,13 +179,19 @@ class LocalHostServices:
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]:
         return []  # 커넥터-of-커넥터 없음.
 
-    def build_job_tools(self, workflow_id, workflow_name, user_id, *, in_scheduled_run, interaction_id) -> List[Any]:
+    def build_job_tools(
+        self, workflow_id, workflow_name, user_id, *, in_scheduled_run, interaction_id
+    ) -> List[Any]:
         return []  # ④: 서버 스케줄러 — v1 로컬 미제공.
 
-    def register_workflow_self_tools(self, registry, *, workflow_id, user_id, workflow_name) -> None:
+    def register_workflow_self_tools(
+        self, registry, *, workflow_id, user_id, workflow_name
+    ) -> None:
         return None  # ④: 그래프는 서버 자산 — 로컬 편집 미제공(v1).
 
-    def build_turn_delegation(self, *, workflow_id, interaction_id, user_id, spec_fields) -> Dict[str, Any]:
+    def build_turn_delegation(
+        self, *, workflow_id, interaction_id, user_id, spec_fields
+    ) -> Dict[str, Any]:
         return {}  # ④: 위임 — v1 로컬 미제공.
 
     def is_report_turn(self, text: str) -> bool:
@@ -192,14 +206,24 @@ class LocalHostServices:
     def drain_pending_reports(self, workflow_id: str, interaction_id: str) -> str:
         return ""
 
-    def make_sub_cli_client_factory(self, params: Mapping[str, Any], workflow_id: str) -> Optional[Any]:
+    def make_sub_cli_client_factory(
+        self, params: Mapping[str, Any], workflow_id: str
+    ) -> Optional[Any]:
         return None
 
-    def register_forged_tools(self, registry, *, workflow_id, workspace_dir, core, sandboxed) -> None:
+    def register_forged_tools(
+        self, registry, *, workflow_id, workspace_dir, core, sandboxed
+    ) -> None:
         return None  # v1: 자가제작 도구 복원 미제공.
 
     def register_builtin_tools(
-        self, registry, *, core: bool, user_id: Any, anthropic_api_key: str, ssh_servers: Sequence[Any],
+        self,
+        registry,
+        *,
+        core: bool,
+        user_id: Any,
+        anthropic_api_key: str,
+        ssh_servers: Sequence[Any],
     ) -> Dict[str, Any]:
         from xgen_agent_runtime.tools.built_in import get_builtin_tools
 
@@ -241,8 +265,15 @@ class LocalHostServices:
         return root
 
     def build_turn_memory_llm(
-        self, provider: str, model: str, api_key: str, base_url: Optional[str],
-        *, cli_auth_mode: str = "", cli_oauth_token: str = "", cli_binary_path: str = "",
+        self,
+        provider: str,
+        model: str,
+        api_key: str,
+        base_url: Optional[str],
+        *,
+        cli_auth_mode: str = "",
+        cli_oauth_token: str = "",
+        cli_binary_path: str = "",
         credentials: Optional[Mapping[str, Any]] = None,
     ) -> Optional[Any]:
         # v1: 로컬 턴-종료 증류는 스킵(None) — 자동 계층(주입/STM 기록)은
@@ -251,13 +282,19 @@ class LocalHostServices:
 
     # ── F. CLI provider runtime (로컬 프로세스 스폰) ──────────────────────
     def build_cli_runtime(
-        self, provider: str, params: Mapping[str, Any],
-        *, cloud_workspace: str = "", shared_workspaces: Optional[Sequence[str]] = None,
+        self,
+        provider: str,
+        params: Mapping[str, Any],
+        *,
+        cloud_workspace: str = "",
+        shared_workspaces: Optional[Sequence[str]] = None,
     ) -> Any:
         # 커넥터에서는 codex/claude_code 가 **로컬 프로세스**로 뜨고 cwd 가 로컬
         # 워크스페이스라, 네이티브 도구가 곧 로컬 파일이다. 서버로 되돌리는 MCP
         # 브릿지(mcp_config)는 없다 — 로컬엔 필요 없다.
-        api_key = self.resolve_api_key("anthropic" if provider == "claude_code" else "openai", params)
+        api_key = self.resolve_api_key(
+            "anthropic" if provider == "claude_code" else "openai", params
+        )
         if provider == "codex":
             from xgen_agent_runtime.host.runner import build_codex_cli_client
 

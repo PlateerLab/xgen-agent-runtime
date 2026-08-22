@@ -84,13 +84,17 @@ def build_memory_tools(provider: Any) -> List[Any]:
             importance=_importance(str(tool_input.get("importance") or "medium")),
         )
         meta = await provider.notes().write(draft)
-        return ToolResult(content=_ok({
-            "status": "created",
-            "filename": meta.ref.filename,
-            "title": meta.title,
-            "category": meta.category,
-            "tags": list(meta.tags or []),
-        }))
+        return ToolResult(
+            content=_ok(
+                {
+                    "status": "created",
+                    "filename": meta.ref.filename,
+                    "title": meta.title,
+                    "category": meta.category,
+                    "tags": list(meta.tags or []),
+                }
+            )
+        )
 
     async def _pin(tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
         title = str(tool_input.get("title") or "").strip()
@@ -108,13 +112,17 @@ def build_memory_tools(provider: Any) -> List[Any]:
             importance=_importance("high"),
         )
         meta = await provider.notes().write(draft)
-        return ToolResult(content=_ok({
-            "status": "pinned",
-            "filename": meta.ref.filename,
-            "title": meta.title,
-            "category": PINNED_CATEGORY,
-            "tags": tags,
-        }))
+        return ToolResult(
+            content=_ok(
+                {
+                    "status": "pinned",
+                    "filename": meta.ref.filename,
+                    "title": meta.title,
+                    "category": PINNED_CATEGORY,
+                    "tags": tags,
+                }
+            )
+        )
 
     async def _read(tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
         filename = str(tool_input.get("filename") or "").strip()
@@ -123,25 +131,35 @@ def build_memory_tools(provider: Any) -> List[Any]:
         note = await provider.notes().read(filename)
         if note is None:
             return ToolResult(content=_err(f"Note not found: {filename}"), is_error=True)
-        return ToolResult(content=_ok({
-            "filename": note.ref.filename,
-            "title": note.title,
-            "category": note.category,
-            "tags": list(note.tags or []),
-            "importance": note.importance.value if hasattr(note.importance, "value") else str(note.importance),
-            "body": note.body,
-            "links_out": list(getattr(note, "links_out", []) or []),
-        }))
+        return ToolResult(
+            content=_ok(
+                {
+                    "filename": note.ref.filename,
+                    "title": note.title,
+                    "category": note.category,
+                    "tags": list(note.tags or []),
+                    "importance": note.importance.value
+                    if hasattr(note.importance, "value")
+                    else str(note.importance),
+                    "body": note.body,
+                    "links_out": list(getattr(note, "links_out", []) or []),
+                }
+            )
+        )
 
     async def _list(tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
         category = str(tool_input.get("category") or "").strip() or None
         tag = str(tool_input.get("tag") or "").strip() or None
         summaries = await provider.index().list_notes(category=category, tag=tag, limit=100)
-        return ToolResult(content=_ok({
-            "total": len(summaries),
-            "filters": {"category": category, "tag": tag},
-            "notes": [_summary_dict(s) for s in summaries],
-        }))
+        return ToolResult(
+            content=_ok(
+                {
+                    "total": len(summaries),
+                    "filters": {"category": category, "tag": tag},
+                    "notes": [_summary_dict(s) for s in summaries],
+                }
+            )
+        )
 
     async def _search(tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
         query = str(tool_input.get("query") or "").strip()
@@ -166,26 +184,32 @@ def build_memory_tools(provider: Any) -> List[Any]:
             seen.add(key)
             content = (getattr(c, "content", "") or "").strip()
             first_line = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
-            items.append({
-                "filename": key,
-                "snippet_first_line": first_line[:200],
-                "score": round(float(getattr(c, "relevance_score", 0.0)), 4),
-                "source": getattr(c, "source", ""),
-            })
+            items.append(
+                {
+                    "filename": key,
+                    "snippet_first_line": first_line[:200],
+                    "score": round(float(getattr(c, "relevance_score", 0.0)), 4),
+                    "source": getattr(c, "source", ""),
+                }
+            )
         items.sort(key=lambda x: -x["score"])
         items = items[:limit]
         return ToolResult(content=_ok({"query": query, "total": len(items), "results": items}))
 
     async def _categories(_tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
         cats = await provider.index().list_categories()
-        return ToolResult(content=_ok({
-            "categories": cats,
-            "next_steps": [
-                "memory_list(category=<name>) — list files in a folder",
-                "memory_search(query=<text>) — keyword search",
-                "memory_read(filename=<path>) — open a specific note",
-            ],
-        }))
+        return ToolResult(
+            content=_ok(
+                {
+                    "categories": cats,
+                    "next_steps": [
+                        "memory_list(category=<name>) — list files in a folder",
+                        "memory_search(query=<text>) — keyword search",
+                        "memory_read(filename=<path>) — open a specific note",
+                    ],
+                }
+            )
+        )
 
     def _schema(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
         schema: Dict[str, Any] = {"type": "object", "properties": props}
@@ -204,13 +228,22 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 "Use for durable knowledge, decisions, insights. Link related notes "
                 "with [[filename]] wikilinks in the content."
             ),
-            input_schema=_schema({
-                "title": {"type": "string", "description": "Note title"},
-                "content": {"type": "string", "description": "Markdown body"},
-                "category": {"type": "string", "description": "topics|projects|insights|daily|critical (default topics)"},
-                "tags": {"type": "string", "description": "Comma-separated tags"},
-                "importance": {"type": "string", "description": "low|medium|high|critical (default medium)"},
-            }, ["title", "content"]),
+            input_schema=_schema(
+                {
+                    "title": {"type": "string", "description": "Note title"},
+                    "content": {"type": "string", "description": "Markdown body"},
+                    "category": {
+                        "type": "string",
+                        "description": "topics|projects|insights|daily|critical (default topics)",
+                    },
+                    "tags": {"type": "string", "description": "Comma-separated tags"},
+                    "importance": {
+                        "type": "string",
+                        "description": "low|medium|high|critical (default medium)",
+                    },
+                },
+                ["title", "content"],
+            ),
             execute=_write,
             capabilities=write_caps,
         ),
@@ -220,20 +253,29 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 "Pin a must-always-know fact (user preferences, binding decisions, "
                 "standing goals). Pinned facts are injected into every future turn."
             ),
-            input_schema=_schema({
-                "title": {"type": "string", "description": "Short fact title"},
-                "content": {"type": "string", "description": "The fact (1-3 sentences)"},
-                "tags": {"type": "string", "description": "Comma-separated tags"},
-            }, ["title", "content"]),
+            input_schema=_schema(
+                {
+                    "title": {"type": "string", "description": "Short fact title"},
+                    "content": {"type": "string", "description": "The fact (1-3 sentences)"},
+                    "tags": {"type": "string", "description": "Comma-separated tags"},
+                },
+                ["title", "content"],
+            ),
             execute=_pin,
             capabilities=write_caps,
         ),
         build_tool(
             name="memory_read",
             description="Read one memory note's full body + metadata by filename.",
-            input_schema=_schema({
-                "filename": {"type": "string", "description": "Note filename, e.g. topics/design.md"},
-            }, ["filename"]),
+            input_schema=_schema(
+                {
+                    "filename": {
+                        "type": "string",
+                        "description": "Note filename, e.g. topics/design.md",
+                    },
+                },
+                ["filename"],
+            ),
             execute=_read,
             capabilities=read_caps,
         ),
@@ -243,20 +285,25 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 "List memory notes (lightweight metadata). Optional category/tag "
                 "filters. Use memory_categories first when unsure which folder."
             ),
-            input_schema=_schema({
-                "category": {"type": "string", "description": "Category filter"},
-                "tag": {"type": "string", "description": "Tag filter"},
-            }),
+            input_schema=_schema(
+                {
+                    "category": {"type": "string", "description": "Category filter"},
+                    "tag": {"type": "string", "description": "Tag filter"},
+                }
+            ),
             execute=_list,
             capabilities=read_caps,
         ),
         build_tool(
             name="memory_search",
             description="Search across memory notes — keyword + semantic (when platform embeddings are configured). Returns filename + snippet hints; use memory_read for full bodies.",
-            input_schema=_schema({
-                "query": {"type": "string", "description": "Search query"},
-                "max_results": {"type": "integer", "description": "Max results (default 10)"},
-            }, ["query"]),
+            input_schema=_schema(
+                {
+                    "query": {"type": "string", "description": "Search query"},
+                    "max_results": {"type": "integer", "description": "Max results (default 10)"},
+                },
+                ["query"],
+            ),
             execute=_search,
             capabilities=read_caps,
         ),

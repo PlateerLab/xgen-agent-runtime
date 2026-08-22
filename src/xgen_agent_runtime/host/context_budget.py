@@ -60,9 +60,15 @@ def resolve_window(
     try:
         from xgen_agent_runtime.host.token_budget import resolve_context_window
 
-        return int(resolve_context_window(
-            provider, model, override, base_url=base_url, vllm_probe=vllm_probe,
-        ))
+        return int(
+            resolve_context_window(
+                provider,
+                model,
+                override,
+                base_url=base_url,
+                vllm_probe=vllm_probe,
+            )
+        )
     except Exception as exc:  # noqa: BLE001 — 예산 해석 실패가 실행을 막으면 안 된다
         logger.warning("context_budget: 윈도우 해석 실패(%s/%s): %s", provider, model, exc)
         return int(override) if override and override > 0 else 0
@@ -148,7 +154,14 @@ def fit_input_to_budget(
 
         logger.warning(
             "[GENY_BUDGET] 입력 %d > 예산 %d (window=%d sys=%d tools=%d hist=%d text=%d rag=%d) — clamp",
-            total, budget, window, sys_t, tools_t, hist_t, text_t, rag_t,
+            total,
+            budget,
+            window,
+            sys_t,
+            tools_t,
+            hist_t,
+            text_t,
+            rag_t,
         )
 
         overhead = sys_t + tools_t + hist_t
@@ -157,7 +170,10 @@ def fit_input_to_budget(
         if rag_block:
             rag_budget = max(0, budget - overhead - text_t)
             new_rag, cut = truncate_text_to_token_budget(
-                rag_block, rag_budget, provider=provider, model=model,
+                rag_block,
+                rag_budget,
+                provider=provider,
+                model=model,
             )
             if cut:
                 result.rag_block = new_rag
@@ -174,10 +190,16 @@ def fit_input_to_budget(
                 logger.error(
                     "[GENY_BUDGET] overhead(%d)+hist(%d)+rag(%d) 만으로 예산(%d) 초과 — "
                     "이력 압축(Stage 2/4)에 위임하고 입력은 최소 보존",
-                    sys_t + tools_t, hist_t, rag_t, budget,
+                    sys_t + tools_t,
+                    hist_t,
+                    rag_t,
+                    budget,
                 )
             new_text, cut = truncate_text_to_token_budget(
-                text, max(1024, available_for_text), provider=provider, model=model,
+                text,
+                max(1024, available_for_text),
+                provider=provider,
+                model=model,
             )
             if cut:
                 result.text = new_text

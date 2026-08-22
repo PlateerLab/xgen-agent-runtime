@@ -31,7 +31,12 @@ def _purge_expired(now: float) -> None:
         _cancelled_until.pop(k, None)
 
 
-def request_cancel(interaction_id: Optional[str], response_io_id: Optional[int] = None, *, ttl_seconds: float = _DEFAULT_TTL_SECONDS) -> None:
+def request_cancel(
+    interaction_id: Optional[str],
+    response_io_id: Optional[int] = None,
+    *,
+    ttl_seconds: float = _DEFAULT_TTL_SECONDS,
+) -> None:
     """
     Mark execution as cancelled for a short TTL.
     If response_io_id is available, only the scoped key is set (future messages won't be affected).

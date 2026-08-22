@@ -14,6 +14,7 @@
     tiktoken 이 없는(폐쇄망 등) 환경에서도 동작하도록 글자/4 fallback 으로 graceful
     degrade 한다. 정확도보다 "안전한 과대추정"이 우선.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,6 +39,7 @@ def _get_encoder():
     _ENCODER_TRIED = True
     try:
         import tiktoken  # noqa: PLC0415
+
         try:
             _ENCODER = tiktoken.get_encoding("o200k_base")
         except Exception:
@@ -147,6 +149,7 @@ def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optio
     win: Optional[int] = None
     try:
         from app_container import app_container  # noqa: PLC0415 — lazy (테스트/도구 환경 방어)
+
         app_db = app_container.get_app_db()
         catalog_provider = _PROVIDER_TO_CATALOG_ID.get(provider.lower(), provider.lower())
         rows = app_db.config_db_manager.execute_query(
@@ -163,7 +166,9 @@ def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optio
                 win = int(max_context)
                 logger.info(
                     "[TOKEN_BUDGET] 카탈로그 max_context: %s/%s → %s tokens",
-                    catalog_provider, model, f"{win:,}",
+                    catalog_provider,
+                    model,
+                    f"{win:,}",
                 )
     except Exception as e:
         logger.debug("[TOKEN_BUDGET] 카탈로그 max_context 조회 실패(%s/%s): %s", provider, model, e)
@@ -339,6 +344,7 @@ def estimate_tools_tokens(
     if not tools:
         return 0
     import json  # noqa: PLC0415
+
     total = 0
     for t in tools:
         try:

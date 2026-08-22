@@ -26,13 +26,13 @@ from typing import Any, Dict
 # ---------------------------------------------------------------------------
 
 DEFAULT_INDICATOR: Dict[str, Any] = {
-    "display_label": None,        # None → 호출자가 tool_name 자체를 라벨로 사용
+    "display_label": None,  # None → 호출자가 tool_name 자체를 라벨로 사용
     "verb_running": "실행 중...",
     "verb_done": "완료",
     "icon": "tool",
     "category": "generic",
     "expected_duration_ms": 1500,
-    "render_hint": "inline",       # 'inline' | 'surface' | 'hide'
+    "render_hint": "inline",  # 'inline' | 'surface' | 'hide'
 }
 
 
@@ -64,7 +64,6 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
         "expected_duration_ms": 2500,
         "render_hint": "inline",
     },
-
     # ── Database / Structured Data ─────────────────────────────────────────
     "list_tables": {
         "display_label": "DB 테이블 목록",
@@ -93,7 +92,6 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
         "expected_duration_ms": 1200,
         "render_hint": "inline",
     },
-
     # ── A2UI / Self-Adaptive UI 도구 (Phase 1 이후 활성화) ─────────────────
     "a2ui_list_components": {
         "display_label": "UI 부품 탐색",
@@ -102,7 +100,7 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
         "icon": "layout",
         "category": "genui",
         "expected_duration_ms": 200,
-        "render_hint": "hide",   # 빠르고 노이즈 — UI 표시 생략
+        "render_hint": "hide",  # 빠르고 노이즈 — UI 표시 생략
     },
     "a2ui_inspect_component": {
         "display_label": "UI 부품 상세",
@@ -129,7 +127,7 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
         "icon": "layout-grid",
         "category": "genui",
         "expected_duration_ms": 800,
-        "render_hint": "hide",   # surface 자체가 결과 → chip 으로 또 표시하면 중복
+        "render_hint": "hide",  # surface 자체가 결과 → chip 으로 또 표시하면 중복
     },
 }
 
@@ -137,6 +135,7 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 # 조회 헬퍼
 # ---------------------------------------------------------------------------
+
 
 def get_indicator(tool_name: str) -> Dict[str, Any]:
     """

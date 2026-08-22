@@ -34,7 +34,18 @@ bundle-able dependency of BOTH hosts.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 if TYPE_CHECKING:
     # Import only for typing — keeps import-time deps to xgen_agent_runtime.
@@ -61,7 +72,9 @@ class HostServices(Protocol):
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str: ...
     def resolve_api_key(self, provider: str, params: Mapping[str, Any]) -> str: ...
     def resolve_base_url(self, provider: str, params: Mapping[str, Any]) -> Optional[str]: ...
-    def resolve_credentials(self, provider: str, params: Mapping[str, Any]) -> Optional[Dict[str, Any]]: ...
+    def resolve_credentials(
+        self, provider: str, params: Mapping[str, Any]
+    ) -> Optional[Dict[str, Any]]: ...
 
     # ── B. execution host: sandbox + workspace ───────────────────────────
     # The one seam the runtime already models (ToolContext.sandbox / XgenySandbox).
@@ -70,11 +83,18 @@ class HostServices(Protocol):
     # direct-host sandbox rooted at the local synced folder — this is what makes
     # codex & every provider operate on local files natively.
     def probe_connector_workspace(
-        self, user_id: Any, workflow_id: str, workflow_name: str,
-        client_surface: Any, provider: str,
+        self,
+        user_id: Any,
+        workflow_id: str,
+        workflow_name: str,
+        client_surface: Any,
+        provider: str,
     ) -> Optional[dict]: ...
     def make_sandbox(
-        self, workflow_id: str, user_id: Any, connector_ws: Optional[dict],
+        self,
+        workflow_id: str,
+        user_id: Any,
+        connector_ws: Optional[dict],
     ) -> Optional["XgenySandbox"]: ...
     def agent_workspace_dir(self, workflow_id: str, *, create: bool = True) -> str: ...
     def workspace_storage_root(self, workflow_id: str) -> str: ...
@@ -84,12 +104,16 @@ class HostServices(Protocol):
     def hydrate_workspace(self, workflow_id: str, run_dir: str) -> bool: ...
     #: Reflect a turn's workspace changes back to the source of truth. Connector
     #: local mode is a no-op here (the connector's own sync engine owns it).
-    def publish_workspace(self, workflow_id: str, run_dir: str, *, origin: str = "agent") -> None: ...
+    def publish_workspace(
+        self, workflow_id: str, run_dir: str, *, origin: str = "agent"
+    ) -> None: ...
 
     #: 실행 환경 안내 프롬프트 — 도구가 **어디서** 도는지 에이전트에게 알린다.
     #: 서버: 러너 sandbox / 커넥터 로컬(ConnectorLocalSandbox) 설명. 커넥터
     #: 사이드카: 이 PC 로컬 환경 설명(OS 포함). 없으면 "".
-    def environment_prompt(self, sandbox: Any, connector_ws: Optional[dict], provider: str) -> str: ...
+    def environment_prompt(
+        self, sandbox: Any, connector_ws: Optional[dict], provider: str
+    ) -> str: ...
 
     # ── C. memory ────────────────────────────────────────────────────────
     # Server: xgen-db provider. Connector: file/sqlite vault OR server RPC so
@@ -97,11 +121,15 @@ class HostServices(Protocol):
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]: ...
 
     # ── D. user cloud (④ server-resident) ────────────────────────────────
-    def prepare_cloud(self, user_id: Any, workflow_id: str, *, pod_local: bool) -> Optional[CloudMount]: ...
+    def prepare_cloud(
+        self, user_id: Any, workflow_id: str, *, pod_local: bool
+    ) -> Optional[CloudMount]: ...
     def cloud_inventory(self, user_id: Any, path: str) -> str: ...
     def cloud_not_mounted_note(self, user_id: Any, workflow_id: str) -> str: ...
     def open_shared(self, sandbox: Any, user_id: Any, *, workflow_id: str) -> List[CloudMount]: ...
-    def build_cloud_skill(self, index: Any, path: str, session: Any, user_id: Any) -> Optional[Any]: ...
+    def build_cloud_skill(
+        self, index: Any, path: str, session: Any, user_id: Any
+    ) -> Optional[Any]: ...
     #: Server-resident feature **prompt blocks** — tell the agent what cloud /
     #: jobs / shared folders are available. Server returns the product's prompt
     #: text; connector returns "" (feature absent locally) until wired via RPC.
@@ -120,18 +148,33 @@ class HostServices(Protocol):
     # unavailable locally, without ever changing the executor's call shape.
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]: ...
     def build_job_tools(
-        self, workflow_id: str, workflow_name: str, user_id: Any,
-        *, in_scheduled_run: bool, interaction_id: str,
+        self,
+        workflow_id: str,
+        workflow_name: str,
+        user_id: Any,
+        *,
+        in_scheduled_run: bool,
+        interaction_id: str,
     ) -> List[Any]: ...
     def register_workflow_self_tools(
-        self, registry: "ToolRegistry", *, workflow_id: str, user_id: Any, workflow_name: str,
+        self,
+        registry: "ToolRegistry",
+        *,
+        workflow_id: str,
+        user_id: Any,
+        workflow_name: str,
     ) -> None: ...
     #: Build the per-turn delegation extras (sub-pipeline factory + report sink).
     #: ``spec_fields`` is a plain dict of the turn's LLM/run fields — the server
     #: impl constructs its SubPipelineSpec from it (the spec type is server-owned,
     #: so it never appears in the shared executor). Connector → {} (no delegation).
     def build_turn_delegation(
-        self, *, workflow_id: str, interaction_id: str, user_id: Any, spec_fields: Mapping[str, Any],
+        self,
+        *,
+        workflow_id: str,
+        interaction_id: str,
+        user_id: Any,
+        spec_fields: Mapping[str, Any],
     ) -> Dict[str, Any]: ...
     #: True iff this turn's text is a delegation report (recursion guard). Server
     #: consults its delegation module; connector → False.
@@ -145,12 +188,27 @@ class HostServices(Protocol):
     #: Claim & format any unreported delegation completions to inject into this
     #: turn (alarm/pod-restart fallback). Server → the report block; connector → "".
     def drain_pending_reports(self, workflow_id: str, interaction_id: str) -> str: ...
-    def make_sub_cli_client_factory(self, params: Mapping[str, Any], workflow_id: str) -> Optional[Any]: ...
+    def make_sub_cli_client_factory(
+        self, params: Mapping[str, Any], workflow_id: str
+    ) -> Optional[Any]: ...
     def register_forged_tools(
-        self, registry: "ToolRegistry", *, workflow_id: str, workspace_dir: str,
-        core: bool, sandboxed: bool,
+        self,
+        registry: "ToolRegistry",
+        *,
+        workflow_id: str,
+        workspace_dir: str,
+        core: bool,
+        sandboxed: bool,
     ) -> None: ...
-    def register_builtin_tools(self, registry: "ToolRegistry", *, core: bool, user_id: Any, anthropic_api_key: str, ssh_servers: Sequence[Any]) -> Dict[str, Any]: ...
+    def register_builtin_tools(
+        self,
+        registry: "ToolRegistry",
+        *,
+        core: bool,
+        user_id: Any,
+        anthropic_api_key: str,
+        ssh_servers: Sequence[Any],
+    ) -> Dict[str, Any]: ...
     def build_run_tool_context(self, **kwargs: Any) -> Any: ...
     def load_ssh_servers(self) -> List[Any]: ...
 
@@ -168,8 +226,15 @@ class HostServices(Protocol):
     #: Build the memory-distillation LLM client for a turn (or None if unavailable,
     #: e.g. claude_code subscription mode / codex).
     def build_turn_memory_llm(
-        self, provider: str, model: str, api_key: str, base_url: Optional[str],
-        *, cli_auth_mode: str = "", cli_oauth_token: str = "", cli_binary_path: str = "",
+        self,
+        provider: str,
+        model: str,
+        api_key: str,
+        base_url: Optional[str],
+        *,
+        cli_auth_mode: str = "",
+        cli_oauth_token: str = "",
+        cli_binary_path: str = "",
         credentials: Optional[Mapping[str, Any]] = None,
     ) -> Optional[Any]: ...
 
@@ -179,9 +244,15 @@ class HostServices(Protocol):
     # connector sidecar flushes through its own sync engine. Local resource
     # cleanups (cli/run-dir) stay in the executor — they are not host state.
     def finalize_turn(
-        self, *, sandbox: Any, workflow_id: str, user_id: Any,
-        hydrated_wf: str, hydrated_ws: Optional[str],
-        shared_mounts: Sequence[Any], cloud_mount: Optional[CloudMount],
+        self,
+        *,
+        sandbox: Any,
+        workflow_id: str,
+        user_id: Any,
+        hydrated_wf: str,
+        hydrated_ws: Optional[str],
+        shared_mounts: Sequence[Any],
+        cloud_mount: Optional[CloudMount],
         connector_ws: Optional[dict],
     ) -> None: ...
 
@@ -190,6 +261,10 @@ class HostServices(Protocol):
     # this is exactly where "codex runs locally" lives: same runtime CLI client,
     # cwd = local workspace, so its native file/shell hit the user's machine.
     def build_cli_runtime(
-        self, provider: str, params: Mapping[str, Any],
-        *, cloud_workspace: str = "", shared_workspaces: Optional[Sequence[str]] = None,
+        self,
+        provider: str,
+        params: Mapping[str, Any],
+        *,
+        cloud_workspace: str = "",
+        shared_workspaces: Optional[Sequence[str]] = None,
     ) -> CliRuntime: ...

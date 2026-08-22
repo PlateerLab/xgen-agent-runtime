@@ -125,20 +125,22 @@ async def record_turn_execution(
         error=error,
     )
     try:
-        await notes.write(NoteDraft(
-            title=title,
-            body=body,
-            category=DAILY_CATEGORY,
-            tags=tags,
-            importance=importance,
-            filename=f"exec-{number:04d}-{uuid.uuid4().hex[:8]}.md",
-            frontmatter={
-                "session_id": session_id,
-                "execution_number": number,
-                "success": bool(success),
-                "duration_ms": int(duration_ms),
-            },
-        ))
+        await notes.write(
+            NoteDraft(
+                title=title,
+                body=body,
+                category=DAILY_CATEGORY,
+                tags=tags,
+                importance=importance,
+                filename=f"exec-{number:04d}-{uuid.uuid4().hex[:8]}.md",
+                frontmatter={
+                    "session_id": session_id,
+                    "execution_number": number,
+                    "success": bool(success),
+                    "duration_ms": int(duration_ms),
+                },
+            )
+        )
     except Exception:  # noqa: BLE001
         logger.debug("execution card write failed (non-critical)", exc_info=True)
 
@@ -152,15 +154,17 @@ async def record_turn_execution(
     try:
         existing = await notes.read(journal_filename)
         if existing is None:
-            await notes.write(NoteDraft(
-                title=f"Executions {day}",
-                body=line + "\n",
-                category=EXECUTIONS_CATEGORY,
-                tags=["execution", "journal"],
-                importance=Importance.MEDIUM,
-                filename=journal_filename,
-                frontmatter={"day": day},
-            ))
+            await notes.write(
+                NoteDraft(
+                    title=f"Executions {day}",
+                    body=line + "\n",
+                    category=EXECUTIONS_CATEGORY,
+                    tags=["execution", "journal"],
+                    importance=Importance.MEDIUM,
+                    filename=journal_filename,
+                    frontmatter={"day": day},
+                )
+            )
         else:
             await notes.update(journal_filename, NotePatch(append_body=line + "\n"))
     except Exception:  # noqa: BLE001

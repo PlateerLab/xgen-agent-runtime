@@ -167,7 +167,6 @@ def _minimal_descriptor() -> Any:
     """런타임이 있으면 진짜 MemoryDescriptor, 없으면 단순 네임스페이스."""
     try:
         from xgen_agent_runtime.memory import (
-            Capability,
             Layer,
             MemoryDescriptor,
             Scope,

@@ -32,7 +32,10 @@ def _coerce_legacy(value: Any) -> str:
 
 
 def collect_rag(
-    text: str, port_value: Any, *, context_builder: Any = None,
+    text: str,
+    port_value: Any,
+    *,
+    context_builder: Any = None,
 ) -> Tuple[str, List[Any]]:
     """Resolve the Context port into ``(context_block, embedded_tools)``.
 
@@ -66,7 +69,9 @@ def collect_rag(
                 if result:
                     blocks.append(result)
             except Exception as exc:  # noqa: BLE001 - RAG must never kill the turn
-                logger.error("geny_bridge: RAG search failed for context[%d]: %s", idx, exc, exc_info=True)
+                logger.error(
+                    "geny_bridge: RAG search failed for context[%d]: %s", idx, exc, exc_info=True
+                )
             continue
         legacy = _coerce_legacy(item)
         if legacy:
