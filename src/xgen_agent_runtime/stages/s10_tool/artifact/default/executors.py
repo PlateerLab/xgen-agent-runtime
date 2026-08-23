@@ -83,6 +83,35 @@ def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) 
     )
 
 
+_EVENT_RESULT_LIMIT = 4000  # chars of result text carried on tool.call_complete
+
+
+def _result_preview(content: Any) -> str:
+    """Flatten an api-format ``content`` payload to display text.
+
+    ``content`` is a str, a list of content blocks, or (rarely) another
+    JSON-able value — mirror what the model sees, clipped for transport.
+    """
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = [
+            b.get("text", "") if isinstance(b, dict) else str(b)
+            for b in content
+        ]
+        text = "\n".join(p for p in parts if p)
+    elif content is None:
+        text = ""
+    else:
+        import json as _json
+
+        try:
+            text = _json.dumps(content, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(content)
+    return text[:_EVENT_RESULT_LIMIT]
+
+
 def _emit_call_complete(
     on_event: Optional[ToolEventCallback],
     tc: Dict[str, Any],
@@ -98,6 +127,7 @@ def _emit_call_complete(
             "name": tc.get("tool_name", ""),
             "is_error": bool(result_dict.get("is_error")),
             "duration_ms": duration_ms,
+            "result": _result_preview(result_dict.get("content")),
         },
     )
 

@@ -226,3 +226,49 @@ async def test_stage_wraps_call_events_inside_execute_events():
         "tool.call_start",
         "tool.call_complete",
     ]
+
+
+# ───────────── call_complete result preview (v3.6.1) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_complete_carries_result_preview_string():
+    router = _RecordingRouter({"alpha": ToolResult(content="Disk: 452.1GB total")})
+    events, on_event = _make_recorder()
+
+    await SequentialExecutor().execute_all(
+        [_tc("alpha", "id_a")], router, ToolContext(), on_event=on_event
+    )
+
+    complete = events[1][1]
+    assert complete["result"] == "Disk: 452.1GB total"
+
+
+@pytest.mark.asyncio
+async def test_complete_result_preview_flattens_content_blocks():
+    router = _RecordingRouter(
+        {"alpha": ToolResult(content=[{"type": "text", "text": "line1"}, {"type": "text", "text": "line2"}])}
+    )
+    events, on_event = _make_recorder()
+
+    await SequentialExecutor().execute_all(
+        [_tc("alpha", "id_a")], router, ToolContext(), on_event=on_event
+    )
+
+    assert events[1][1]["result"] == "line1\nline2"
+
+
+@pytest.mark.asyncio
+async def test_complete_result_preview_is_clipped():
+    from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
+        _EVENT_RESULT_LIMIT,
+    )
+
+    router = _RecordingRouter({"alpha": ToolResult(content="x" * (_EVENT_RESULT_LIMIT + 500))})
+    events, on_event = _make_recorder()
+
+    await SequentialExecutor().execute_all(
+        [_tc("alpha", "id_a")], router, ToolContext(), on_event=on_event
+    )
+
+    assert len(events[1][1]["result"]) == _EVENT_RESULT_LIMIT

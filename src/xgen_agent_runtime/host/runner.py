@@ -515,7 +515,9 @@ def _indicator(tool_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
+def _tool_call_event(
+    name: str, tool_input: Any, *, run_id: Optional[str] = None
+) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
         "tool_name": name,
@@ -524,6 +526,8 @@ def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
         else json.dumps(tool_input or {}, ensure_ascii=False, default=str),
         "timestamp": datetime.now().isoformat(),
     }
+    if run_id:
+        event["run_id"] = run_id
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -536,6 +540,7 @@ def _tool_end_event(
     *,
     is_error: bool = False,
     duration_ms: Optional[int] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if is_error:
         event: Dict[str, Any] = {
@@ -554,6 +559,8 @@ def _tool_end_event(
     event["timestamp"] = datetime.now().isoformat()
     if duration_ms is not None:
         event["duration_ms"] = duration_ms
+    if run_id:
+        event["run_id"] = run_id
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -711,17 +718,26 @@ def stream_turn(
             elif tool_events and event.type == "tool.call_start":
                 yield {
                     "type": "agent_event",
-                    "data": _tool_call_event(event.data.get("name", ""), event.data.get("input")),
+                    "data": _tool_call_event(
+                        event.data.get("name", ""),
+                        event.data.get("input"),
+                        run_id=event.data.get("tool_use_id") or None,
+                    ),
                 }
             elif tool_events and event.type == "tool.call_complete":
                 name = event.data.get("name", "")
+                # v3.6.1: call_complete carries a result preview; the name-keyed
+                # result_sink stays as fallback for adapted (LangChain) tools on
+                # older engines (sink is last-write-wins and empty for builtins).
+                result_text = event.data.get("result") or (result_sink or {}).get(name, "")
                 yield {
                     "type": "agent_event",
                     "data": _tool_end_event(
                         name,
-                        (result_sink or {}).get(name, ""),
+                        result_text,
                         is_error=bool(event.data.get("is_error")),
                         duration_ms=event.data.get("duration_ms"),
+                        run_id=event.data.get("tool_use_id") or None,
                     ),
                 }
             elif event.type == "canvas_command":
@@ -737,20 +753,24 @@ def stream_turn(
                     cli_tool_names[tool_use_id] = name
                 yield {
                     "type": "agent_event",
-                    "data": _tool_call_event(name, event.data.get("input")),
+                    "data": _tool_call_event(
+                        name, event.data.get("input"), run_id=tool_use_id or None
+                    ),
                 }
             elif (
                 tool_events
                 and event.type == "api.tool_result"
                 and event.data.get("source") == "cli"
             ):
-                name = cli_tool_names.pop(event.data.get("tool_use_id", ""), "") or "cli_tool"
+                cli_use_id = event.data.get("tool_use_id", "")
+                name = cli_tool_names.pop(cli_use_id, "") or "cli_tool"
                 yield {
                     "type": "agent_event",
                     "data": _tool_end_event(
                         name,
                         _stringify_content(event.data.get("content")),
                         is_error=bool(event.data.get("is_error")),
+                        run_id=cli_use_id or None,
                     ),
                 }
     finally:
