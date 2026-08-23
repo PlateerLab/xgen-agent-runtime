@@ -43,6 +43,8 @@ stdin 요청(턴) — **상태는 서버가 해석해 넘긴다**(로컬↔웹 �
 stdout 이벤트(JSON-lines; 데몬 모드는 ``id`` 포함)::
 
     {"type": "started", "pid": 123, "surface": "connector_local"}
+    {"type": "notice", "data": {"code": "memory_offline", "message": "..."}}
+                                                     # 진단 신호(0..1회, 첫 chunk 이전)
     {"type": "chunk", "text": "..."}                 # 스트리밍 출력 조각(0..n)
     {"type": "tool", "data": {"type": "tool_call"|"tool_result"|"tool_error",
                                "tool_name": "...", ...}}   # 도구 활동(웹과 같은 shape)
@@ -132,6 +134,7 @@ def run_turn_request(
 
     # 라이브 서버 브릿지(메모리 등 공유 상태) — {url, token} 있으면 구성.
     bridge = None
+    bridge_failed = False  # 메모리가 기대됐으나(server.url) 브릿지 구성이 실패했는가.
     server = req.get("server") or {}
     if isinstance(server, dict) and server.get("url"):
         try:
@@ -145,12 +148,17 @@ def run_turn_request(
             )
         except Exception:  # noqa: BLE001 — 브릿지 실패는 무기억으로 degrade(발산 방지)
             bridge = None
+            bridge_failed = True  # 조용한 degrade — 아래서 진단 notice 로 승격.
 
     host = LocalHostServices(
         workspace_dir,
         context=req.get("context"),  # 서버가 계정으로 해석한 키/설정
         server_bridge=bridge,
     )
+    if bridge_failed:
+        # 브릿지 구성 실패는 build_memory_provider 가 관측 못 하므로(브릿지 None) 여기서
+        # 직접 신호를 세운다 — 첫 RPC 실패는 host.build_memory_provider 가 세운다.
+        host.note_memory_offline()
 
     # AgentTurnExecutor.run 의 kwargs 로 평탄화 (서버 노드가 kwargs 로 받는 것과 동일 표면).
     kwargs: Dict[str, Any] = {
@@ -177,6 +185,18 @@ def run_turn_request(
     except Exception as exc:  # noqa: BLE001 — 사이드카는 조용히 죽지 않는다
         yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
         return
+
+    # 메모리 오프라인 진단 신호 — 첫 청크 이전 1회(없으면 무동작). 폴백이 아니라
+    # 무기억으로 계속 진행한다는 알림뿐이다. build_memory_provider 는 run() 안에서
+    # eager 로 호출되므로 이 시점에 신호가 서 있다.
+    if host.memory_offline():
+        yield {
+            "type": "notice",
+            "data": {
+                "code": "memory_offline",
+                "message": "메모리 서버 연결 실패 — 이번 턴은 무기억으로 진행",
+            },
+        }
 
     if streaming and hasattr(result, "__iter__") and not isinstance(result, str):
         acc = []

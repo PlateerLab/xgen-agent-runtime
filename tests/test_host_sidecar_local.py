@@ -408,6 +408,113 @@ def test_server_bridge_passes_tls_verify() -> None:
     assert p2._verify == "/ca.pem"
 
 
+# ── sidecar: 메모리 오프라인 진단 notice ──────────────────────────────
+
+
+def _req_with_server(ws: str, **opts: Any) -> Dict[str, Any]:
+    r = _req(ws, **opts)
+    r["server"] = {"url": "https://xgen.example", "token": "tok"}
+    return r
+
+
+def test_run_turn_request_emits_memory_offline_notice_on_bridge_failure(
+    fake_executor, monkeypatch
+) -> None:
+    """브릿지 구성이 실패하면(메모리 기대됨) 첫 청크 이전에 notice 를 1회 낸다."""
+    import xgen_agent_runtime.host.server_bridge as sb
+
+    def _boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("tls handshake failed")
+
+    monkeypatch.setattr(sb, "ServerBridge", _boom)
+    _FakeExecutor.items = ["안", "녕"]
+    events = list(sidecar.run_turn_request(_req_with_server(fake_executor["ws"])))
+    kinds = [e["type"] for e in events]
+    # started 다음, 첫 chunk 이전에 notice 가 정확히 한 번.
+    assert kinds == ["started", "notice", "chunk", "chunk", "done"]
+    notice = events[1]
+    assert notice["data"]["code"] == "memory_offline"
+    assert "무기억" in notice["data"]["message"]
+    # 폴백이 아니다 — 로컬 실행은 계속돼 done 으로 닫힌다.
+    assert events[-1]["type"] == "done" and events[-1]["text"] == "안녕"
+
+
+def test_run_turn_request_no_notice_when_no_server(fake_executor) -> None:
+    """server 미지정(의도적 오프라인)은 실패가 아니므로 notice 를 내지 않는다."""
+    _FakeExecutor.items = ["x"]
+    events = list(sidecar.run_turn_request(_req(fake_executor["ws"])))
+    assert "notice" not in [e["type"] for e in events]
+
+
+def test_run_turn_request_memory_offline_notice_nonstreaming(
+    fake_executor, monkeypatch
+) -> None:
+    """비스트리밍 턴에서도 notice 는 done 이전에 방출된다."""
+    import xgen_agent_runtime.host.server_bridge as sb
+
+    monkeypatch.setattr(sb, "ServerBridge", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+
+    class _StrExec:
+        def run(self, host: Any, **kwargs: Any) -> str:
+            return "done-text"
+
+    import xgen_agent_runtime.host.turn_executor as te
+
+    monkeypatch.setattr(te, "AgentTurnExecutor", _StrExec)
+    events = list(
+        sidecar.run_turn_request(_req_with_server(fake_executor["ws"], streaming=False))
+    )
+    kinds = [e["type"] for e in events]
+    assert kinds == ["started", "notice", "done"]
+    assert events[1]["data"]["code"] == "memory_offline"
+
+
+# ── LocalHostServices: 메모리 오프라인 신호 헬퍼 ──────────────────────
+
+
+class _FakeBridge:
+    """ServerBridge 대역 — build_memory_provider 결과를 주입."""
+
+    def __init__(self, result: Any = object(), raises: bool = False) -> None:
+        self._result = result
+        self._raises = raises
+
+    def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Any:
+        if self._raises:
+            raise RuntimeError("rpc transport failed")
+        return self._result
+
+
+def test_local_host_marks_offline_when_provider_build_returns_none(tmp_path) -> None:
+    """브릿지는 있으나 첫 provider 구성이 None(엔드포인트 부재 등) → 오프라인 신호."""
+    host = LocalHostServices(str(tmp_path / "ws"), server_bridge=_FakeBridge(result=None))
+    assert host.memory_offline() is False
+    assert host.build_memory_provider("wf", "i") is None
+    assert host.memory_offline() is True
+
+
+def test_local_host_marks_offline_when_first_rpc_raises(tmp_path) -> None:
+    """브릿지 첫 RPC 가 던지면 무기억 degrade + 오프라인 신호."""
+    host = LocalHostServices(str(tmp_path / "ws"), server_bridge=_FakeBridge(raises=True))
+    assert host.build_memory_provider("wf", "i") is None
+    assert host.memory_offline() is True
+
+
+def test_local_host_no_offline_signal_when_bridge_missing(tmp_path) -> None:
+    """브릿지 미연결(서버 url 없음=의도적 오프라인)은 실패가 아니다 — 신호 안 섬."""
+    host = LocalHostServices(str(tmp_path / "ws"), server_bridge=None)
+    assert host.build_memory_provider("wf", "i") is None
+    assert host.memory_offline() is False
+
+
+def test_local_host_no_offline_when_memory_ok(tmp_path) -> None:
+    """정상 provider 를 열면 신호가 서지 않는다."""
+    prov = object()
+    host = LocalHostServices(str(tmp_path / "ws"), server_bridge=_FakeBridge(result=prov))
+    assert host.build_memory_provider("wf", "i") is prov
+    assert host.memory_offline() is False
+
+
 # ── LocalHostServices: 3.8.0 — 경로 격리·CLI 네이티브 사전 허용·이력 dict·플래그 ──
 
 

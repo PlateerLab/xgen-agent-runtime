@@ -107,6 +107,10 @@ class LocalHostServices:
         self._builtin_features: Optional[tuple] = (
             tuple(builtin_features) if builtin_features is not None else None
         )
+        #: 메모리가 **기대됐으나**(서버 브릿지 구성/첫 RPC) 실패해 이번 턴이 무기억으로
+        #: degrade 됐는지. 사이드카가 이 신호를 읽어 진단 notice 이벤트를 낸다.
+        #: (서버 url 이 아예 없는 의도적 오프라인은 실패가 아니므로 세우지 않는다.)
+        self._memory_offline = False
 
     # ── A. settings & credentials (서버 계정 상태) ───────────────────────
     def setting(self, name: str, default: str = "") -> str:
@@ -226,19 +230,38 @@ class LocalHostServices:
             "- **기억/이력**: 서버와 공유됩니다 — 웹 대화와 같은 기억을 읽고 씁니다.\n"
         )
 
+    # ── 메모리 오프라인 진단 신호(사이드카가 읽는다) ─────────────────────
+    def note_memory_offline(self) -> None:
+        """메모리 브릿지 구성 실패 또는 첫 RPC 실패로 이번 턴이 무기억으로 degrade
+        됐음을 기록한다. 사이드카가 첫 청크 이전에 notice 이벤트로 승격한다.
+        (사이드카가 브릿지 구성 실패를 감지했을 때도 이 헬퍼로 신호를 세운다.)"""
+        self._memory_offline = True
+
+    def memory_offline(self) -> bool:
+        """이번 host 수명에서 메모리 오프라인 degrade 가 관측됐는가."""
+        return self._memory_offline
+
     # ── C. memory (서버 공유 — 웹과 같은 저장소) ─────────────────────────
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]:
         # 메모리는 계정 자산 — 서버가 진실. 브릿지로 **웹과 같은 저장소**를 읽고
         # 쓴다(로컬 턴의 기억도 웹에서 보인다). 브릿지 없으면(미연결) 로컬 전용
         # vault 를 만들지 않는다 — 발산 방지(기억이 갈라지느니 이번 턴은 무기억).
         if self._bridge is None:
+            # 브릿지 미연결 — 서버 url 이 없어 의도적 오프라인이거나, 구성 실패라
+            # 사이드카가 이미 note_memory_offline() 로 신호를 세웠다(여긴 판단 안 함).
             return None
         try:
-            return self._bridge.build_memory_provider(
+            provider = self._bridge.build_memory_provider(
                 str(workflow_id or ""), str(interaction_id or "")
             )
         except Exception:  # noqa: BLE001 — 메모리 실패가 턴을 죽이면 안 된다
+            # 브릿지는 있으나(메모리 기대됨) 첫 RPC/구성이 던졌다 → 무기억 degrade 신호.
+            self.note_memory_offline()
             return None
+        if provider is None:
+            # 브릿지는 있으나 provider 를 못 열었다(엔드포인트 부재 등) → 같은 신호.
+            self.note_memory_offline()
+        return provider
 
     # ── D. user cloud (v1: 로컬 미제공) ──────────────────────────────────
     def prepare_cloud(self, user_id: Any, workflow_id: str, *, pod_local: bool) -> Optional[Any]:

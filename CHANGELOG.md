@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.3] — 2026-08-24
+
+### Added — 메모리 오프라인 진단 신호(커넥터 로컬)
+
+- 사이드카가 메모리 브릿지 구성 실패(사설 인증서/네트워크 등)를 감지하면 첫 청크 이전에
+  `{"type":"notice","data":{"code":"memory_offline","message":"메모리 서버 연결 실패 — 이번 턴은 무기억으로 진행"}}`
+  를 1회 방출한다(폴백 아님 — 로컬 실행은 계속). LocalHostServices.note_memory_offline()/memory_offline().
+  커넥터가 이 notice 를 받아 실행 상태 배지에 detail 을 붙인다(감사 #13/#47 sub-case).
+
 ## [3.8.2] — 2026-08-24
 
 ### Fixed — Windows 로컬 셸(커넥터 로컬 SDK 턴)
