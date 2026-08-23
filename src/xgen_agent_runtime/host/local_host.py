@@ -55,10 +55,37 @@ _FAMILY_FLAGS = {
 #: 커넥터가 넘기는 로컬 CLI 홈 격리 설정 이름.
 SETTING_LOCAL_CODEX_HOME = "XGEN_LOCAL_CODEX_HOME"
 SETTING_LOCAL_CLAUDE_CONFIG_DIR = "XGEN_LOCAL_CLAUDE_CONFIG_DIR"
+#: Claude Code **네이티브** 도구 사전 허용 표면(로컬 턴). ``--print`` 비대화 모드는
+#: 허용되지 않은 도구 호출을 프롬프트 없이 **자동 거부**하므로, 서버가 mcp__connector
+#: 를 settings+allowedTools 로 통째로 사전 허용하는 것과 같은 방식으로 네이티브 도구를
+#: 미리 연다(settings permissions.allow + --allowedTools, permission_mode 는 default 유지
+#: — bypassPermissions 는 root 차단·dontAsk 는 거부 모드라 쓰지 않는다).
+CLAUDE_LOCAL_ALLOW_TOOLS = (
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebFetch",
+    "WebSearch",
+    "NotebookEdit",
+    "TodoWrite",
+)
+#: 격리 CLAUDE_CONFIG_DIR 안에 쓰는 settings 파일 이름(--settings <path>).
+CLAUDE_LOCAL_SETTINGS_FILENAME = "xgen-local-settings.json"
 
 
 class LocalHostServices:
     """커넥터 로컬 실행용 HostServices — 상태는 서버(context/bridge), 실행은 로컬."""
+
+    #: 턴이 **출력을 하나도 내기 전에** 실패하면 메모리 vault 실행 기록
+    #: (record_turn_execution)을 남기지 않는다. 커넥터는 그런 실패를 서버 실행으로
+    #: 폴백하므로, 여기서 실패 카드를 남기면 서버 턴의 기록과 **중복**된다.
+    #: (runner.stream_turn 이 getattr(host, "record_failed_starts", True) 로 읽는다.)
+    record_failed_starts: bool = False
 
     def __init__(
         self,
@@ -98,6 +125,17 @@ class LocalHostServices:
             return True
         raw = self.setting(flag).strip().lower()
         return raw not in ("0", "false", "no", "off")
+
+    def cli_bridge_available(self, provider: str) -> bool:
+        """CLI(claude_code/codex) 턴에 ``mcp__connector__*`` 브릿지가 붙는가 — 로컬은 **항상 False**.
+
+        로컬 CLI 턴은 서버로 되돌아가는 MCP 브릿지가 없다(네이티브 도구가 곧 로컬
+        파일). 실행기는 이 값으로 CLI 전용 프롬프트 안내(mcp__connector__memory_*
+        메모리 도구·DelegateTask 위임·SELF_EVOLUTION 블록)를 **붙이지 않는다** —
+        없는 도구를 안내하면 유령 도구가 된다. 기억은 RemoteMemoryProvider 단계
+        (주입/STM 기록)가 자동으로 처리하므로 도구 없이도 웹과 같은 기억을 쓴다.
+        """
+        return False
 
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str:
         # 에이전트 설정(provider/model)은 서버 저장 에이전트에서 온다 = run() kwargs.
@@ -318,11 +356,20 @@ class LocalHostServices:
     def build_run_tool_context(self, **kwargs: Any) -> Any:
         from xgen_agent_runtime.tools.base import ToolContext
 
+        run_dir = str(kwargs.get("run_dir") or self._workspace)
+        # 서버 builtin_tools.build_run_tool_context 와 같은 규약: 허용 트리는
+        # **항상** [run_dir(=동기화 폴더), *명시적 추가분]. None/[] 로 두면 path guard
+        # 가 "제한 없음"이라 Read/Write/Edit 가 사용자 PC 전체를 만진다 — 로컬이
+        # 샌드박스 없이(sandbox=None) 호스트에서 도는 만큼 이 격리가 유일한 울타리다.
+        allowed = [run_dir]
+        for extra in kwargs.get("extra_allowed") or []:
+            if extra and str(extra) not in allowed:
+                allowed.append(str(extra))
         return ToolContext(
             session_id=str(kwargs.get("interaction_id") or ""),
-            working_dir=str(kwargs.get("run_dir") or self._workspace),
+            working_dir=run_dir,
             storage_path=kwargs.get("storage_dir"),
-            allowed_paths=list(kwargs.get("extra_allowed") or []) or None,
+            allowed_paths=allowed,
             metadata=dict(kwargs.get("extras") or {}),
             sandbox=kwargs.get("sandbox"),  # None → 로컬 호스트 실행
         )
@@ -402,6 +449,29 @@ class LocalHostServices:
             logger.warning("codex 자격증명 물질화 실패(%s): %s", path, exc)
             return False
 
+    def _claude_local_settings(self, claude_home: str) -> str:
+        """네이티브 도구 사전 허용 settings — 격리 홈이 있으면 그 안의 파일 경로,
+        없으면 인라인 JSON(서버 agent_geny 의 mcp__connector 사전 허용과 같은 형식).
+        둘 다 ``--settings`` 로 전달된다."""
+        payload = {"permissions": {"allow": list(CLAUDE_LOCAL_ALLOW_TOOLS)}}
+        body = json.dumps(payload, ensure_ascii=False)
+        if not claude_home:
+            return body
+        path = os.path.join(claude_home, CLAUDE_LOCAL_SETTINGS_FILENAME)
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    if f.read() == body:
+                        return path
+            tmp = f"{path}.tmp-{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(body)
+            os.replace(tmp, path)
+            return path
+        except OSError as exc:
+            logger.warning("claude settings 파일 쓰기 실패(%s): %s — 인라인 JSON 사용", path, exc)
+            return body
+
     def build_cli_runtime(
         self,
         provider: str,
@@ -433,6 +503,9 @@ class LocalHostServices:
                 # 이 PC 의 기존 로그인(격리 홈/기본 홈)을 그대로 쓴다.
                 self._materialize_codex_credentials(codex_home)
             timeout_s = float(self.setting("CODEX_TIMEOUT_S", "3600") or 3600.0)
+            # 샌드박스/승인: CodexCLIClient 기본 ``--sandbox workspace-write`` + ``codex exec``
+            # (헤드리스 — 승인 정책 never) 로 cwd(=동기화 폴더) 안 쓰기는 프롬프트 없이
+            # 허용되고 밖은 거부된다. bypass(--dangerously-bypass…)는 쓰지 않는다.
             client = build_codex_cli_client(
                 auth_mode=auth_mode,
                 api_key=api_key,
@@ -467,6 +540,9 @@ class LocalHostServices:
         claude_home = self._isolated_home(SETTING_LOCAL_CLAUDE_CONFIG_DIR)
         if claude_home:
             extra_env["CLAUDE_CONFIG_DIR"] = claude_home
+        # --print(비대화) 는 허용 목록 밖 도구 호출을 프롬프트 없이 자동 거부한다 —
+        # 네이티브 표면을 settings(permissions.allow) + --allowedTools 로 사전 허용.
+        settings_path = self._claude_local_settings(claude_home)
         client = build_cli_client(
             auth_mode=auth_mode,
             api_key=api_key,
@@ -479,6 +555,9 @@ class LocalHostServices:
             # 서버는 러너 sandbox 가 붙어 있어 끄고 mcp__connector__* 로 브릿지하지만,
             # 여기엔 브릿지가 없다 — 끄면 모델에게 파일/셸 도구가 하나도 남지 않는다.
             allow_local_tools=True,
+            permission_mode="default",
+            settings_path=settings_path,
+            allow_tools=CLAUDE_LOCAL_ALLOW_TOOLS,
             mcp_config=None,
             extra_env=extra_env or None,
         )

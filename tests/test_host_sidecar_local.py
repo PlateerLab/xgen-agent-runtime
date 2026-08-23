@@ -406,3 +406,180 @@ def test_server_bridge_passes_tls_verify() -> None:
     assert p is not None and p._verify is False
     p2 = ServerBridge("https://s", "t", verify="/ca.pem").build_memory_provider("wf", "i")
     assert p2._verify == "/ca.pem"
+
+
+# ── LocalHostServices: 3.8.0 — 경로 격리·CLI 네이티브 사전 허용·이력 dict·플래그 ──
+
+
+def test_local_host_run_tool_context_confines_allowed_paths(tmp_path) -> None:
+    """allowed_paths 는 항상 [workspace, *extra_allowed] — None(무제한)이 되면 안 된다."""
+    ws = tmp_path / "ws"
+    host = LocalHostServices(str(ws))
+    ctx = host.build_run_tool_context(interaction_id="i1", run_dir=str(ws), extras={"a": 1})
+    assert ctx.allowed_paths == [str(ws)]
+    assert ctx.working_dir == str(ws) and ctx.sandbox is None and ctx.metadata == {"a": 1}
+    extra = tmp_path / "cloud"
+    ctx2 = host.build_run_tool_context(run_dir=str(ws), extra_allowed=[str(extra), str(extra), ""])
+    assert ctx2.allowed_paths == [str(ws), str(extra)]
+    # run_dir 미지정 → 워크스페이스
+    assert host.build_run_tool_context().allowed_paths == [str(ws)]
+
+
+def test_local_host_file_tools_reject_paths_outside_workspace(tmp_path) -> None:
+    """호스트(sandbox=None) 경로에서 Read/Write 가 path guard 로 워크스페이스 밖을 거부한다."""
+    import asyncio
+
+    from xgen_agent_runtime.tools.built_in.read_tool import ReadTool
+    from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
+
+    ws = tmp_path / "ws"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("top secret", encoding="utf-8")
+    host = LocalHostServices(str(ws))
+    ctx = host.build_run_tool_context(run_dir=str(ws))
+
+    async def _go():
+        w_in = await WriteTool().execute({"file_path": "note.md", "content": "hi"}, ctx)
+        w_out = await WriteTool().execute({"file_path": str(outside / "x.txt"), "content": "no"}, ctx)
+        w_trav = await WriteTool().execute({"file_path": "../outside/y.txt", "content": "no"}, ctx)
+        r_in = await ReadTool().execute({"file_path": str(ws / "note.md")}, ctx)
+        r_out = await ReadTool().execute({"file_path": str(outside / "secret.txt")}, ctx)
+        return w_in, w_out, w_trav, r_in, r_out
+
+    w_in, w_out, w_trav, r_in, r_out = asyncio.run(_go())
+    assert not w_in.is_error and (ws / "note.md").read_text(encoding="utf-8") == "hi"
+    assert w_out.is_error and "outside allowed" in w_out.content
+    assert w_trav.is_error and not (outside / "y.txt").exists()
+    assert not (outside / "x.txt").exists()
+    assert not r_in.is_error and "hi" in r_in.content
+    assert r_out.is_error and "top secret" not in r_out.content
+
+
+def test_local_host_claude_cli_preallows_native_tools(tmp_path, monkeypatch) -> None:
+    """--print 자동 거부 방지: 격리 홈 안 settings 파일(permissions.allow) + allow_tools, permission_mode=default."""
+    import xgen_agent_runtime.host.runner as runner
+    from xgen_agent_runtime.host import local_host as lh
+
+    captured: Dict[str, Any] = {}
+
+    def _fake_claude(**kw: Any) -> str:
+        captured.update(kw)
+        return "client"
+
+    monkeypatch.setattr(runner, "build_cli_client", _fake_claude)
+    claude_home = tmp_path / "claude-home"
+    host = LocalHostServices(
+        str(tmp_path / "ws"),
+        context={
+            "api_keys": {"anthropic": "ak"},
+            "settings": {
+                "CLAUDE_CODE_ENABLED": "true",
+                "CLAUDE_CODE_AUTH_MODE": "api_key",
+                "XGEN_LOCAL_CLAUDE_CONFIG_DIR": str(claude_home),
+            },
+        },
+    )
+    host.build_cli_runtime("claude_code", {})
+    settings_file = claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME
+    assert captured["settings_path"] == str(settings_file)
+    allow = json.loads(settings_file.read_text(encoding="utf-8"))["permissions"]["allow"]
+    for name in ("Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS",
+                 "WebFetch", "WebSearch", "NotebookEdit", "TodoWrite"):
+        assert name in allow
+    assert tuple(captured["allow_tools"]) == lh.CLAUDE_LOCAL_ALLOW_TOOLS
+    assert captured["permission_mode"] == "default"
+    assert captured["allow_local_tools"] is True
+    # 멱등 — 두 번째 호출도 같은 파일
+    host.build_cli_runtime("claude_code", {})
+    assert captured["settings_path"] == str(settings_file)
+    # 격리 홈이 없으면 인라인 JSON(서버 agent_geny 와 같은 형식)
+    host2 = LocalHostServices(
+        str(tmp_path / "ws2"),
+        context={"api_keys": {"anthropic": "ak"}, "settings": {"CLAUDE_CODE_ENABLED": "1"}},
+    )
+    host2.build_cli_runtime("claude_code", {})
+    assert json.loads(captured["settings_path"])["permissions"]["allow"] == list(lh.CLAUDE_LOCAL_ALLOW_TOOLS)
+
+
+def test_local_host_claude_argv_carries_allow_surface(tmp_path) -> None:
+    """실제 build_cli_client → ClaudeCodeCLIClient argv 에 --allowedTools/--settings 가 실리고 네이티브 도구가 차단 목록에 없다."""
+    from xgen_agent_runtime.host import local_host as lh
+    from xgen_agent_runtime.llm_client.types import APIRequest
+
+    claude_home = tmp_path / "claude-home"
+    host = LocalHostServices(
+        str(tmp_path / "ws"),
+        context={
+            "api_keys": {"anthropic": "ak"},
+            "settings": {
+                "CLAUDE_CODE_ENABLED": "true",
+                "CLAUDE_CODE_BINARY_PATH": "/bin/true",
+                "XGEN_LOCAL_CLAUDE_CONFIG_DIR": str(claude_home),
+            },
+        },
+    )
+    client, _ = host.build_cli_runtime("claude_code", {})
+    argv = client._build_argv(APIRequest(model="claude-sonnet-4-5", messages=[{"role": "user", "content": "x"}]))
+    allowed = argv[argv.index("--allowedTools") + 1].split()
+    assert set(lh.CLAUDE_LOCAL_ALLOW_TOOLS) <= set(allowed)
+    assert argv[argv.index("--settings") + 1] == str(claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME)
+    assert "--permission-mode" not in argv  # default 유지(허용 목록으로 충분)
+    disallowed = argv[argv.index("--disallowedTools") + 1].split() if "--disallowedTools" in argv else []
+    assert not (set(disallowed) & set(lh.CLAUDE_LOCAL_ALLOW_TOOLS))
+    assert "CronCreate" in disallowed  # 세션 한정 스케줄 도구는 여전히 차단
+
+
+def test_local_host_codex_runs_workspace_write_without_bypass(tmp_path, monkeypatch) -> None:
+    """codex: exec(헤드리스=승인 never) + --sandbox workspace-write, bypass 미사용."""
+    from xgen_agent_runtime.llm_client.types import APIRequest
+
+    host = LocalHostServices(
+        str(tmp_path / "ws"),
+        context={
+            "api_keys": {"openai": "sk"},
+            "settings": {"CODEX_ENABLED": "1", "CODEX_AUTH_MODE": "api_key", "CODEX_BINARY_PATH": "/bin/true"},
+        },
+    )
+    client, _ = host.build_cli_runtime("codex", {})
+    assert client._sandbox_mode == "workspace-write" and client._bypass_sandbox is False
+    argv = client._build_argv(APIRequest(model="gpt-5.3-codex", messages=[{"role": "user", "content": "x"}]))
+    assert argv[0] == "exec"
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+
+
+def test_local_host_flags_for_runner_and_executor(tmp_path) -> None:
+    host = LocalHostServices(str(tmp_path / "ws"))
+    assert LocalHostServices.record_failed_starts is False
+    assert getattr(host, "record_failed_starts", True) is False
+    assert host.cli_bridge_available("claude_code") is False
+    assert host.cli_bridge_available("codex") is False
+
+
+def test_history_messages_accepts_plain_dicts() -> None:
+    from xgen_agent_runtime.host.memory import history_messages
+
+    class _Msg:
+        def __init__(self, t: str, c: Any) -> None:
+            self.type, self.content = t, c
+
+    raw = [
+        {"role": "user", "content": "안녕"},
+        {"role": "assistant", "content": [{"type": "text", "text": "반가워"}]},
+        {"role": "system", "content": "drop"},
+        {"role": "user", "content": ""},
+        {"type": "human", "content": "직렬화 type 키"},
+        _Msg("ai", "객체도 섞여도 됨"),
+        "garbage",
+        {"content": "no role"},
+    ]
+    assert history_messages(raw) == [
+        {"role": "user", "content": "안녕"},
+        {"role": "assistant", "content": "반가워"},
+        {"role": "user", "content": "직렬화 type 키"},
+        {"role": "assistant", "content": "객체도 섞여도 됨"},
+    ]
+    # 기존 동작 유지: 튜플 모양·None·비리스트
+    assert history_messages((raw[:1], "ctx")) == [{"role": "user", "content": "안녕"}]
+    assert history_messages(None) == [] and history_messages("x") == []

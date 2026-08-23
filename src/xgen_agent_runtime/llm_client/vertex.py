@@ -107,5 +107,15 @@ class VertexClient(GoogleClient):
                 # Application Default Credentials.
                 kwargs["project"] = self._project
                 kwargs["location"] = self._location
+            # Gateway/proxy endpoint + extra headers ride along exactly as
+            # on the Gemini path (``GoogleClient._http_options``); the SDK
+            # joins ``projects/{p}/locations/{l}/...`` onto the custom
+            # base_url. Older SDKs that ignore it trigger the one-shot
+            # warning in ``_verify_base_url_honoured`` instead of a silent
+            # fallback to ``*-aiplatform.googleapis.com``.
+            http_options = self._http_options()
+            if http_options:
+                kwargs["http_options"] = http_options
             self._client = genai.Client(**kwargs)
+            self._verify_base_url_honoured(self._client)
         return self._client

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
 
 _MAX_RESULTS = 500
 
@@ -81,7 +82,14 @@ class GlobTool(Tool):
                 return ToolResult(content=f"No files matching '{pattern}' in {search_path}")
             return ToolResult(content=out)
 
-        base = Path(search_path)
+        # 호스트 경로(sandbox 없음): 검색 루트도 allowed_paths 안이어야 한다 — Read/Write 와
+        # 같은 가드. 커넥터 로컬 턴에서 PC 전역 열거를 막는다(감사 #11 후속).
+        try:
+            base = resolve_and_validate(search_path, context.working_dir, context.allowed_paths)
+        except PermissionError as e:
+            return ToolResult(content=str(e), is_error=True)
+        except ValueError:
+            base = Path(context.working_dir or ".")
         if not base.is_dir():
             return ToolResult(content=f"Directory not found: {search_path}", is_error=True)
 
@@ -92,6 +100,18 @@ class GlobTool(Tool):
 
         # Filter to files only, sort by mtime descending
         files = [m for m in matches if m.is_file()]
+        # 심볼릭 링크로 허용 경로 밖을 가리키는 항목은 제외한다.
+        if context.allowed_paths:
+            roots = [Path(ap).resolve() for ap in context.allowed_paths]
+
+            def _inside(m: Path) -> bool:
+                try:
+                    r = m.resolve()
+                except Exception:  # noqa: BLE001
+                    return False
+                return any(r == root or root in r.parents for root in roots)
+
+            files = [m for m in files if _inside(m)]
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
         if not files:

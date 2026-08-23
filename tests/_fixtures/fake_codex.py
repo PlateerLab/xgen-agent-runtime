@@ -10,6 +10,10 @@ Scenarios:
   auth_fail   exit 1 with the CLI's not-logged-in phrase on stderr.
   echo_argv   emit one agent_message whose text is the JSON argv + stdin,
               so tests can assert exactly what reached the binary.
+  ok_stream_tools
+              a turn with CLI-internal tool items (command_execution +
+              mcp_tool_call, item.started/item.completed pairs) — drives
+              the tool_use/tool_result surfacing path.
 """
 
 import json
@@ -48,6 +52,91 @@ def main() -> int:
                 {
                     "type": "turn.completed",
                     "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+        )
+        return 0
+
+    if scenario == "ok_stream_tools":
+        # Recorded-style ``codex exec --json`` turn with a shell command
+        # and an MCP call executed inside the CLI (item.started →
+        # item.completed pairs), then the final message.
+        print(json.dumps({"type": "thread.started", "thread_id": "thr_tools"}))
+        print(json.dumps({"type": "turn.started"}))
+        print(
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "item_1",
+                        "type": "command_execution",
+                        "command": "bash -lc 'ls /tmp/x'",
+                        "aggregated_output": "",
+                        "exit_code": None,
+                        "status": "in_progress",
+                    },
+                }
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_1",
+                        "type": "command_execution",
+                        "command": "bash -lc 'ls /tmp/x'",
+                        "aggregated_output": "a.txt\nb.txt\n",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "item_2",
+                        "type": "mcp_tool_call",
+                        "server": "connector",
+                        "tool": "memory_search",
+                        "arguments": {"query": "x"},
+                        "status": "in_progress",
+                    },
+                }
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_2",
+                        "type": "mcp_tool_call",
+                        "server": "connector",
+                        "tool": "memory_search",
+                        "arguments": {"query": "x"},
+                        "result": {"content": [{"type": "text", "text": "hit"}]},
+                        "status": "completed",
+                    },
+                }
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"id": "item_3", "type": "agent_message", "text": "two files"},
+                }
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 7, "output_tokens": 3},
                 }
             )
         )

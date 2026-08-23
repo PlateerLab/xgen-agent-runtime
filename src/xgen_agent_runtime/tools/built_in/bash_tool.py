@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict
+import sys
+from typing import Any, Dict, FrozenSet, Mapping, Optional
 
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 
@@ -38,12 +39,83 @@ _SAFE_ENV_KEYS = frozenset(
     }
 )
 
+# Windows additions (desktop host — the connector sidecar runs this tool
+# directly on the user's PC). A child spawned without ``SystemRoot`` fails
+# to initialise Winsock/CRT, ``COMSPEC``/``PATHEXT`` are needed for the
+# shell to resolve commands at all, and ``HOME`` is normally unset there
+# (``USERPROFILE`` is the home). Kept as a local fallback table; the CLI
+# runtime's authoritative Windows whitelist is reused when importable.
+_SAFE_ENV_KEYS_WINDOWS_FALLBACK = frozenset(
+    {
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "SYSTEMDRIVE",
+        "USERNAME",
+    }
+)
 
-def _scrubbed_env(extra: Dict[str, str] | None) -> Dict[str, str]:
-    if os.environ.get("GENY_BASH_INHERIT_ENV", "").strip() in ("1", "true", "yes"):
-        env = os.environ.copy()
+
+def _windows_env_keys() -> FrozenSet[str]:
+    """Windows whitelist — ``_cli_runtime``'s table when importable (one
+    source of truth with the CLI subprocess env), else the local fallback."""
+    try:
+        from xgen_agent_runtime.llm_client._cli_runtime import _ENV_WHITELIST_WINDOWS
+
+        return frozenset(_ENV_WHITELIST_WINDOWS) | _SAFE_ENV_KEYS_WINDOWS_FALLBACK
+    except Exception:  # noqa: BLE001 — import cycle / layout drift: fall back
+        return _SAFE_ENV_KEYS_WINDOWS_FALLBACK
+
+
+def _scrubbed_env(
+    extra: Optional[Mapping[str, str]],
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    platform: Optional[str] = None,
+) -> Dict[str, str]:
+    """Benign base env for the host-path subprocess.
+
+    Platform-aware: on Windows (``platform == "win32"``) the process
+    bootstrap variables are whitelisted too and matching is
+    case-insensitive (``Path`` vs ``PATH``, ``SystemRoot`` vs
+    ``SYSTEMROOT`` — the parent's spelling is preserved); ``HOME`` is
+    mapped from ``USERPROFILE`` when unset so ``~``/``$HOME`` resolve. The
+    ``environ``/``platform`` knobs exist for tests — production reads
+    ``os.environ`` / ``sys.platform``.
+    """
+    source: Mapping[str, str] = os.environ if environ is None else environ
+    plat = sys.platform if platform is None else platform
+    is_windows = plat == "win32"
+
+    if str(source.get("GENY_BASH_INHERIT_ENV", "")).strip() in ("1", "true", "yes"):
+        env: Dict[str, str] = dict(source)
+    elif is_windows:
+        allowed_ci = {k.upper() for k in (_SAFE_ENV_KEYS | _windows_env_keys())}
+        env = {
+            k: v
+            for k, v in source.items()
+            if k.upper() in allowed_ci or k.upper().startswith("LC_")
+        }
+        # PATH must exist under SOME spelling; only synthesise when absent.
+        if not any(k.upper() == "PATH" for k in env):
+            system_root = next((v for k, v in env.items() if k.upper() == "SYSTEMROOT"), "")
+            if system_root:
+                env["PATH"] = f"{system_root}\\System32;{system_root}"
+        if not any(k.upper() == "HOME" for k in env):
+            profile = next((v for k, v in env.items() if k.upper() == "USERPROFILE"), "")
+            if profile:
+                env["HOME"] = profile
     else:
-        env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS or k.startswith("LC_")}
+        env = {k: v for k, v in source.items() if k in _SAFE_ENV_KEYS or k.startswith("LC_")}
         env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
     if extra:
         env.update(extra)
@@ -69,15 +141,18 @@ class BashTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a shell command in your own isolated sandbox session — a "
-            "dedicated Linux environment that is separate from the server "
-            "hosting this conversation. This sandbox is where all your work "
-            "runs: you have full read/write access to your working directory "
-            "and home directory, and you can install the dependencies you need "
-            "(for example `pip install ...`, `uv pip install ...`, "
-            "`npm install ...`) into your session. Returns stdout, stderr, and "
-            "exit code. Commands run in your working directory with a "
-            "configurable timeout."
+            "Execute a shell command in your execution host — the place where "
+            "all your work runs. Depending on how this turn is executed that "
+            "is either your own isolated sandbox session on the server, or "
+            "the user's PC itself — directly inside the synchronized workspace "
+            "folder — when the turn runs locally; the environment section of "
+            "your prompt says which. Either way you "
+            "have read/write access to your working directory and can install "
+            "the dependencies you need (for example `pip install ...`, "
+            "`uv pip install ...`, `npm install ...`) into that environment — "
+            "be mindful that on a local PC this touches the user's real "
+            "machine. Returns stdout, stderr, and exit code. Commands run in "
+            "your working directory with a configurable timeout."
         )
 
     @property

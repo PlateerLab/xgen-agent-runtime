@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from xgen_agent_runtime.host._constants import (  # noqa: E402
     _CLI_BACKENDS,
     _coerce_text,
+    _delegation_wired,
     _self_evolution_policy,
     default_prompt,
     SELF_EVOLUTION_PROMPT_BLOCK,
@@ -361,14 +362,59 @@ class AgentTurnExecutor:
             if _shared_mounts:
                 # 여는 것과 알려 주는 것은 다른 일이다 — 클라우드에서 배웠다.
                 system_prompt = system_prompt + "\n\n" + host.shared_prompt_block(_shared_mounts)
+            # ── CLI 도구 브릿지 가용성 (claude_code/codex 전용) ───────────
+            # CLI 백엔드는 registry 를 못 보고, 비네이티브 도구(memory_*/WorkflowSelf/
+            # DelegateTask…)는 host 의 MCP 브릿지가 mcp__connector__* 로 광고할 때만
+            # 존재한다. 브릿지가 없는 host(데스크톱 사이드카)에서 그 도구를 프롬프트로
+            # 약속하면 유령 호출이 된다(감사 #25). host.cli_bridge_available 은
+            # OPTIONAL — 없으면 True(레거시 서버 동작). 예외도 True(판정 불가 = 레거시).
+            _cli_bridge_ok = True
+            _cli_bridge_reason = ""
+            if provider in _CLI_BACKENDS:
+                _probe = getattr(host, "cli_bridge_available", None)
+                if callable(_probe):
+                    try:
+                        if not bool(_probe(provider)):
+                            _cli_bridge_ok = False
+                            _cli_bridge_reason = "host 가 CLI 도구 브릿지를 제공하지 않음"
+                    except Exception as _bexc:  # noqa: BLE001
+                        logger.warning(
+                            "agents/geny: cli_bridge_available 판정 실패 (브릿지 있음으로 간주): %s",
+                            _bexc,
+                        )
+            # 도구(run ctx) 표면 — WorkflowSelf/위임은 브릿지 run ctx 에 산다. 서버는
+            # enable_builtin_tools 가 꺼지면 run ctx 를 바인딩하지 않으므로(감사 #25)
+            # host 가 True 라 해도 여기서 '브릿지 없음'으로 본다. memory_* 는 run ctx 와
+            # 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
+            _cli_tools_bridge_ok = _cli_bridge_ok and bool(
+                kwargs.get("enable_builtin_tools", True)
+            )
+            _cli_tools_bridge_reason = _cli_bridge_reason or (
+                "enable_builtin_tools=off (브릿지 run ctx 미바인딩)"
+            )
             if bool(kwargs.get("enable_memory", True)):
-                from xgen_agent_runtime.host._constants import MEMORY_PROMPT_BLOCK
+                from xgen_agent_runtime.host._constants import (
+                    MEMORY_AUTO_PROMPT_BLOCK,
+                    MEMORY_PROMPT_BLOCK,
+                )
                 from xgen_agent_runtime.host.memory_tools import build_memory_tools
 
                 memory_provider = host.build_memory_provider(
                     str(kwargs.get("workflow_id") or ""), interaction_id
                 )
-                if memory_provider is not None and provider == "claude_code":
+                if (
+                    memory_provider is not None
+                    and provider in _CLI_BACKENDS
+                    and not _cli_bridge_ok
+                ):
+                    # 브릿지 없는 CLI(데스크톱 사이드카): 도구는 없고 자동 계층(Stage 2
+                    # 주입 + Stage 15 기록)만 돈다 — 그 사실만 알리고 도구는 광고 안 함.
+                    system_prompt = system_prompt + MEMORY_AUTO_PROMPT_BLOCK
+                    logger.info(
+                        "agents/geny: CLI 메모리 도구 미광고 — %s (자동 계층만 동작)",
+                        _cli_bridge_reason,
+                    )
+                if memory_provider is not None and provider == "claude_code" and _cli_bridge_ok:
                     # CLI 백엔드: memory_* 는 내부 MCP 브릿지가 광고한다
                     # (mcp__connector__memory_* 이름). 자동 계층(주입/기록)과 별개로
                     # 에이전트가 도구를 인지하도록 동일 정책 블록 + 이름 규약 노트.
@@ -378,7 +424,7 @@ class AgentTurnExecutor:
                         + "\n(Note: on this backend the memory tools appear as"
                         + " mcp__connector__memory_write, mcp__connector__memory_read, etc.)"
                     )
-                if memory_provider is not None and provider == "codex":
+                if memory_provider is not None and provider == "codex" and _cli_bridge_ok:
                     # Codex: 자기서브(self-serve) 메모리 도구는 커넥터 MCP 브릿지가
                     # 광고한다 (mcp_config → -c mcp_servers.connector). 이름 규약은
                     # Codex 의 MCP 표기(서버명 connector)를 따른다.
@@ -582,6 +628,14 @@ class AgentTurnExecutor:
                         )
                 except Exception as _sexc:  # noqa: BLE001
                     logger.warning("agents/geny: self-evolution 도구 등록 실패 (스킵): %s", _sexc)
+            elif provider in _CLI_BACKENDS and _se_allowed and not _cli_tools_bridge_ok:
+                # 브릿지 run ctx 가 없으면 WorkflowSelf 는 CLI 에 보이지 않는다 —
+                # 블록을 붙이면 유령 안내(감사 #25). 같은 판정(_self_evolution_allowed)
+                # 스태시는 그대로 두어 브릿지가 생기는 호스트 쪽 계약은 불변.
+                logger.info(
+                    "agents/geny: self-evolution 미배선 — CLI 브릿지 없음 (%s)",
+                    _cli_tools_bridge_reason,
+                )
             elif (
                 provider == "claude_code"
                 and _se_allowed
@@ -645,31 +699,52 @@ class AgentTurnExecutor:
             ):
                 try:
                     wf_id = str(kwargs.get("workflow_id"))
-                    cli_factory = None
-                    if provider == "claude_code":
-                        cli_factory = host.make_sub_cli_client_factory(kwargs, wf_id)
-                    # SubPipelineSpec 은 서버 소유 타입 — 여기선 plain dict 필드만
-                    # 주고, host(서버 impl)가 그 타입을 구성한다(공유 executor 무결).
-                    delegation_extras = host.build_turn_delegation(
-                        workflow_id=wf_id,
-                        interaction_id=interaction_id,
-                        user_id=kwargs.get("user_id"),
-                        spec_fields=dict(
-                            provider=provider,
-                            model=model,
-                            api_key=api_key,
-                            base_url=base_url,
-                            temperature=float(kwargs.get("temperature", 0.7) or 0.7),
-                            max_tokens=int(kwargs.get("max_tokens", 8192)),
+                    delegation_extras: Dict[str, Any] = {}
+                    _deleg_no_bridge = provider == "claude_code" and not _cli_tools_bridge_ok
+                    if _deleg_no_bridge:
+                        # 브릿지 run ctx 가 없으면 mcp__connector__DelegateTask 는 CLI 에
+                        # 보이지 않는다 — 스태시(→ CLI 내장 Task/Agent 차단)·노트 모두
+                        # 생략해 CLI 가 최소한 자기 위임 도구는 쓰게 둔다(감사 #25).
+                        # host.build_turn_delegation 도 부르지 않는다(쓸 데 없는 백엔드 생성).
+                        logger.info(
+                            "agents/geny: 위임 미배선 — CLI 브릿지 없음 (%s)",
+                            _cli_tools_bridge_reason,
+                        )
+                    else:
+                        cli_factory = None
+                        if provider == "claude_code":
+                            cli_factory = host.make_sub_cli_client_factory(kwargs, wf_id)
+                        # SubPipelineSpec 은 서버 소유 타입 — 여기선 plain dict 필드만
+                        # 주고, host(서버 impl)가 그 타입을 구성한다(공유 executor 무결).
+                        delegation_extras = host.build_turn_delegation(
+                            workflow_id=wf_id,
+                            interaction_id=interaction_id,
                             user_id=kwargs.get("user_id"),
-                            anthropic_api_key=host.resolve_api_key("anthropic", kwargs),
-                            ssh_servers=host.load_ssh_servers(),
-                            llm_client_factory=cli_factory,
-                            sandbox=_sandbox,
-                            credentials=credentials,
-                        ),
-                    )
-                    if provider == "claude_code":
+                            spec_fields=dict(
+                                provider=provider,
+                                model=model,
+                                api_key=api_key,
+                                base_url=base_url,
+                                temperature=float(kwargs.get("temperature", 0.7) or 0.7),
+                                max_tokens=int(kwargs.get("max_tokens", 8192)),
+                                user_id=kwargs.get("user_id"),
+                                anthropic_api_key=host.resolve_api_key("anthropic", kwargs),
+                                ssh_servers=host.load_ssh_servers(),
+                                llm_client_factory=cli_factory,
+                                sandbox=_sandbox,
+                                credentials=credentials,
+                            ),
+                        )
+                    if _deleg_no_bridge:
+                        pass  # 위에서 판정·로그 끝 — 미보고 완료분 주입만 계속
+                    elif not _delegation_wired(delegation_extras):
+                        # host 가 위임 백엔드(subagent_manager/task_runner/task_registry)
+                        # 를 주지 않았다(데스크톱 사이드카 v1: {}). 이때 SDK 패밀리
+                        # (SubAgent*/Task*)를 등록하면 도구는 보이는데 extras 가 비어
+                        # 매 호출이 NO_SUBAGENT_MANAGER 로 죽는 유령 도구가 된다 —
+                        # WorkflowSelf 와 같은 원칙으로 등록·노트 모두 생략.
+                        logger.info("agents/geny: 위임 미배선 — host 미제공")
+                    elif provider == "claude_code":
                         # CLI 경로: 도구는 커넥터 MCP 브릿지가 광고/실행한다 —
                         # _build_connector_mcp_bridge 가 run ctx 로 가져가도록 스태시.
                         kwargs["_delegation_extras"] = delegation_extras
@@ -993,6 +1068,7 @@ class AgentTurnExecutor:
                 cancel_check=_cancelled,
                 output_schema=schema,
                 on_close=_teardown,
+                host=host,
             )
             if clamped and schema is None:
                 # 입력이 잘렸음을 사용자에게 알린다 (agent_xgen 의 경고 관행과
@@ -1007,6 +1083,6 @@ class AgentTurnExecutor:
                 return _with_notice(turn_iter)
             return turn_iter
         try:
-            return run_turn(pipeline, user_text, state, output_schema=schema)
+            return run_turn(pipeline, user_text, state, output_schema=schema, host=host)
         finally:
             _teardown()

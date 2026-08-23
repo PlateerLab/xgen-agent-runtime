@@ -110,3 +110,65 @@ def test_subscription_mode_never_leaks_the_api_key():
     assert "OPENAI_API_KEY" not in client._env_extras()
     client2 = _client(auth_mode="api_key")
     assert client2._env_extras()["OPENAI_API_KEY"] == "sk-fake"
+
+
+# ---------------------------------------------------------------------------
+# audit #26 — CLI-internal tool items reach the stream + Stage 6 (source=cli)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_surfaces_tool_use_and_tool_result_for_cli_items():
+    client = _client("ok_stream_tools")
+    events = []
+    async for event in client.create_message_stream(
+        model_config=_mc(), messages=[{"role": "user", "content": "ls"}]
+    ):
+        events.append(event)
+    types = [e["type"] for e in events]
+    assert types == [
+        "tool_use", "tool_result", "tool_use", "tool_result", "text_delta", "message_complete"
+    ], types
+    assert events[0]["name"] == "Bash" and events[0]["id"] == "item_1"
+    assert events[1]["tool_use_id"] == "item_1" and events[1]["content"] == "a.txt\nb.txt\n"
+    assert events[2]["name"] == "mcp__connector__memory_search"
+    assert events[3]["tool_use_id"] == "item_2" and events[3]["is_error"] is False
+    final = events[-1]["response"]
+    assert final.text == "two files"
+    assert [b.type for b in final.content] == ["text"]
+    assert "unknown_line_count" in final.raw and final.raw["unknown_line_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_items_reach_stage6_as_cli_tool_calls():
+    """Same outermost surface the Claude CLI test pins: api.tool_use +
+    api.cli_tool_call companion + api.tool_result, all source="cli", so
+    ``host.runner.stream_turn`` renders agent_event tool_call/tool_result
+    for Codex without any backend-specific branch."""
+    from xgen_agent_runtime import Pipeline
+    from xgen_agent_runtime.stages.s01_input import InputStage
+    from xgen_agent_runtime.stages.s06_api import APIStage
+    from xgen_agent_runtime.stages.s21_yield import YieldStage
+
+    pipeline = Pipeline()
+    pipeline.register_stage(InputStage())
+    pipeline.register_stage(APIStage())
+    pipeline.register_stage(YieldStage())
+    pipeline.attach_runtime(llm_client=_client("ok_stream_tools"))
+
+    events = []
+    async for event in pipeline.run_stream("list /tmp/x"):
+        events.append(event)
+    assert events[-1].type == "pipeline.complete", [e.type for e in events]
+
+    tool_uses = [e for e in events if e.type == "api.tool_use"]
+    assert [e.data["name"] for e in tool_uses] == ["Bash", "mcp__connector__memory_search"]
+    assert all(e.data["source"] == "cli" for e in tool_uses)
+    cli_calls = [e for e in events if e.type == "api.cli_tool_call"]
+    assert [c.data for c in cli_calls] == [t.data for t in tool_uses]
+    results = [e for e in events if e.type == "api.tool_result"]
+    assert [r.data["tool_use_id"] for r in results] == ["item_1", "item_2"]
+    assert all(r.data["source"] == "cli" for r in results)
+    # The tool items never reach the history as tool_use blocks (no Stage 10 ghost dispatch).
+    text = [e for e in events if e.type == "text.delta"]
+    assert [t.data["text"] for t in text] == ["two files"]

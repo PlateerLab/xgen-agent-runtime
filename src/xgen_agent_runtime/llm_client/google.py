@@ -81,8 +81,64 @@ class GoogleClient(BaseClient):
                     "Google client requires the 'google-genai' package. "
                     "Install with: pip install xgen-agent-runtime[google]"
                 ) from e
-            self._client = genai.Client(api_key=self._api_key)
+            kwargs: Dict[str, Any] = {"api_key": self._api_key}
+            http_options = self._http_options()
+            if http_options:
+                kwargs["http_options"] = http_options
+            self._client = genai.Client(**kwargs)
+            self._verify_base_url_honoured(self._client)
         return self._client
+
+    # ── base_url / headers → genai.Client(http_options=...) ──────────
+    #
+    # ``BaseClient`` carries ``base_url`` + ``default_headers`` for every
+    # provider, but this client built ``genai.Client(api_key=...)`` bare —
+    # an operator who pointed Gemini at a gateway/proxy was silently
+    # talking to ``generativelanguage.googleapis.com``. The google-genai
+    # SDK takes both through ``http_options`` (``HttpOptionsDict``:
+    # ``base_url`` / ``headers``), which is honoured for the Gemini API
+    # and — since the SDK patches user ``http_options`` over its
+    # computed defaults — for Vertex as well. The post-construction
+    # check below is the belt to that brace: if a (older/newer) SDK
+    # ignores the override, say so once instead of failing silently.
+
+    def _http_options(self) -> Optional[Dict[str, Any]]:
+        """``http_options`` kwarg for ``genai.Client`` or ``None`` when
+        neither ``base_url`` nor ``default_headers`` is configured."""
+        opts: Dict[str, Any] = {}
+        if self._base_url:
+            opts["base_url"] = self._base_url
+        if self._default_headers:
+            opts["headers"] = dict(self._default_headers)
+        return opts or None
+
+    def _verify_base_url_honoured(self, client: Any) -> None:
+        """Warn ONCE when the SDK resolved a different endpoint than the
+        configured ``base_url`` (silent fallback to the public endpoint
+        is exactly the failure this guards against)."""
+        if not self._base_url or getattr(self, "_base_url_warned", False):
+            return
+        try:
+            effective = getattr(
+                getattr(getattr(client, "_api_client", None), "_http_options", None),
+                "base_url",
+                None,
+            )
+        except Exception:  # noqa: BLE001 — SDK internals are best-effort
+            effective = None
+        if effective is None:
+            return  # SDK internals unknown — nothing to compare against
+        want = str(self._base_url).rstrip("/")
+        if str(effective).rstrip("/") != want:
+            self._base_url_warned = True
+            logger.warning(
+                "%s: configured base_url=%r was NOT honoured by google-genai "
+                "(effective endpoint %r) — requests go to the SDK default. "
+                "Upgrade google-genai or drop base_url.",
+                self.provider,
+                self._base_url,
+                effective,
+            )
 
     async def warmup(self, *, timeout_s: float = 8.0) -> bool:
         """Build the genai client and walk one cheap list-models call so

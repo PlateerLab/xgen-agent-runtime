@@ -47,9 +47,24 @@ stdout 이벤트(JSON-lines; 데몬 모드는 ``id`` 포함)::
     {"type": "tool", "data": {"type": "tool_call"|"tool_result"|"tool_error",
                                "tool_name": "...", ...}}   # 도구 활동(웹과 같은 shape)
     {"type": "canvas_command", "data": {...}}        # self-evolution 사이드채널
+    {"type": "usage", "data": {"input_tokens": int, "output_tokens": int,
+                                "cache_read_tokens": int|null,
+                                "cache_creation_tokens": int|null,
+                                "total_cost_usd": float|null,
+                                "model": str|null, "provider": str|null}}
+                                                     # 턴 토큰/비용 집계(0..1회, done 직전)
     {"type": "done", "text": "..."}                  # 완료(전체 텍스트)
     {"type": "error", "message": "..."}              # 치명 오류
     {"type": "cancelled"}                            # cancel 로 중단됨
+
+``usage`` 는 runner.stream_turn 이 파이프라인 종료 후 한 번 내는 집계를 **1급
+이벤트**로 올린 것이다(``meta`` 로 감싸지 않는다) — 커넥터는 이를
+TurnReport.usage 로 report-turn 에 실어 서버 토큰 컬럼을 채운다. 사용량이
+기록되지 않은 턴(API 호출 0회)에는 나오지 않는다.
+
+종료 이벤트는 ``done`` / ``error`` / ``cancelled`` 중 **정확히 하나**다. cancel 요청이
+관측된 턴은 스트림이 자연 종료한 뒤라도 ``done`` 이 아니라 ``cancelled`` 로 닫는다
+(커넥터가 "취소했는데 done" 을 받아 완료로 오판하던 레이스 차단).
 
 v1(커넥터 ≤1.64) 은 chunk/done/error 만 해석했고 그 외 dict 청크를 ``str()`` 로
 텍스트에 섞어 넣었다 — v2 는 도구 이벤트를 전용 ``tool`` 이벤트로 올린다.
@@ -80,7 +95,7 @@ def _normalize_event(chunk: Any) -> Dict[str, Any]:
     """AgentTurnExecutor 스트림 항목 → 사이드카 이벤트.
 
     str → chunk. dict 는 runner.stream_turn 의 사이드채널(agent_event /
-    canvas_command) — 절대 텍스트로 강등하지 않는다."""
+    canvas_command / usage) — 절대 텍스트로 강등하지 않는다."""
     if isinstance(chunk, str):
         return {"type": "chunk", "text": chunk}
     if isinstance(chunk, dict):
@@ -90,6 +105,9 @@ def _normalize_event(chunk: Any) -> Dict[str, Any]:
             return {"type": "tool", "data": data}
         if kind == "canvas_command":
             return {"type": "canvas_command", "data": data}
+        if kind == "usage" and isinstance(data, dict):
+            # 턴 토큰/비용 집계 — 1급 이벤트(meta 로 감싸지 않는다).
+            return {"type": "usage", "data": data}
         return {"type": "meta", "data": chunk}
     return {"type": "chunk", "text": str(chunk)}
 
@@ -178,8 +196,17 @@ def run_turn_request(
         except Exception as exc:  # noqa: BLE001
             yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
             return
+        if cancel_check is not None and cancel_check():
+            # 레이스: 마지막 청크와 스트림 종료 사이에 cancel 이 들어왔다 — 실행기
+            # 루프가 협조 중단했든 자연 종료했든, 취소가 관측된 턴은 절대 done 으로
+            # 닫지 않는다(커넥터가 완료로 오판 → 다음 턴 상태 오염).
+            yield {"type": "cancelled"}
+            return
         yield {"type": "done", "text": "".join(acc)}
     else:
+        if cancel_check is not None and cancel_check():
+            yield {"type": "cancelled"}
+            return
         yield {"type": "done", "text": result if isinstance(result, str) else str(result)}
 
 

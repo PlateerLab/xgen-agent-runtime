@@ -154,29 +154,46 @@ class CodexEventAccumulator:
     ``finalize() -> APIResponse`` and the three wire-drift counters.
 
     Codex executes its own tools inside the subprocess (same contract as
-    Claude Code), so ``command_execution`` / ``mcp_tool_call`` /
-    ``file_change`` items are *known* frames that simply do not surface
-    as response content — they are neither emitted nor counted as
-    unknown.
+    Claude Code). Its tool items (``command_execution`` /
+    ``mcp_tool_call`` / ``file_change`` / ``web_search``) never become
+    response *content*, but — exactly like the Claude CLI accumulator
+    (``_cli.py``: ``tool_use`` on the assistant block, ``tool_result``
+    on the ``user`` envelope) — they ARE surfaced as canonical
+    streaming events so Stage 6 emits ``api.tool_use`` /
+    ``api.cli_tool_call`` / ``api.tool_result`` (``source="cli"``) and
+    hosts show a tool timeline for Codex too:
+
+    * ``item.started``   → ``{"type": "tool_use", "id", "name", "input"}``
+    * ``item.completed`` → ``{"type": "tool_result", "tool_use_id",
+      "content", "is_error"}`` (preceded by the ``tool_use`` when no
+      ``item.started`` announced the item — older CLIs skip it)
+    * ``item.updated``   → silent (progressive ``aggregated_output``)
+
+    Tool names reuse the Claude CLI vocabulary where a 1:1 exists
+    (``Bash``, ``WebSearch``), ``mcp__<server>__<tool>`` for MCP calls
+    and ``ApplyPatch`` for file changes, so UI consumers need no
+    per-backend branch. ``todo_list`` / ``patch_apply`` stay silent.
     """
 
     #: item types we recognise but deliberately do not surface.
     _KNOWN_SILENT_ITEMS = frozenset(
         {
-            "command_execution",
-            "file_change",
-            "mcp_tool_call",
-            "web_search",
             "todo_list",
             "patch_apply",
         }
     )
+    #: tool-ish item types → canonical tool name (see class docstring).
+    _TOOL_ITEM_NAMES: Dict[str, str] = {
+        "command_execution": "Bash",
+        "mcp_tool_call": "",  # composed per item: mcp__<server>__<tool>
+        "file_change": "ApplyPatch",
+        "web_search": "WebSearch",
+    }
     #: top-level event types that carry no response content.
     _KNOWN_SILENT_EVENTS = frozenset(
         {
             "thread.started",
             "turn.started",
-            "item.started",
             "item.updated",
             "session.created",
         }
@@ -190,6 +207,11 @@ class CodexEventAccumulator:
         self._usage: Optional[TokenUsage] = None
         self._session_id: str = ""
         self._structured: Any = None
+        # Tool items announced via ``item.started`` (id → name) so the
+        # matching ``item.completed`` emits only the ``tool_result``; an
+        # item that completes without a start gets both events.
+        self._open_tools: Dict[str, str] = {}
+        self._anon_tool_seq = 0
         self.unknown_line_count = 0
         self.malformed_line_count = 0
         self.first_unknown_type: Optional[str] = None
@@ -217,6 +239,105 @@ class CodexEventAccumulator:
             output_tokens=_i("output_tokens"),
             cache_read_input_tokens=cached,
         )
+
+    # ── tool items → canonical tool_use / tool_result ────────────────
+
+    def _tool_name(self, itype: str, item: Dict[str, Any]) -> str:
+        if itype == "mcp_tool_call":
+            server = str(item.get("server") or "").strip()
+            tool = str(item.get("tool") or "").strip()
+            if server and tool:
+                return f"mcp__{server}__{tool}"
+            return tool or server or "mcp_tool_call"
+        return self._TOOL_ITEM_NAMES.get(itype) or itype
+
+    @staticmethod
+    def _tool_input(itype: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        if itype == "command_execution":
+            return {"command": str(item.get("command") or "")}
+        if itype == "mcp_tool_call":
+            args = item.get("arguments")
+            return dict(args) if isinstance(args, dict) else {"arguments": args}
+        if itype == "file_change":
+            changes = item.get("changes")
+            return {"changes": list(changes) if isinstance(changes, list) else []}
+        if itype == "web_search":
+            return {"query": str(item.get("query") or "")}
+        return {}
+
+    @staticmethod
+    def _tool_outcome(itype: str, item: Dict[str, Any]) -> tuple[Any, bool]:
+        """(content, is_error) for a completed tool item."""
+        status = str(item.get("status") or "").lower()
+        failed = status in ("failed", "declined", "error")
+        if itype == "command_execution":
+            output = str(item.get("aggregated_output") or "")
+            exit_code = item.get("exit_code")
+            try:
+                code = int(exit_code) if exit_code is not None else 0
+            except (TypeError, ValueError):
+                code = 0
+            if code != 0:
+                output = (output + "\n" if output else "") + f"Exit code: {code}"
+            return output, failed or code != 0
+        if itype == "mcp_tool_call":
+            error = item.get("error")
+            if error:
+                msg = error.get("message") if isinstance(error, dict) else error
+                return str(msg or "mcp tool call failed"), True
+            result = item.get("result")
+            if isinstance(result, dict) and isinstance(result.get("content"), list):
+                # MCP CallToolResult — keep the content blocks (text-bearing).
+                return result.get("content"), failed
+            return result if result is not None else "", failed
+        if itype == "file_change":
+            changes = item.get("changes")
+            lines = []
+            if isinstance(changes, list):
+                for ch in changes:
+                    if isinstance(ch, dict):
+                        lines.append(f"{ch.get('kind') or 'update'}: {ch.get('path') or ''}")
+            return "\n".join(lines), failed
+        if itype == "web_search":
+            return "", failed
+        return "", failed
+
+    def _tool_id(self, item: Dict[str, Any]) -> str:
+        raw_id = str(item.get("id") or "").strip()
+        if raw_id:
+            return raw_id
+        self._anon_tool_seq += 1
+        return f"codex_item_{self._anon_tool_seq}"
+
+    def _tool_started(self, itype: str, item: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+        tool_id = self._tool_id(item)
+        name = self._tool_name(itype, item)
+        self._open_tools[tool_id] = name
+        yield {
+            "type": "tool_use",
+            "id": tool_id,
+            "name": name,
+            "input": self._tool_input(itype, item),
+        }
+
+    def _tool_completed(self, itype: str, item: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+        raw_id = str(item.get("id") or "").strip()
+        if not raw_id or raw_id not in self._open_tools:
+            # No ``item.started`` seen (older CLIs / anonymous items) —
+            # announce the call first so the pair stays intact.
+            events = list(self._tool_started(itype, item))
+            tool_id = events[0]["id"]
+            yield from events
+        else:
+            tool_id = raw_id
+        self._open_tools.pop(tool_id, None)
+        content, is_error = self._tool_outcome(itype, item)
+        yield {
+            "type": "tool_result",
+            "tool_use_id": tool_id,
+            "content": content,
+            "is_error": bool(is_error),
+        }
 
     # ── the interface the client consumes ────────────────────────────
 
@@ -265,9 +386,19 @@ class CodexEventAccumulator:
             return
         if etype in self._KNOWN_SILENT_EVENTS:
             return
+        if etype == "item.started":
+            item = _item_of(line_obj) or {}
+            itype = _item_type(item)
+            if itype in self._TOOL_ITEM_NAMES:
+                yield from self._tool_started(itype, item)
+            # every other item kind is only interesting once completed
+            return
         if etype == "item.completed":
             item = _item_of(line_obj) or {}
             itype = _item_type(item)
+            if itype in self._TOOL_ITEM_NAMES:
+                yield from self._tool_completed(itype, item)
+                return
             if itype in ("agent_message", "assistant_message"):
                 text = str(item.get("text") or "")
                 if text:

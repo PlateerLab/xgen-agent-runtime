@@ -4,6 +4,75 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.0] — 2026-08-23
+
+파이프라인 전수 검수(8 provider × Web/Connector) 확정 결함 반영 — 자세한 항목은 아래.
+
+### Changed — 데스크톱 호스트(LocalHostServices) 격리·CLI 네이티브 사전 허용·이력 dict
+
+- **파일 도구 격리**: `LocalHostServices.build_run_tool_context` 가 `allowed_paths=[workspace, *extra_allowed]`
+  를 항상 준다(서버 `builtin_tools.build_run_tool_context` 와 동일) — 종전 `None`(무제한)이라
+  Read/Write/Edit 가 사용자 PC 전체를 만질 수 있던 문제. 경로 가드 테스트 추가.
+- **Claude Code 로컬 턴 사전 허용**: `--print` 비대화 모드의 자동 거부를 막기 위해 격리
+  `CLAUDE_CONFIG_DIR` 안 `xgen-local-settings.json`(`permissions.allow` 네이티브 표면) +
+  `--allowedTools` 를 함께 전달(`CLAUDE_LOCAL_ALLOW_TOOLS`), `permission_mode` 는 default 유지.
+  격리 홈이 없으면 인라인 JSON. codex 는 `exec`(승인 never) + `--sandbox workspace-write` 확인.
+- **이력 평문 dict**: `host.memory.history_messages` 가 `{"role","content"}` dict 리스트(서버가
+  로컬 턴에 `memory` 옵션으로 보내는 모양)도 받는다 — user/assistant 만, 빈 content 제거.
+- **`record_failed_starts = False`** (LocalHostServices): 출력 전 실패 턴은 vault 실행 기록을
+  남기지 않는다 — 커넥터가 서버로 폴백하므로 카드가 중복된다.
+- **`cli_bridge_available(provider) -> False`** (LocalHostServices): 로컬 CLI 턴엔 mcp__connector__
+  브릿지가 없다 — 실행기가 CLI 전용 프롬프트 안내(메모리 도구·위임·SELF_EVOLUTION)를 붙이지 않는다.
+
+### Changed — host 게이트 (turn_executor)
+
+- **[DELEGATION_GATE]** SDK `SubAgent*`/`Task*`/`DelegateTask` 패밀리와 CLI 위임 노트·스태시는 `host.build_turn_delegation()` 이 실제 백엔드(`subagent_manager`/`task_runner`/`task_registry`)를 돌려줄 때만 배선 — `{}`(데스크톱 사이드카)는 '위임 미배선 — host 미제공' 로그 후 미등록(유령 도구 제거).
+- **[CLI_BRIDGE]** `HostServices.cli_bridge_available(provider)` (OPTIONAL, 부재=True) — False 면 CLI 전용 노트(`mcp__connector__memory_*`, SELF_EVOLUTION, 위임 노트/`_delegation_extras` 스태시)를 생략하고 메모리는 `MEMORY_AUTO_PROMPT_BLOCK`(자동 주입·기록만, 도구 없음)으로 안내. SDK 경로 `MEMORY_PROMPT_BLOCK` 불변.
+- **[감사 #25]** `enable_builtin_tools=False` 인 CLI 턴은 브릿지 run ctx 가 바인딩되지 않으므로 host 판정과 무관하게 SELF_EVOLUTION 블록·위임 노트를 붙이지 않는다(memory_* 노트는 run ctx 와 무관하게 유지).
+
+### Added — 턴 사용량(usage) 청크 + 사이드카 1급 ``usage`` 이벤트
+
+- **`runner.stream_turn` usage 청크**: 파이프라인 종료 후(성공·오류 무관, 취소 제외) 정확히
+  한 번 `{"type": "usage", "data": {input_tokens, output_tokens, cache_read_tokens,
+  cache_creation_tokens, total_cost_usd, model, provider}}` 를 yield 한다(`runner.turn_usage`).
+  출처는 Stage 7 이 쌓는 per-call `state.turn_token_usage` 합계(SDK·CLI 공통); 비용은
+  provider 보고값(Claude Code envelope `total_cost_usd`) 우선, 없으면 Stage 7 계산기.
+  `run_turn(usage_sink=...)` 은 같은 shape 를 dict 로 채운다.
+- **sidecar v2 `usage` 이벤트**: 위 청크를 `meta` 로 감싸지 않고 `{"type": "usage", "data": {...}}`
+  1급 이벤트로 올린다(커넥터 TurnReport.usage → report-turn). 프로토콜 문서(모듈 docstring) 갱신.
+- **`build_cli_client(prewarm_spawn=None)`**: hot-spare 프리웜 토글 전달. None(기본)이면 클라이언트
+  기본값 그대로(동작 불변); 턴마다 클라이언트를 새로 만드는 원샷 호스트(서버)는 False 를 넘겨
+  고아 프리웜 프로세스를 막는다.
+
+### Fixed
+
+- **sidecar cancel/done 레이스**: 마지막 청크와 스트림 종료 사이에 cancel 이 관측된 턴이 `done` 으로
+  닫히던 문제 — 취소가 관측되면 스트리밍/비스트리밍 모두 `cancelled` 로 닫는다.
+- **`host.record_failed_starts`**: `stream_turn`/`run_turn` 에 선택 `host` 인자 — 호스트가
+  `record_failed_starts=False` 를 노출하면 "출력 0 + 실패/취소" 턴의 메모리 실행 기록을 건너뛴다
+  (커넥터 로컬 실패 → 서버 폴백 시 중복 실패 기록 방지). 기본/미전달은 기존 그대로 기록.
+
+<!-- llm_client/bash 감사 후속 (openai 샘플링·google base_url·codex 도구 이벤트·Bash Windows env) -->
+- **openai**: o1/o3/o4/gpt-5 계열에 `temperature`/`top_p` 를 보내지 않는다(anthropic
+  `_model_rejects_sampling_params` 동형, INFO 로그) + 400 이 샘플링 파라미터를 지목하면
+  `_heal_request_kwargs` 가 해당 키를 떼고 1회 재시도.
+- **google/vertex**: `base_url`/`default_headers` 를 `genai.Client(http_options=...)` 로
+  전달(이전엔 조용히 무시돼 게이트웨이 설정이 공식 엔드포인트로 새던 경로). SDK 가 override 를
+  무시하면 클라이언트당 1회 WARNING.
+- **codex 번역기(감사 #26)**: `item.started/completed` 의 `command_execution`/`mcp_tool_call`/
+  `file_change`/`web_search` 를 Claude CLI 번역기와 같은 canonical `tool_use`/`tool_result`
+  청크로 올린다 → Stage 6 `api.cli_tool_call`/`api.tool_result`(source=cli) → runner
+  `agent_event` tool_call/tool_result 가 Codex 에서도 보인다. 응답 content 는 text/thinking 만(기존 유지).
+- **Bash 도구**: 호스트 경로 env 스크럽이 Windows 를 인식(SystemRoot/ComSpec/PATHEXT/TEMP/
+  USERPROFILE… 대소문자 무시 화이트리스트, `HOME←USERPROFILE`), 설명문을 서버 샌드박스/로컬 PC
+  양쪽에 참인 문장으로 교체("서버와 분리된 Linux 환경" 무조건 문구 제거).
+
+- **Glob/Grep 호스트 경로 가드**: 검색 루트도 `allowed_paths` 안이어야 한다(Read/Write 와 동일) —
+  커넥터 로컬 턴에서 PC 전역 열거를 막는다; 심볼릭 링크로 밖을 가리키는 결과는 제외.
+- **tool_result 표시 축약이 꼬리를 보존**: 4000자 초과 결과는 머리+꼬리(800자)를 남긴다 — 문서 도구가
+  결과 끝에 붙이는 다운로드 마커가 잘려 다운로드 버튼이 사라지던 문제(`runner._display_result`).
+- **turn_executor → `stream_turn/run_turn(host=...)`** 전달: `record_failed_starts` 게이트가 실제로 동작.
+
 ## [3.7.1] — 2026-08-23
 
 ### Fixed — 데스크톱 호스트 감사(커넥터 로컬 실행 v2) 확정 결함

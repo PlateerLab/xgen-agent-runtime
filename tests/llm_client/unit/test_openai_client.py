@@ -424,3 +424,129 @@ def test_vllm_provenance_reports_vllm_provider_with_openai_sdk() -> None:
     prov = client._provenance()
     assert prov["provider"] == "vllm"
     assert prov["sdk_version"] == openai_sdk.__version__
+
+
+# ---------------------------------------------------------------------------
+# Reasoning families reject temperature/top_p: proactive drop + reactive heal
+# ---------------------------------------------------------------------------
+
+from xgen_agent_runtime.llm_client.openai import (  # noqa: E402
+    _model_rejects_sampling_params,
+)
+
+
+@pytest.mark.parametrize("model", ["o1", "o3-mini", "o4-mini", "gpt-5", "gpt-5.2-codex"])
+def test_reasoning_families_reject_sampling_params(model: str) -> None:
+    assert _model_rejects_sampling_params(model) is True
+
+
+@pytest.mark.parametrize("model", ["gpt-4o", "gpt-4.1-mini", "gpt-3.5-turbo"])
+def test_classic_families_keep_sampling_params(model: str) -> None:
+    assert _model_rejects_sampling_params(model) is False
+
+
+def test_build_kwargs_drops_temperature_and_top_p_for_reasoning_models(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = OpenAIClient(api_key="sk-mock")
+    with caplog.at_level(logging.INFO, logger="xgen_agent_runtime.llm_client.openai"):
+        kwargs = client._build_kwargs(
+            _req(model="gpt-5", max_tokens=256, temperature=0.2, top_p=0.9)
+        )
+    assert "temperature" not in kwargs
+    assert "top_p" not in kwargs
+    assert kwargs["max_completion_tokens"] == 256
+    dropped = [r.getMessage() for r in caplog.records if "dropped" in r.getMessage()]
+    assert any("'temperature'" in m for m in dropped)
+    assert any("'top_p'" in m for m in dropped)
+
+
+def test_build_kwargs_keeps_temperature_and_top_p_for_classic_models() -> None:
+    client = OpenAIClient(api_key="sk-mock")
+    kwargs = client._build_kwargs(_req(model="gpt-4o", temperature=0.2, top_p=0.9))
+    assert kwargs["temperature"] == 0.2
+    assert kwargs["top_p"] == 0.9
+
+
+_TEMPERATURE_400 = (
+    "Unsupported value: 'temperature' does not support 0.2 with this model. "
+    "Only the default (1) value is supported."
+)
+_TOP_P_400 = "Unsupported parameter: 'top_p' is not supported with this model."
+
+
+def test_heal_hook_strips_temperature_named_by_the_400() -> None:
+    client = OpenAIClient(api_key="sk-mock")
+    kwargs = {"model": "o9-future", "messages": [], "temperature": 0.2, "top_p": 0.9}
+    healed = client._heal_request_kwargs(kwargs, RuntimeError(_TEMPERATURE_400))
+    assert healed is not None
+    assert "temperature" not in healed
+    assert healed["top_p"] == 0.9  # only the named key goes
+    assert kwargs["temperature"] == 0.2  # pure
+
+
+def test_heal_hook_strips_top_p_named_by_the_400() -> None:
+    client = OpenAIClient(api_key="sk-mock")
+    healed = client._heal_request_kwargs(
+        {"model": "m", "top_p": 0.5, "temperature": 0.1}, RuntimeError(_TOP_P_400)
+    )
+    assert healed is not None
+    assert "top_p" not in healed and healed["temperature"] == 0.1
+
+
+@pytest.mark.parametrize(
+    "msg,kwargs",
+    [
+        # Names temperature but it's not in the request.
+        (_TEMPERATURE_400, {"model": "m", "max_tokens": 1}),
+        # Range complaint, not an unsupported-param rejection.
+        ("temperature must be between 0 and 2", {"model": "m", "temperature": 5}),
+    ],
+)
+def test_heal_hook_ignores_non_sampling_rejections(msg: str, kwargs: Dict[str, Any]) -> None:
+    client = OpenAIClient(api_key="sk-mock")
+    assert client._heal_request_kwargs(kwargs, RuntimeError(msg)) is None
+
+
+def test_heal_hook_still_renames_max_tokens_when_sampling_not_named() -> None:
+    client = OpenAIClient(api_key="sk-mock")
+    healed = client._heal_request_kwargs(
+        {"model": "m", "max_tokens": 8, "temperature": 0.3}, RuntimeError(_RENAME_400)
+    )
+    assert healed is not None
+    assert healed["max_completion_tokens"] == 8 and healed["temperature"] == 0.3
+
+
+async def test_send_heals_temperature_rejection_and_emits_drift_event() -> None:
+    events: List[Dict[str, Any]] = []
+    client = OpenAIClient(api_key="sk-mock", event_sink=events.append)
+    calls: List[Dict[str, Any]] = []
+    fake_raw = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="ok", tool_calls=None), finish_reason="stop"
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1),
+        model="o9-future",
+        id="cmpl_mock",
+    )
+
+    async def create(**kwargs: Any) -> SimpleNamespace:
+        calls.append(kwargs)
+        if "temperature" in kwargs:
+            raise RuntimeError(_TEMPERATURE_400)
+        return fake_raw
+
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    resp = await client.create_message(
+        model_config=ModelConfig(model="o9-future", max_tokens=512, temperature=0.2),
+        messages=[{"role": "user", "content": "x"}],
+    )
+    assert resp.text == "ok"
+    assert len(calls) == 2
+    assert "temperature" in calls[0] and "temperature" not in calls[1]
+    drift = [e for e in events if e["type"] == "llm_client.drift_healed"]
+    assert [e["field"] for e in drift] == ["temperature"]

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
 
 _MAX_FILES = 200
 _MAX_MATCHES = 300
@@ -123,7 +124,13 @@ class GrepTool(Tool):
                 return ToolResult(content=f"No matches for '{pattern_str}'")
             return ToolResult(content=out)
 
-        base = Path(search_path)
+        # 호스트 경로(sandbox 없음): 검색 루트도 allowed_paths 안이어야 한다(Read/Write 와 같은 가드).
+        try:
+            base = resolve_and_validate(search_path, context.working_dir, context.allowed_paths)
+        except PermissionError as e:
+            return ToolResult(content=str(e), is_error=True)
+        except ValueError:
+            base = Path(context.working_dir or ".")
         if not base.exists():
             return ToolResult(content=f"Path not found: {search_path}", is_error=True)
 

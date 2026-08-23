@@ -5,6 +5,10 @@ DB Memory 노드(memory/db_memory_v*)의 ``memory`` 포트는
 Anthropic 형태의 ``{"role", "content"}`` 딕셔너리 리스트를 쓰므로 여기서
 변환한다. System 메시지는 파이프라인이 시스템 프롬프트를 따로 관리하므로
 걸러낸다 (agent_xgen 의 prepare_chat_history 와 동일한 규칙).
+
+커넥터 로컬 턴은 서버가 이력을 **이미 Anthropic 형태의 평문 dict** 리스트
+(``[{"role": "user"|"assistant", "content": str}, …]``, 옵션 키 ``memory``)로 실어
+보내므로 같은 함수가 그 모양도 받는다 — 객체/dict 가 섞여 있어도 항목별로 처리한다.
 """
 
 from __future__ import annotations
@@ -35,9 +39,12 @@ def _content_text(content: Any) -> str:
 def history_messages(memory_value: Any) -> List[Dict[str, Any]]:
     """Convert the Memory port value into Anthropic-shaped history messages.
 
-    Accepts ``List[BaseMessage]`` (duck-typed on ``.type``/``.content``),
-    tolerates the raw ``(messages, context_str)`` tuple shape of the memory
-    node's execute(), and returns ``[]`` for anything unusable.
+    Accepts ``List[BaseMessage]`` (duck-typed on ``.type``/``.content``) **or**
+    plain dicts ``{"role": "user"|"assistant", "content": ...}`` (already
+    Anthropic-shaped — the server ships these for connector-local turns;
+    unknown roles / empty content are dropped), tolerates the raw
+    ``(messages, context_str)`` tuple shape of the memory node's execute(),
+    and returns ``[]`` for anything unusable.
     """
     if memory_value is None:
         return []
@@ -52,11 +59,17 @@ def history_messages(memory_value: Any) -> List[Dict[str, Any]]:
 
     history: List[Dict[str, Any]] = []
     for msg in memory_value:
-        msg_type = getattr(msg, "type", None)
+        if isinstance(msg, dict):
+            # 평문 dict — role 키(없으면 langchain 직렬화의 type 키)로 판별.
+            msg_type = msg.get("role", msg.get("type"))
+            content = msg.get("content", "")
+        else:
+            msg_type = getattr(msg, "type", None)
+            content = getattr(msg, "content", "")
         role = _ROLE_MAP.get(str(msg_type or "").lower())
         if role is None:
             continue  # system/tool/etc. — not part of the visible history
-        text = _content_text(getattr(msg, "content", ""))
+        text = _content_text(content)
         if text:
             history.append({"role": role, "content": text})
     return history

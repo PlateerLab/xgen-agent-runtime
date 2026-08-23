@@ -9,7 +9,9 @@ The xgen executor runs ``execute()`` in a worker thread, so both bridges
 drive the async engine on a private event loop, exactly like the harness
 node. ``stream_turn`` translates engine events into xgen stream chunks:
 ``text.delta`` → str, tool events → ``{"type": "agent_event", ...}`` dicts
-(the shape agent_node_processor forwards to the chat UI).
+(the shape agent_node_processor forwards to the chat UI), and — once, after
+the pipeline finishes — ``{"type": "usage", "data": {...}}`` with the turn's
+token/cost totals (:func:`turn_usage`).
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ _PROVIDER_MAP = {
 }
 
 _DISPLAY_RESULT_LIMIT = 4000  # chars shown in a tool_result agent_event
+_DISPLAY_TAIL_KEEP = 800  # of which the last N chars are kept (download markers live at the tail)
 
 
 def _map_provider(provider: str) -> str:
@@ -125,8 +128,16 @@ def build_cli_client(
     extra_env: Optional[Dict[str, str]] = None,
     disallow_tools_extra: Any = (),
     extra_args: Any = (),
+    prewarm_spawn: Optional[bool] = None,
 ) -> Any:
     """Construct a ``ClaudeCodeCLIClient`` from xgen-resolved settings.
+
+    ``prewarm_spawn`` — hot-spare 프리웜(다음 턴용 CLI 프로세스를 스트림 종료
+    직후 미리 띄움) 토글. ``None``(기본)이면 클라이언트 기본값(env
+    ``GENY_CLI_PREWARM`` 해석)을 그대로 쓴다 — 기존 동작 불변. 서버(xgen-workflow)
+    처럼 파이프라인/클라이언트가 **턴마다 새로** 만들어지는 원샷 호스트는
+    ``False`` 를 넘긴다: 프리웜된 프로세스는 다음 턴이 없어 절대 재사용되지
+    않고 teardown 에 고아로 남는다.
 
     Auth wiring mirrors Geny's bundle builder — the two footguns it guards:
     ``--bare``(=bare_mode) is only valid on the api_key channel (it bypasses
@@ -202,6 +213,9 @@ def build_cli_client(
         for k, v in extra_env.items():
             merged.setdefault(str(k), str(v))
         kwargs["env_extras"] = merged
+    if prewarm_spawn is not None:
+        # None 은 전달하지 않는다 — 클라이언트가 env 기본값을 해석하게 둔다.
+        kwargs["prewarm_spawn"] = bool(prewarm_spawn)
     return ClaudeCodeCLIClient(**kwargs)
 
 
@@ -530,6 +544,19 @@ def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
     return event
 
 
+def _display_result(text: str) -> str:
+    """tool_result 표시용 축약 — 머리+꼬리를 남긴다.
+
+    문서 도구는 결과 **끝**에 다운로드 마커를 붙인다(서버가 download_artifact 로 승격).
+    단순 head 절단이면 4000자를 넘는 결과의 마커가 잘려 다운로드 버튼이 사라진다.
+    """
+    if len(text) <= _DISPLAY_RESULT_LIMIT:
+        return text
+    head = _DISPLAY_RESULT_LIMIT - _DISPLAY_TAIL_KEEP
+    omitted = len(text) - head - _DISPLAY_TAIL_KEEP
+    return f"{text[:head]}\n…[{omitted} chars truncated]…\n{text[-_DISPLAY_TAIL_KEEP:]}"
+
+
 def _tool_end_event(
     name: str,
     result_text: str,
@@ -547,7 +574,7 @@ def _tool_end_event(
         event = {
             "type": "tool_result",
             "tool_name": name,
-            "result": result_text[:_DISPLAY_RESULT_LIMIT],
+            "result": _display_result(result_text),
             "result_length": len(result_text),
             "citations": None,
         }
@@ -569,6 +596,78 @@ def _stringify_content(content: Any) -> str:
         return json.dumps(content, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         return str(content)
+
+
+# ── turn usage (토큰/비용 집계 → ``usage`` 청크) ─────────────────────────────
+
+
+def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, Any]]:
+    """턴 1회의 토큰/비용 집계 — 호스트 간 공통 ``usage`` 페이로드.
+
+    출처는 Stage 7(TokenStage) 이 API 호출마다 ``state.turn_token_usage`` 에
+    쌓는 per-call ``TokenUsage`` (SDK 경로·CLI 경로 모두 Stage 6 이
+    ``last_api_response`` 로 올려 Stage 7 이 추적한다; ``begin_turn`` 이
+    턴 시작마다 비우므로 합계 = 이 턴의 총량). 비용은 provider 가 직접
+    보고한 값(Claude Code result envelope 의 ``total_cost_usd`` →
+    ``TokenUsage.cost_usd``)을 우선하고, 없으면 Stage 7 계산기의 per-turn
+    누적(``state.total_cost_usd``, 0 이면 미상)을 쓴다.
+
+    반환 shape (크로스-레포 계약 — 커넥터 TurnReport.usage / 서버 report-turn
+    output_data.usage / trace.record_llm_usage 가 그대로 읽는다)::
+
+        {"input_tokens": int, "output_tokens": int,
+         "cache_read_tokens": int|None, "cache_creation_tokens": int|None,
+         "total_cost_usd": float|None, "model": str|None, "provider": str|None}
+
+    사용량이 전혀 기록되지 않은 턴(API 호출 0회 — 가드 거절·즉시 오류)은
+    ``None`` — 호출자는 이때 usage 청크를 내지 않는다.
+    """
+    from xgen_agent_runtime.core.state import TokenUsage
+
+    calls = list(getattr(state, "turn_token_usage", None) or [])
+    if not calls:
+        return None
+    total = TokenUsage()
+    for u in calls:
+        if isinstance(u, TokenUsage):
+            total += u
+    cost: Optional[float] = total.cost_usd
+    if cost is None:
+        turn_cost = getattr(state, "total_cost_usd", 0.0) or 0.0
+        cost = float(turn_cost) if turn_cost > 0 else None
+    last = getattr(state, "last_api_response", None)
+    model = str(getattr(last, "model", "") or "") or str(getattr(state, "model", "") or "")
+    provider = ""
+    try:
+        resolver = getattr(pipeline, "_resolved_provider_name", None)
+        if callable(resolver):
+            provider = str(resolver(state) or "")
+    except Exception:  # noqa: BLE001 — 진단용 라벨일 뿐
+        provider = ""
+    if not provider:
+        provider = str(getattr(getattr(state, "llm_client", None), "provider", "") or "")
+    return {
+        "input_tokens": int(total.input_tokens),
+        "output_tokens": int(total.output_tokens),
+        "cache_read_tokens": int(total.cache_read_input_tokens),
+        "cache_creation_tokens": int(total.cache_creation_input_tokens),
+        "total_cost_usd": float(cost) if cost is not None else None,
+        "model": model or None,
+        "provider": provider or None,
+    }
+
+
+def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) -> bool:
+    """메모리 실행 기록 여부 — 출력 0 으로 실패한 턴은 host 정책에 따른다.
+
+    ``host.record_failed_starts``(기본 True) 가 False 인 호스트(커넥터 로컬
+    LocalHostServices)는 "시작도 못 한" 턴(텍스트 0 + 오류/취소)을 vault 에
+    남기지 않는다 — 서버 폴백이 같은 턴을 다시 돌려 기록하므로 중복 실패
+    기록이 쌓이던 경로. 성공 턴·출력이 있었던 실패 턴은 항상 기록.
+    """
+    if produced_output or not failed:
+        return True
+    return bool(getattr(host, "record_failed_starts", True)) if host is not None else True
 
 
 # ── sync bridges (executor runs execute() in a worker thread) ───────────────
@@ -656,6 +755,7 @@ def stream_turn(
     cancel_check: Optional[Callable[[], bool]] = None,
     output_schema: Optional[Dict[str, Any]] = None,
     on_close: Optional[Callable[[], None]] = None,
+    host: Optional[Any] = None,
 ) -> Iterator[Union[str, Dict[str, Any]]]:
     """Drive ``run_stream`` from a sync generator.
 
@@ -671,6 +771,15 @@ def stream_turn(
 
     ``output_schema`` 는 스트리밍에서는 모델이 생성한 JSON 텍스트가 그대로
     흐른다 — 사후 검증·정규화는 non-stream(run_turn) 경로에서만 가능하다.
+
+    **usage 청크** — 파이프라인이 끝난 뒤(성공·오류 무관, 취소 제외) 사용량이
+    기록돼 있으면 ``{"type": "usage", "data": turn_usage(...)}`` 를 **정확히
+    한 번**, 제너레이터 종료 직전에 yield 한다. 소비자(사이드카·서버
+    agent_geny)가 토큰/비용을 집계하는 단일 출처.
+
+    ``host`` — 선택. ``host.record_failed_starts`` (기본 True) 가 False 이면
+    "출력 0 + 실패/취소" 턴의 메모리 실행 기록을 건너뛴다
+    (:func:`_should_record_execution`).
     """
     loop = asyncio.new_event_loop()
     agen = pipeline.run_stream(text, state)
@@ -753,6 +862,12 @@ def stream_turn(
                         is_error=bool(event.data.get("is_error")),
                     ),
                 }
+        if turn_completed:
+            # 파이프라인 종료 후 정확히 1회 — 취소(break)로 나온 턴은 백그라운드
+            # 태스크가 아직 돌고 있어 집계가 확정되지 않았으므로 내지 않는다.
+            usage = turn_usage(pipeline, state)
+            if usage is not None:
+                yield {"type": "usage", "data": usage}
     finally:
         try:
             loop.run_until_complete(agen.aclose())
@@ -762,17 +877,24 @@ def stream_turn(
             loop.run_until_complete(pipeline.aclose())
         except Exception:  # noqa: BLE001
             pass
-        _record_execution(
-            pipeline,
-            loop,
-            input_text=text,
-            state=state,
-            output_text="".join(out_parts),
-            success=turn_completed and not turn_error,
-            duration_ms=int((time.monotonic() - turn_started) * 1000),
-            error=turn_error or ("cancelled" if not turn_completed else ""),
-            cancelled=not turn_completed and not turn_error,
-        )
+        turn_failed = bool(turn_error) or not turn_completed
+        if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
+            _record_execution(
+                pipeline,
+                loop,
+                input_text=text,
+                state=state,
+                output_text="".join(out_parts),
+                success=turn_completed and not turn_error,
+                duration_ms=int((time.monotonic() - turn_started) * 1000),
+                error=turn_error or ("cancelled" if not turn_completed else ""),
+                cancelled=not turn_completed and not turn_error,
+            )
+        else:
+            logger.debug(
+                "geny_bridge: execution record skipped — failed before any output "
+                "(host.record_failed_starts=False)"
+            )
         _close_memory_provider(pipeline, loop)
         loop.close()
         if on_close is not None:
@@ -788,15 +910,32 @@ def run_turn(
     state: PipelineState,
     *,
     output_schema: Optional[Dict[str, Any]] = None,
+    host: Optional[Any] = None,
+    usage_sink: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Run one turn to completion and return the final text (non-streaming)."""
+    """Run one turn to completion and return the final text (non-streaming).
+
+    반환값은 문자열이라 usage 를 실어 보낼 결과 객체가 없다 — 호출자가
+    ``usage_sink`` (dict) 를 넘기면 실행 후 :func:`turn_usage` 페이로드
+    (stream_turn 의 ``usage`` 청크 ``data`` 와 동일 shape)로 채워 준다.
+    ``host`` 는 stream_turn 과 같은 record_failed_starts 게이트.
+    """
     loop = asyncio.new_event_loop()
     turn_started = time.monotonic()
     turn_output = ""
     turn_success = False
     turn_error = ""
+    produced_output = False
     try:
         result = loop.run_until_complete(pipeline.run(text, state))
+        produced_output = bool(getattr(result, "text", "") or "")
+        if usage_sink is not None:
+            try:
+                usage = turn_usage(pipeline, state)
+                if usage is not None:
+                    usage_sink.update(usage)
+            except Exception:  # noqa: BLE001 — 집계는 턴 결과를 바꾸지 않는다
+                logger.debug("geny_bridge: usage aggregation failed", exc_info=True)
         if not result.success:
             turn_error = str(result.error or "unknown error")
             return f"[ERROR] {result.error}"
@@ -814,15 +953,23 @@ def run_turn(
             loop.run_until_complete(pipeline.aclose())
         except Exception:  # noqa: BLE001
             pass
-        _record_execution(
-            pipeline,
-            loop,
-            input_text=text,
-            state=state,
-            output_text=turn_output,
-            success=turn_success,
-            duration_ms=int((time.monotonic() - turn_started) * 1000),
-            error=turn_error,
-        )
+        if _should_record_execution(
+            host, produced_output=produced_output or bool(turn_output), failed=not turn_success
+        ):
+            _record_execution(
+                pipeline,
+                loop,
+                input_text=text,
+                state=state,
+                output_text=turn_output,
+                success=turn_success,
+                duration_ms=int((time.monotonic() - turn_started) * 1000),
+                error=turn_error,
+            )
+        else:
+            logger.debug(
+                "geny_bridge: execution record skipped — failed before any output "
+                "(host.record_failed_starts=False)"
+            )
         _close_memory_provider(pipeline, loop)
         loop.close()

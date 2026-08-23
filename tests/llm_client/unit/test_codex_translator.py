@@ -98,9 +98,17 @@ class TestAccumulator:
         ):
             events.extend(accum.feed(line))
 
-        assert [e["type"] for e in events] == ["thinking_delta", "text_delta"]
+        # command_execution is a CLI-internal tool item: surfaced as a
+        # tool_use/tool_result pair (audit #26), never as response content.
+        assert [e["type"] for e in events] == [
+            "thinking_delta",
+            "tool_use",
+            "tool_result",
+            "text_delta",
+        ]
         response = accum.finalize()
         assert response.text == "answer"
+        assert [b.type for b in response.content] == ["thinking", "text"]
         assert response.usage.input_tokens == 10
         assert response.usage.cache_read_input_tokens == 4
         assert response.usage.output_tokens == 3
@@ -146,3 +154,189 @@ def test_oneshot_parse_shares_the_vocabulary():
     assert response.text == "done"
     assert response.usage.output_tokens == 2
     assert response.raw["cli_version"] == "v"
+
+
+# ---------------------------------------------------------------------------
+# audit #26 — CLI-internal tool items → canonical tool_use / tool_result
+# (same event shapes the Claude CLI accumulator emits, so Stage 6 produces
+# api.cli_tool_call / api.tool_result with source="cli" for Codex too)
+# ---------------------------------------------------------------------------
+
+# Recorded-style ``codex exec --json`` frames (codex-cli ≥ 0.40 vocabulary:
+# ``item.{started,completed}`` with a flattened ``{"id", "type", ...}`` item).
+_CMD_STARTED = {
+    "type": "item.started",
+    "item": {
+        "id": "item_1",
+        "type": "command_execution",
+        "command": "bash -lc 'ls /tmp/x'",
+        "aggregated_output": "",
+        "exit_code": None,
+        "status": "in_progress",
+    },
+}
+_CMD_UPDATED = {
+    "type": "item.updated",
+    "item": {
+        "id": "item_1",
+        "type": "command_execution",
+        "command": "bash -lc 'ls /tmp/x'",
+        "aggregated_output": "a.txt\n",
+        "exit_code": None,
+        "status": "in_progress",
+    },
+}
+_CMD_COMPLETED = {
+    "type": "item.completed",
+    "item": {
+        "id": "item_1",
+        "type": "command_execution",
+        "command": "bash -lc 'ls /tmp/x'",
+        "aggregated_output": "a.txt\nb.txt\n",
+        "exit_code": 0,
+        "status": "completed",
+    },
+}
+_MCP_STARTED = {
+    "type": "item.started",
+    "item": {
+        "id": "item_2",
+        "type": "mcp_tool_call",
+        "server": "connector",
+        "tool": "memory_search",
+        "arguments": {"query": "x"},
+        "status": "in_progress",
+    },
+}
+_MCP_COMPLETED = {
+    "type": "item.completed",
+    "item": {
+        "id": "item_2",
+        "type": "mcp_tool_call",
+        "server": "connector",
+        "tool": "memory_search",
+        "arguments": {"query": "x"},
+        "result": {"content": [{"type": "text", "text": "hit"}]},
+        "status": "completed",
+    },
+}
+
+
+class TestToolItemsSurfaceAsCanonicalEvents:
+    def test_command_execution_pair(self):
+        accum = CodexEventAccumulator(model="m")
+        events = []
+        for line in (_CMD_STARTED, _CMD_UPDATED, _CMD_COMPLETED):
+            events.extend(accum.feed(line))
+        assert events == [
+            {
+                "type": "tool_use",
+                "id": "item_1",
+                "name": "Bash",
+                "input": {"command": "bash -lc 'ls /tmp/x'"},
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "item_1",
+                "content": "a.txt\nb.txt\n",
+                "is_error": False,
+            },
+        ]
+        assert accum.unknown_line_count == 0
+
+    def test_failed_command_is_error_with_exit_code(self):
+        accum = CodexEventAccumulator(model="m")
+        failed = dict(_CMD_COMPLETED)
+        failed["item"] = {**_CMD_COMPLETED["item"], "aggregated_output": "nope", "exit_code": 2, "status": "failed"}
+        events = list(accum.feed(_CMD_STARTED)) + list(accum.feed(failed))
+        result = events[-1]
+        assert result["type"] == "tool_result" and result["is_error"] is True
+        assert result["content"] == "nope\nExit code: 2"
+
+    def test_mcp_tool_call_uses_claude_mcp_naming_and_keeps_result_blocks(self):
+        accum = CodexEventAccumulator(model="m")
+        events = list(accum.feed(_MCP_STARTED)) + list(accum.feed(_MCP_COMPLETED))
+        assert events[0] == {
+            "type": "tool_use",
+            "id": "item_2",
+            "name": "mcp__connector__memory_search",
+            "input": {"query": "x"},
+        }
+        assert events[1] == {
+            "type": "tool_result",
+            "tool_use_id": "item_2",
+            "content": [{"type": "text", "text": "hit"}],
+            "is_error": False,
+        }
+
+    def test_mcp_error_becomes_error_result(self):
+        accum = CodexEventAccumulator(model="m")
+        failed = {
+            "type": "item.completed",
+            "item": {**_MCP_STARTED["item"], "error": {"message": "boom"}, "status": "failed"},
+        }
+        events = list(accum.feed(_MCP_STARTED)) + list(accum.feed(failed))
+        assert events[-1] == {
+            "type": "tool_result",
+            "tool_use_id": "item_2",
+            "content": "boom",
+            "is_error": True,
+        }
+
+    def test_file_change_and_web_search(self):
+        accum = CodexEventAccumulator(model="m")
+        events = list(
+            accum.feed(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_3",
+                        "type": "file_change",
+                        "changes": [{"path": "a.py", "kind": "update"}, {"path": "b.py", "kind": "add"}],
+                        "status": "completed",
+                    },
+                }
+            )
+        )
+        events += list(
+            accum.feed(
+                {"type": "item.completed", "item": {"id": "item_4", "type": "web_search", "query": "codex"}}
+            )
+        )
+        assert [e["type"] for e in events] == ["tool_use", "tool_result", "tool_use", "tool_result"]
+        assert events[0]["name"] == "ApplyPatch"
+        assert events[0]["input"] == {"changes": [{"path": "a.py", "kind": "update"}, {"path": "b.py", "kind": "add"}]}
+        assert events[1]["content"] == "update: a.py\nadd: b.py"
+        assert events[2] == {"type": "tool_use", "id": "item_4", "name": "WebSearch", "input": {"query": "codex"}}
+        assert events[3]["tool_use_id"] == "item_4" and events[3]["is_error"] is False
+
+    def test_completed_without_started_synthesises_the_pair(self):
+        """Older CLIs emit only item.completed (and sometimes no id): the
+        tool_use is announced right before the tool_result so consumers
+        pairing by id stay intact."""
+        accum = CodexEventAccumulator(model="m")
+        events = list(
+            accum.feed(
+                {"type": "item.completed", "item": {"item_type": "command_execution", "command": "ls"}}
+            )
+        )
+        assert [e["type"] for e in events] == ["tool_use", "tool_result"]
+        assert events[0]["name"] == "Bash" and events[0]["input"] == {"command": "ls"}
+        assert events[0]["id"] == events[1]["tool_use_id"] == "codex_item_1"
+        assert events[1]["is_error"] is False
+
+    def test_other_items_stay_silent_and_known(self):
+        accum = CodexEventAccumulator(model="m")
+        assert list(accum.feed({"type": "item.started", "item": {"id": "i", "type": "agent_message"}})) == []
+        assert list(accum.feed({"type": "item.started", "item": {"id": "i", "type": "todo_list"}})) == []
+        assert list(accum.feed({"type": "item.completed", "item": {"id": "i", "type": "todo_list", "items": []}})) == []
+        assert accum.unknown_line_count == 0
+
+    def test_tool_events_never_enter_the_response_content(self):
+        accum = CodexEventAccumulator(model="m")
+        for line in (_CMD_STARTED, _CMD_COMPLETED, _MCP_STARTED, _MCP_COMPLETED):
+            list(accum.feed(line))
+        list(accum.feed({"type": "item.completed", "item": {"id": "x", "type": "agent_message", "text": "done"}}))
+        response = accum.finalize()
+        assert [b.type for b in response.content] == ["text"]
+        assert response.text == "done"

@@ -268,3 +268,15 @@ class HostServices(Protocol):
         cloud_workspace: str = "",
         shared_workspaces: Optional[Sequence[str]] = None,
     ) -> CliRuntime: ...
+
+    #: **OPTIONAL** — does this host advertise the turn's non-native tool surface
+    #: (memory_* / WorkflowSelf / DelegateTask… as ``mcp__connector__*``) to the
+    #: CLI backend ``provider`` (claude_code/codex) through an MCP bridge?
+    #: The executor only appends the CLI-only prompt notes (memory tool names,
+    #: self-evolution block, delegation note) when this returns True — a note
+    #: about tools the CLI cannot see is a ghost promise (audit #25). Absent
+    #: method → treated as True (legacy server behaviour). Server: True iff the
+    #: bridge run ctx will actually be bound (enable_builtin_tools and a
+    #: workspace dir). Desktop sidecar (LocalHostServices): False — the CLI runs
+    #: with its native tools only; memory stays automatic (inject + record).
+    def cli_bridge_available(self, provider: str) -> bool: ...

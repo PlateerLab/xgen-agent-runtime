@@ -61,6 +61,32 @@ def _model_requires_max_completion_tokens(model: str) -> bool:
     return any(model.startswith(prefix) for prefix in _MAX_COMPLETION_TOKENS_PREFIXES)
 
 
+# ── Reasoning families reject sampling params ───────────────────────
+#
+# The same o-series / gpt-5 families that demand ``max_completion_tokens``
+# also refuse the classic sampler knobs — the live 400 reads
+#
+#   ``Unsupported value: 'temperature' does not support 0.2 with this
+#     model. Only the default (1) value is supported.``
+#
+# (and the analogous ``Unsupported parameter: 'top_p' is not supported
+# with this model.``). Mirror of Anthropic's
+# ``_model_rejects_sampling_params``: drop the kwargs at the boundary
+# (INFO log so an operator who pinned a temperature sees why it was
+# ignored) and keep the reactive heal below as the safety net for
+# families the table doesn't know yet. ``min_p``/``top_k`` never reach
+# this client (``drops`` declares ``top_k``), so the key list is just
+# the two the Chat Completions request actually carries.
+_SAMPLING_PARAM_KEYS: tuple[str, ...] = ("temperature", "top_p")
+
+
+def _model_rejects_sampling_params(model: str) -> bool:
+    """True iff ``model`` belongs to a reasoning family that rejects
+    ``temperature``/``top_p`` (same prefix table as the
+    ``max_completion_tokens`` rename — the two quirks ship together)."""
+    return _model_requires_max_completion_tokens(model)
+
+
 class OpenAIClient(BaseClient):
     """OpenAI Chat Completions API client.
 
@@ -145,22 +171,51 @@ class OpenAIClient(BaseClient):
     def _heal_request_kwargs(
         self, kwargs: Dict[str, Any], exc: BaseException
     ) -> Optional[Dict[str, Any]]:
-        """Self-heal the ``max_tokens`` → ``max_completion_tokens`` rename.
+        """Self-heal two reasoning-family 400s.
 
-        Triggers only when the 400 message names the problem — it must
-        mention ``max_tokens`` *and* either say the param is not
-        supported or name the replacement kwarg. The live phrasing
-        (verified against openai 2.x):
+        1. ``max_tokens`` → ``max_completion_tokens`` rename. Triggers
+           only when the message names the problem — it must mention
+           ``max_tokens`` *and* either say the param is not supported
+           or name the replacement kwarg. The live phrasing (verified
+           against openai 2.x):
 
-          ``Unsupported parameter: 'max_tokens' is not supported with
-            this model. Use 'max_completion_tokens' instead.``
+             ``Unsupported parameter: 'max_tokens' is not supported with
+               this model. Use 'max_completion_tokens' instead.``
 
-        Covers reasoning families the static
+        2. ``temperature``/``top_p`` rejection — the message names the
+           sampling kwarg as unsupported (``Unsupported value:
+           'temperature' does not support 0.2 with this model`` /
+           ``Unsupported parameter: 'top_p' is not supported with this
+           model``); the named key is stripped.
+
+        Both cover reasoning families the static
         ``_MAX_COMPLETION_TOKENS_PREFIXES`` table doesn't know yet.
+        Pure: always returns a fresh dict or ``None``.
         """
+        msg = str(getattr(exc, "message", "") or exc).lower()
+
+        # Class 2 — sampling-param rejection. The 400 names the kwarg
+        # (``'temperature' does not support 0.2 with this model`` /
+        # ``'top_p' is not supported with this model``); strip every
+        # named sampling key that is actually in the request and retry.
+        # Checked first because a request can carry both quirks and the
+        # API reports only one per round-trip — each heal fixes the one
+        # it was told about, the retry surfaces the next.
+        if ("not supported" in msg or "unsupported" in msg) and "max_tokens" not in msg:
+            named = [
+                key
+                for key in _SAMPLING_PARAM_KEYS
+                if key in kwargs and (f"'{key}'" in msg or f"`{key}`" in msg or f" {key} " in f" {msg} ")
+            ]
+            if named:
+                retry = dict(kwargs)
+                for key in named:
+                    retry.pop(key, None)
+                return retry
+
+        # Class 1 — ``max_tokens`` → ``max_completion_tokens`` rename.
         if "max_tokens" not in kwargs:
             return None
-        msg = str(getattr(exc, "message", "") or exc).lower()
         if "max_tokens" not in msg:
             return None
         if "max_completion_tokens" not in msg and "not supported" not in msg:
@@ -319,10 +374,29 @@ class OpenAIClient(BaseClient):
                 kwargs["max_completion_tokens"] = request.max_tokens
             else:
                 kwargs["max_tokens"] = request.max_tokens
+        # Reasoning families refuse ``temperature``/``top_p`` outright —
+        # see ``_model_rejects_sampling_params`` at module top. Drop at
+        # the boundary (mirrors the Anthropic client) so an env that
+        # ships an explicit temperature keeps working on o-series / gpt-5.
+        rejects_sampling = _model_rejects_sampling_params(request.model)
         if request.temperature is not None:
-            kwargs["temperature"] = request.temperature
+            if rejects_sampling:
+                logger.info(
+                    "openai: dropped 'temperature'=%r — model %r refuses this sampling param",
+                    request.temperature,
+                    request.model,
+                )
+            else:
+                kwargs["temperature"] = request.temperature
         if request.top_p is not None:
-            kwargs["top_p"] = request.top_p
+            if rejects_sampling:
+                logger.info(
+                    "openai: dropped 'top_p'=%r — model %r refuses this sampling param",
+                    request.top_p,
+                    request.model,
+                )
+            else:
+                kwargs["top_p"] = request.top_p
         if request.stop_sequences:
             kwargs["stop"] = request.stop_sequences
 

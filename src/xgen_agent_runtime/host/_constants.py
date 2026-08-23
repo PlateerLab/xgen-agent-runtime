@@ -56,6 +56,32 @@ Policy:
 """
 
 
+#: CLI 백엔드에서 **도구 브릿지가 없을 때**(데스크톱 사이드카 등) 붙는 메모리 안내 —
+#: 자동 계층(Pinned Facts/Relevant Knowledge 주입 + 턴 기록)만 있음을 알리고
+#: 도구는 광고하지 않는다. 도구를 약속했는데 CLI 에 보이지 않으면 유령 호출이 된다.
+MEMORY_AUTO_PROMPT_BLOCK = """
+
+# Agent Memory (persistent, automatic)
+You have a persistent memory vault that survives across conversations. It is
+managed automatically on this backend: relevant context (Pinned Facts /
+Relevant Knowledge) is injected above when available, and this conversation is
+recorded at the end of the turn. There are NO memory tools available here —
+do not attempt to call memory_* tools; simply answer using the injected context.
+"""
+
+#: host.build_turn_delegation() 반환 dict 에서 **실제 위임 백엔드**를 뜻하는 키 —
+#: 하나라도 non-None 이면 위임이 배선된 것이다 (xgen-workflow delegation 모듈 계약:
+#: subagent_manager=상주 매니저 프록시, task_runner/task_registry=백그라운드 태스크).
+_DELEGATION_BACKEND_KEYS = ("subagent_manager", "task_runner", "task_registry")
+
+
+def _delegation_wired(extras: Any) -> bool:
+    """호스트가 돌려준 위임 extras 가 실제 백엔드를 담고 있는가 (빈 dict/None → False)."""
+    if not isinstance(extras, dict) or not extras:
+        return False
+    return any(extras.get(k) is not None for k in _DELEGATION_BACKEND_KEYS)
+
+
 def _coerce_text(value: Any) -> str:
     """STREAM STR | STR | list 포트 값을 단일 문자열로 평탄화."""
     if value is None:
