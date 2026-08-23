@@ -30,6 +30,9 @@ import dataclasses
 import datetime as _dt
 import enum
 from typing import Any, Dict, Optional
+import logging
+
+logger = logging.getLogger("xgen_agent_runtime.host.memory_wire")
 
 _REG: Optional[Dict[str, type]] = None
 
@@ -40,16 +43,32 @@ def _registry() -> Dict[str, type]:
     복원은 이 맵으로 타입을 찾는다(태그가 이름을 실어 옴). 미등록 이름은
     복원 시 dict/원시로 격하(진단 가능, 크래시 없음)."""
     reg: Dict[str, type] = {}
-    try:
-        import xgen_agent_runtime.memory as m
-    except Exception:  # noqa: BLE001 — 런타임 부재(비-사이드카 문맥)면 빈 맵.
-        return reg
-    for name in dir(m):
-        obj = getattr(m, name, None)
-        if not isinstance(obj, type):
-            continue
-        if dataclasses.is_dataclass(obj) or issubclass(obj, enum.Enum):
-            reg[name] = obj
+
+    def _scan(module_name: str) -> None:
+        try:
+            import importlib
+
+            mod = importlib.import_module(module_name)
+        except Exception:  # noqa: BLE001 — 런타임 부재(비-사이드카 문맥)면 건너뛴다.
+            return
+        for name in dir(mod):
+            obj = getattr(mod, name, None)
+            if not isinstance(obj, type):
+                continue
+            if dataclasses.is_dataclass(obj) or issubclass(obj, enum.Enum):
+                # 먼저 등록된 정식 타입을 재-export 별칭이 덮지 않게 한다.
+                reg.setdefault(name, obj)
+
+    # 메모리 패키지가 1차 소스. 다만 RPC 결과에는 **다른 모듈**의 dataclass 도
+    # 실려 온다 — 특히 검색 결과 RetrievalResult.chunks 의 MemoryChunk 는
+    # stages.s02_context.types 에 산다. 이 타입들을 등록하지 않으면 load 가
+    # 원시 dict 로 격하하고, s02 가 chunk.content 를 읽다 'dict' object has no
+    # attribute 'content' 로 커넥터 로컬 턴이 통째로 죽는다(2026-08-23 실기).
+    for module_name in (
+        "xgen_agent_runtime.memory",
+        "xgen_agent_runtime.stages.s02_context.types",
+    ):
+        _scan(module_name)
     return reg
 
 
@@ -110,7 +129,14 @@ def load(data: Any) -> Any:
         cls = _reg().get(data["$t"])
         fields = {k: load(v) for k, v in (data.get("f") or {}).items()}
         if cls is None:
-            return fields  # 미등록 타입 — dict 로(진단 가능).
+            # 미등록 타입 — dict 로 격하. 소비자가 속성 접근을 하면 죽으므로
+            # (예: s02 의 chunk.content) 등록 누락을 눈에 띄게 남긴다.
+            logger.warning(
+                "memory_wire: 미등록 타입 %r 을(를) dict 로 격하 — _registry() 에 "
+                "정의 모듈을 추가하세요(속성 접근 소비자가 깨질 수 있음).",
+                data["$t"],
+            )
+            return fields
         return _construct(cls, fields)
     if "$e" in data:
         cls = _reg().get(data["$e"])

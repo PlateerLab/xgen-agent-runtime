@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.1] — 2026-08-23
+
+### Fixed — 커넥터 로컬 메모리 RPC 역직렬화(`'dict' object has no attribute 'content'`)
+
+- `memory_wire._registry()` 가 `xgen_agent_runtime.memory` 만 스캔해 **`MemoryChunk`**
+  (정의 위치: `stages.s02_context.types`)를 놓쳤다 → 검색 결과 `RetrievalResult.chunks`
+  가 원시 dict 로 격하 → s02 의 `chunk.content` 에서 `AttributeError` → 커넥터 **로컬 턴이
+  통째로 실패**하고 서버로 폴백(웹은 인-프로세스 provider 라 영향 없음; 저장된 메모리가
+  있을 때만 발현). 이제 `stages.s02_context.types` 도 스캔하고, 미등록 타입 load 시 WARNING.
+- 회귀 테스트 `tests/unit/test_memory_wire_roundtrip.py`.
+
 ## [3.8.0] — 2026-08-23
 
 파이프라인 전수 검수(8 provider × Web/Connector) 확정 결함 반영 — 자세한 항목은 아래.
