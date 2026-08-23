@@ -127,7 +127,16 @@ class CLIResult(NamedTuple):
 #: Environment variables that are always passed through. CLI tools commonly
 #: need ``HOME`` (to find their own config), ``PATH`` (for spawning helpers),
 #: locale info, and a sensible ``TERM``.
-DEFAULT_ENV_WHITELIST: frozenset[str] = frozenset(
+#:
+#: Desktop hosts (the XGEN Connector sidecar) additionally need:
+#: * the CLI's own config-dir redirects (``CODEX_HOME`` / ``CLAUDE_CONFIG_DIR`` /
+#:   XDG dirs) so the connector can isolate its codex/claude homes from the
+#:   user's personal ones — these are only forwarded when the parent set them;
+#: * corporate proxy / CA settings, or the CLI cannot reach its API at all;
+#: * on Windows, the process-bootstrap variables (``SystemRoot`` et al.) —
+#:   a child spawned without ``SystemRoot`` fails to initialise Winsock/CRT,
+#:   and ``HOME`` is normally unset there (``USERPROFILE`` is the home).
+_ENV_WHITELIST_POSIX: frozenset[str] = frozenset(
     {
         "HOME",
         "PATH",
@@ -139,7 +148,55 @@ DEFAULT_ENV_WHITELIST: frozenset[str] = frozenset(
         "TERM",
         "TMPDIR",
         "TZ",
+        # CLI config-dir redirects (forwarded only when set by the host).
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        # Network egress policy (corporate proxies / private CAs).
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
     }
+)
+
+_ENV_WHITELIST_WINDOWS: frozenset[str] = _ENV_WHITELIST_POSIX | frozenset(
+    {
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERNAME",
+        "USERDOMAIN",
+        "COMPUTERNAME",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+    }
+)
+
+DEFAULT_ENV_WHITELIST: frozenset[str] = (
+    _ENV_WHITELIST_WINDOWS if sys.platform == "win32" else _ENV_WHITELIST_POSIX
 )
 
 
@@ -173,8 +230,15 @@ def scrub_env(
     extras: Optional[Mapping[str, str]] = None,
 ) -> dict[str, str]:
     """Build a child env containing only whitelisted parent vars + extras."""
-    allowed = set(whitelist)
-    out: dict[str, str] = {k: v for k, v in parent.items() if k in allowed}
+    if sys.platform == "win32":
+        # Windows env names are case-insensitive (``Path`` vs ``PATH``,
+        # ``SystemRoot`` vs ``SYSTEMROOT``) — match on the upper-cased name but
+        # keep the parent's spelling so the child sees the conventional casing.
+        allowed_ci = {k.upper() for k in whitelist}
+        out: dict[str, str] = {k: v for k, v in parent.items() if k.upper() in allowed_ci}
+    else:
+        allowed = set(whitelist)
+        out = {k: v for k, v in parent.items() if k in allowed}
     if extras:
         out.update(extras)
     return out

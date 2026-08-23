@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "3.6.0"
+version = "3.7.0"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -114,6 +114,10 @@ dev = [
     "mypy>=1.10",
     "asyncssh>=2.14",
 ]
+
+[project.scripts]
+# 데스크톱 커넥터 사이드카 진입점 — `python -m xgen_agent_runtime.host.sidecar` 와 동일.
+xgen-agent-sidecar = "xgen_agent_runtime.host.sidecar:main"
 
 [project.urls]
 Homepage = "https://github.com/PlateerLab/xgen-agent-runtime"

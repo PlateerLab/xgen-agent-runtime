@@ -494,13 +494,17 @@ class AgentTurnExecutor:
                         _cloud_extra = ([_cloud_mount[1]] if _cloud_mount else []) + [
                             _p for _o, _p, _m in _shared_mounts
                         ]
-                        _cloud_extras_kv = (
-                            __import__(
-                                "editor.geny_bridge.cloud_mount", fromlist=["describe"]
-                            ).describe(_cloud_mount[1])
-                            if _cloud_mount
-                            else {}
-                        )
+                        # 클라우드 extras 는 서버 자산(editor.geny_bridge.cloud_mount) —
+                        # 데스크톱 호스트(사이드카)에는 그 모듈이 없다. 마운트가 있을
+                        # 때만, 그리고 import 가 가능할 때만 붙인다(호스트 비의존 유지).
+                        _cloud_extras_kv: Dict[str, Any] = {}
+                        if _cloud_mount:
+                            try:
+                                _cloud_extras_kv = __import__(
+                                    "editor.geny_bridge.cloud_mount", fromlist=["describe"]
+                                ).describe(_cloud_mount[1])
+                            except Exception:  # noqa: BLE001 — 서버 전용 헬퍼 부재
+                                _cloud_extras_kv = {}
 
                         run_tool_context = host.build_run_tool_context(
                             interaction_id=interaction_id,

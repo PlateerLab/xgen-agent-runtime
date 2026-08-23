@@ -1,46 +1,102 @@
-"""커넥터 로컬 실행 사이드카 — Node(커넥터)↔Python 계약.
+"""커넥터 로컬 실행 사이드카 — Node(커넥터)↔Python 계약 (v2: 상주 데몬 + 구조화 이벤트).
 
 데스크톱 커넥터는 커넥터-세션 턴을 서버에 보내는 대신 **이 사이드카를 로컬
 프로세스로 스폰**해, 서버 웹과 **같은 AgentTurnExecutor** 를 사용자 PC 에서
-돌린다(무발산). Node 는 turn 요청(JSON)을 stdin 으로 주고, 사이드카는 이벤트를
-JSON-lines 로 stdout 에 흘린다(스트리밍 청크 → done/error).
+돌린다(무발산). 핵심: 실행 host 는 ``LocalHostServices`` — make_sandbox=None 이라
+런타임 Bash/Read/Write 가 이 PC 에서 직접 돌고, codex/claude_code 는 로컬
+프로세스로 스폰된다. agent 코드는 서버와 한 줄도 다르지 않다.
 
-핵심: 실행 host 는 ``LocalHostServices`` — make_sandbox=None 이라 런타임
-Bash/Read/Write 가 이 PC 에서 직접 돌고, codex/claude_code 는 로컬 프로세스로
-스폰된다. agent 코드는 서버와 한 줄도 다르지 않다.
+두 가지 실행 모드 (Node 가 고른다):
 
-프로토콜(stdin 요청) — **상태는 서버가 해석해 넘긴다**(로컬↔웹 무발산)::
+1. **원샷** (인자 없음, v1 호환): stdin 전체를 JSON 요청 하나로 읽고, 이벤트를
+   stdout JSON-lines 로 흘린 뒤 종료한다.
+2. **데몬** (``--serve``): 프로세스가 상주하며 stdin 의 JSON-lines **명령**을 받고
+   stdout 으로 JSON-lines **이벤트**를 흘린다. 커넥터가 턴마다 Python 을 새로
+   띄우지 않아 첫 토큰 지연이 사라진다(Windows 의 Python 기동 수 초 절감).
+   턴은 각각 워커 스레드에서 돌며, 이벤트에는 ``id`` 가 붙어 다중 세션을 구분한다.
+
+stdin 요청(턴) — **상태는 서버가 해석해 넘긴다**(로컬↔웹 무발산)::
 
     {
-      "workspace_dir": "/path/to/synced/agent-folder",   # 필수(서버와 sync 되는 폴더)
+      "id": "t-123",                                  # 데몬 모드 필수(이벤트 상관키)
+      "op": "turn",                                   # 데몬 모드 (원샷은 생략)
+      "workspace_dir": "/path/to/synced/agent-folder",# 필수(서버와 sync 되는 폴더)
       "provider": "openai" | "anthropic" | "codex" | "claude_code" | ...,
       "text": "사용자 메시지",
       "context": {                       # 서버가 **로그인 계정**으로 해석해 넘긴 상태
-        "api_keys": {"openai": "sk-...", "anthropic": "..."},   # 계정 키
+        "api_keys": {"openai": "sk-...", "anthropic": "..."},
         "base_urls": {"vllm": "..."},
         "credentials": {"bedrock": {...}},
-        "settings": {"CODEX_BINARY_PATH": "...", ...}           # 관리자 설정
+        "settings": {"CODEX_BINARY_PATH": "...", "CODEX_AUTH_MODE": "oauth", ...}
       },
       "server": {"url": "https://xgen...", "token": "..."},  # 라이브 브릿지(메모리 등)
-      "options": {"model": "...", "temperature": 0.7, "workflow_id": "...",
-                  "interaction_id": "...", "streaming": true, ...}  # 저장된 에이전트 설정
+      "options": {"model": "...", "workflow_id": "...", "interaction_id": "...",
+                  "streaming": true, ...}                     # 저장된 에이전트 설정
     }
 
-stdout 이벤트(JSON-lines)::
+데몬 모드의 다른 명령::
 
-    {"type": "chunk", "text": "..."}     # 스트리밍 출력 조각(0..n)
-    {"type": "done", "text": "..."}      # 완료(비스트리밍이면 전체 텍스트)
-    {"type": "error", "message": "..."}  # 치명 오류
+    {"id": "t-123", "op": "cancel"}     # 진행 중 턴 협조 취소(cancel_context)
+    {"op": "ping"}                       # → {"type": "pong", ...}
+    {"op": "shutdown"}                   # 상주 종료
+
+stdout 이벤트(JSON-lines; 데몬 모드는 ``id`` 포함)::
+
+    {"type": "started", "pid": 123, "surface": "connector_local"}
+    {"type": "chunk", "text": "..."}                 # 스트리밍 출력 조각(0..n)
+    {"type": "tool", "data": {"type": "tool_call"|"tool_result"|"tool_error",
+                               "tool_name": "...", ...}}   # 도구 활동(웹과 같은 shape)
+    {"type": "canvas_command", "data": {...}}        # self-evolution 사이드채널
+    {"type": "done", "text": "..."}                  # 완료(전체 텍스트)
+    {"type": "error", "message": "..."}              # 치명 오류
+    {"type": "cancelled"}                            # cancel 로 중단됨
+
+v1(커넥터 ≤1.64) 은 chunk/done/error 만 해석했고 그 외 dict 청크를 ``str()`` 로
+텍스트에 섞어 넣었다 — v2 는 도구 이벤트를 전용 ``tool`` 이벤트로 올린다.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
-from typing import Any, Dict, Iterator, Mapping
+import threading
+from typing import Any, Dict, Iterator, Mapping, Optional, TextIO
+
+SIDECAR_PROTOCOL_VERSION = 2
+SURFACE = "connector_local"
 
 
-def run_turn_request(req: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
+def _runtime_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("xgen-agent-runtime")
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _normalize_event(chunk: Any) -> Dict[str, Any]:
+    """AgentTurnExecutor 스트림 항목 → 사이드카 이벤트.
+
+    str → chunk. dict 는 runner.stream_turn 의 사이드채널(agent_event /
+    canvas_command) — 절대 텍스트로 강등하지 않는다."""
+    if isinstance(chunk, str):
+        return {"type": "chunk", "text": chunk}
+    if isinstance(chunk, dict):
+        kind = chunk.get("type")
+        data = chunk.get("data")
+        if kind == "agent_event" and isinstance(data, dict):
+            return {"type": "tool", "data": data}
+        if kind == "canvas_command":
+            return {"type": "canvas_command", "data": data}
+        return {"type": "meta", "data": chunk}
+    return {"type": "chunk", "text": str(chunk)}
+
+
+def run_turn_request(
+    req: Mapping[str, Any], *, cancel_check: Optional[Any] = None
+) -> Iterator[Dict[str, Any]]:
     """turn 요청을 로컬에서 실행하고 이벤트를 yield 한다(계약의 핵심 — 테스트 대상).
 
     Node 는 이 결과를 stdout JSON-lines 로 받는다. 실패는 error 이벤트로 승격
@@ -81,6 +137,13 @@ def run_turn_request(req: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
         **options,
     }
     kwargs.setdefault("node_name", "agent")
+    yield {
+        "type": "started",
+        "pid": os.getpid(),
+        "surface": SURFACE,
+        "provider": kwargs["provider"],
+        "workspace_dir": host.agent_workspace_dir(""),
+    }
 
     try:
         result = AgentTurnExecutor().run(host, **kwargs)
@@ -92,9 +155,17 @@ def run_turn_request(req: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
         acc = []
         try:
             for chunk in result:
-                s = chunk if isinstance(chunk, str) else str(chunk)
-                acc.append(s)
-                yield {"type": "chunk", "text": s}
+                if cancel_check is not None and cancel_check():
+                    try:
+                        result.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    yield {"type": "cancelled"}
+                    return
+                ev = _normalize_event(chunk)
+                if ev["type"] == "chunk":
+                    acc.append(ev["text"])
+                yield ev
         except Exception as exc:  # noqa: BLE001
             yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
             return
@@ -103,17 +174,176 @@ def run_turn_request(req: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
         yield {"type": "done", "text": result if isinstance(result, str) else str(result)}
 
 
+# ── 데몬 모드 ────────────────────────────────────────────────────────────
+
+
+class _Emitter:
+    """stdout 프로토콜 채널 — 스레드 안전 JSON-lines writer."""
+
+    def __init__(self, out: TextIO) -> None:
+        self._out = out
+        self._lock = threading.Lock()
+
+    def emit(self, event: Dict[str, Any]) -> None:
+        line = json.dumps(event, ensure_ascii=False, default=str)
+        with self._lock:
+            try:
+                self._out.write(line + "\n")
+                self._out.flush()
+            except (BrokenPipeError, OSError):
+                # 커넥터가 사라졌다 — 더 쓸 곳이 없다. 데몬은 stdin EOF 로 종료된다.
+                pass
+
+
+class SidecarDaemon:
+    """stdin 명령 → 워커 스레드 턴 → stdout 이벤트. 테스트는 in/out 스트림 주입."""
+
+    def __init__(self, inp: Any, out: TextIO) -> None:
+        self._in = inp
+        self._emitter = _Emitter(out)
+        self._turns: Dict[str, Dict[str, Any]] = {}  # id → {"cancel": Event, "interaction_id": str}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+
+    # ── 명령 처리 ──
+    def _handle(self, cmd: Dict[str, Any]) -> None:
+        op = str(cmd.get("op") or "turn")
+        tid = str(cmd.get("id") or "")
+        if op == "ping":
+            self._emitter.emit(
+                {
+                    "id": tid,
+                    "type": "pong",
+                    "pid": os.getpid(),
+                    "protocol": SIDECAR_PROTOCOL_VERSION,
+                    "runtime_version": _runtime_version(),
+                    "python": sys.version.split()[0],
+                    "surface": SURFACE,
+                }
+            )
+            return
+        if op == "shutdown":
+            self._stop.set()
+            return
+        if op == "cancel":
+            self._cancel(tid)
+            return
+        if op == "turn":
+            if not tid:
+                self._emitter.emit(
+                    {"id": "", "type": "error", "message": "turn 요청에 id 가 없습니다."}
+                )
+                return
+            th = threading.Thread(
+                target=self._run_turn, args=(tid, cmd), name=f"sidecar-turn-{tid}", daemon=True
+            )
+            th.start()
+            return
+        self._emitter.emit({"id": tid, "type": "error", "message": f"unknown op: {op}"})
+
+    def _cancel(self, tid: str) -> None:
+        with self._lock:
+            entry = self._turns.get(tid)
+        if entry is None:
+            self._emitter.emit(
+                {"id": tid, "type": "error", "message": "취소할 턴이 없습니다(이미 종료)."}
+            )
+            return
+        entry["cancel"].set()
+        # 실행기 내부 협조 취소(도구/스트림 사이에서 확인) — 서버 SSE stop 과 같은 축.
+        try:
+            from xgen_agent_runtime.host.cancel_context import request_cancel
+
+            if entry.get("interaction_id"):
+                request_cancel(str(entry["interaction_id"]), ttl_seconds=600.0)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _run_turn(self, tid: str, req: Dict[str, Any]) -> None:
+        cancel = threading.Event()
+        interaction_id = str((req.get("options") or {}).get("interaction_id") or "")
+        with self._lock:
+            self._turns[tid] = {"cancel": cancel, "interaction_id": interaction_id}
+        try:
+            for ev in run_turn_request(req, cancel_check=cancel.is_set):
+                ev["id"] = tid
+                self._emitter.emit(ev)
+        except Exception as exc:  # noqa: BLE001
+            self._emitter.emit(
+                {"id": tid, "type": "error", "message": f"{type(exc).__name__}: {exc}"}
+            )
+        finally:
+            with self._lock:
+                self._turns.pop(tid, None)
+            try:
+                from xgen_agent_runtime.host.cancel_context import clear_cancel
+
+                if interaction_id:
+                    clear_cancel(interaction_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ── 루프 ──
+    def serve(self) -> int:
+        self._emitter.emit(
+            {
+                "type": "ready",
+                "pid": os.getpid(),
+                "protocol": SIDECAR_PROTOCOL_VERSION,
+                "runtime_version": _runtime_version(),
+                "python": sys.version.split()[0],
+                "surface": SURFACE,
+            }
+        )
+        for raw in self._in:
+            if self._stop.is_set():
+                break
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                cmd = json.loads(line)
+            except ValueError as exc:
+                self._emitter.emit({"type": "error", "message": f"bad command: {exc}"})
+                continue
+            if not isinstance(cmd, dict):
+                continue
+            self._handle(cmd)
+        # stdin EOF / shutdown → 진행 중 턴 취소 후 종료.
+        with self._lock:
+            ids = list(self._turns.keys())
+        for tid in ids:
+            self._cancel(tid)
+        return 0
+
+
+def _protocol_stdout() -> TextIO:
+    """프로토콜 전용 stdout — 라이브러리의 잡다한 print 가 JSON-lines 를 깨지 않게
+    실제 fd 1 을 복제해 쓰고, sys.stdout 은 stderr 로 돌린다."""
+    fd = os.dup(1)
+    out = os.fdopen(fd, "w", encoding="utf-8", errors="replace", buffering=1)
+    sys.stdout = sys.stderr
+    return out
+
+
 def main(argv: Any = None) -> int:
-    """CLI 진입 — stdin JSON 요청을 읽어 stdout JSON-lines 이벤트를 흘린다."""
+    """CLI 진입 — ``--serve`` 면 데몬, 아니면 원샷(stdin JSON 하나)."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--serve" in args:
+        out = _protocol_stdout()
+        return SidecarDaemon(sys.stdin.buffer, out).serve()
     try:
         req = json.load(sys.stdin)
     except Exception as exc:  # noqa: BLE001
         sys.stdout.write(json.dumps({"type": "error", "message": f"bad request: {exc}"}) + "\n")
         sys.stdout.flush()
         return 2
+    out = _protocol_stdout()
     for event in run_turn_request(req):
-        sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        out.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+        out.flush()
     return 0
 
 

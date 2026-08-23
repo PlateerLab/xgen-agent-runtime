@@ -13,7 +13,13 @@
 * **실행 = 이 PC**: ``make_sandbox`` 가 ``None`` → 런타임 Bash/Read/Write 가
   ``ToolContext.sandbox`` 없이 **로컬 호스트(사용자 PC)** 에서 직접 실행된다.
   codex/claude_code 는 로컬 프로세스로 스폰돼 네이티브 도구가 곧 로컬 파일을
-  만진다 — 서버-codex 처럼 tool 을 되돌려 라우팅할 필요가 없다.
+  만진다 — 서버-codex 처럼 tool 을 되돌려 라우팅할 필요가 없다 (커넥터의
+  ``mcp_local_*`` 브릿지 도구도 필요 없다 — 이미 로컬이다).
+* **CLI 홈 격리**: 커넥터는 ``XGEN_LOCAL_CODEX_HOME`` / ``XGEN_LOCAL_CLAUDE_CONFIG_DIR``
+  설정(설치 폴더 아래)을 넘긴다. 그러면 codex/claude 의 설정·로그인이 사용자의
+  개인 ``~/.codex`` / ``~/.claude`` 와 섞이지 않고, 서버 중앙 자격증명
+  (``CODEX_CREDENTIALS_JSON`` / ``CLAUDE_CODE_OAUTH_TOKEN``)이 그 격리 홈에
+  물질화된다 — 서버 파드의 materialize 와 동형.
 * **워크스페이스**: 로컬 동기화 폴더(커넥터 동기화 엔진이 서버 인덱스와 sync).
   hydrate/publish 는 그 엔진이 하므로 여기선 무동작.
 * **④(cloud/jobs/delegation/self-evolution)**: 서버 자산이라 로컬은 서버 브릿지
@@ -25,9 +31,29 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import platform
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+logger = logging.getLogger("xgen_agent_runtime.host.local_host")
+
+#: 서버(editor/geny_bridge/builtin_tools._EXPOSED_FAMILIES)와 같은 기본 노출
+#: 패밀리 + meta(ToolSearch 등). 관리자 kill-switch(GENY_TOOLS_<FAMILY>_ENABLED)는
+#: context.settings 로 전달돼 여기서도 같은 규칙(명시적으로 꺼야 비활성)이 적용된다.
+_DEFAULT_FAMILIES = ("web", "documents", "browser", "workflow", "filesystem", "shell", "meta")
+_FAMILY_FLAGS = {
+    "web": "GENY_TOOLS_WEB_ENABLED",
+    "documents": "GENY_TOOLS_DOCUMENTS_ENABLED",
+    "browser": "GENY_TOOLS_BROWSER_ENABLED",
+    "workflow": "GENY_TOOLS_WORKFLOW_ENABLED",
+    "filesystem": "GENY_TOOLS_FILESYSTEM_ENABLED",
+    "shell": "GENY_TOOLS_SHELL_ENABLED",
+}
+#: 커넥터가 넘기는 로컬 CLI 홈 격리 설정 이름.
+SETTING_LOCAL_CODEX_HOME = "XGEN_LOCAL_CODEX_HOME"
+SETTING_LOCAL_CLAUDE_CONFIG_DIR = "XGEN_LOCAL_CLAUDE_CONFIG_DIR"
 
 
 class LocalHostServices:
@@ -39,7 +65,7 @@ class LocalHostServices:
         *,
         context: Optional[Mapping[str, Any]] = None,
         server_bridge: Optional[Any] = None,
-        builtin_features: Sequence[str] = ("filesystem", "shell", "web", "meta"),
+        builtin_features: Optional[Sequence[str]] = None,
     ) -> None:
         #: 에이전트가 파일/셸을 조작하는 로컬 폴더(커넥터 동기화 대상=서버와 sync).
         self._workspace = os.path.abspath(workspace_dir)
@@ -50,22 +76,39 @@ class LocalHostServices:
         self._ctx = dict(context or {})
         #: 서버 브릿지(인증 RPC) — 메모리 등 라이브 공유 상태. None=미연결.
         self._bridge = server_bridge
-        self._builtin_features = tuple(builtin_features)
+        self._builtin_features: Optional[tuple] = (
+            tuple(builtin_features) if builtin_features is not None else None
+        )
 
     # ── A. settings & credentials (서버 계정 상태) ───────────────────────
     def setting(self, name: str, default: str = "") -> str:
         # 관리자 설정은 서버가 진실 — context.settings. (미연결 dev 는 env 폴백.)
         val = (self._ctx.get("settings") or {}).get(name)
-        if val:
+        if val is not None and str(val) != "":
             return str(val)
         return os.getenv(name, "") or default
 
     def setting_truthy(self, name: str) -> bool:
         return self.setting(name).strip().lower() in ("1", "true", "yes", "on")
 
+    def _family_enabled(self, family: str) -> bool:
+        flag = _FAMILY_FLAGS.get(family, "")
+        if not flag:
+            return True
+        raw = self.setting(flag).strip().lower()
+        return raw not in ("0", "false", "no", "off")
+
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str:
         # 에이전트 설정(provider/model)은 서버 저장 에이전트에서 온다 = run() kwargs.
-        return str(params.get("model") or "").strip()
+        model = str(params.get("model") or "").strip()
+        if model:
+            return model
+        # 서버 해석기와 같은 폴백(관리자 기본 모델) — context.settings 로 전달된다.
+        if provider == "claude_code":
+            return self.setting("CLAUDE_CODE_MODEL_DEFAULT", "")
+        if provider == "codex":
+            return self.setting("CODEX_MODEL_DEFAULT", "")
+        return ""
 
     def resolve_api_key(self, provider: str, params: Mapping[str, Any]) -> str:
         explicit = str(params.get("api_key") or "").strip()
@@ -127,10 +170,12 @@ class LocalHostServices:
             platform.system(), platform.system()
         )
         return (
-            "## 실행 환경 — 사용자 PC (데스크톱 커넥터, 로컬)\n"
-            f"- **OS**: {osname}. 셸/파일 도구는 **이 컴퓨터에서 직접** 실행됩니다.\n"
+            "## 실행 환경 — 사용자 PC (데스크톱 커넥터, 로컬 실행)\n"
+            f"- **OS**: {osname} ({platform.machine()}). 셸/파일 도구는 **이 컴퓨터에서 직접** 실행됩니다 "
+            "— 별도의 원격 브릿지 도구(mcp_local_* 등)를 부를 필요가 없습니다.\n"
             f"- **작업 폴더**: `{self._workspace}` — Bash·Read·Write 가 여기서 돕니다. "
-            "산출물은 이 폴더 안에 저장하세요.\n"
+            "산출물은 이 폴더 안에 저장하세요(서버 워크스페이스와 자동 동기화되어 웹에서도 보입니다).\n"
+            "- **기억/이력**: 서버와 공유됩니다 — 웹 대화와 같은 기억을 읽고 씁니다.\n"
         )
 
     # ── C. memory (서버 공유 — 웹과 같은 저장소) ─────────────────────────
@@ -177,7 +222,7 @@ class LocalHostServices:
 
     # ── E. tool families ─────────────────────────────────────────────────
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]:
-        return []  # 커넥터-of-커넥터 없음.
+        return []  # 이미 로컬 — 커넥터-of-커넥터(mcp_local_*) 없음.
 
     def build_job_tools(
         self, workflow_id, workflow_name, user_id, *, in_scheduled_run, interaction_id
@@ -216,6 +261,13 @@ class LocalHostServices:
     ) -> None:
         return None  # v1: 자가제작 도구 복원 미제공.
 
+    def builtin_families(self) -> List[str]:
+        """이 턴에 노출할 built-in 패밀리 — 서버 `_EXPOSED_FAMILIES` + meta 를
+        같은 kill-switch 규칙으로 거른 것(명시적 주입이 있으면 그것)."""
+        if self._builtin_features is not None:
+            return list(self._builtin_features)
+        return [f for f in _DEFAULT_FAMILIES if self._family_enabled(f)]
+
     def register_builtin_tools(
         self,
         registry,
@@ -227,13 +279,39 @@ class LocalHostServices:
     ) -> Dict[str, Any]:
         from xgen_agent_runtime.tools.built_in import get_builtin_tools
 
-        tools = get_builtin_tools(features=list(self._builtin_features))
+        # 서버 register_builtin_tools 와 같은 게이트: required_config_keys 가
+        # 충족되지 않는 도구는 광고하지 않는다(죽은 도구 미광고 원칙).
+        satisfied: set = set()
+        extras: Dict[str, Any] = {}
+        if anthropic_api_key:
+            satisfied.add("feature:docs_llm")
+            extras["docs"] = {"api_key": anthropic_api_key}
+
         names: List[str] = []
-        for name, tool_cls in tools.items():
-            if registry.get(name) is None:
-                registry.register(tool_cls(), core=core)
+        families = self.builtin_families()
+        for family in families:
+            try:
+                tools = get_builtin_tools(features=[family])
+            except Exception as exc:  # noqa: BLE001 — 옵셔널 미설치 등은 해당 패밀리만 스킵
+                logger.warning("built-in 패밀리 %s 로드 실패 (스킵): %s", family, exc)
+                continue
+            for name, tool_cls in tools.items():
+                if not name or registry.get(name) is not None:
+                    continue
+                try:
+                    tool = tool_cls()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("built-in 도구 %s 생성 실패 (스킵): %s", name, exc)
+                    continue
+                try:
+                    required = list(tool.required_config_keys() or [])
+                except Exception:  # noqa: BLE001
+                    required = []
+                if any(tok not in satisfied for tok in required):
+                    continue
+                registry.register(tool, core=core)
                 names.append(name)
-        return {"tools": names, "extras": {}}
+        return {"families": families, "tools": names, "extras": extras}
 
     def build_run_tool_context(self, **kwargs: Any) -> Any:
         from xgen_agent_runtime.tools.base import ToolContext
@@ -258,9 +336,8 @@ class LocalHostServices:
         return None  # 라이브 프로브 없음 — token_budget 이 카탈로그로 폴백.
 
     def agent_vault_root(self, workflow_id: str) -> str:
-        import os
-
-        root = os.path.join(self._workspace, ".memory")
+        # 워크스페이스(동기화 폴더) **밖** — 사용자 파일 트리에 .memory 를 남기지 않는다.
+        root = os.path.join(self.workspace_storage_root(workflow_id), "memory")
         os.makedirs(root, exist_ok=True)
         return root
 
@@ -281,6 +358,48 @@ class LocalHostServices:
         return None
 
     # ── F. CLI provider runtime (로컬 프로세스 스폰) ──────────────────────
+    def _isolated_home(self, setting_name: str) -> str:
+        """커넥터가 넘긴 격리 홈(설치 폴더 아래). 없으면 ""(CLI 기본 홈)."""
+        path = self.setting(setting_name).strip()
+        if not path:
+            return ""
+        try:
+            os.makedirs(path, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            logger.warning("CLI 격리 홈 생성 실패(%s): %s — 기본 홈 사용", path, exc)
+            return ""
+        return path
+
+    def _materialize_codex_credentials(self, codex_home: str) -> bool:
+        """서버 중앙 자격증명(CODEX_CREDENTIALS_JSON)을 격리 CODEX_HOME/auth.json 에
+        물질화 — 서버 파드의 codex_service.materialize_credentials 와 동형(멱등)."""
+        cred = self.setting("CODEX_CREDENTIALS_JSON").strip()
+        if not cred or not codex_home:
+            return False
+        try:
+            json.loads(cred)
+        except ValueError:
+            logger.warning("CODEX_CREDENTIALS_JSON 이 JSON 이 아닙니다 — 물질화 생략")
+            return False
+        path = os.path.join(codex_home, "auth.json")
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    if f.read() == cred:
+                        return True
+            tmp = f"{path}.tmp-{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(cred)
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+            return True
+        except OSError as exc:
+            logger.warning("codex 자격증명 물질화 실패(%s): %s", path, exc)
+            return False
+
     def build_cli_runtime(
         self,
         provider: str,
@@ -292,29 +411,58 @@ class LocalHostServices:
         # 커넥터에서는 codex/claude_code 가 **로컬 프로세스**로 뜨고 cwd 가 로컬
         # 워크스페이스라, 네이티브 도구가 곧 로컬 파일이다. 서버로 되돌리는 MCP
         # 브릿지(mcp_config)는 없다 — 로컬엔 필요 없다.
-        api_key = self.resolve_api_key(
-            "anthropic" if provider == "claude_code" else "openai", params
-        )
         if provider == "codex":
             from xgen_agent_runtime.host.runner import build_codex_cli_client
 
+            auth_mode = (self.setting("CODEX_AUTH_MODE", "api_key") or "api_key").strip()
+            api_key = self.resolve_api_key("openai", params) if auth_mode == "api_key" else ""
+            env_extras: Dict[str, str] = {}
+            codex_home = self._isolated_home(SETTING_LOCAL_CODEX_HOME)
+            if codex_home:
+                env_extras["CODEX_HOME"] = codex_home
+            if auth_mode != "api_key":
+                # 구독(ChatGPT) — 서버 중앙 자격증명을 격리 홈에 물질화. 중앙값이 없으면
+                # 이 PC 의 기존 로그인(격리 홈/기본 홈)을 그대로 쓴다.
+                self._materialize_codex_credentials(codex_home)
+            timeout_s = float(self.setting("CODEX_TIMEOUT_S", "3600") or 3600.0)
             client = build_codex_cli_client(
-                auth_mode=self.setting("CODEX_AUTH_MODE", "api_key") or "api_key",
+                auth_mode=auth_mode,
                 api_key=api_key,
                 binary_path=self.setting("CODEX_BINARY_PATH"),
                 workspace_dir=self._workspace,
+                timeout_s=timeout_s,
                 mcp_config=None,
+                env_extras=env_extras or None,
             )
             return client, None
+
         from xgen_agent_runtime.host.runner import build_cli_client
 
+        auth_mode = (self.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key").strip()
+        api_key = self.resolve_api_key("anthropic", params) if auth_mode == "api_key" else ""
+        oauth_token = self.setting("CLAUDE_CODE_OAUTH_TOKEN") if auth_mode == "setup_token" else ""
+        timeout_s = float(self.setting("CLAUDE_CODE_TIMEOUT_S", "3600") or 3600.0)
+        budget = float(params.get("cli_max_budget_usd") or 0.0) or float(
+            self.setting("CLAUDE_CODE_MAX_BUDGET_USD", "0") or 0.0
+        )
+        extra_env: Dict[str, str] = {}
+        claude_home = self._isolated_home(SETTING_LOCAL_CLAUDE_CONFIG_DIR)
+        if claude_home:
+            extra_env["CLAUDE_CONFIG_DIR"] = claude_home
         client = build_cli_client(
-            auth_mode=self.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key",
+            auth_mode=auth_mode,
             api_key=api_key,
-            oauth_token=self.setting("CLAUDE_CODE_OAUTH_TOKEN"),
+            oauth_token=oauth_token,
             binary_path=self.setting("CLAUDE_CODE_BINARY_PATH"),
             workspace_dir=self._workspace,
+            timeout_s=timeout_s,
+            max_budget_usd=budget,
+            # ⚠ 로컬: CLI 의 **네이티브** 도구(Read/Write/Edit/Bash/…)를 켠다.
+            # 서버는 러너 sandbox 가 붙어 있어 끄고 mcp__connector__* 로 브릿지하지만,
+            # 여기엔 브릿지가 없다 — 끄면 모델에게 파일/셸 도구가 하나도 남지 않는다.
+            allow_local_tools=bool(params.get("cli_allow_local_tools", True)),
             mcp_config=None,
+            extra_env=extra_env or None,
         )
         return client, None
 

@@ -4,6 +4,62 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.7.0] — 2026-08-23
+
+### Added — 데스크톱 호스트(커넥터 사이드카) v2: 상주 데몬 + 구조화 이벤트 + CLI 홈 격리
+
+XGEN Connector 가 Agent-XGeny 턴을 **사용자 PC 에서** 돌리는 경로(`host.sidecar` +
+`LocalHostServices`)를 제품 수준으로 끌어올린다. 서버와 **같은 AgentTurnExecutor** 를
+쓴다는 무발산 계약은 그대로이고, 로컬↔웹 차이는 실행 환경뿐이다.
+
+- **sidecar `--serve` (데몬 모드)**: 프로세스가 상주하며 stdin JSON-lines 명령
+  (`turn`/`cancel`/`ping`/`shutdown`)을 받고 `id` 가 붙은 이벤트를 stdout 으로 흘린다.
+  턴마다 Python 을 새로 띄우지 않아 첫 토큰 지연이 사라지고(Windows 기동 수 초),
+  다중 세션이 한 프로세스에서 돈다. 원샷(인자 없음) 모드는 v1 호환 유지.
+- **구조화 이벤트**: 실행기 스트림의 `agent_event`(tool_call/tool_result/tool_error)
+  와 `canvas_command` 를 전용 `tool` / `canvas_command` 이벤트로 올린다. v1 은 이
+  dict 들을 `str()` 로 텍스트에 섞어 넣어 커넥터 화면에 파이썬 dict 가 찍혔다.
+  `started`(surface=connector_local) / `cancelled` 이벤트 추가.
+- **취소**: `cancel` 명령이 `cancel_context.request_cancel` + 스트림 협조 취소로
+  진행 중 턴을 멈춘다(서버 SSE stop 과 같은 축).
+- **콘솔 스크립트** `xgen-agent-sidecar` (= `python -m xgen_agent_runtime.host.sidecar`).
+
+### Changed — `LocalHostServices` 서버 정합성
+
+- **claude_code 네이티브 도구 허용**: 로컬엔 mcp__connector__ 브릿지가 없는데
+  `allow_local_tools=False` 기본값이 그대로 적용돼 모델에게 파일/셸 도구가 하나도
+  남지 않았다. 로컬은 `True`(파라미터 `cli_allow_local_tools` 존중).
+- **CLI 홈 격리 + 중앙 자격증명 물질화**: 커넥터가 넘기는
+  `XGEN_LOCAL_CODEX_HOME` / `XGEN_LOCAL_CLAUDE_CONFIG_DIR` 설정을 `CODEX_HOME` /
+  `CLAUDE_CONFIG_DIR` 로 CLI 에 주입(사용자 개인 ~/.codex·~/.claude 와 분리).
+  codex oauth 모드는 서버 중앙 `CODEX_CREDENTIALS_JSON` 을 격리 홈의 auth.json 에
+  물질화(서버 파드 materialize 와 동형). 타임아웃·예산·기본 모델 설정도
+  context.settings 에서 읽는다.
+- **built-in 패밀리 서버 동형**: 기본 노출 패밀리를 서버 `_EXPOSED_FAMILIES`
+  (web/documents/browser/workflow/filesystem/shell)+meta 로 맞추고, 같은
+  kill-switch(`GENY_TOOLS_<FAMILY>_ENABLED`)와 `required_config_keys` 게이트
+  (docs_llm=anthropic 키)를 적용한다 — 예전엔 4 패밀리만 노출돼 웹과 능력이 달랐다.
+- vault 루트를 동기화 폴더 **밖**(`.xgen-agent-storage/memory`)으로 — 사용자 파일
+  트리에 `.memory` 를 남기지 않는다.
+- `turn_executor`: 클라우드 extras 의 서버 전용 import(`editor.geny_bridge.cloud_mount`)
+  를 가드 — 데스크톱 호스트에서 마운트가 붙어도 ImportError 로 턴이 죽지 않는다.
+
+### Fixed — CLI 프로세스 환경 화이트리스트
+
+- **Windows 부트스트랩 변수 통과**: `SystemRoot`/`USERPROFILE`/`APPDATA`/`LOCALAPPDATA`/
+  `COMSPEC`/`PATHEXT`/`TEMP`/`TMP` 등이 빠져 있어 Windows 에서 자식 CLI 가 Winsock/CRT
+  초기화에 실패할 수 있었다. 플랫폼별 화이트리스트 + Windows 대소문자 무시 매칭.
+- `CODEX_HOME`/`CLAUDE_CONFIG_DIR`/XDG 디렉터리, 프록시(`HTTP(S)_PROXY`/`NO_PROXY`)와
+  사설 CA(`SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS` 등) 변수를 부모가 설정한 경우 통과.
+
+## [3.6.0] — 2026-08-22
+
+### Added — `host` 서브패키지(agent-turn executor) 통합
+
+`AgentTurnExecutor` + `HostServices` 프로토콜 + `LocalHostServices`/`sidecar`/
+`server_bridge`/`remote_memory` 가 런타임 안으로 들어왔다 — 서버(xgen-workflow)와
+데스크톱 커넥터가 **같은 run()** 을 돈다.
+
 ## [3.5.1] — 2026-08-21
 
 ### Fixed — Bedrock 실전 검증에서 발견된 wire 결함 2건
