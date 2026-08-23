@@ -209,10 +209,18 @@ class LocalHostServices:
         osname = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}.get(
             platform.system(), platform.system()
         )
+        shell_hint = (
+            "PowerShell 로 실행됩니다 — Bash 도구에 **PowerShell 문법**을 쓰세요"
+            "(`Get-ChildItem`, `$env:VAR`, 명령 연결은 `;`). bash 전용 문법(`&&`, `$(...)`,"
+            " `ls -la`)은 이 컴퓨터에서 실패할 수 있습니다."
+            if osname == "Windows"
+            else "POSIX 셸(bash/sh)로 실행됩니다."
+        )
         return (
             "## 실행 환경 — 사용자 PC (데스크톱 커넥터, 로컬 실행)\n"
             f"- **OS**: {osname} ({platform.machine()}). 셸/파일 도구는 **이 컴퓨터에서 직접** 실행됩니다 "
             "— 별도의 원격 브릿지 도구(mcp_local_* 등)를 부를 필요가 없습니다.\n"
+            f"- **셸**: {shell_hint}\n"
             f"- **작업 폴더**: `{self._workspace}` — Bash·Read·Write 가 여기서 돕니다. "
             "산출물은 이 폴더 안에 저장하세요(서버 워크스페이스와 자동 동기화되어 웹에서도 보입니다).\n"
             "- **기억/이력**: 서버와 공유됩니다 — 웹 대화와 같은 기억을 읽고 씁니다.\n"

@@ -4,6 +4,18 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.2] — 2026-08-24
+
+### Fixed — Windows 로컬 셸(커넥터 로컬 SDK 턴)
+
+- 호스트 경로(sandbox 없음) Bash 도구가 Windows 에서 `create_subprocess_shell`(=cmd.exe)로 돌아
+  모델이 쓴 bash 문법이 깨지던 문제 — 이제 **PowerShell**(`powershell.exe -NoProfile
+  -NonInteractive -Command`, 없으면 cmd.exe 폴백)로 돈다. 커넥터 로컬 Shell 도구와 동일 규약.
+- Bash 도구 설명 + LocalHostServices 환경 프롬프트에 **Windows=PowerShell 문법** 안내 추가.
+- 참고: CLI provider(Codex/Claude Code)는 자체 셸 도구를 subprocess 안에서 돌린다 —
+  Codex CLI 의 "Command contains subexpressions $()" 등은 CLI 내부 파서 제약(런타임 밖).
+- 테스트 `tests/unit/test_bash_tool_windows_shell.py`.
+
 ## [3.8.1] — 2026-08-23
 
 ### Fixed — 커넥터 로컬 메모리 RPC 역직렬화(`'dict' object has no attribute 'content'`)

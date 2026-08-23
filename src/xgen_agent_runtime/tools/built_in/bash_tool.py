@@ -122,6 +122,37 @@ def _scrubbed_env(
     return env
 
 
+def _host_shell_argv(command: str, *, platform: Optional[str] = None) -> Optional[list]:
+    """호스트 실행(샌드박스 없음)에서 명령을 돌릴 shell argv.
+
+    Windows 는 bash 가 없다 — 커넥터 로컬 셸 도구와 동일하게 **PowerShell** 로 돈다
+    (``powershell.exe -NoProfile -NonInteractive -Command <cmd>``). PowerShell 이 없으면
+    (매우 드묾) ``cmd.exe /d /s /c`` 로 폴백. POSIX 는 None 을 돌려 기존 경로
+    (``create_subprocess_shell`` = ``/bin/sh -c``)를 그대로 쓴다.
+
+    반환 None → create_subprocess_shell(command) (POSIX).
+    반환 [file, *args] → create_subprocess_exec(*argv) (Windows).
+    """
+    plat = sys.platform if platform is None else platform
+    if plat != "win32":
+        return None
+    pwsh = _which_windows("powershell.exe") or _which_windows("pwsh.exe")
+    if pwsh:
+        return [pwsh, "-NoProfile", "-NonInteractive", "-Command", command]
+    comspec = os.environ.get("ComSpec") or os.environ.get("COMSPEC") or "cmd.exe"
+    return [comspec, "/d", "/s", "/c", command]
+
+
+def _which_windows(name: str) -> Optional[str]:
+    """PATH 에서 실행 파일을 찾는다(Windows). 없으면 None — shutil.which 얇은 래퍼."""
+    try:
+        import shutil
+
+        return shutil.which(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 _DEFAULT_TIMEOUT_MS = 120_000  # 2 minutes
 _MAX_TIMEOUT_MS = 600_000  # 10 minutes
 _MAX_OUTPUT = 100_000  # characters
@@ -152,7 +183,11 @@ class BashTool(Tool):
             "`uv pip install ...`, `npm install ...`) into that environment — "
             "be mindful that on a local PC this touches the user's real "
             "machine. Returns stdout, stderr, and exit code. Commands run in "
-            "your working directory with a configurable timeout."
+            "your working directory with a configurable timeout. Shell: on "
+            "Linux/macOS (server sandbox, or a local Unix PC) commands run in a "
+            "POSIX shell — use bash/sh syntax. On a local Windows PC they run in "
+            "PowerShell — use PowerShell syntax (e.g. `Get-ChildItem`, `$env:VAR`, "
+            "`;` to chain) rather than bash-isms."
         )
 
     @property
@@ -235,14 +270,26 @@ class BashTool(Tool):
         # os.environ.
         env = _scrubbed_env(context.env_vars)
 
+        # Windows 호스트(커넥터 로컬)는 bash 가 없으므로 PowerShell 로 돈다 — 셸 선택은
+        # _host_shell_argv 가 캡슐화한다(POSIX 는 None → 기존 /bin/sh 경로).
+        shell_argv = _host_shell_argv(command)
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=env,
-            )
+            if shell_argv is not None:
+                proc = await asyncio.create_subprocess_exec(
+                    *shell_argv,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
         except OSError as e:
             return ToolResult(content=f"Failed to start process: {e}", is_error=True)
 
