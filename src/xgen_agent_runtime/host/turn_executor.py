@@ -465,8 +465,14 @@ class AgentTurnExecutor:
                                 # 원본(host)에서 복원한 뒤 턴을 시작한다. hydrate 가
                                 # **성공한** 경우에만 markers 를 세운다 — 복원 실패한
                                 # 빈 캐시로 삭제를 전파하면 원본이 통째로 날아간다.
-                                if host.hydrate_workspace(_wf_for_ws, run_dir):
+                                _hyd = host.hydrate_workspace(_wf_for_ws, run_dir)
+                                if _hyd:
                                     _hydrated_ws, _hydrated_wf = run_dir, _wf_for_ws
+                                elif _hyd is None:
+                                    # 호스트가 복원 개념이 없다(데스크톱: 동기화 폴더가 곧 원본)
+                                    logger.debug(
+                                        "agents/geny: workspace hydrate 해당 없음(host 관리 동기화)"
+                                    )
                                 else:
                                     logger.warning(
                                         "agents/geny: workspace 복원 실패 — 이번 턴은 "
@@ -565,7 +571,15 @@ class AgentTurnExecutor:
                         user_id=kwargs.get("user_id"),
                         workflow_name=str(kwargs.get("workflow_name") or ""),
                     )
-                    system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK
+                    # 프롬프트 블록은 도구가 **실제로 등록된** 경우에만 — 호스트가 미제공
+                    # (데스크톱 사이드카 v1: WorkflowSelf 없음)이면 "그래프를 영구 편집할 수
+                    # 있다"고 말해 놓고 도구가 없는 유령 안내가 된다.
+                    if registry.get("WorkflowSelf") is not None:
+                        system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK
+                    else:
+                        logger.info(
+                            "agents/geny: self-evolution 미배선 — host 가 WorkflowSelf 를 제공하지 않음"
+                        )
                 except Exception as _sexc:  # noqa: BLE001
                     logger.warning("agents/geny: self-evolution 도구 등록 실패 (스킵): %s", _sexc)
             elif (
@@ -918,7 +932,19 @@ class AgentTurnExecutor:
             err = f"[ERROR] geny agent could not start: {exc}"
             return iter([err]) if streaming else err
 
+        # 호스트가 턴 단위 취소 훅을 줄 수 있다(사이드카 데몬: 같은 interaction 의
+        # 다음 턴을 오염시키지 않는 per-turn Event). 없으면 interaction 스코프 레지스트리.
+        _extra_cancel = kwargs.get("cancel_check")
+        if not callable(_extra_cancel):
+            _extra_cancel = None
+
         def _cancelled() -> bool:
+            if _extra_cancel is not None:
+                try:
+                    if _extra_cancel():
+                        return True
+                except Exception:  # noqa: BLE001
+                    pass
             if not interaction_id:
                 return False
             try:

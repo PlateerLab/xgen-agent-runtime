@@ -39,10 +39,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 logger = logging.getLogger("xgen_agent_runtime.host.local_host")
 
-#: 서버(editor/geny_bridge/builtin_tools._EXPOSED_FAMILIES)와 같은 기본 노출
-#: 패밀리 + meta(ToolSearch 등). 관리자 kill-switch(GENY_TOOLS_<FAMILY>_ENABLED)는
+#: 서버(editor/geny_bridge/builtin_tools._EXPOSED_FAMILIES)와 **같은** 기본 노출 패밀리
+#: (meta/Plan 은 서버도 미노출 — HITL 배선 없음; ToolSearch 는 build_pipeline 이 필요 시
+#: 자동 등록). 관리자 kill-switch(GENY_TOOLS_<FAMILY>_ENABLED)는
 #: context.settings 로 전달돼 여기서도 같은 규칙(명시적으로 꺼야 비활성)이 적용된다.
-_DEFAULT_FAMILIES = ("web", "documents", "browser", "workflow", "filesystem", "shell", "meta")
+_DEFAULT_FAMILIES = ("web", "documents", "browser", "workflow", "filesystem", "shell")
 _FAMILY_FLAGS = {
     "web": "GENY_TOOLS_WEB_ENABLED",
     "documents": "GENY_TOOLS_DOCUMENTS_ENABLED",
@@ -157,9 +158,10 @@ class LocalHostServices:
         # 워크스페이스 밖 형제 경로(도구 산출물·상태가 사용자 파일과 안 섞이게).
         return os.path.join(os.path.dirname(self._workspace), ".xgen-agent-storage")
 
-    def hydrate_workspace(self, workflow_id: str, run_dir: str) -> bool:
-        # 이미 로컬·동기화됨 — 복원 불필요. markers 를 세워 두면 안 되므로 False.
-        return False
+    def hydrate_workspace(self, workflow_id: str, run_dir: str):  # -> Optional[bool]
+        # 이미 로컬·동기화됨 — 복원 개념이 없다(None = 해당 없음). False 를 돌려주면
+        # 실행기가 "복원 실패" 경고를 매 턴 찍는다.
+        return None
 
     def publish_workspace(self, workflow_id: str, run_dir: str, *, origin: str = "agent") -> None:
         # 커넥터 동기화 엔진이 인덱스에 반영한다 — 여기선 무동작.
@@ -414,6 +416,12 @@ class LocalHostServices:
         if provider == "codex":
             from xgen_agent_runtime.host.runner import build_codex_cli_client
 
+            # 관리자 enable 게이트 — 서버(agent_geny._build_codex_cli_runtime)와 같은 문구.
+            if not self.setting_truthy("CODEX_ENABLED"):
+                raise ValueError(
+                    "Codex 백엔드가 비활성화되어 있습니다. "
+                    "관리자 설정(CODEX_ENABLED)에서 활성화 후 사용하세요."
+                )
             auth_mode = (self.setting("CODEX_AUTH_MODE", "api_key") or "api_key").strip()
             api_key = self.resolve_api_key("openai", params) if auth_mode == "api_key" else ""
             env_extras: Dict[str, str] = {}
@@ -438,6 +446,16 @@ class LocalHostServices:
 
         from xgen_agent_runtime.host.runner import build_cli_client
 
+        if not self.setting_truthy("CLAUDE_CODE_ENABLED"):
+            raise ValueError(
+                "Claude Code 백엔드가 비활성화되어 있습니다. "
+                "관리자 설정(CLAUDE_CODE_ENABLED)에서 활성화 후 사용하세요."
+            )
+        if params.get("cli_allow_local_tools") is False:
+            logger.warning(
+                "로컬 실행에는 MCP 브릿지가 없어 CLI 네이티브 도구를 켭니다 "
+                "(cli_allow_local_tools=False 무시)"
+            )
         auth_mode = (self.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key").strip()
         api_key = self.resolve_api_key("anthropic", params) if auth_mode == "api_key" else ""
         oauth_token = self.setting("CLAUDE_CODE_OAUTH_TOKEN") if auth_mode == "setup_token" else ""
@@ -460,7 +478,7 @@ class LocalHostServices:
             # ⚠ 로컬: CLI 의 **네이티브** 도구(Read/Write/Edit/Bash/…)를 켠다.
             # 서버는 러너 sandbox 가 붙어 있어 끄고 mcp__connector__* 로 브릿지하지만,
             # 여기엔 브릿지가 없다 — 끄면 모델에게 파일/셸 도구가 하나도 남지 않는다.
-            allow_local_tools=bool(params.get("cli_allow_local_tools", True)),
+            allow_local_tools=True,
             mcp_config=None,
             extra_env=extra_env or None,
         )

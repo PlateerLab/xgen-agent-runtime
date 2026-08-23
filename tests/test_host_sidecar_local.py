@@ -253,7 +253,7 @@ def test_local_host_settings_prefer_server_context(tmp_path, monkeypatch) -> Non
 
 def test_local_host_builtin_families_mirror_server_killswitch(tmp_path) -> None:
     host = LocalHostServices(str(tmp_path / "ws"))
-    assert host.builtin_families() == ["web", "documents", "browser", "workflow", "filesystem", "shell", "meta"]
+    assert host.builtin_families() == ["web", "documents", "browser", "workflow", "filesystem", "shell"]
     off = LocalHostServices(
         str(tmp_path / "ws"),
         context={"settings": {"GENY_TOOLS_BROWSER_ENABLED": "false", "GENY_TOOLS_SHELL_ENABLED": "0"}},
@@ -287,6 +287,7 @@ def test_local_host_codex_cli_runtime_isolates_home_and_materializes(tmp_path, m
         context={
             "api_keys": {"openai": "sk"},
             "settings": {
+                "CODEX_ENABLED": "true",
                 "CODEX_AUTH_MODE": "oauth",
                 "CODEX_CREDENTIALS_JSON": cred,
                 "CODEX_BINARY_PATH": "/opt/codex",
@@ -304,7 +305,7 @@ def test_local_host_codex_cli_runtime_isolates_home_and_materializes(tmp_path, m
     # api_key 모드: 키 전달, 물질화 없음
     host2 = LocalHostServices(
         str(tmp_path / "ws"),
-        context={"api_keys": {"openai": "sk"}, "settings": {"CODEX_AUTH_MODE": "api_key"}},
+        context={"api_keys": {"openai": "sk"}, "settings": {"CODEX_ENABLED": "1", "CODEX_AUTH_MODE": "api_key"}},
     )
     host2.build_cli_runtime("codex", {})
     assert captured["auth_mode"] == "api_key" and captured["api_key"] == "sk"
@@ -327,6 +328,7 @@ def test_local_host_claude_cli_runtime_allows_native_tools_and_isolates(tmp_path
         context={
             "api_keys": {"anthropic": "ak"},
             "settings": {
+                "CLAUDE_CODE_ENABLED": "true",
                 "CLAUDE_CODE_AUTH_MODE": "setup_token",
                 "CLAUDE_CODE_OAUTH_TOKEN": "tok",
                 "CLAUDE_CODE_BINARY_PATH": "/opt/claude",
@@ -335,8 +337,8 @@ def test_local_host_claude_cli_runtime_allows_native_tools_and_isolates(tmp_path
             },
         },
     )
-    host.build_cli_runtime("claude_code", {})
-    assert captured["allow_local_tools"] is True  # 로컬엔 브릿지가 없다 — 네이티브 도구 필수
+    host.build_cli_runtime("claude_code", {"cli_allow_local_tools": False})
+    assert captured["allow_local_tools"] is True  # 로컬엔 브릿지가 없다 — 네이티브 도구 필수(False 무시)
     assert captured["auth_mode"] == "setup_token" and captured["oauth_token"] == "tok"
     assert captured["api_key"] == ""
     assert captured["extra_env"] == {"CLAUDE_CONFIG_DIR": str(claude_home)}
@@ -375,3 +377,32 @@ def test_cli_env_whitelist_windows_bootstrap_vars(monkeypatch) -> None:
     assert env == {"SystemRoot": "C:\\Windows", "Path": "C:\\bin"}
     if sys.platform != "win32":
         assert rt.DEFAULT_ENV_WHITELIST == rt._ENV_WHITELIST_POSIX
+
+
+def test_local_host_cli_gates_and_hydrate_tristate(tmp_path, monkeypatch) -> None:
+    host = LocalHostServices(str(tmp_path / "ws"), context={"settings": {"CODEX_ENABLED": "false"}})
+    with pytest.raises(ValueError, match="CODEX_ENABLED"):
+        host.build_cli_runtime("codex", {})
+    host2 = LocalHostServices(str(tmp_path / "ws"), context={"settings": {"CLAUDE_CODE_ENABLED": "0"}})
+    with pytest.raises(ValueError, match="CLAUDE_CODE_ENABLED"):
+        host2.build_cli_runtime("claude_code", {})
+    assert host.hydrate_workspace("wf", str(tmp_path)) is None  # 해당 없음(경고 X)
+
+
+def test_sidecar_turn_cancel_is_per_turn_hook(fake_executor) -> None:
+    """cancel_check 는 kwargs 로 실행기에 전달되고(턴 단위), interaction 스코프 레지스트리는 건드리지 않는다."""
+    from xgen_agent_runtime.host.cancel_context import is_cancelled
+
+    _FakeExecutor.items = ["a"]
+    list(sidecar.run_turn_request(_req(fake_executor["ws"]), cancel_check=lambda: False))
+    assert callable(_FakeExecutor.seen_kwargs.get("cancel_check"))
+    assert is_cancelled("i1") is False
+
+
+def test_server_bridge_passes_tls_verify() -> None:
+    from xgen_agent_runtime.host.server_bridge import ServerBridge
+
+    p = ServerBridge("https://s", "t", verify=False).build_memory_provider("wf", "i")
+    assert p is not None and p._verify is False
+    p2 = ServerBridge("https://s", "t", verify="/ca.pem").build_memory_provider("wf", "i")
+    assert p2._verify == "/ca.pem"

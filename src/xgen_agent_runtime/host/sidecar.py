@@ -119,7 +119,12 @@ def run_turn_request(
         try:
             from xgen_agent_runtime.host.server_bridge import ServerBridge
 
-            bridge = ServerBridge(str(server["url"]), str(server.get("token") or ""))
+            tls = server.get("tls") if isinstance(server.get("tls"), dict) else {}
+            bridge = ServerBridge(
+                str(server["url"]),
+                str(server.get("token") or ""),
+                verify=(tls.get("ca_file") or (False if tls.get("verify") is False else True)),
+            )
         except Exception:  # noqa: BLE001 — 브릿지 실패는 무기억으로 degrade(발산 방지)
             bridge = None
 
@@ -137,6 +142,10 @@ def run_turn_request(
         **options,
     }
     kwargs.setdefault("node_name", "agent")
+    if cancel_check is not None:
+        # 턴 단위 취소 훅 — interaction 스코프 레지스트리를 쓰지 않아 같은 대화의 다음
+        # 턴을 오염시키지 않는다(실행기 _cancelled 가 먼저 본다).
+        kwargs["cancel_check"] = cancel_check
     yield {
         "type": "started",
         "pid": os.getpid(),
@@ -249,15 +258,9 @@ class SidecarDaemon:
                 {"id": tid, "type": "error", "message": "취소할 턴이 없습니다(이미 종료)."}
             )
             return
+        # per-turn Event 만 세운다 — 실행기에는 cancel_check 로 전달돼 있어 다음 스트림 경계에서
+        # 멈춘다. interaction 스코프 request_cancel 은 쓰지 않는다(같은 대화의 다음 턴 오염).
         entry["cancel"].set()
-        # 실행기 내부 협조 취소(도구/스트림 사이에서 확인) — 서버 SSE stop 과 같은 축.
-        try:
-            from xgen_agent_runtime.host.cancel_context import request_cancel
-
-            if entry.get("interaction_id"):
-                request_cancel(str(entry["interaction_id"]), ttl_seconds=600.0)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _run_turn(self, tid: str, req: Dict[str, Any]) -> None:
         cancel = threading.Event()
@@ -275,13 +278,6 @@ class SidecarDaemon:
         finally:
             with self._lock:
                 self._turns.pop(tid, None)
-            try:
-                from xgen_agent_runtime.host.cancel_context import clear_cancel
-
-                if interaction_id:
-                    clear_cancel(interaction_id)
-            except Exception:  # noqa: BLE001
-                pass
 
     # ── 루프 ──
     def serve(self) -> int:

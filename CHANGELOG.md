@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.7.1] — 2026-08-23
+
+### Fixed — 데스크톱 호스트 감사(커넥터 로컬 실행 v2) 확정 결함
+
+- **self-evolution 유령 도구**: SDK 경로에서 `WorkflowSelf` 가 실제로 등록된 경우에만
+  프롬프트 블록을 붙인다 — 데스크톱 호스트(미제공)에서 "그래프를 영구 편집할 수 있다"고
+  안내해 놓고 도구가 없던 문제.
+- **LocalHostServices CLI 게이트**: 관리자 `CLAUDE_CODE_ENABLED`/`CODEX_ENABLED` 비활성 시
+  서버와 같은 문구로 거부; `cli_allow_local_tools=False` 는 로컬에선 무시(브릿지가 없어
+  네이티브 도구 필수 — 경고 로그).
+- **hydrate 3-상태**: 로컬 호스트는 `None`(해당 없음)을 돌려주고 실행기는 경고 대신 debug —
+  매 턴 "workspace 복원 실패" 노이즈 제거.
+- **built-in 패밀리**: 로컬 기본 노출에서 `meta`(Plan 모드)를 빼 서버 `_EXPOSED_FAMILIES` 와
+  정확히 동일하게.
+- **턴 단위 취소**: 사이드카 데몬의 `cancel` 이 interaction 스코프 레지스트리 대신 per-turn
+  훅(`kwargs["cancel_check"]`)으로 실행기에 전달 — 같은 대화의 다음 턴이 오염되지 않는다.
+- **TLS 정책 전달**: `server.tls.{verify, ca_file}` → `ServerBridge(verify=…)` →
+  `RemoteMemoryProvider` httpx verify — 사설 인증서 XGEN 에서 메모리 RPC 가 조용히 실패하던 경로.
+
 ## [3.7.0] — 2026-08-23
 
 ### Added — 데스크톱 호스트(커넥터 사이드카) v2: 상주 데몬 + 구조화 이벤트 + CLI 홈 격리

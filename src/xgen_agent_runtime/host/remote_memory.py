@@ -61,6 +61,7 @@ class RemoteMemoryProvider:
         interaction_id: str = "",
         timeout_s: float = 30.0,
         transport: Any = None,
+        verify: Any = True,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._token = token
@@ -68,6 +69,7 @@ class RemoteMemoryProvider:
         self._interaction_id = interaction_id
         self._timeout = float(timeout_s)
         self._transport = transport  # 테스트 주입: async (payload)->dict
+        self._verify = verify  # httpx verify (True/False/CA 경로) — 커넥터 사설 인증서 정책
         self._descriptor: Any = None
         self._has_vector: Optional[bool] = None
 
@@ -82,7 +84,7 @@ class RemoteMemoryProvider:
         import httpx  # 런타임 의존(지연 import — 테스트는 transport 주입).
 
         headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, verify=self._verify) as client:
             resp = await client.post(self._url, json=payload, headers=headers)
             resp.raise_for_status()
             return resp.json()

@@ -20,10 +20,14 @@ class ServerBridge:
     미연결/실패는 조용히 None 으로 degrade — 로컬 전용 상태를 만들지 않는다
     (발산 방지: 기억이 갈라지느니 이번 턴은 무기억)."""
 
-    def __init__(self, base_url: str, token: str, *, timeout_s: float = 30.0) -> None:
+    def __init__(
+        self, base_url: str, token: str, *, timeout_s: float = 30.0, verify: Any = True
+    ) -> None:
         self._base = base_url.rstrip("/")
         self._token = token
         self._timeout = float(timeout_s)
+        #: TLS 검증 — httpx verify 인자(True/False/CA 파일 경로). 커넥터의 사설 인증서 정책.
+        self._verify = verify
 
     # ── memory (서버 저장소 공유) ─────────────────────────────────────────
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]:
@@ -40,6 +44,7 @@ class ServerBridge:
                 workflow_id=str(workflow_id or ""),
                 interaction_id=str(interaction_id or ""),
                 timeout_s=self._timeout,
+                verify=self._verify,
             )
         except Exception:  # noqa: BLE001
             return None
