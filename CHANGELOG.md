@@ -4,6 +4,19 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.4] — 2026-08-24
+
+### Added — 로컬 실행에서 외부 MCP 서버 사용
+
+- 로컬 실행(사이드카)에서도 사용자가 커넥터에 등록한 **외부 MCP 서버**(Atlassian 등)를 쓸 수
+  있다. `LocalHostServices.build_connector_mcp_tools` 가 [] 대신, 커넥터가
+  `context.connector_mcp_servers` 로 실어 준 resolved 설정을 **런타임 MCP 매니저로 직접 연결**해
+  도구를 노출한다(서버 경로의 reverse-WS 프록시와 같은 결과, 커넥터 로컬에서 직접).
+- 이벤트 루프 경계 처리: MCP 세션은 프로세스 상주 **전용 백그라운드 루프**에서 유지하고, 도구
+  호출은 `run_coroutine_threadsafe`/`wrap_future` 로 턴 루프와 교차 프록시(`host/connector_mcp_local.py`).
+  설정 해시 캐시로 매 턴 재스폰 방지, 데몬 종료 시 정리. 실패는 전부 무 MCP 로 degrade(턴 불변).
+- 실 stdio MCP 서버로 연결·검색·교차 루프 호출 e2e 테스트(`tests/unit/test_connector_mcp_local.py`).
+
 ## [3.8.3] — 2026-08-24
 
 ### Added — 메모리 오프라인 진단 신호(커넥터 로컬)

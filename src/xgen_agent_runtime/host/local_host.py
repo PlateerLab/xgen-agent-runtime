@@ -293,7 +293,21 @@ class LocalHostServices:
 
     # ── E. tool families ─────────────────────────────────────────────────
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]:
-        return []  # 이미 로컬 — 커넥터-of-커넥터(mcp_local_*) 없음.
+        # 로컬 실행 = 이미 로컬. 서버 reverse-WS 브릿지 도구(mcp_local_* — 셸/파일 프록시)는
+        # 런타임 자체 도구와 중복이라 노출하지 않는다. 다만 사용자가 커넥터에 등록한 **외부 MCP
+        # 서버**(Atlassian 등)는 로컬 실행 에이전트도 써야 하므로, 런타임 MCP 매니저로 직접
+        # 연결해 노출한다(서버 경로가 브릿지로 프록시하는 것과 같은 결과, 커넥터 로컬에서 직접).
+        # 설정은 커넥터가 context.connector_mcp_servers 로 실어 보낸다(resolved). 실패는 무 MCP.
+        servers = self._ctx.get("connector_mcp_servers")
+        if not servers:
+            return []
+        try:
+            from xgen_agent_runtime.host.connector_mcp_local import connector_mcp_tools
+
+            return connector_mcp_tools(servers)
+        except Exception as exc:  # noqa: BLE001 — MCP 실패가 턴을 깨면 안 된다
+            logger.warning("local_host: 외부 MCP 도구 빌드 실패(무시): %s", exc)
+            return []
 
     def build_job_tools(
         self, workflow_id, workflow_name, user_id, *, in_scheduled_run, interaction_id

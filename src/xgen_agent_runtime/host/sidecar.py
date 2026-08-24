@@ -359,6 +359,13 @@ class SidecarDaemon:
             ids = list(self._turns.keys())
         for tid in ids:
             self._cancel(tid)
+        # 로컬 외부 MCP 연결(백그라운드 루프·서브프로세스) 정리 — 데몬 종료 시 누수 방지.
+        try:
+            from xgen_agent_runtime.host import connector_mcp_local
+
+            connector_mcp_local.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         return 0
 
 
