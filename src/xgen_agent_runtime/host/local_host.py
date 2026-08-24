@@ -153,10 +153,39 @@ class LocalHostServices:
             return self.setting("CODEX_MODEL_DEFAULT", "")
         return ""
 
+    def _llm_proxy_for(self, provider: str) -> Optional[Dict[str, str]]:
+        """이 provider 의 LLM 호출을 **서버로 프록시**하라는 마커(context.llm_proxy) 해석.
+
+        내부 서빙(vLLM 등) base_url 은 커넥터 PC 에서 도달 불가라, 서버가 그 URL·모델
+        키를 싣는 대신 이 마커만 싣는다. 런타임은 **서버 브릿지**(=서버에 닿는 경로,
+        base_url·토큰 보유)로 LLM 호출을 프록시한다:
+
+            connector 런타임 → xgen-server /llm-proxy → 내부 provider
+
+        서버 프록시는 OpenAI 호환 패스스루라 런타임 OpenAI 클라이언트는 그냥
+        ``{base}{path}/chat/completions`` 를 부른다. 브릿지가 없으면(오프라인 dev)
+        프록시 불가 → None(그때는 종전대로 base_urls 를 본다)."""
+        if self._bridge is None:
+            return None
+        marker = self._ctx.get("llm_proxy")
+        if not isinstance(marker, Mapping) or str(marker.get("provider") or "") != provider:
+            return None
+        path = str(marker.get("path") or "").strip()
+        base = str(getattr(self._bridge, "base_url", "") or "").rstrip("/")
+        token = str(getattr(self._bridge, "token", "") or "")
+        if not path or not base or not token:
+            return None
+        return {"base_url": base + path, "token": token}
+
     def resolve_api_key(self, provider: str, params: Mapping[str, Any]) -> str:
         explicit = str(params.get("api_key") or "").strip()
         if explicit:
             return explicit
+        # 서버 LLM 프록시 대상이면 인증은 **브릿지 토큰**(사용자 세션) — 프록시가
+        # 업스트림(내부 모델)의 실키를 서버에서 주입한다(실키는 PC 로 안 나간다).
+        proxy = self._llm_proxy_for(provider)
+        if proxy:
+            return proxy["token"]
         # 로그인 계정의 키 — 서버가 해석해 넘긴 것(로컬 env 아님).
         key = (self._ctx.get("api_keys") or {}).get(provider)
         if key:
@@ -167,6 +196,10 @@ class LocalHostServices:
         explicit = str(params.get("base_url") or "").strip()
         if explicit:
             return explicit
+        # 내부 서빙 provider → 서버 LLM 프록시 URL 로 재작성(PC 도달 가능한 서버 경유).
+        proxy = self._llm_proxy_for(provider)
+        if proxy:
+            return proxy["base_url"]
         return (self._ctx.get("base_urls") or {}).get(provider) or None
 
     def resolve_credentials(

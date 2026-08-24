@@ -29,6 +29,20 @@ class ServerBridge:
         #: TLS 검증 — httpx verify 인자(True/False/CA 파일 경로). 커넥터의 사설 인증서 정책.
         self._verify = verify
 
+    @property
+    def base_url(self) -> str:
+        """서버(로그인 계정 저장소)의 **도달 가능한** base URL.
+
+        LocalHostServices 의 LLM 프록시 재작성이 재사용한다 — 내부 서빙(vLLM 등)
+        base_url 은 PC 에서 못 닿으므로, 런타임이 이 서버 URL 로 LLM 호출을
+        프록시한다 (connector 런타임 → xgen-server → 내부 provider)."""
+        return self._base
+
+    @property
+    def token(self) -> str:
+        """서버 인증 토큰(사용자 세션) — 프록시 엔드포인트 ``_authorize`` 가 그대로 검증."""
+        return self._token
+
     # ── memory (서버 저장소 공유) ─────────────────────────────────────────
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]:
         """서버 메모리를 원격 provider 로 연다 — 웹과 같은 workflow 저장소.

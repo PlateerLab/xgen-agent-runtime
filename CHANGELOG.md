@@ -4,6 +4,24 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.6] — 2026-08-24
+
+### Added — 로컬 실행에서 내부 모델(vLLM 등) 사용: LLM = 서버 프록시
+
+- 내부 서빙 프로바이더(vLLM·내부 custom)를 쓰는 에이전트도 **로컬 실행**이 가능해졌다. 그 base_url
+  은 쿠버네티스 내부 주소(`http://…:8000` 등)라 커넥터 PC 에서 도달 불가 → 종전엔 첫 LLM 호출이
+  `APITimeoutError("Request timed out.")` 로 폴백했다(로컬 실행 불가). 이제 LLM 호출을 **서버로
+  프록시**한다: `connector 런타임 → xgen-server /llm-proxy → 내부 provider`.
+- `LocalHostServices` 가 서버가 실어 준 `context.llm_proxy = {provider, path}` 마커를 보고,
+  `resolve_base_url` 은 **서버 브릿지 URL + 프록시 경로**로, `resolve_api_key` 는 **브릿지
+  토큰**(사용자 세션)으로 재작성한다. 서버 프록시는 OpenAI 호환 패스스루라 런타임 OpenAI
+  클라이언트(vLLM=OpenAIClient 서브클래스)는 변경 없이 `{base}/chat/completions` 를 부른다.
+- **모델 실키/내부 URL 은 PC 로 나가지 않는다**(서버가 업스트림에 주입) — 종전 직접 shipping 대비
+  보안 강화. 브릿지 없음(오프라인)·토큰 없음·노드 명시 base_url 은 프록시 안 함(방어·우선순위).
+- `ServerBridge` 에 `base_url`/`token` 속성 노출(프록시 재작성이 재사용). 공개 프로바이더
+  (OpenAI/Anthropic/Gemini)는 종전대로 로컬에서 직접 호출(무영향).
+- 테스트 `tests/unit/test_local_llm_proxy.py`. 서버측 프록시 엔드포인트는 xgen-workflow.
+
 ## [3.8.5] — 2026-08-24
 
 ### Fixed — 로컬 실행에서 RAG 사용(RAG=서버 호출 원칙)
