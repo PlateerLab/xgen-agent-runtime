@@ -48,3 +48,33 @@ class ServerBridge:
             )
         except Exception:  # noqa: BLE001
             return None
+
+    # ── RAG (서버 자산 호출) ──────────────────────────────────────────────
+    def rag_search(self, workflow_id: str, text: str, search_params: Any) -> Optional[str]:
+        """서버 RAG 검색을 호출해 ``[DOC_n]`` 컨텍스트 블록을 받는다(동기).
+
+        RAG 서비스/컬렉션은 **서버 자산** — 로컬은 search_params(직렬화 가능)만 갖고 서버가
+        rag_service 클라이언트로 실제 검색을 돌린다(메모리와 같은 '서버 호출' 원칙).
+        빌드 파이프라인(루프 이전)에서 동기로 불리므로 blocking httpx 로 안전하다.
+        실패는 None → 그 RAG 아이템은 컨텍스트 없이 진행(턴 불변)."""
+        wf = str(workflow_id or "").strip()
+        if not wf or not isinstance(search_params, dict):
+            return None
+        try:
+            import httpx
+
+            url = f"{self._base}/api/agentflow/geny-memory/{wf}/rag-search"
+            with httpx.Client(timeout=max(self._timeout, 300.0), verify=self._verify) as client:
+                resp = client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    json={"text": str(text or ""), "search_params": search_params},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            if not isinstance(data, dict) or not data.get("ok"):
+                return None
+            block = data.get("block")
+            return str(block) if block else None
+        except Exception:  # noqa: BLE001
+            return None

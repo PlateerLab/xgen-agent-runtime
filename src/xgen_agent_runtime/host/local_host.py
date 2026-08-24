@@ -424,7 +424,24 @@ class LocalHostServices:
 
     # ── H. product helpers injected into rag / token_budget / distill ────
     def rag_context_builder(self, text: str, item: Any) -> Optional[str]:
-        return None  # RAG 포트 컨텍스트 빌더는 서버 노드 헬퍼 — 로컬 스킵.
+        # RAG(컬렉션·rag_service)는 **서버 자산** — 메모리와 같은 '서버 호출' 원칙이다.
+        # 로컬은 직렬화된 search_params 만 받고, 서버 RAG RPC 로 실제 검색을 위임해
+        # [DOC_n] 블록을 받는다. 브릿지/파라미터/workflow_id 가 없거나 실패하면 None
+        # (그 RAG 아이템은 컨텍스트 없이 진행 — 턴은 깨지지 않는다). rag_service 는
+        # 로컬로 오지 않으므로(직렬화 불가) 여기서 무시하고 search_params 만 쓴다.
+        if self._bridge is None:
+            return None
+        search_params = item.get("search_params") if isinstance(item, dict) else None
+        if not isinstance(search_params, dict) or not search_params:
+            return None
+        workflow_id = str(self._ctx.get("workflow_id") or "").strip()
+        if not workflow_id:
+            return None
+        try:
+            return self._bridge.rag_search(workflow_id, text, search_params)
+        except Exception as exc:  # noqa: BLE001 — RAG 실패가 턴을 깨면 안 된다
+            logger.warning("local_host: RAG 서버 호출 실패(무시): %s", exc)
+            return None
 
     def fetch_vllm_max_model_len(self, base_url: str, model: Optional[str]) -> Optional[int]:
         return None  # 라이브 프로브 없음 — token_budget 이 카탈로그로 폴백.

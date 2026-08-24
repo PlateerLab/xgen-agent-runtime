@@ -4,6 +4,18 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.5] — 2026-08-24
+
+### Fixed — 로컬 실행에서 RAG 사용(RAG=서버 호출 원칙)
+
+- RAG 컨텍스트가 연결된 에이전트도 로컬 실행이 가능해졌다. RAG 서비스/컬렉션은 **서버 자산**이라
+  로컬은 직렬화된 `search_params` 만 받고, `LocalHostServices.rag_context_builder` 가
+  **서버 RAG RPC**(`/geny-memory/{wf}/rag-search`)로 검색을 위임해 `[DOC_n]` 블록을 받는다
+  (메모리와 같은 서버 호출 원칙). `ServerBridge.rag_search`(동기 httpx, build_pipeline 시점 호출).
+- 종전엔 context(RAG) 포트가 unsupported → 서버 폴백을 강제했다(로컬 실행 불가 버그).
+- 실패(브릿지/파라미터/workflow_id 없음, RPC 오류)는 그 RAG 아이템만 컨텍스트 없이 진행(턴 불변).
+- 테스트 `tests/unit/test_local_rag_over_rpc.py`.
+
 ## [3.8.4] — 2026-08-24
 
 ### Added — 로컬 실행에서 외부 MCP 서버 사용
