@@ -17,42 +17,37 @@ default_prompt = "You are a helpful AI assistant."
 _CLI_BACKENDS = ("claude_code", "codex")
 
 #: 자기진화 시스템 프롬프트 블록 — 등록된 턴에만 붙는다.
+#:
+#: 철학: 시스템 프롬프트는 **일반화된 사실**만 담는다 — 개별 도구 사용법은 그
+#: 도구의 description 이 담는다(중복 금지). 여기 남은 두 가지는 도구 설명이 담을
+#: 수 없는 것들이다: (a) 능력의 존재 사실(스키마만으로는 모델이 놓친다 — 프로드
+#: 실증 "편집 기능이 없다" 확신 답변), (b) 하네스 자체 Workflow 도구와의 교차
+#: 구분(어느 한 도구 설명도 소유할 수 없는 cross-tool 사실).
 SELF_EVOLUTION_PROMPT_BLOCK = """
 
 # Self-evolution (editing your own workflow graph)
-You can PERMANENTLY extend your own capabilities by editing your workflow graph
-with the WorkflowSelf tool: attach RAG/document search, tool/MCP/API/DB nodes,
-memory, routers, and more. When the user asks you to gain an ability you lack
-(e.g. "attach RAG to yourself"), use WorkflowSelf — start with
-action='guidance' if unsure. Do NOT confuse this with any harness-provided
-"Workflow"/orchestration tool: only WorkflowSelf edits the XGEN graph."""
+You can PERMANENTLY extend your own capabilities by editing your own XGEN
+workflow graph — the WorkflowSelf tool carries the details. Do NOT confuse it
+with any harness-provided "Workflow"/orchestration tool: only WorkflowSelf
+edits the XGEN graph."""
 
 
 #: 내장 메모리 시스템 프롬프트 블록 — 메모리 provider 가 붙은 턴에만 붙는다.
+#:
+#: 철학: **일반화된 지침만** — 도구 목록/시그니처/"MUST call" 드릴은 금지다.
+#: 개별 memory_* 도구의 사용법은 각 도구 description 이 이미 담고 있다(중복이
+#: 곧 드리프트 위험이다). 여기 남는 것은 어느 한 도구 설명도 소유할 수 없는
+#: 볼트의 정보 구조(자동 아카이브 vs 노트 vs 핀 주입)와 가벼운 행동 원칙뿐이다.
 MEMORY_PROMPT_BLOCK = """
 
 # Agent Memory (persistent)
-You have a persistent memory vault that survives across conversations. Retrieved
-context (Pinned Facts / Relevant Knowledge) may already be injected above.
-Tools:
-- memory_categories() — vault overview. Use FIRST when unsure where to look.
-- memory_list(category, tag) — list notes in a folder.
-- memory_read(filename) — read one note's full body.
-- memory_search(query, max_results) — search across notes (keyword + semantic).
-- memory_write(title, content, category, tags, importance) — save durable
-  knowledge, decisions, insights. Link related notes with [[filename]].
-- memory_pin(title, content, tags) — pin a must-always-know fact (user
-  preferences, binding decisions). Pinned facts are always injected.
-Policy:
-- When the user EXPLICITLY asks you to remember something ("기억해",
-  "remember this", "저장해"), you MUST call memory_pin (personal facts,
-  preferences, how to address them) or memory_write (knowledge/decisions)
-  BEFORE answering — acknowledging without saving loses it forever.
-- Also proactively memory_write durable facts, decisions and lessons you
-  learn mid-conversation; skip transient chatter. Conversations themselves
-  are archived automatically — notes are for distilled knowledge.
-- Update or extend existing notes instead of duplicating. Write in the
-  user's language.
+You have a persistent memory vault that survives across conversations, with
+tools to read and write it. Retrieved context (Pinned Facts / Relevant
+Knowledge) may already be injected above. Conversations are archived
+automatically — write notes only for distilled, durable knowledge. When the
+user asks you to remember something, persist it in memory rather than only
+acknowledging it. Prefer updating existing notes over duplicating them, and
+write notes in the user's language.
 """
 
 
