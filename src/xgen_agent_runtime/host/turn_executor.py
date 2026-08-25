@@ -230,7 +230,7 @@ class AgentTurnExecutor:
                 # 정확한 경로로 바로 연다.
                 _inv = host.cloud_inventory(kwargs.get("user_id"), _cloud_mount[1])
                 if _inv:
-                    system_prompt = system_prompt + "\n현재 최상위 항목:\n" + _inv + "\n"
+                    system_prompt = system_prompt + "\nCurrent top-level entries:\n" + _inv + "\n"
             else:
                 # 클라우드를 못 열었다 — **절대 침묵하지 않는다.** 침묵하면(프롬프트도
                 # 안내도 없으면) 에이전트는 '클라우드가 없다'고 보고 외부 서비스
@@ -245,7 +245,7 @@ class AgentTurnExecutor:
                     if _note:
                         system_prompt = (
                             system_prompt
-                            + "\n## 사용자 클라우드 스토리지 (XgenCloud)\n"
+                            + "\n## User cloud storage (XgenCloud)\n"
                             + _note
                             + "\n"
                         )

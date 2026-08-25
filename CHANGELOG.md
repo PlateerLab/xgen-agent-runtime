@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.9.0] — 2026-08-25
+
+### Changed — 프롬프트 철학 정렬: 일반화·영문·무중복 (도구 사용법은 도구 description 의 몫)
+
+- **`MEMORY_PROMPT_BLOCK` 전면 재작성** — 기존 블록은 6개 memory_* 도구의
+  시그니처/사용법을 시스템 프롬프트에서 다시 가르쳤고(각 도구 description 과
+  거의 축자 중복 = 드리프트 위험), "you MUST call memory_pin … BEFORE
+  answering" 드릴과 한국어 트리거 리터럴("기억해"/"저장해")로 로케일 의존
+  의도 감지를 했다. 새 블록은 **일반화된 사실만** 담는다: 볼트의 존재, 주입
+  구조(Pinned/Relevant), 자동 아카이브 vs 노트의 구분, "기억 요청은 저장으로
+  응답" 원칙, 중복 대신 갱신 — 도구 목록/시그니처/MUST 드릴 전부 제거.
+- **`SELF_EVOLUTION_PROMPT_BLOCK` 축소** — 노드 종류 나열과 `action='guidance'`
+  드릴을 제거(전부 WorkflowSelf 자체 description 이 담고 있음을 확인). 남긴
+  것은 도구 설명이 소유할 수 없는 두 가지: 능력의 존재 사실 + 하네스 자체
+  Workflow 도구와의 교차 구분.
+- **주입 프롬프트 영문화** — turn_executor 의 한국어 인라인 주입 문자열
+  ("현재 최상위 항목:", "## 사용자 클라우드 스토리지 (XgenCloud)") 과
+  `LocalHostServices.environment_prompt`(커넥터 로컬 실행 환경 블록, PowerShell
+  힌트 포함)를 영문으로 교체. xgen-workflow 쪽 블록(JOBS/CLOUD/SANDBOX/
+  SHARED/CODEX/connector) 영문화와 짝을 이룬다.
+
 ## [3.8.9] — 2026-08-25
 
 ### Added — Claude Code 네이티브 도구 **선택**(도구 제한) + 유지/제거 리포트
