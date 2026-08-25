@@ -655,6 +655,11 @@ class LocalHostServices:
             allow_tools=CLAUDE_LOCAL_ALLOW_TOOLS,
             mcp_config=None,
             extra_env=extra_env or None,
+            # 이 호스트는 턴마다 파이프라인/CLI 클라이언트를 새로 만들고 턴 끝에 닫는다
+            # (one-shot). hot-spare 프리웜은 '다음 턴'이 이 클라이언트를 재사용할 때만
+            # 이득인데, 여기선 매 턴 새 클라이언트라 프리웜된 프로세스가 즉시 teardown
+            # 에 회수될 뿐이다 → 매 CLI 턴 낭비 spawn. 끈다(runner.build_cli_client 지침).
+            prewarm_spawn=False,
         )
         return client, None
 

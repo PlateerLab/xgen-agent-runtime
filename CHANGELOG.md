@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.7] — 2026-08-25
+
+### Changed — 로컬 CLI 턴 hot-spare 낭비 제거 (세션 무낭비)
+
+- `LocalHostServices.build_cli_runtime`(claude_code)이 `build_cli_client(prewarm_spawn=False)`
+  를 넘긴다. 이 호스트는 턴마다 파이프라인·CLI 클라이언트를 새로 만들고 턴 끝에 닫는
+  **one-shot** 이라, 스트림 종료 후 띄우는 hot-spare 프로세스(+MCP shim)는 다음 턴이 이
+  클라이언트를 재사용할 때만 이득인데 여기선 매 턴 새 클라이언트 → 프리웜 프로세스가 즉시
+  teardown 에 회수될 뿐이었다(매 CLI 턴 낭비 spawn). `runner.build_cli_client` 지침대로 끈다.
+- 서버 호스트는 이미 False. codex 클라이언트는 hot-spare 가 없어 무관. 세션 관리 감사 후속.
+
 ## [3.8.6] — 2026-08-24
 
 ### Added — 로컬 실행에서 내부 모델(vLLM 등) 사용: LLM = 서버 프록시
