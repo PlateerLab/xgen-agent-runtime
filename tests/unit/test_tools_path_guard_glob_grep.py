@@ -12,9 +12,11 @@ def _ctx(ws: Path) -> ToolContext:
 
 
 def test_glob_and_grep_reject_paths_outside_allowed(tmp_path):
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     (ws / "a.txt").write_text("needle here")
-    outside = tmp_path / "outside"; outside.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
     (outside / "secret.txt").write_text("needle secret")
     ctx = _ctx(ws)
     r = asyncio.run(GlobTool().execute({"pattern": "*.txt", "path": str(outside)}, ctx))
@@ -27,7 +29,8 @@ def test_glob_and_grep_reject_paths_outside_allowed(tmp_path):
 
 
 def test_glob_and_grep_work_inside_allowed(tmp_path):
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     (ws / "a.txt").write_text("needle here")
     ctx = _ctx(ws)
     r = asyncio.run(GlobTool().execute({"pattern": "*.txt"}, ctx))
