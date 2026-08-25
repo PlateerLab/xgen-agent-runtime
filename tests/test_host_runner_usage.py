@@ -372,3 +372,34 @@ def test_claude_code_client_accepts_prewarm_spawn_kwarg() -> None:
     from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
     assert "prewarm_spawn" in inspect.signature(ClaudeCodeCLIClient.__init__).parameters
+
+
+# ── 네이티브 도구 선택(도구 제한) 계약 ────────────────────────────────────
+
+
+def test_native_default_disabled_keeps_only_bash() -> None:
+    kept, removed = runner.resolve_native_tools(None)
+    assert kept == ["Bash"]
+    assert "Bash" not in removed and set(removed) == set(runner.CLI_NATIVE_TOOL_CATALOG) - {"Bash"}
+
+
+def test_native_parse_respects_explicit_empty_and_selection() -> None:
+    # "[]" = 전부 켬 (기본정책 덮음)
+    assert runner.parse_disabled_native_tools("[]") == set()
+    # 명시 선택
+    assert runner.parse_disabled_native_tools('["Read","Write"]') == {"Read", "Write"}
+    # 미설정(None/"") = 기본정책(Bash 제외 전부)
+    assert runner.parse_disabled_native_tools(None) == set(runner.native_default_disabled())
+    assert runner.parse_disabled_native_tools("  ") == set(runner.native_default_disabled())
+
+
+def test_build_cli_client_disallows_removed_natives(captured_cli) -> None:
+    # 기본(러너 없음): Bash 만 열고 나머지는 disallow 로 제거.
+    runner.build_cli_client(
+        auth_mode="api_key", api_key="sk", allow_local_tools=True,
+        disallow_tools_extra=tuple(runner.native_default_disabled()),
+    )
+    disallowed = set(captured_cli.get("disallow_tools", ()))
+    assert {"Read", "Write", "Edit", "WebSearch", "TodoWrite"} <= disallowed
+    assert "Bash" not in disallowed
+    assert "CronCreate" in disallowed  # 스케줄 도구는 항상 차단

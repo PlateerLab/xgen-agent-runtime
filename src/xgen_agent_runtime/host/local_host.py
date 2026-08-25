@@ -544,11 +544,13 @@ class LocalHostServices:
             logger.warning("codex 자격증명 물질화 실패(%s): %s", path, exc)
             return False
 
-    def _claude_local_settings(self, claude_home: str) -> str:
+    def _claude_local_settings(self, claude_home: str, allow_tools: Any = None) -> str:
         """네이티브 도구 사전 허용 settings — 격리 홈이 있으면 그 안의 파일 경로,
         없으면 인라인 JSON(서버 agent_geny 의 mcp__connector 사전 허용과 같은 형식).
-        둘 다 ``--settings`` 로 전달된다."""
-        payload = {"permissions": {"allow": list(CLAUDE_LOCAL_ALLOW_TOOLS)}}
+        둘 다 ``--settings`` 로 전달된다. ``allow_tools`` 로 **유지된 네이티브만**
+        사전 허용한다(에이전트별 도구 선택) — None 이면 전체 카탈로그."""
+        allow = list(allow_tools) if allow_tools is not None else list(CLAUDE_LOCAL_ALLOW_TOOLS)
+        payload = {"permissions": {"allow": allow}}
         body = json.dumps(payload, ensure_ascii=False)
         if not claude_home:
             return body
@@ -612,18 +614,20 @@ class LocalHostServices:
             )
             return client, None
 
-        from xgen_agent_runtime.host.runner import build_cli_client
+        from xgen_agent_runtime.host.runner import build_cli_client, resolve_native_tools
 
         if not self.setting_truthy("CLAUDE_CODE_ENABLED"):
             raise ValueError(
                 "Claude Code 백엔드가 비활성화되어 있습니다. "
                 "관리자 설정(CLAUDE_CODE_ENABLED)에서 활성화 후 사용하세요."
             )
-        if params.get("cli_allow_local_tools") is False:
-            logger.warning(
-                "로컬 실행에는 MCP 브릿지가 없어 CLI 네이티브 도구를 켭니다 "
-                "(cli_allow_local_tools=False 무시)"
-            )
+        # 네이티브 도구 선택(에이전트별 tool-toggle-list) — 유지/제거 분리.
+        # 커넥터 로컬엔 MCP 브릿지가 없어 네이티브가 파일/셸의 유일 경로이므로
+        # 기본 정책(Bash 만 유지)이 그대로 로컬에도 적용된다. 제거된 도구는
+        # --disallowedTools 로 차단(비어 있어도 무해). 서버와 같은 판정 함수를 쓴다.
+        _kept_natives, _removed_natives = resolve_native_tools(
+            params.get("cli_native_tools_disabled"), catalog=CLAUDE_LOCAL_ALLOW_TOOLS
+        )
         auth_mode = (self.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key").strip()
         api_key = self.resolve_api_key("anthropic", params) if auth_mode == "api_key" else ""
         oauth_token = self.setting("CLAUDE_CODE_OAUTH_TOKEN") if auth_mode == "setup_token" else ""
@@ -637,7 +641,7 @@ class LocalHostServices:
             extra_env["CLAUDE_CONFIG_DIR"] = claude_home
         # --print(비대화) 는 허용 목록 밖 도구 호출을 프롬프트 없이 자동 거부한다 —
         # 네이티브 표면을 settings(permissions.allow) + --allowedTools 로 사전 허용.
-        settings_path = self._claude_local_settings(claude_home)
+        settings_path = self._claude_local_settings(claude_home, allow_tools=_kept_natives)
         client = build_cli_client(
             auth_mode=auth_mode,
             api_key=api_key,
@@ -652,7 +656,10 @@ class LocalHostServices:
             allow_local_tools=True,
             permission_mode="default",
             settings_path=settings_path,
-            allow_tools=CLAUDE_LOCAL_ALLOW_TOOLS,
+            # 유지된 네이티브만 사전 허용하고, 제거된 것은 disallow 로 차단한다
+            # (--disallowedTools 가 우선). 기본은 Bash 만 유지.
+            allow_tools=tuple(_kept_natives),
+            disallow_tools_extra=tuple(_removed_natives),
             mcp_config=None,
             extra_env=extra_env or None,
             # 이 호스트는 턴마다 파이프라인/CLI 클라이언트를 새로 만들고 턴 끝에 닫는다

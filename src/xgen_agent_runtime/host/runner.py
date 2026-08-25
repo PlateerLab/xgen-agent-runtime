@@ -80,13 +80,11 @@ def build_client(
     return client_cls(**kwargs)
 
 
-# Claude Code CLI 의 네이티브 fs/셸 도구 — Geny credentials.py 의
-# _NATIVE_FS_SHELL_TOOLS 와 **완전 동일 목록** (웹 도구는 Geny 가 어떤 모드에서도
-# 막지 않으므로 여기서도 제외). Geny 검증 로직: 샌드박스(GAPT)가 있을 때만 이
-# 목록을 차단하고 브릿지의 executor fs 도구가 격리 실행으로 대체한다 — 샌드박스가
-# 없으면(=XGEN) 네이티브 허용이 Geny 의 기본값이다. cli_allow_local_tools=False
-# 는 그 "샌드박스 격리 모드"의 차단만 미러한다 (이때 파일 작업은 브릿지의
-# path-guard 된 executor Read/Write/Bash 가 workspace 안에서 담당).
+# Claude Code CLI 의 네이티브 fs/셸 도구. 샌드박스(러너)가 붙으면 이 목록을
+# 통째로 차단하고 브릿지의 executor fs 도구가 격리 실행으로 대체한다
+# (allow_local_tools=False). 러너가 없으면 base 로 열되, 에이전트별 네이티브
+# 도구 선택(cli_native_tools_disabled, 아래 CLI_NATIVE_TOOL_CATALOG)에서
+# 제거된 도구를 disallow_tools_extra 로 개별 차단한다 — 기본은 Bash 만 유지.
 _CLI_LOCAL_TOOLS = (
     "Bash",
     "Read",
@@ -107,6 +105,100 @@ _CLI_LOCAL_TOOLS = (
 #: 안 도는" 기능이다). XGEN 의 영구 작업은 JobSchedule(서버 스케줄러, DB)이
 #: 담당한다 — 같은 일을 하는 반쪽 도구가 곁에 있으면 모델은 반드시 그걸 집는다.
 _CLI_SESSION_SCHED_TOOLS = ("CronCreate", "CronDelete", "CronList", "ScheduleWakeup")
+
+#: Claude Code 네이티브 도구 **전체 카탈로그** — 에이전트별로 일부만 켜는 선택
+#: 대상. _CLI_LOCAL_TOOLS(fs/셸) + 웹/Todo 를 합친 집합이며 LocalHostServices 의
+#: CLAUDE_LOCAL_ALLOW_TOOLS 와 같은 이름 공간을 쓴다. (스케줄 도구는 항상 차단이라
+#: 선택 대상이 아니다 — _CLI_SESSION_SCHED_TOOLS 로 별도 관리.)
+CLI_NATIVE_TOOL_CATALOG = (
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebSearch",
+    "WebFetch",
+    "TodoWrite",
+)
+
+#: 기본 정책 — **Bash 만** 유지하고 나머지 네이티브는 전부 끈다. 우리의 커스텀
+#: 도구(mcp__connector__* : web/filesystem/shell/workflow/…)가 같은 기능을 제공하므로
+#: 네이티브를 함께 열어두면 모델에게 같은 도구가 두 벌씩 보인다(충돌). Bash 만
+#: 남기는 이유: 커넥터 로컬 턴엔 브릿지가 없어 파일/셸의 유일 경로가 네이티브
+#: Bash 다. 에이전트별로 tool-toggle-list 에서 더 켤 수 있다.
+CLI_NATIVE_KEEP_DEFAULT = ("Bash",)
+
+
+def native_default_disabled() -> tuple:
+    """파라미터 미설정(구 워크플로우/신규 기본)일 때 끄는 네이티브 집합."""
+    keep = set(CLI_NATIVE_KEEP_DEFAULT)
+    return tuple(t for t in CLI_NATIVE_TOOL_CATALOG if t not in keep)
+
+
+def parse_disabled_native_tools(value: Any) -> set:
+    """``cli_native_tools_disabled`` 파라미터 → 비활성 네이티브 이름 집합.
+
+    ``None`` / 빈 문자열 = **미설정** → 기본 정책(Bash 만 유지)을 적용한다.
+    명시적으로 저장된 값(빈 배열 ``"[]"`` 포함)은 그대로 존중한다 — ``"[]"`` 는
+    사용자가 '전부 켬' 을 고른 것이라 기본 정책을 덮는다. 캔버스는 STR 을
+    JSON 문자열로 내려주지만 list/콤마 문자열도 방어한다.
+    """
+    if value is None:
+        return set(native_default_disabled())
+    if isinstance(value, (list, tuple, set)):
+        return {str(v).strip() for v in value if str(v).strip()}
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return set(native_default_disabled())
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            return {p.strip() for p in text.split(",") if p.strip()}
+        if isinstance(parsed, (list, tuple)):
+            return {str(v).strip() for v in parsed if str(v).strip()}
+        return set()
+    return set()
+
+
+def resolve_native_tools(value: Any, *, catalog: Any = None) -> tuple:
+    """``(kept, removed)`` — 카탈로그를 선택값으로 갈라 유지/제거 목록으로 반환.
+
+    카탈로그 순서를 보존해 리포트가 안정적이다. 카탈로그에 없는 이름은 무시한다.
+    """
+    tools = tuple(catalog) if catalog else CLI_NATIVE_TOOL_CATALOG
+    disabled = parse_disabled_native_tools(value)
+    kept = [t for t in tools if t not in disabled]
+    removed = [t for t in tools if t in disabled]
+    return kept, removed
+
+
+def _log_native_tool_report(disallowed: Any) -> None:
+    """빌드 시점에 **유지/제거된 네이티브 도구 리포트**를 로그로 남긴다.
+
+    ``build_cli_client`` 는 최종 disallow 집합을 아는 유일한 지점이라(서버·커넥터
+    로컬 공통), 여기서 카탈로그를 갈라 출력한다. 사용자 요구:
+    (1) 선택(유지)된 도구, (2) 제거된 도구를 각각 리포트한다. 리포트가 실행을
+    막으면 안 되므로 절대 raise 하지 않는다.
+    """
+    try:
+        blocked = set(disallowed or ())
+        kept = [t for t in CLI_NATIVE_TOOL_CATALOG if t not in blocked]
+        removed = [t for t in CLI_NATIVE_TOOL_CATALOG if t in blocked]
+        logger.info(
+            "claude_code 네이티브 도구 리포트 — 유지 %d개 [%s] · 제거 %d개 [%s]",
+            len(kept),
+            ", ".join(kept) or "(없음)",
+            len(removed),
+            ", ".join(removed) or "(없음)",
+        )
+    except Exception:  # noqa: BLE001 — 리포트는 절대 실행을 막지 않는다
+        pass
+
 
 _CLI_AUTH_MODES = ("api_key", "setup_token", "oauth", "auto")
 
@@ -188,6 +280,8 @@ def build_cli_client(
     for name in tuple(disallow_tools_extra or ()):
         if name and name not in disallowed:
             disallowed.append(str(name))
+    # 유지/제거된 네이티브 도구 리포트 (사용자 요구: 선택/제거 도구 각각 출력).
+    _log_native_tool_report(disallowed)
     if disallowed:
         kwargs["disallow_tools"] = tuple(disallowed)
     # Connector Local MCP bridge (agent_geny wires this for the claude_code

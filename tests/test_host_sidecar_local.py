@@ -337,8 +337,8 @@ def test_local_host_claude_cli_runtime_allows_native_tools_and_isolates(tmp_path
             },
         },
     )
-    host.build_cli_runtime("claude_code", {"cli_allow_local_tools": False})
-    assert captured["allow_local_tools"] is True  # 로컬엔 브릿지가 없다 — 네이티브 도구 필수(False 무시)
+    host.build_cli_runtime("claude_code", {})
+    assert captured["allow_local_tools"] is True  # 로컬 base 는 열고, 제거분만 disallow 로 뺀다
     assert captured["auth_mode"] == "setup_token" and captured["oauth_token"] == "tok"
     assert captured["api_key"] == ""
     assert captured["extra_env"] == {"CLAUDE_CONFIG_DIR": str(claude_home)}
@@ -564,7 +564,8 @@ def test_local_host_file_tools_reject_paths_outside_workspace(tmp_path) -> None:
 
 
 def test_local_host_claude_cli_preallows_native_tools(tmp_path, monkeypatch) -> None:
-    """--print 자동 거부 방지: 격리 홈 안 settings 파일(permissions.allow) + allow_tools, permission_mode=default."""
+    """--print 자동 거부 방지 + 네이티브 도구 선택: 기본은 Bash 만 사전 허용하고
+    나머지는 disallow 로 제거한다(에이전트별 tool-toggle-list). permission_mode=default."""
     import xgen_agent_runtime.host.runner as runner
     from xgen_agent_runtime.host import local_host as lh
 
@@ -591,22 +592,25 @@ def test_local_host_claude_cli_preallows_native_tools(tmp_path, monkeypatch) -> 
     settings_file = claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME
     assert captured["settings_path"] == str(settings_file)
     allow = json.loads(settings_file.read_text(encoding="utf-8"))["permissions"]["allow"]
-    for name in ("Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS",
-                 "WebFetch", "WebSearch", "NotebookEdit", "TodoWrite"):
-        assert name in allow
-    assert tuple(captured["allow_tools"]) == lh.CLAUDE_LOCAL_ALLOW_TOOLS
+    # 기본 정책: Bash 만 유지.
+    assert allow == ["Bash"]
+    assert tuple(captured["allow_tools"]) == ("Bash",)
+    # 제거분은 disallow_tools_extra 로 넘어간다.
+    removed = set(captured["disallow_tools_extra"])
+    assert {"Read", "Write", "Edit", "WebSearch", "WebFetch", "TodoWrite"} <= removed
+    assert "Bash" not in removed
     assert captured["permission_mode"] == "default"
     assert captured["allow_local_tools"] is True
     # 멱등 — 두 번째 호출도 같은 파일
     host.build_cli_runtime("claude_code", {})
     assert captured["settings_path"] == str(settings_file)
-    # 격리 홈이 없으면 인라인 JSON(서버 agent_geny 와 같은 형식)
-    host2 = LocalHostServices(
-        str(tmp_path / "ws2"),
-        context={"api_keys": {"anthropic": "ak"}, "settings": {"CLAUDE_CODE_ENABLED": "1"}},
-    )
-    host2.build_cli_runtime("claude_code", {})
-    assert json.loads(captured["settings_path"])["permissions"]["allow"] == list(lh.CLAUDE_LOCAL_ALLOW_TOOLS)
+    # 사용자가 전부 켜면("[]") 카탈로그 전체가 사전 허용된다.
+    host.build_cli_runtime("claude_code", {"cli_native_tools_disabled": "[]"})
+    allow_all = json.loads(
+        (claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME).read_text(encoding="utf-8")
+    )["permissions"]["allow"]
+    assert set(lh.CLAUDE_LOCAL_ALLOW_TOOLS) <= set(allow_all)
+    assert not set(captured["disallow_tools_extra"])
 
 
 def test_local_host_claude_argv_carries_allow_surface(tmp_path) -> None:
@@ -629,11 +633,14 @@ def test_local_host_claude_argv_carries_allow_surface(tmp_path) -> None:
     client, _ = host.build_cli_runtime("claude_code", {})
     argv = client._build_argv(APIRequest(model="claude-sonnet-4-5", messages=[{"role": "user", "content": "x"}]))
     allowed = argv[argv.index("--allowedTools") + 1].split()
-    assert set(lh.CLAUDE_LOCAL_ALLOW_TOOLS) <= set(allowed)
+    # 기본 정책: Bash 만 --allowedTools 에 실린다.
+    assert "Bash" in allowed and "Read" not in allowed
     assert argv[argv.index("--settings") + 1] == str(claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME)
     assert "--permission-mode" not in argv  # default 유지(허용 목록으로 충분)
     disallowed = argv[argv.index("--disallowedTools") + 1].split() if "--disallowedTools" in argv else []
-    assert not (set(disallowed) & set(lh.CLAUDE_LOCAL_ALLOW_TOOLS))
+    # 제거된 네이티브(기본 Bash 제외 전부)가 --disallowedTools 에 실린다.
+    assert {"Read", "Write", "Edit", "WebSearch", "WebFetch", "TodoWrite"} <= set(disallowed)
+    assert "Bash" not in disallowed
     assert "CronCreate" in disallowed  # 세션 한정 스케줄 도구는 여전히 차단
 
 

@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.9] — 2026-08-25
+
+### Added — Claude Code 네이티브 도구 **선택**(도구 제한) + 유지/제거 리포트
+
+- Claude Code 의 기본(네이티브) 도구를 에이전트별로 일부만 켤 수 있게 했다.
+  기존의 all-or-nothing `allow_local_tools` 부울 대신, 카탈로그
+  `CLI_NATIVE_TOOL_CATALOG`(Bash/Read/Write/Edit/MultiEdit/NotebookEdit/Glob/
+  Grep/LS/WebSearch/WebFetch/TodoWrite)에서 유지할 도구를 고른다.
+- **기본 정책은 Bash 만 유지**(`CLI_NATIVE_KEEP_DEFAULT`)하고 나머지는 전부
+  제거한다 — 우리 커스텀 도구(mcp__connector__* : web/filesystem/shell/…)가 같은
+  기능을 제공하므로 네이티브를 함께 열면 모델에게 도구가 두 벌씩 보여 충돌한다.
+- 새 공개 헬퍼: `native_default_disabled()`, `parse_disabled_native_tools(value)`
+  (None/"" = 미설정 → 기본정책, "[]" = 전부 켬), `resolve_native_tools(value)`
+  → `(kept, removed)`. `build_cli_client` 은 최종 disallow 집합에서 유지/제거된
+  네이티브를 **리포트 로그**로 출력한다(사용자 요구: 선택/제거 도구 각각 출력).
+- 커넥터 로컬 실행(`LocalHostServices.build_cli_runtime`)도 같은 선택을 적용한다
+  — 유지분만 `--settings`/`--allowedTools` 로 사전 허용하고 제거분은
+  `--disallowedTools` 로 차단(로컬엔 브릿지가 없어 Bash 가 파일/셸 유일 경로).
+- 회귀 테스트: `tests/test_host_runner_usage.py`(헬퍼·리포트),
+  `tests/test_host_sidecar_local.py`(로컬 사전허용·argv).
+
 ## [3.8.8] — 2026-08-25
 
 ### Fixed — System Prompt 를 정말로 비울 수 있게 (표시용이 아니라 실행값)
