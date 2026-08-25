@@ -205,7 +205,8 @@ class OpenAIClient(BaseClient):
             named = [
                 key
                 for key in _SAMPLING_PARAM_KEYS
-                if key in kwargs and (f"'{key}'" in msg or f"`{key}`" in msg or f" {key} " in f" {msg} ")
+                if key in kwargs
+                and (f"'{key}'" in msg or f"`{key}`" in msg or f" {key} " in f" {msg} ")
             ]
             if named:
                 retry = dict(kwargs)

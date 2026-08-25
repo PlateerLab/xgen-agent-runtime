@@ -392,9 +392,7 @@ class AgentTurnExecutor:
             # enable_builtin_tools 가 꺼지면 run ctx 를 바인딩하지 않으므로(감사 #25)
             # host 가 True 라 해도 여기서 '브릿지 없음'으로 본다. memory_* 는 run ctx 와
             # 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
-            _cli_tools_bridge_ok = _cli_bridge_ok and bool(
-                kwargs.get("enable_builtin_tools", True)
-            )
+            _cli_tools_bridge_ok = _cli_bridge_ok and bool(kwargs.get("enable_builtin_tools", True))
             _cli_tools_bridge_reason = _cli_bridge_reason or (
                 "enable_builtin_tools=off (브릿지 run ctx 미바인딩)"
             )
@@ -408,11 +406,7 @@ class AgentTurnExecutor:
                 memory_provider = host.build_memory_provider(
                     str(kwargs.get("workflow_id") or ""), interaction_id
                 )
-                if (
-                    memory_provider is not None
-                    and provider in _CLI_BACKENDS
-                    and not _cli_bridge_ok
-                ):
+                if memory_provider is not None and provider in _CLI_BACKENDS and not _cli_bridge_ok:
                     # 브릿지 없는 CLI(데스크톱 사이드카): 도구는 없고 자동 계층(Stage 2
                     # 주입 + Stage 15 기록)만 돈다 — 그 사실만 알리고 도구는 광고 안 함.
                     system_prompt = system_prompt + MEMORY_AUTO_PROMPT_BLOCK
