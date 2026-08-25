@@ -5,7 +5,6 @@ create_subprocess_shell(=cmd.exe)로 돌아 bash 문법 명령이 깨졌다. 이
 """
 from __future__ import annotations
 
-import os
 
 from xgen_agent_runtime.tools.built_in import bash_tool as bt
 

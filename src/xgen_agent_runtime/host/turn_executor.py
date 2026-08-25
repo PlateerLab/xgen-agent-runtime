@@ -171,7 +171,13 @@ class AgentTurnExecutor:
             # (Pinned Facts/Relevant Knowledge 주입)와 Stage 15 STM 기록은 동일하게
             # 동작한다.
             memory_provider = None
-            system_prompt = kwargs.get("system_prompt") or default_prompt
+            # 명시적으로 비운 것("")과 아예 안 준 것(None/키 없음)을 구분한다 —
+            # `or default_prompt` 는 둘을 똑같이 취급해, 사용자가 System Prompt 를
+            # 의도적으로 비워도 조용히 기본 문구로 되돌아갔다(진짜 "시스템 프롬프트
+            # 없음" 을 요청할 방법이 없었다). 키 자체가 없을 때만 기본값을 쓴다.
+            system_prompt = kwargs.get("system_prompt")
+            if system_prompt is None:
+                system_prompt = default_prompt
 
             # ── 연결된 사용자 클라우드 ─────────────────────────────────
             #
@@ -386,9 +392,7 @@ class AgentTurnExecutor:
             # enable_builtin_tools 가 꺼지면 run ctx 를 바인딩하지 않으므로(감사 #25)
             # host 가 True 라 해도 여기서 '브릿지 없음'으로 본다. memory_* 는 run ctx 와
             # 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
-            _cli_tools_bridge_ok = _cli_bridge_ok and bool(
-                kwargs.get("enable_builtin_tools", True)
-            )
+            _cli_tools_bridge_ok = _cli_bridge_ok and bool(kwargs.get("enable_builtin_tools", True))
             _cli_tools_bridge_reason = _cli_bridge_reason or (
                 "enable_builtin_tools=off (브릿지 run ctx 미바인딩)"
             )
@@ -402,11 +406,7 @@ class AgentTurnExecutor:
                 memory_provider = host.build_memory_provider(
                     str(kwargs.get("workflow_id") or ""), interaction_id
                 )
-                if (
-                    memory_provider is not None
-                    and provider in _CLI_BACKENDS
-                    and not _cli_bridge_ok
-                ):
+                if memory_provider is not None and provider in _CLI_BACKENDS and not _cli_bridge_ok:
                     # 브릿지 없는 CLI(데스크톱 사이드카): 도구는 없고 자동 계층(Stage 2
                     # 주입 + Stage 15 기록)만 돈다 — 그 사실만 알리고 도구는 광고 안 함.
                     system_prompt = system_prompt + MEMORY_AUTO_PROMPT_BLOCK
