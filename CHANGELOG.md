@@ -4,6 +4,20 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.8.8] — 2026-08-25
+
+### Fixed — System Prompt 를 정말로 비울 수 있게 (표시용이 아니라 실행값)
+
+- `AgentTurnExecutor.run()` 이 `kwargs.get("system_prompt") or default_prompt` 로
+  받아서, 사용자가 노드의 System Prompt 를 **의도적으로 빈 문자열로 비워도** 조용히
+  `"You are a helpful AI assistant."` 로 되돌아갔다 — `""`/`None`/키 없음을 전부
+  똑같이 취급해, "시스템 프롬프트 없이 실행"을 요청할 방법이 없었다.
+- 키 자체가 없을 때만(`None`) 기본값을 쓰도록 수정 — 명시적으로 비운 값은 그대로
+  존중한다. 하위 스테이지(SystemStage/APIStage)는 이미 빈 문자열을 falsy 로 걸러내
+  `system` 파라미터 자체를 생략하므로, provider 에 실제로 빈 시스템 프롬프트가 전달된다.
+- 회귀 방지 테스트 2건 추가(`tests/test_host_turn_executor_gates.py`):
+  명시적 `""` 이 보존되는지, 미지정 시 여전히 기본값으로 폴백하는지.
+
 ## [3.8.7] — 2026-08-25
 
 ### Changed — 로컬 CLI 턴 hot-spare 낭비 제거 (세션 무낭비)

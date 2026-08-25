@@ -171,7 +171,13 @@ class AgentTurnExecutor:
             # (Pinned Facts/Relevant Knowledge 주입)와 Stage 15 STM 기록은 동일하게
             # 동작한다.
             memory_provider = None
-            system_prompt = kwargs.get("system_prompt") or default_prompt
+            # 명시적으로 비운 것("")과 아예 안 준 것(None/키 없음)을 구분한다 —
+            # `or default_prompt` 는 둘을 똑같이 취급해, 사용자가 System Prompt 를
+            # 의도적으로 비워도 조용히 기본 문구로 되돌아갔다(진짜 "시스템 프롬프트
+            # 없음" 을 요청할 방법이 없었다). 키 자체가 없을 때만 기본값을 쓴다.
+            system_prompt = kwargs.get("system_prompt")
+            if system_prompt is None:
+                system_prompt = default_prompt
 
             # ── 연결된 사용자 클라우드 ─────────────────────────────────
             #

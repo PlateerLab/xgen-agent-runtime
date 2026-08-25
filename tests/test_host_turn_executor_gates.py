@@ -25,6 +25,7 @@ from xgen_agent_runtime.host._constants import (
     MEMORY_PROMPT_BLOCK,
     SELF_EVOLUTION_PROMPT_BLOCK,
     _delegation_wired,
+    default_prompt,
 )
 from xgen_agent_runtime.host.host import HostServices
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor
@@ -369,6 +370,29 @@ def test_sdk_provider_memory_block_unchanged_regardless_of_probe(capture) -> Non
     assert MEMORY_PROMPT_BLOCK in sp
     assert MEMORY_AUTO_PROMPT_BLOCK not in sp
     assert "memory_write" in _registry_names(seen)
+
+
+# ── System Prompt: 명시적 "" 과 미지정(None/키 없음)을 구분 ────────────────
+# kwargs.get("system_prompt") or default_prompt 였을 때는 사용자가 System
+# Prompt 를 의도적으로 비워도 조용히 기본 문구로 되돌아가 "정말 비우기" 가
+# 불가능했다. 키가 아예 없을 때만 기본값을 쓰도록 고친 회귀 방지 테스트.
+
+
+def test_empty_system_prompt_is_preserved_not_replaced_by_default(capture) -> None:
+    """System Prompt 를 사용자가 명시적으로 비우면("") 기본 문구로 대체되면 안 된다."""
+    host = _FakeHost(delegation_extras={}, cli_bridge=False, memory=False)
+    seen = _run(host, capture, provider="openai", system_prompt="")
+    sp = seen["system_prompt"]
+    assert default_prompt not in sp
+    assert sp == ""
+
+
+def test_missing_system_prompt_still_falls_back_to_default(capture) -> None:
+    """system_prompt 키 자체를 안 주면(레거시 호출부 등) 여전히 기본 문구를 쓴다."""
+    host = _FakeHost(delegation_extras={}, cli_bridge=False, memory=False)
+    seen = _run(host, capture, provider="openai")  # system_prompt 미지정
+    sp = seen["system_prompt"]
+    assert default_prompt in sp
 
 
 # ── [감사 #25] enable_builtin_tools=False ─────────────────────────────
