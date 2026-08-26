@@ -229,7 +229,11 @@ def capture(monkeypatch):
         return object()
 
     monkeypatch.setattr(runner_mod, "build_pipeline", _fake_build_pipeline)
-    monkeypatch.setattr(runner_mod, "stream_turn", lambda *a, **k: iter([]))
+    def _fake_stream_turn(*args, **kwargs):
+        seen["stream_input"] = args[1]
+        return iter([])
+
+    monkeypatch.setattr(runner_mod, "stream_turn", _fake_stream_turn)
     monkeypatch.setattr(runner_mod, "run_turn", lambda *a, **k: "")
     return seen
 
@@ -258,6 +262,48 @@ def _registry_names(capture: Dict[str, Any]) -> List[str]:
     if reg is None:
         return []
     return list(reg.list_names())
+
+
+def test_structured_image_input_survives_host_executor(capture) -> None:
+    host = _FakeHost(delegation_extras={}, memory=False)
+    image = {
+        "kind": "image",
+        "mime_type": "image/png",
+        "data": "iVBORw0KGgo=",
+        "workspace_path": "uploads/turn-1/example.png",
+    }
+    seen = _run(
+        host,
+        capture,
+        text={"text": "describe it", "attachments": [image]},
+    )
+    assert seen["stream_input"] == {
+        "text": "describe it",
+        "attachments": [image],
+        "metadata": {},
+    }
+
+
+def test_openai_content_array_becomes_canonical_image_input(capture) -> None:
+    host = _FakeHost(delegation_extras={}, memory=False)
+    seen = _run(
+        host,
+        capture,
+        text=[
+            {"type": "text", "text": "what is shown?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ],
+    )
+    assert seen["stream_input"] == {
+        "text": "what is shown?",
+        "attachments": [
+            {"kind": "image", "mime_type": "image/png", "data": "iVBORw0KGgo="}
+        ],
+        "metadata": {},
+    }
 
 
 # ── [DELEGATION_GATE] ─────────────────────────────────────────────────
