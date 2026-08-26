@@ -354,7 +354,81 @@ class LocalHostServices:
     def register_workflow_self_tools(
         self, registry, *, workflow_id, user_id, workflow_name
     ) -> None:
-        return None  # ④: 그래프는 서버 자산 — 로컬 편집 미제공(v1).
+        """자기진화(WorkflowSelf) — 그래프는 서버 자산이지만 편집은 **서버 RPC** 로
+        로컬에서도 웹과 완전 동일하게 동작한다(메모리·RAG·LLM 프록시와 같은
+        '서버 호출' 원칙). 프록시 도구는 컨텍스트 메타가 실어 준 서버 실물의
+        description/input_schema 를 그대로 광고한다(정적 사본=드리프트 금지).
+
+        메타 없음(구서버)/비활성(관리자 kill-switch)/브릿지 없음이면 조용히
+        미등록 — turn_executor 가 registry.get("WorkflowSelf") 게이트로 프롬프트
+        블록도 함께 생략한다(유령 안내 방지).
+        """
+        meta = self._ctx.get("workflow_self")
+        if not isinstance(meta, dict) or not meta.get("enabled"):
+            return None
+        if self._bridge is None or registry is None:
+            return None
+        path = str(meta.get("path") or "").strip()
+        description = str(meta.get("description") or "").strip()
+        schema = meta.get("input_schema")
+        if not path or not description or not isinstance(schema, dict):
+            return None
+
+        from xgen_agent_runtime.tools.base import (
+            Tool,
+            ToolCapabilities,
+            ToolContext,
+            ToolResult,
+        )
+
+        bridge = self._bridge
+
+        class _WorkflowSelfProxy(Tool):
+            """서버 WorkflowSelfTool 프록시 — 입력을 그대로 위임, 결과를 그대로 반환."""
+
+            @property
+            def name(self) -> str:
+                return "WorkflowSelf"
+
+            @property
+            def description(self) -> str:
+                return description
+
+            @property
+            def input_schema(self) -> Dict[str, Any]:
+                return schema
+
+            def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:  # noqa: A002
+                return ToolCapabilities(concurrency_safe=False, network_egress=True)
+
+            async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:  # noqa: A002
+                import asyncio as _aio
+
+                data = await _aio.to_thread(bridge.workflow_self, path, dict(input or {}))
+                if not isinstance(data, dict):
+                    return ToolResult(
+                        content="WorkflowSelf server call failed — the server is "
+                                "unreachable or refused the request. The graph was "
+                                "not changed; try again shortly.",
+                        is_error=True,
+                    )
+                if not data.get("ok"):
+                    return ToolResult(
+                        content=str(data.get("error") or "WorkflowSelf failed."),
+                        is_error=True,
+                    )
+                return ToolResult(
+                    content=str(data.get("content") or ""),
+                    is_error=bool(data.get("is_error")),
+                    metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+                )
+
+        try:
+            registry.register(_WorkflowSelfProxy(), core=True)
+            logger.info("local-host: WorkflowSelf(자기진화) 서버-RPC 프록시 등록 (wf=%s)", workflow_id)
+        except Exception:  # noqa: BLE001 — 등록 실패가 턴을 죽이면 안 된다
+            logger.warning("local-host: WorkflowSelf 프록시 등록 실패 (스킵)", exc_info=True)
+        return None
 
     def build_turn_delegation(
         self, *, workflow_id, interaction_id, user_id, spec_fields

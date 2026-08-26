@@ -697,3 +697,56 @@ def test_history_messages_accepts_plain_dicts() -> None:
     # 기존 동작 유지: 튜플 모양·None·비리스트
     assert history_messages((raw[:1], "ctx")) == [{"role": "user", "content": "안녕"}]
     assert history_messages(None) == [] and history_messages("x") == []
+
+
+def test_workflow_self_proxy_registers_from_context_meta() -> None:
+    """자기진화(로컬) — 그래프는 서버 자산, 편집은 서버 RPC.
+
+    컨텍스트 메타(enabled+path+실물 description/schema)가 있으면 WorkflowSelf
+    프록시가 core 등록되고, 실행은 bridge.workflow_self 로 위임된다. 메타 없음
+    (구서버)/비활성이면 조용히 미등록 — 프롬프트 블록 게이트(registry.get)가
+    유령 안내를 막는다.
+    """
+    import asyncio
+
+    from xgen_agent_runtime.tools import ToolRegistry
+
+    class _FakeBridge:
+        base_url = "http://srv"
+        token = "t"
+
+        def __init__(self) -> None:
+            self.calls: list = []
+
+        def workflow_self(self, path: str, input: Dict[str, Any]) -> Dict[str, Any]:
+            self.calls.append((path, dict(input)))
+            return {"ok": True, "content": "srv-result", "is_error": False, "metadata": {"a": 1}}
+
+    meta = {
+        "enabled": True,
+        "path": "/api/agentflow/geny-memory/wf1/workflow-self",
+        "description": "Edit your OWN workflow graph…",
+        "input_schema": {"type": "object", "properties": {"action": {"type": "string"}}},
+    }
+    bridge = _FakeBridge()
+    host = LocalHostServices("/tmp/ws-wsp", context={"workflow_self": meta}, server_bridge=bridge)
+    reg = ToolRegistry()
+    host.register_workflow_self_tools(reg, workflow_id="wf1", user_id=7, workflow_name="n")
+    tool = reg.get("WorkflowSelf")
+    assert tool is not None and reg.is_core("WorkflowSelf")
+    assert tool.to_api_format()["description"].startswith("Edit your OWN")
+    res = asyncio.run(tool.execute({"action": "guidance"}, None))
+    assert res.content == "srv-result" and not res.is_error
+    assert bridge.calls == [(meta["path"], {"action": "guidance"})]
+    # 서버 실패 → 에러 ToolResult 로 degrade (그래프 불변 안내)
+    bridge.workflow_self = lambda path, input: None  # type: ignore[assignment]
+    res2 = asyncio.run(tool.execute({"action": "graph"}, None))
+    assert res2.is_error and "not changed" in res2.content
+
+    # 메타 없음/비활성 → 미등록
+    for ctx in ({}, {"workflow_self": {"enabled": False}}):
+        r = ToolRegistry()
+        LocalHostServices("/tmp/ws-wsp", context=ctx, server_bridge=bridge).register_workflow_self_tools(
+            r, workflow_id="wf1", user_id=7, workflow_name="n"
+        )
+        assert r.get("WorkflowSelf") is None
