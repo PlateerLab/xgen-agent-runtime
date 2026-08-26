@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.10.0] — 2026-08-26
+
+### Added — 스킬 게이트웨이: Guide + 컴팩트 멤버 (DocGuide 동형 점진공개)
+
+- **`BrowserGuide`** — 브라우저 패밀리의 게이트웨이 도구. 무주제=세션 모델·도구
+  플로·타게팅 문법 지도, 주제(act/extract/flows)=심층 가이드. 멤버 7종의
+  description 을 컴팩트 한 줄 + 가이드 포인터로 축소(예: BrowserAct 407→158자)
+  — 타게팅 문법·액션 파라미터·모드·플로 레시피 같은 사용 지식은 게이트웨이가
+  요청 시에만 공개한다. 턴1 도구 컨텍스트가 줄고, 지식은 필요할 때 깊어진다.
+- **`DelegationGuide`** — 위임 스킬 게이트웨이(subagent 패밀리 첫 항목). 무주제=
+  세 표면(DelegateTask/SubAgent*/Task*)의 결정 지도, 주제(subagents/tasks/
+  patterns)=수명주기·태스크 레지스트리·패턴 심층 가이드. 어느 한 도구
+  description 도 소유할 수 없는 교차 판단("언제 무엇을")을 게이트웨이가 담는다.
+- 계약 테스트 `tests/unit/test_skill_gateways.py` — 게이트웨이 첫 항목·멤버
+  컴팩트(<250자)·포인터·영문.
+
 ## [3.9.0] — 2026-08-25
 
 ### Changed — 프롬프트 철학 정렬: 일반화·영문·무중복 (도구 사용법은 도구 description 의 몫)
