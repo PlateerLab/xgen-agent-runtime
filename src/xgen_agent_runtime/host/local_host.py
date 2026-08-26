@@ -329,22 +329,144 @@ class LocalHostServices:
         return None
 
     # ── E. tool families ─────────────────────────────────────────────────
+    def _build_connector_browser_tools(self) -> List[Any]:
+        """커넥터 브라우저 6종의 **서버 중계 프록시** 도구.
+
+        사용자가 보는 XGEN 브라우저 탭은 Electron 메인 프로세스가 소유하고, 로컬
+        사이드카에서 직접 가는 채널이 없다 — 그래서 서버를 경유한다(메모리·RAG·
+        자기진화와 같은 '서버 호출' 원칙): 런타임 → 서버 RPC → 역방향 WS → 커넥터.
+
+        이름/설명/스키마는 **서버가 광고하는 그대로**(컨텍스트 메타) 쓴다 — 같은
+        에이전트가 로컬/서버 턴을 오갈 때 도구 표면이 달라지면 안 된다.
+        """
+        meta = self._connector_browser_meta()
+        if not meta or self._bridge is None:
+            return []
+        path = str(meta.get("path") or "").strip()
+        server = str(meta.get("server") or "local").strip()
+        if not path:
+            return []
+
+        from xgen_agent_runtime.tools.base import (
+            Tool,
+            ToolCapabilities,
+            ToolContext,
+            ToolResult,
+        )
+
+        bridge = self._bridge
+
+        # ⚠ 클래스는 **루프 밖에서 한 번만** 정의하고 값은 생성자 인자로 넘긴다.
+        # 클래스 본문(기본 인자 평가 포함)은 바깥 함수의 지역변수를 읽지 못한다 —
+        # 루프 안에서 정의하며 기본 인자로 캡처하려 하면 NameError 로 6종이 통째로
+        # 스킵된다(실제로 겪음).
+        class _ConnectorBrowserProxy(Tool):
+            """커넥터 내장 브라우저 도구 프록시 — 입력 그대로 서버 중계에 위임."""
+
+            def __init__(
+                self,
+                adv_name: str,
+                remote_tool: str,
+                desc: str,
+                schema: Dict[str, Any],
+                _bridge: Any,
+                _path: str,
+                _server: str,
+            ) -> None:
+                self._name = adv_name
+                self._tool = remote_tool
+                self._desc = desc
+                self._schema = schema
+                self._bridge_ref = _bridge
+                self._path = _path
+                self._server = _server
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+            @property
+            def description(self) -> str:
+                return self._desc
+
+            @property
+            def input_schema(self) -> Dict[str, Any]:
+                return self._schema
+
+            def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:  # noqa: A002
+                # 한 브라우저 탭을 공유하므로 직렬화한다(서버 경로와 같은 규약).
+                return ToolCapabilities(concurrency_safe=False, network_egress=True)
+
+            async def execute(  # noqa: A002
+                self, input: Dict[str, Any], context: ToolContext
+            ) -> ToolResult:
+                import asyncio as _aio
+
+                data = await _aio.to_thread(
+                    self._bridge_ref.connector_mcp_call,
+                    self._path, self._server, self._tool, dict(input or {}),
+                )
+                if not isinstance(data, dict):
+                    return ToolResult(
+                        content=(
+                            "Connector browser call failed — the server or the connector "
+                            "is unreachable. Nothing was changed in the browser; try again "
+                            "shortly."
+                        ),
+                        is_error=True,
+                    )
+                if not data.get("ok"):
+                    return ToolResult(
+                        content=str(data.get("error") or "Connector browser call failed."),
+                        is_error=True,
+                    )
+                return ToolResult(content=str(data.get("content") or ""))
+
+        out: List[Any] = []
+        for spec in meta.get("tools") or []:
+            try:
+                adv_name = str(spec.get("name") or "").strip()
+                remote_tool = str(spec.get("tool") or "").strip()
+                description = str(spec.get("description") or "").strip()
+                schema = spec.get("input_schema")
+                if not adv_name or not remote_tool or not isinstance(schema, dict):
+                    continue
+                out.append(
+                    _ConnectorBrowserProxy(
+                        adv_name, remote_tool, description, schema, bridge, path, server
+                    )
+                )
+            except Exception:  # noqa: BLE001 — 도구 1개 실패가 나머지를 막지 않는다
+                logger.warning("local_host: 커넥터 브라우저 도구 빌드 실패(스킵)", exc_info=True)
+                continue
+        if out:
+            logger.info(
+                "local_host: 커넥터 브라우저 도구 %d종 등록 (an-web 대신 사용자 XGEN 탭)",
+                len(out),
+            )
+        return out
+
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]:
         # 로컬 실행 = 이미 로컬. 서버 reverse-WS 브릿지 도구(mcp_local_* — 셸/파일 프록시)는
         # 런타임 자체 도구와 중복이라 노출하지 않는다. 다만 사용자가 커넥터에 등록한 **외부 MCP
         # 서버**(Atlassian 등)는 로컬 실행 에이전트도 써야 하므로, 런타임 MCP 매니저로 직접
         # 연결해 노출한다(서버 경로가 브릿지로 프록시하는 것과 같은 결과, 커넥터 로컬에서 직접).
         # 설정은 커넥터가 context.connector_mcp_servers 로 실어 보낸다(resolved). 실패는 무 MCP.
+        #
+        # ⚠ 예외: **브라우저**는 중복이 아니다. 커넥터 브라우저는 사용자가 보는 XGEN 탭이고
+        # 런타임 an-web 은 headless 별도 세션이라, 커넥터에서 브라우저를 켠 턴은 그 6종이
+        # 유일한 올바른 표면이다(이때 builtin_families 가 an-web 을 뺀다).
+        tools: List[Any] = list(self._build_connector_browser_tools())
         servers = self._ctx.get("connector_mcp_servers")
         if not servers:
-            return []
+            return tools
         try:
             from xgen_agent_runtime.host.connector_mcp_local import connector_mcp_tools
 
-            return connector_mcp_tools(servers)
+            return tools + list(connector_mcp_tools(servers))
         except Exception as exc:  # noqa: BLE001 — MCP 실패가 턴을 깨면 안 된다
             logger.warning("local_host: 외부 MCP 도구 빌드 실패(무시): %s", exc)
-            return []
+            return tools
 
     def build_job_tools(
         self, workflow_id, workflow_name, user_id, *, in_scheduled_run, interaction_id
@@ -457,12 +579,35 @@ class LocalHostServices:
     ) -> None:
         return None  # v1: 자가제작 도구 복원 미제공.
 
+    def _connector_browser_meta(self) -> Dict[str, Any]:
+        """켜져 있는 커넥터 브라우저 메타(서버가 컨텍스트로 실어 준 것) 또는 빈 dict.
+
+        브라우저가 꺼져 있거나 커넥터 미연결이면 서버가 아예 싣지 않는다 —
+        그 경우 런타임 an-web 이 브라우저 표면을 담당한다.
+        """
+        meta = self._ctx.get("connector_browser")
+        if not isinstance(meta, dict) or not meta.get("enabled"):
+            return {}
+        tools = meta.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return {}
+        return meta
+
     def builtin_families(self) -> List[str]:
         """이 턴에 노출할 built-in 패밀리 — 서버 `_EXPOSED_FAMILIES` + meta 를
-        같은 kill-switch 규칙으로 거른 것(명시적 주입이 있으면 그것)."""
+        같은 kill-switch 규칙으로 거른 것(명시적 주입이 있으면 그것).
+
+        **브라우저 표면은 언제나 하나**: 커넥터 브라우저(사용자가 보는 XGEN 탭)가
+        켜져 있으면 an-web(headless 별도 세션) 패밀리를 등록하지 않는다. 둘을 함께
+        열면 모델이 어느 브라우저를 조작하는지 알 수 없다(서버 실행의
+        `_gated_families_and_extras(exclude_families=...)` 와 같은 판정).
+        """
         if self._builtin_features is not None:
             return list(self._builtin_features)
-        return [f for f in _DEFAULT_FAMILIES if self._family_enabled(f)]
+        families = [f for f in _DEFAULT_FAMILIES if self._family_enabled(f)]
+        if self._connector_browser_meta():
+            families = [f for f in families if f != "browser"]
+        return families
 
     def register_builtin_tools(
         self,

@@ -750,3 +750,83 @@ def test_workflow_self_proxy_registers_from_context_meta() -> None:
             r, workflow_id="wf1", user_id=7, workflow_name="n"
         )
         assert r.get("WorkflowSelf") is None
+
+
+def test_connector_browser_tools_replace_anweb_locally() -> None:
+    """브라우저 표면은 언제나 하나 — 커넥터 브라우저가 켜진 로컬 턴.
+
+    커넥터 브라우저(사용자가 보는 XGEN 탭)는 Electron 이 소유하고 사이드카에서
+    직접 갈 채널이 없다 → 서버 중계 프록시로 노출하고, 같은 턴에 an-web
+    (headless 별도 세션) 패밀리는 등록하지 않는다. 브라우저가 꺼져 있으면
+    (= 서버가 메타를 싣지 않으면) 정반대로 an-web 이 표면을 담당한다.
+    """
+    import asyncio
+
+    meta = {
+        "enabled": True,
+        "server": "local",
+        "path": "/api/agentflow/geny-memory/wf1/connector-mcp-call",
+        "tools": [
+            {
+                "name": "mcp_local_BrowserTabs",
+                "tool": "BrowserTabs",
+                "description": "Manage XGEN browser pages on the user desktop.",
+                "input_schema": {"type": "object", "properties": {"action": {"type": "string"}}},
+            },
+            {
+                "name": "mcp_local_BrowserNavigate",
+                "tool": "BrowserNavigate",
+                "description": "Navigate one XGEN browser page.",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ],
+    }
+
+    class _FakeBridge:
+        base_url = "http://srv"
+        token = "t"
+
+        def __init__(self) -> None:
+            self.calls: list = []
+
+        def connector_mcp_call(self, path: str, server: str, tool: str, args: Dict[str, Any]):
+            self.calls.append((path, server, tool, dict(args)))
+            return {"ok": True, "content": f"ran {tool}"}
+
+    bridge = _FakeBridge()
+    host = LocalHostServices(
+        "/tmp/ws-connector-browser", context={"connector_browser": meta}, server_bridge=bridge
+    )
+
+    tools = host.build_connector_mcp_tools(7, "connector")
+    assert [t.name for t in tools] == ["mcp_local_BrowserTabs", "mcp_local_BrowserNavigate"]
+    # 서버 실행과 **같은 이름/스키마**로 광고된다(로컬↔서버 표면 동일).
+    api = tools[0].to_api_format()
+    assert api["name"] == "mcp_local_BrowserTabs"
+    assert api["input_schema"]["properties"]["action"]["type"] == "string"
+
+    # an-web 패밀리는 이 턴에 빠진다 — 두 브라우저가 동시에 열리지 않는다.
+    assert "browser" not in host.builtin_families()
+    assert "web" in host.builtin_families() and "shell" in host.builtin_families()
+
+    # 각 프록시가 자기 원격 도구를 부른다(루프 캡처 회귀 가드) + workflow_id 는 서버가 보완.
+    asyncio.run(tools[0].execute({"action": "list"}, None))
+    asyncio.run(tools[1].execute({}, None))
+    assert [c[2] for c in bridge.calls] == ["BrowserTabs", "BrowserNavigate"]
+    assert bridge.calls[0][0] == meta["path"] and bridge.calls[0][1] == "local"
+
+    # 서버/커넥터 불통 → '브라우저는 그대로' 에러로 degrade (턴은 죽지 않는다).
+    bridge.connector_mcp_call = lambda *_a, **_k: None  # type: ignore[assignment]
+    res = asyncio.run(tools[0].execute({"action": "list"}, None))
+    assert res.is_error and "unreachable" in res.content
+
+    # 브라우저 OFF(메타 없음) → 프록시 없음 + an-web 복귀.
+    off = LocalHostServices("/tmp/ws-connector-browser", context={}, server_bridge=bridge)
+    assert off.build_connector_mcp_tools(7, "connector") == []
+    assert "browser" in off.builtin_families()
+
+    # 메타가 있어도 enabled=False / 도구 없음이면 an-web 유지(fail-open).
+    for bad in ({"enabled": False, "tools": meta["tools"]}, {"enabled": True, "tools": []}):
+        h = LocalHostServices("/tmp/ws-cb", context={"connector_browser": bad}, server_bridge=bridge)
+        assert h.build_connector_mcp_tools(7, "connector") == []
+        assert "browser" in h.builtin_families()

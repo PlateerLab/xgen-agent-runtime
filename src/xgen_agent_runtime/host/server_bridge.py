@@ -93,6 +93,40 @@ class ServerBridge:
         except Exception:  # noqa: BLE001
             return None
 
+    # ── connector 내장 도구 중계 (브라우저 — 사용자가 보는 XGEN 탭) ─────────
+    def connector_mcp_call(
+        self, path: str, server: str, tool: str, args: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """커넥터 내장 도구 실행을 **서버를 경유해** 커넥터로 중계한다(동기).
+
+        로컬 턴은 사용자 PC 에서 돌지만 커넥터의 브라우저는 Electron 메인 프로세스
+        안에 있고 사이드카에서 직접 가는 채널이 없다 — 그래서 메모리·RAG·자기진화와
+        같은 '서버 호출' 경로를 쓴다: 런타임 → 서버 RPC → 역방향 WS → 커넥터.
+
+        ``path`` 는 컨텍스트 메타가 실어 준 값(런타임이 경로를 지어내지 않는다).
+        반환은 서버 응답 dict(``{"ok","content"}`` 또는 ``{"ok":false,"error"}``),
+        네트워크/인가 실패는 None — 호출부가 에러 텍스트로 degrade 한다.
+        브라우저 조작은 페이지 로드를 포함하므로 타임아웃을 넉넉히 잡는다.
+        """
+        p = str(path or "").strip()
+        if not p or not tool:
+            return None
+        try:
+            import httpx
+
+            url = f"{self._base}{p if p.startswith('/') else '/' + p}"
+            with httpx.Client(timeout=max(self._timeout, 300.0), verify=self._verify) as client:
+                resp = client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    json={"server": str(server or ""), "tool": str(tool), "args": dict(args or {})},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return data if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
     # ── workflow-self (자기진화 — 그래프는 서버 자산, 편집은 서버 RPC) ──────
     def workflow_self(self, path: str, input: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """서버의 실물 WorkflowSelfTool 실행을 위임한다(동기, blocking httpx).
