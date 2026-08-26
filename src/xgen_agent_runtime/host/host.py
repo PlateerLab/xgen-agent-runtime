@@ -7,16 +7,17 @@ cannot do in pure Python — read admin settings, resolve credentials, reach the
 sandbox runner, hydrate/publish a workspace, mount the user's cloud, build the
 server-owned tool families — it obtains through this ``HostServices`` protocol.
 
-Two implementations exist, and they MUST produce byte-identical turn behaviour
-(the whole point of the extraction — the connector must never diverge from web):
+One implementation exists: ``ServerHostServices`` (in xgen-workflow) — admin
+config DB, MinIO+DB workspace store, the sandbox HTTP runner, cloud DB, and the
+connector reverse-WS bridge. **Every** agent turn runs there, in its own runner
+session, whatever the conversation came from (web or desktop connector).
 
-* ``ServerHostServices`` (in xgen-workflow): admin config DB, MinIO+DB workspace
-  store, xgen-workflow-sandbox HTTP runner, cloud DB, connector reverse-WS
-  bridge. Web sessions and the current server-routed connector path.
-* ``LocalHostServices`` (in the desktop connector's Python sidecar): env/local
-  config, the local synced folder as the workspace, direct host execution
-  (codex/claude_code/SDK all spawn locally), and thin RPC back to the server for
-  the capabilities that are inherently multi-tenant (④ below).
+The protocol stays a protocol on purpose: it is what keeps the turn body free of
+product coupling, and it is where a second host would attach if one is ever
+warranted. There was such a host once — a Python sidecar that ran turns on the
+user's PC. It is gone: an agent that sometimes runs on a laptop and sometimes in
+a session is two different agents wearing one name, and every capability had to
+be built twice.
 
 Method groups map 1:1 to the dependency categories established in the extraction
 survey (see memory ``xgeny-shared-host-extraction``):
@@ -78,24 +79,11 @@ class HostServices(Protocol):
 
     # ── B. execution host: sandbox + workspace ───────────────────────────
     # The one seam the runtime already models (ToolContext.sandbox / XgenySandbox).
-    # Server: SandboxSession (HTTP runner) or, for a connector-surface turn,
-    # ConnectorLocalSandbox (reverse-WS to the user PC). Connector sidecar: a
-    # direct-host sandbox rooted at the local synced folder — this is what makes
-    # codex & every provider operate on local files natively.
-    def probe_connector_workspace(
-        self,
-        user_id: Any,
-        workflow_id: str,
-        workflow_name: str,
-        client_surface: Any,
-        provider: str,
-    ) -> Optional[dict]: ...
-    def make_sandbox(
-        self,
-        workflow_id: str,
-        user_id: Any,
-        connector_ws: Optional[dict],
-    ) -> Optional["XgenySandbox"]: ...
+    # An agent turn ALWAYS runs in its own runner session — that is the whole
+    # point of the session. ``None`` means an operator explicitly disabled the
+    # runner for this deployment; anything else raises rather than silently
+    # falling back to the serving pod.
+    def make_sandbox(self, workflow_id: str, user_id: Any) -> Optional["XgenySandbox"]: ...
     def agent_workspace_dir(self, workflow_id: str, *, create: bool = True) -> str: ...
     def workspace_storage_root(self, workflow_id: str) -> str: ...
     #: Restore the persistent workspace from the source of truth into ``run_dir``
@@ -111,9 +99,7 @@ class HostServices(Protocol):
     #: 실행 환경 안내 프롬프트 — 도구가 **어디서** 도는지 에이전트에게 알린다.
     #: 서버: 러너 sandbox / 커넥터 로컬(ConnectorLocalSandbox) 설명. 커넥터
     #: 사이드카: 이 PC 로컬 환경 설명(OS 포함). 없으면 "".
-    def environment_prompt(
-        self, sandbox: Any, connector_ws: Optional[dict], provider: str
-    ) -> str: ...
+    def environment_prompt(self, sandbox: Any, provider: str) -> str: ...
 
     # ── C. memory ────────────────────────────────────────────────────────
     # Server: xgen-db provider. Connector: file/sqlite vault OR server RPC so
@@ -253,13 +239,12 @@ class HostServices(Protocol):
         hydrated_ws: Optional[str],
         shared_mounts: Sequence[Any],
         cloud_mount: Optional[CloudMount],
-        connector_ws: Optional[dict],
     ) -> None: ...
 
     # ── F. CLI provider runtime (process spawn + connector MCP bridge) ────
-    # Builds the claude_code / codex subprocess client. On the connector sidecar
-    # this is exactly where "codex runs locally" lives: same runtime CLI client,
-    # cwd = local workspace, so its native file/shell hit the user's machine.
+    # Builds the claude_code / codex subprocess client. The process runs on the
+    # serving pod, but its tools come from the MCP bridge and execute in the
+    # agent's runner session — natives are denied on both backends.
     def build_cli_runtime(
         self,
         provider: str,
@@ -275,8 +260,7 @@ class HostServices(Protocol):
     #: The executor only appends the CLI-only prompt notes (memory tool names,
     #: self-evolution block, delegation note) when this returns True — a note
     #: about tools the CLI cannot see is a ghost promise (audit #25). Absent
-    #: method → treated as True (legacy server behaviour). Server: True iff the
-    #: bridge run ctx will actually be bound (enable_builtin_tools and a
-    #: workspace dir). Desktop sidecar (LocalHostServices): False — the CLI runs
-    #: with its native tools only; memory stays automatic (inject + record).
+    #: method → treated as True (legacy behaviour). Server: True iff the bridge
+    #: run ctx will actually be bound (a workspace dir, and either built-in tools
+    #: or self-evolution).
     def cli_bridge_available(self, provider: str) -> bool: ...

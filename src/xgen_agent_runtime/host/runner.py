@@ -284,8 +284,14 @@ def build_codex_cli_client(
     mcp_config: Any = None,
     extra_args: Any = (),
     env_extras: Optional[Dict[str, str]] = None,
+    sandbox_mode: str = "workspace-write",
 ) -> Any:
     """xgen 설정으로 ``CodexCLIClient`` 를 구성한다 (claude 의 build_cli_client 짝).
+
+    ``sandbox_mode`` — codex 자체 OS 샌드박스 모드. 러너 세션이 붙은 실행에서는
+    ``"read-only"`` 를 준다: codex 는 claude 처럼 네이티브 도구를 개별 차단할 수
+    없으므로, 자기 셸이 **이 파드에 쓰지 못하게** 막아 모든 쓰기가 브릿지 도구
+    (=러너 세션)로만 일어나게 한다. 러너가 없는 배포에서만 workspace-write.
 
     인증 채널 배타 계약은 런타임이 집행한다: api_key 모드만 OPENAI_API_KEY 를
     subprocess 환경에 주입하고, oauth(ChatGPT 구독) 모드는 절대 키를 흘리지
@@ -315,6 +321,8 @@ def build_codex_cli_client(
         kwargs["extra_args"] = tuple(str(a) for a in extra_args)
     if env_extras:
         kwargs["env_extras"] = {str(k): str(v) for k, v in env_extras.items()}
+    if sandbox_mode:
+        kwargs["sandbox_mode"] = str(sandbox_mode)
     return CodexCLIClient(**kwargs)
 
 
