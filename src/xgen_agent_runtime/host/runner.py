@@ -807,7 +807,7 @@ def _close_memory_provider(pipeline: Pipeline, loop: asyncio.AbstractEventLoop) 
 
 def stream_turn(
     pipeline: Pipeline,
-    text: str,
+    text: Any,
     state: PipelineState,
     *,
     tool_events: bool = True,
@@ -966,7 +966,7 @@ def stream_turn(
 
 def run_turn(
     pipeline: Pipeline,
-    text: str,
+    text: Any,
     state: PipelineState,
     *,
     output_schema: Optional[Dict[str, Any]] = None,

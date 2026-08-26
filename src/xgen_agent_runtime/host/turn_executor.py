@@ -18,12 +18,12 @@ from typing import Any, Dict, List, Optional
 # 순환 없음(execute 가 turn_executor 를 지연 import). Phase 2 에서 패키지로 이전.
 from xgen_agent_runtime.host._constants import (  # noqa: E402
     _CLI_BACKENDS,
-    _coerce_text,
     _delegation_wired,
     _self_evolution_policy,
     default_prompt,
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
+from xgen_agent_runtime.host.turn_input import TurnInput
 
 logger = logging.getLogger("editor.nodes.xgen.agent.agent_geny")
 
@@ -55,7 +55,8 @@ class AgentTurnExecutor:
         from xgen_agent_runtime.host.tools import adapt_tools
         from xgen_agent_runtime import PipelineState
 
-        text = _coerce_text(kwargs.get("text"))
+        turn_input = TurnInput.from_raw(kwargs.get("text"))
+        text = turn_input.text
         streaming = bool(kwargs.get("streaming", True))
         interaction_id = str(kwargs.get("interaction_id") or "")
         response_io_id = kwargs.get("response_io_id")
@@ -985,6 +986,7 @@ class AgentTurnExecutor:
                         )
 
             user_text = f"{text}\n\n{rag_block}" if rag_block else text
+            pipeline_input = turn_input.with_text(user_text).as_pipeline_input()
 
             pipeline = build_pipeline(
                 name=node_name,
@@ -1079,7 +1081,7 @@ class AgentTurnExecutor:
         if streaming:
             turn_iter = stream_turn(
                 pipeline,
-                user_text,
+                pipeline_input,
                 state,
                 tool_events=bool(kwargs.get("tool_events", True)),
                 result_sink=result_sink,
@@ -1101,6 +1103,6 @@ class AgentTurnExecutor:
                 return _with_notice(turn_iter)
             return turn_iter
         try:
-            return run_turn(pipeline, user_text, state, output_schema=schema, host=host)
+            return run_turn(pipeline, pipeline_input, state, output_schema=schema, host=host)
         finally:
             _teardown()
