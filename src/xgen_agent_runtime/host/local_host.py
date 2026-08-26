@@ -627,10 +627,65 @@ class LocalHostServices:
     ) -> Optional[Any]:
         return None
 
+    def _forged_store(self, workflow_id: str) -> Optional[Any]:
+        """서버 DB 의 도구 스펙 저장소(원격) — 서버가 경로를 실어 줬을 때만.
+
+        경로를 런타임이 지어내지 않는다: 구버전 서버에 없는 엔드포인트를 때리면
+        매 턴 404 를 먹고, 그 실패는 "도구가 없다"로 보인다.
+        """
+        meta = self._ctx.get("forged_tools")
+        if not isinstance(meta, dict) or not meta.get("enabled"):
+            return None
+        path = str(meta.get("path") or "").strip()
+        if not path or self._bridge is None or not workflow_id:
+            return None
+        opener = getattr(self._bridge, "forged_tool_store", None)
+        if not callable(opener):
+            return None
+        return opener(path)
+
     def register_forged_tools(
         self, registry, *, workflow_id, workspace_dir, core, sandboxed
     ) -> None:
-        return None  # v1: 자가제작 도구 복원 미제공.
+        """자가제작 도구 복원 + 제작 도구 배선 — 서버와 **같은 엔진**으로.
+
+        갈라지는 것은 두 축뿐이고, 둘 다 이 에이전트의 정의상 그래야 한다:
+
+        * **스펙은 서버** — 계정 자산이라 원격 store(서버 DB) 를 쓴다. 그래서 웹에서
+          만든 도구가 여기서 보이고, 여기서 만든 도구가 웹에서 보인다.
+        * **실행은 이 PC** — 스크립트는 동기화되는 workspace 안에 있고
+          ``ToolContext.sandbox`` 가 None 이라 엔진이 로컬 서브프로세스로 돈다
+          (서버 턴은 같은 엔진이 러너 세션에서 돈다).
+
+        store 가 없으면(구서버·미로그인) 조용히 미배선한다 — 제작 도구만 띄워 놓고
+        저장이 안 되면 에이전트는 도구를 만들었다고 믿고 다음 턴에 잃는다.
+        """
+        wf = str(workflow_id or "")
+        store = self._forged_store(wf)
+        if store is None:
+            logger.info("local-host: 자가제작 도구 미배선 — 서버 스펙 저장소 없음")
+            return None
+        try:
+            from xgen_agent_runtime.host.forged_tools import register_forged_tools
+
+            summary = register_forged_tools(
+                registry,
+                workflow_id=wf,
+                workspace_dir=str(workspace_dir or self._workspace),
+                store=store,
+                core=core,
+                # 로컬은 실행지가 이 PC 다 — 스크립트 존재를 **여기서** 확인할 수
+                # 있고, 확인해야 한다(없는 도구를 광고하지 않는다).
+                sandboxed=False,
+            )
+            logger.info(
+                "local-host: 자가제작 도구 복원 %d개 + 제작 도구 %d개",
+                len(summary.get("restored") or []),
+                len(summary.get("authoring") or []),
+            )
+        except Exception as exc:  # noqa: BLE001 — 도구 복원 실패가 턴을 깨지 않는다
+            logger.warning("local-host: 자가제작 도구 배선 실패 (스킵): %s", exc, exc_info=True)
+        return None
 
     def _connector_browser_meta(self) -> Dict[str, Any]:
         """켜져 있는 커넥터 브라우저 메타(서버가 컨텍스트로 실어 준 것) 또는 빈 dict.
