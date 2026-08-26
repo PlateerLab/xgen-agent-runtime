@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.12.0] — 2026-08-26
+
+### Changed — 브라우저 표면은 언제나 하나 (커넥터 브라우저 vs an-web)
+
+브라우저 체계가 둘이다: 커넥터 6종(`mcp_local_Browser*` — Electron 의 **사용자가
+보는 XGEN 탭**)과 런타임 an-web 8종(**별도 headless 세션**). 이름이 겹치지 않아
+(`mcp_local_` 접두) 예전엔 커넥터 대화에서 **둘이 동시에** 광고됐고(도구 14종),
+로컬 실행에서는 커넥터 6종이 아예 도달하지 못했다.
+
+- `LocalHostServices.builtin_families()` — 커넥터 브라우저가 켜진 턴(컨텍스트
+  `connector_browser` 메타)에는 an-web `browser` 패밀리를 등록하지 않는다.
+- `LocalHostServices.build_connector_mcp_tools()` — 커넥터 브라우저 6종을
+  **서버 중계 프록시**로 노출한다(사이드카에서 Electron 으로 가는 채널이 없어
+  메모리·RAG·자기진화와 같은 '서버 호출' 경로를 쓴다: 런타임 → 서버 RPC →
+  역방향 WS → 커넥터). 이름·설명·스키마는 서버가 광고하는 그대로라 로컬/서버
+  턴 사이에 도구 표면이 달라지지 않는다.
+- `ServerBridge.connector_mcp_call(path, server, tool, args)` — 그 중계 RPC.
+  실패는 "브라우저는 그대로" 에러 ToolResult 로 degrade.
+- 브라우저가 꺼져 있거나(메타 없음) 브릿지가 없으면 정확히 이전 동작(an-web)
+  으로 남는다(fail-open). 계약 테스트 추가.
+
 ## [3.11.0] — 2026-08-26
 
 ### Added — 자기진화(WorkflowSelf)를 커넥터 로컬(SDK)에서도 — 서버 RPC 위임
