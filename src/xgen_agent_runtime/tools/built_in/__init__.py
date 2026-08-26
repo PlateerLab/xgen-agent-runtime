@@ -21,6 +21,7 @@ from typing import Dict, Iterable, List, Optional, Type
 
 from xgen_agent_runtime.tools.base import Tool
 from xgen_agent_runtime.tools.built_in.agent_tool import AgentTool
+from xgen_agent_runtime.tools.built_in.delegation_guide_tool import DelegationGuideTool
 from xgen_agent_runtime.tools.built_in.subagent_tools import (
     SubAgentAssignTool,
     SubAgentInboxReadTool,
@@ -198,6 +199,9 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     "SubAgentList": SubAgentListTool,
     "SubAgentStop": SubAgentStopTool,
     "SubAgentInboxRead": SubAgentInboxReadTool,
+    # Delegation gateway — the skill guide across DelegateTask/SubAgent*/Task*
+    # (Guide + compact members, DocGuide 동형 점진공개).
+    "DelegationGuide": DelegationGuideTool,
     # Self-modifying environment — one lean dispatcher; detailed guidance lives
     # in the bundled ``environment`` skill (progressive disclosure).
     "env": EnvTool,
@@ -238,6 +242,9 @@ BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
     "meta": ["ToolSearch", "EnterPlanMode", "ExitPlanMode"],
     "agent": ["Agent"],
     "subagent": [
+        # 게이트웨이 먼저 — 위임 3표면(DelegateTask/SubAgent*/Task*)의 결정
+        # 지도를 요청 시 공개한다 (Guide + 컴팩트 멤버 규약).
+        "DelegationGuide",
         "SubAgentSpawn",
         "SubAgentAssign",
         "SubAgentList",

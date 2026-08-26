@@ -314,6 +314,124 @@ class _BrowserToolBase(Tool):
         raise NotImplementedError
 
 
+#: BrowserGuide 의 심층 가이드 — 게이트웨이가 요청 시에만 공개한다 (점진공개).
+#: 멤버 도구 description 은 컴팩트 한 줄 + 가이드 포인터만 들고, 타게팅 문법·
+#: 액션 파라미터·모드 상세·플로 레시피 같은 '사용 지식'은 전부 여기 산다.
+_BROWSER_GUIDE_MAP = """\
+Browser skill — one headless tab per agent session (embedded V8 runs the
+page's JavaScript, so SPAs/React work; cookies, localStorage and history
+persist across calls until BrowserClose).
+
+Standard flow:
+  1. BrowserNavigate(url)      -> semantic snapshot with [ref=nN] handles
+  2. BrowserAct(action, ...)   -> click / type / select / submit / scroll / wait_for
+  3. BrowserExtract(query)     -> pull structured data (tables, lists, prices)
+  4. BrowserSnapshot()         -> re-read the page when state changed
+  5. BrowserEval(expression)   -> run JS when no tool fits
+  6. BrowserBack() / BrowserClose()
+
+Element targeting (the `target` parameter, everywhere):
+  - "n42"            a [ref=...] handle from a snapshot (exact, preferred)
+  - "text=Sign in"   visible-text match
+  - "#login" etc.    any other string is a CSS selector
+  - {...}            an an-web semantic locator object (e.g. {"by": "role",
+                     "role": "button", "text": "Login"})
+
+Topics (call BrowserGuide(topic=...) for the deep guide):
+  - act      all BrowserAct actions and their parameters
+  - extract  BrowserExtract modes and when to use each
+  - flows    recipes: login, SPA waits, pagination, form filling
+"""
+
+_BROWSER_GUIDE_TOPICS = {
+    "act": """\
+BrowserAct — interact with the current page. `action` is one of:
+  - click    target required. Clicking a link navigates and returns the new
+             page's snapshot.
+  - type     target + text. Replaces the field's value; append=true appends.
+  - select   target + value (option value) — or by_text=true to match the
+             option's visible text instead.
+  - clear    target. Empties the field.
+  - submit   target (the form or a field inside it).
+  - scroll   optional target; delta_y (default 300) / delta_x pixels.
+  - wait_for condition: network_idle | dom_stable | selector |
+             element_visible (+ selector for the last two);
+             timeout_ms (default 5000). Use after actions that trigger
+             async updates before re-reading the page.
+Every action returns an effects summary; navigating actions return the new
+snapshot. Prefer [ref=nN] targets from the latest snapshot — refs go stale
+after navigation, so re-snapshot first if unsure.""",
+    "extract": """\
+BrowserExtract — pull data out of the current page by CSS selector.
+`mode` picks the shape:
+  - css         visible text per match (default) — quick scrapes
+  - structured  text + attributes per match — links (href), images (src),
+                data-* attributes
+  - json        parse JSON islands (script[type=application/ld+json], inline
+                JSON) — prices, product data, SEO metadata
+  - html        raw HTML per match — when you need the markup itself
+limit caps matches (default 100). Use extract when the snapshot alone is too
+coarse (tables, lists, article bodies); use the snapshot for interaction.""",
+    "flows": """\
+Recipes:
+  - Login: Navigate(login page) -> Act(type, target=username field) ->
+    Act(type, target=password field) -> Act(click, submit button) ->
+    Act(wait_for, condition=network_idle) -> Snapshot. Cookies persist for
+    later calls in this session.
+  - SPA that renders late: after Navigate or a click, Act(wait_for,
+    condition=dom_stable) or condition=selector with the expected element,
+    then Snapshot/Extract.
+  - Pagination: loop { Extract(rows) -> Act(click, target=next button) ->
+    Act(wait_for, dom_stable) } until the next button disappears.
+  - When no tool fits (custom widgets, shadow DOM): BrowserEval with a JS
+    expression — DOM and window are live; return JSON-serializable values.""",
+}
+
+
+class BrowserGuideTool(Tool):
+    """브라우저 스킬 게이트웨이 — 계층형 가이드, 점진공개 (DocGuide 동형)."""
+
+    @property
+    def name(self) -> str:
+        return "BrowserGuide"
+
+    @property
+    def description(self) -> str:
+        return (
+            "START HERE for web browsing — the browser skill. No topic: the "
+            "session model, tool flow and element-targeting syntax. topic: "
+            "deep guide (act, extract, flows). Free, instant, no page needed."
+        )
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "enum": sorted(_BROWSER_GUIDE_TOPICS),
+                    "description": "Deep-guide topic. Omit for the overview map.",
+                },
+            },
+        }
+
+    def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
+        return ToolCapabilities(concurrency_safe=True, read_only=True, idempotent=True)
+
+    async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+        topic = str((input or {}).get("topic") or "").strip()
+        if topic and topic in _BROWSER_GUIDE_TOPICS:
+            return ToolResult(
+                content=_BROWSER_GUIDE_TOPICS[topic],
+                metadata={"topic": topic, "topics": sorted(_BROWSER_GUIDE_TOPICS)},
+            )
+        return ToolResult(
+            content=_BROWSER_GUIDE_MAP,
+            metadata={"topics": sorted(_BROWSER_GUIDE_TOPICS)},
+        )
+
+
 class BrowserNavigateTool(_BrowserToolBase):
     """Open a URL in the session's tab (executes page JavaScript) and
     return the semantic snapshot."""
@@ -324,12 +442,12 @@ class BrowserNavigateTool(_BrowserToolBase):
 
     @property
     def description(self) -> str:
+        # 컴팩트 규약: 한 줄 요약 + 게이트웨이 포인터. 상세(타게팅/플로)는
+        # BrowserGuide 가 요청 시 공개한다 — 매 턴 컨텍스트를 태우지 않는다.
         return (
-            "Open a URL in this session's browser tab. Runs the page's "
-            "JavaScript (embedded V8 — handles SPAs/React), keeps cookies and "
-            "history across calls, and returns a semantic snapshot of the "
-            "rendered page with [ref=...] handles for interactive elements. "
-            "Use BrowserAct to click/type, BrowserExtract to pull data."
+            "Open a URL in this session's browser tab (runs page JS — SPAs "
+            "work; cookies persist) and return a semantic snapshot with "
+            "[ref=...] handles. The entry point. Guide: BrowserGuide."
         )
 
     @property
@@ -408,9 +526,8 @@ class BrowserSnapshotTool(_BrowserToolBase):
     @property
     def description(self) -> str:
         return (
-            "Return the semantic snapshot of the CURRENT page in this "
-            "session's browser tab (roles, names, [ref=...] handles). Use "
-            "after BrowserAct when you need to re-read the page state."
+            "Re-read the CURRENT page as a semantic snapshot ([ref=...] "
+            "handles) — use when the page state changed."
         )
 
     @property
@@ -459,13 +576,9 @@ class BrowserActTool(_BrowserToolBase):
     @property
     def description(self) -> str:
         return (
-            "Interact with the current page in this session's browser tab. "
-            "Actions: click, type (set text; append=true to append), select "
-            "(dropdown), clear, submit (form), scroll, wait_for (condition: "
-            "network_idle | dom_stable | selector | element_visible). Target "
-            "elements by snapshot ref ('n42'), visible text ('text=Sign in'), "
-            "or CSS selector ('#login'). Clicking a link navigates and "
-            "returns the new page's snapshot."
+            "Interact with the current page — click / type / select / clear / "
+            "submit / scroll / wait_for. Target by snapshot ref, text, or CSS. "
+            "Guide: BrowserGuide('act')."
         )
 
     @property
@@ -584,11 +697,9 @@ class BrowserExtractTool(_BrowserToolBase):
     @property
     def description(self) -> str:
         return (
-            "Extract data from the current page by CSS selector. Modes: "
-            "'css' (visible text per match), 'structured' (text + attributes), "
-            "'json' (parse JSON islands), 'html' (raw HTML per match). Use "
-            "after BrowserNavigate/BrowserAct when the snapshot alone is not "
-            "detailed enough (tables, lists, prices, article bodies)."
+            "Extract data from the current page by CSS selector (modes: css / "
+            "structured / json / html) — tables, lists, prices, article "
+            "bodies. Guide: BrowserGuide('extract')."
         )
 
     @property
@@ -656,8 +767,8 @@ class BrowserEvalTool(_BrowserToolBase):
     def description(self) -> str:
         return (
             "Evaluate a JavaScript expression in the current page's V8 "
-            "context and return the result (JSON-serialized). The page's own "
-            "scripts have already run; DOM and window are available."
+            "context (DOM/window live; JSON result). For cases no other "
+            "browser tool covers. Guide: BrowserGuide('flows')."
         )
 
     @property
@@ -759,6 +870,8 @@ class BrowserCloseTool(_BrowserToolBase):
 
 
 BROWSER_TOOL_CLASSES: Dict[str, type] = {
+    # 게이트웨이 먼저 — 스킬 규약(Guide + 컴팩트 멤버, DocGuide 동형).
+    "BrowserGuide": BrowserGuideTool,
     "BrowserNavigate": BrowserNavigateTool,
     "BrowserSnapshot": BrowserSnapshotTool,
     "BrowserAct": BrowserActTool,
