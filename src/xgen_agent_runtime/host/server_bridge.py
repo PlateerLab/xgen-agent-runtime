@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 
 class ServerBridge:
@@ -90,5 +90,32 @@ class ServerBridge:
                 return None
             block = data.get("block")
             return str(block) if block else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    # ── workflow-self (자기진화 — 그래프는 서버 자산, 편집은 서버 RPC) ──────
+    def workflow_self(self, path: str, input: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """서버의 실물 WorkflowSelfTool 실행을 위임한다(동기, blocking httpx).
+
+        ``path`` 는 컨텍스트 메타가 실어 준 RPC 경로(버전 정합 — 런타임이 경로를
+        지어내지 않는다). 반환 ``{"ok","content","is_error","metadata"}`` 또는
+        네트워크/인가 실패 시 None — 호출부(프록시 도구)가 에러 텍스트로 degrade.
+        """
+        p = str(path or "").strip()
+        if not p:
+            return None
+        try:
+            import httpx
+
+            url = f"{self._base}{p if p.startswith('/') else '/' + p}"
+            with httpx.Client(timeout=max(self._timeout, 300.0), verify=self._verify) as client:
+                resp = client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    json={"input": dict(input or {})},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return data if isinstance(data, dict) else None
         except Exception:  # noqa: BLE001
             return None

@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.11.0] — 2026-08-26
+
+### Added — 자기진화(WorkflowSelf)를 커넥터 로컬(SDK)에서도 — 서버 RPC 위임
+
+- 그래프는 서버 자산이지만 편집 호출은 서버 RPC 로 위임하면 로컬에서도 웹과
+  완전 동일하게 동작한다(메모리·RAG·LLM 프록시와 같은 '서버 호출' 원칙).
+- `ServerBridge.workflow_self(path, input)` — 서버의 실물 WorkflowSelfTool
+  실행을 위임하는 인증 RPC(경로는 컨텍스트 메타가 실어 준다 — 런타임이 경로를
+  지어내지 않는다).
+- `LocalHostServices.register_workflow_self_tools` 실구현 — 컨텍스트
+  `workflow_self` 메타(enabled + path + **서버 실물의 description/input_schema**)
+  로 프록시 도구를 core 등록(드리프트 없는 동일 표면). 메타 없음(구서버)/
+  비활성(관리자 kill-switch)/브릿지 없음이면 조용히 미등록 — turn_executor 의
+  registry.get("WorkflowSelf") 게이트가 프롬프트 블록도 함께 생략(유령 안내 방지).
+- 서버 실패는 "그래프 불변" 에러 ToolResult 로 degrade. 계약 테스트 추가.
+
 ## [3.10.0] — 2026-08-26
 
 ### Added — 스킬 게이트웨이: Guide + 컴팩트 멤버 (DocGuide 동형 점진공개)
