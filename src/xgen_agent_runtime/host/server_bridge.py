@@ -128,6 +128,28 @@ class ServerBridge:
             return None
 
     # ── workflow-self (자기진화 — 그래프는 서버 자산, 편집은 서버 RPC) ──────
+    def forged_tool_store(self, path: str) -> Optional[Any]:
+        """서버 DB 의 forged-tool **스펙 저장소**를 원격 store 로 연다.
+
+        스펙만 서버로 간다 — 스크립트 실행은 로컬이다(스크립트가 동기화되는
+        workspace 안에 있으므로). 메모리와 같은 '상태는 서버, 실행은 여기' 규약.
+        """
+        p = str(path or "").strip()
+        if not p:
+            return None
+        try:
+            from xgen_agent_runtime.host.remote_forged_store import RemoteForgedToolStore
+
+            return RemoteForgedToolStore(
+                base_url=self._base,
+                token=self._token,
+                path=p,
+                timeout_s=self._timeout,
+                verify=self._verify,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
     def workflow_self(self, path: str, input: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """서버의 실물 WorkflowSelfTool 실행을 위임한다(동기, blocking httpx).
 
