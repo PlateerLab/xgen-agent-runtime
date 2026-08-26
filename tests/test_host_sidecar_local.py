@@ -830,3 +830,103 @@ def test_connector_browser_tools_replace_anweb_locally() -> None:
         h = LocalHostServices("/tmp/ws-cb", context={"connector_browser": bad}, server_bridge=bridge)
         assert h.build_connector_mcp_tools(7, "connector") == []
         assert "browser" in h.builtin_families()
+
+
+def test_local_cli_gets_builtin_mcp_bridge(tmp_path, monkeypatch) -> None:
+    """로컬 CLI 턴의 **내장 MCP 표면** — 사용자의 '로컬 MCP 사용'(외부 서버) 설정과
+    무관하게 주입된다. MCP 가 CLI 백엔드에 도구를 건네는 표준 경로이기 때문.
+
+    서버가 실어 준 cli_mcp(경로+토큰)를 stdio shim 으로 물리고, ``mcp__connector``
+    를 settings/allowedTools 에 사전 허용한다(--print 가 권한 프롬프트로 막히지
+    않게). 네이티브 도구(파일/셸)는 그대로 — 로컬 파일 작업은 이 PC 가 맞다.
+    """
+    import xgen_agent_runtime.host.runner as runner
+    from xgen_agent_runtime.host import local_host as lh
+
+    captured: Dict[str, Any] = {}
+
+    def _fake_claude(**kw: Any) -> str:
+        captured.clear()
+        captured.update(kw)
+        return "client"
+
+    monkeypatch.setattr(runner, "build_cli_client", _fake_claude)
+
+    class _FakeBridge:
+        base_url = "https://xgen.example"
+        token = "user-token"
+
+    cli_mcp = {
+        "enabled": True,
+        "path": "/api/internal/connector-mcp/42/rpc",
+        "token": "tok-abc",
+        "timeout_s": 3600,
+    }
+    claude_home = tmp_path / "claude-home"
+    host = LocalHostServices(
+        str(tmp_path / "ws"),
+        context={
+            "api_keys": {"anthropic": "ak"},
+            "settings": {
+                "CLAUDE_CODE_ENABLED": "true",
+                "CLAUDE_CODE_AUTH_MODE": "api_key",
+                "XGEN_LOCAL_CLAUDE_CONFIG_DIR": str(claude_home),
+            },
+            "cli_mcp": cli_mcp,
+        },
+        server_bridge=_FakeBridge(),
+    )
+
+    # 프롬프트 계약: 브릿지가 실제로 붙으므로 CLI 도구 안내가 정직해진다.
+    assert host.cli_bridge_available("claude_code") is True
+
+    host.build_cli_runtime("claude_code", {})
+    cfg = captured["mcp_config"]
+    server = cfg["mcpServers"]["connector"]
+    assert server["type"] == "stdio"
+    # 파일 경로가 아니라 모듈 실행 — 번들/휠/개발 트리 어디서도 같은 인터프리터가 찾는다.
+    assert server["args"] == ["-m", "xgen_agent_runtime.host.cli_mcp_shim"]
+    assert server["env"]["XGEN_MCP_URL"] == "https://xgen.example"
+    assert server["env"]["XGEN_MCP_PATH"] == cli_mcp["path"]
+    assert server["env"]["XGEN_MCP_TOKEN"] == "tok-abc"
+
+    # mcp__connector 사전 허용 + 네이티브(Bash) 유지 — 둘 다 같은 settings 파일에.
+    allow = set(captured["allow_tools"])
+    assert "mcp__connector" in allow and "Bash" in allow
+    perms = json.loads(
+        (claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME).read_text(encoding="utf-8")
+    )["permissions"]["allow"]
+    assert "mcp__connector" in perms and "Bash" in perms
+    assert captured["allow_local_tools"] is True  # 파일/셸은 여전히 네이티브
+
+
+def test_local_cli_without_bridge_stays_native_only(tmp_path, monkeypatch) -> None:
+    """구서버/미로그인 등 브릿지가 없으면 예전 그대로 — 네이티브 도구만, 프롬프트도
+    CLI 도구를 약속하지 않는다(유령 방지)."""
+    import xgen_agent_runtime.host.runner as runner
+
+    captured: Dict[str, Any] = {}
+    monkeypatch.setattr(
+        runner, "build_cli_client", lambda **kw: (captured.update(kw), "c")[1]
+    )
+
+    class _FakeBridge:
+        base_url = "https://xgen.example"
+        token = "t"
+
+    base_ctx = {
+        "api_keys": {"anthropic": "ak"},
+        "settings": {"CLAUDE_CODE_ENABLED": "true", "CLAUDE_CODE_AUTH_MODE": "api_key"},
+    }
+    # (1) 메타 없음 (2) enabled=False (3) 토큰 없음 (4) 브릿지 객체 없음
+    for ctx, bridge in (
+        (dict(base_ctx), _FakeBridge()),
+        ({**base_ctx, "cli_mcp": {"enabled": False, "path": "/p", "token": "t"}}, _FakeBridge()),
+        ({**base_ctx, "cli_mcp": {"enabled": True, "path": "/p", "token": ""}}, _FakeBridge()),
+        ({**base_ctx, "cli_mcp": {"enabled": True, "path": "/p", "token": "t"}}, None),
+    ):
+        host = LocalHostServices(str(tmp_path / "ws"), context=ctx, server_bridge=bridge)
+        assert host.cli_bridge_available("claude_code") is False
+        host.build_cli_runtime("claude_code", {})
+        assert captured["mcp_config"] is None
+        assert "mcp__connector" not in set(captured["allow_tools"])

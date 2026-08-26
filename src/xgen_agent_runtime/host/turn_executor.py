@@ -244,10 +244,7 @@ class AgentTurnExecutor:
                     )
                     if _note:
                         system_prompt = (
-                            system_prompt
-                            + "\n## User cloud storage (XgenCloud)\n"
-                            + _note
-                            + "\n"
+                            system_prompt + "\n## User cloud storage (XgenCloud)\n" + _note + "\n"
                         )
                 except Exception:  # noqa: BLE001
                     pass
