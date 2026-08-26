@@ -1,19 +1,16 @@
-"""자가제작 도구(forged tools) — 엔진 계약 + 로컬 배선.
+"""자가제작 도구(forged tools) — 엔진 계약.
 
-핵심 주장 하나: **엔진은 하나이고 저장소만 갈린다.** 스펙은 계정 자산이라 서버 DB
-가 원본이고(로컬은 같은 인터페이스의 RPC 프록시), 스크립트 실행지는 다른 도구와
-똑같이 ``ToolContext.sandbox`` 가 정한다. 그래서 웹에서 만든 도구가 로컬에서 그대로
-살아나고, 그 반대도 같다.
+핵심 주장 하나: **엔진은 저장소를 모른다.** 스펙 저장소는 호스트가 주입하고
+(:class:`ForgedToolSpecStore`), 스크립트 실행지는 다른 도구와 똑같이
+``ToolContext.sandbox`` 가 정한다.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-import pytest
 
 from xgen_agent_runtime.host.forged_tools import (
     ForgedToolSpec,
@@ -172,127 +169,3 @@ def test_failing_script_reports_stderr_and_records(tmp_path) -> None:
     out = asyncio.run(RegistryRouter(reg).route("Boom", {}, _ctx(ws)))
     assert out.is_error and "kaboom" in out.content
     assert store.calls and store.calls[-1][0] == "Boom" and store.calls[-1][1]
-
-
-# ── 로컬 호스트 배선 ────────────────────────────────────────────────────
-
-
-class _StoreBridge:
-    def __init__(self, store: Any) -> None:
-        self._store = store
-        self.asked: List[str] = []
-
-    base_url = "https://xgen.example"
-    token = "t"
-
-    def forged_tool_store(self, path: str) -> Any:
-        self.asked.append(path)
-        return self._store
-
-
-def _local_host(ws: str, *, ctx: Dict[str, Any], bridge: Any = None):
-    from xgen_agent_runtime.host.local_host import LocalHostServices
-
-    return LocalHostServices(ws, context=ctx, server_bridge=bridge)
-
-
-def test_local_host_wires_forged_tools_from_server_store(tmp_path) -> None:
-    """로컬 턴도 같은 엔진 — 스펙은 서버 store, 실행은 이 PC."""
-    ws, store = _ws(tmp_path), _MemStore()
-    _write_script(ws)
-    store.save(ForgedToolSpec(
-        name="Greet", description="인사", entrypoint="greet.py", verified=True,
-        input_schema={"type": "object", "properties": {"who": {"type": "string"}}},
-    ))
-    bridge = _StoreBridge(store)
-    host = _local_host(ws, ctx={"forged_tools": {"enabled": True, "path": "/rpc"}}, bridge=bridge)
-
-    reg = ToolRegistry()
-    host.register_forged_tools(reg, workflow_id="wf1", workspace_dir=ws, core=True, sandboxed=False)
-    assert bridge.asked == ["/rpc"]
-    assert {"Greet", "ForgeTool", "PythonEnv"} <= set(reg.list_names())
-    out = asyncio.run(RegistryRouter(reg).route("Greet", {"who": "local"}, _ctx(ws)))
-    assert out.content == {"msg": "hello local"}
-
-
-@pytest.mark.parametrize(
-    "ctx, bridge_present",
-    [
-        ({}, True),                                                   # 메타 없음(구서버)
-        ({"forged_tools": {"enabled": False}}, True),                 # 관리자 kill-switch
-        ({"forged_tools": {"enabled": True, "path": ""}}, True),      # 경로 없음
-        ({"forged_tools": {"enabled": True, "path": "/rpc"}}, False),  # 브릿지 없음(미로그인)
-    ],
-)
-def test_local_host_stays_silent_without_a_store(tmp_path, ctx, bridge_present) -> None:
-    """저장소가 없으면 **제작 도구도** 띄우지 않는다.
-
-    띄워 놓고 저장이 안 되면 에이전트는 도구를 만들었다고 믿고 다음 턴에 잃는다 —
-    "도구가 없다"보다 "만들었다는데 없다"가 훨씬 나쁘다.
-    """
-    ws = _ws(tmp_path)
-    host = _local_host(ws, ctx=ctx, bridge=_StoreBridge(_MemStore()) if bridge_present else None)
-    reg = ToolRegistry()
-    host.register_forged_tools(reg, workflow_id="wf1", workspace_dir=ws, core=True, sandboxed=False)
-    assert reg.list_names() == []
-
-
-def test_remote_store_save_failure_is_loud(tmp_path) -> None:
-    """저장 실패를 삼키면 안 된다 — 성공했다고 답하면 다음 턴에 도구가 없다."""
-    from xgen_agent_runtime.host.remote_forged_store import (
-        RemoteForgedToolStore,
-        RemoteForgedToolStoreError,
-    )
-
-    store = RemoteForgedToolStore(
-        base_url="http://127.0.0.1:1", token="t", path="/rpc", timeout_s=0.2
-    )
-    # 읽기는 조용히 degrade (도구가 잠깐 안 보이는 것뿐)
-    assert store.list() == []
-    assert store.get("x") is None
-    assert store.delete("x") is False
-    store.record_call("x")  # 통계 실패는 무시 — raise 하지 않는다
-    with pytest.raises(RemoteForgedToolStoreError):
-        store.save(ForgedToolSpec(name="X", description="d", entrypoint="a.py"))
-
-
-def test_remote_store_speaks_the_server_contract() -> None:
-    """RPC 봉투가 서버 엔드포인트(geny_memory.forged_tool_store_rpc)와 같은 모양인가."""
-    import threading
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    from xgen_agent_runtime.host.remote_forged_store import RemoteForgedToolStore
-
-    seen: List[Dict[str, Any]] = []
-
-    class _H(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            seen.append(body)
-            spec = ForgedToolSpec(name="A", description="d", entrypoint="a.py").to_dict()
-            raw = json.dumps({"ok": True, "specs": [spec], "spec": spec, "removed": True}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-        def log_message(self, *a: Any) -> None:
-            return
-
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _H)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    try:
-        s = RemoteForgedToolStore(
-            base_url=f"http://127.0.0.1:{httpd.server_address[1]}", token="tok", path="/rpc"
-        )
-        assert [t.name for t in s.list()] == ["A"]
-        assert s.get("A").name == "A"
-        assert s.save(ForgedToolSpec(name="A", description="d", entrypoint="a.py")).name == "A"
-        assert s.delete("A") is True
-        s.mark_tested("A", ok=True)
-    finally:
-        httpd.shutdown()
-    assert [b["op"] for b in seen] == ["list", "get", "save", "delete", "mark_tested"]
-    assert seen[2]["spec"]["name"] == "A"
-    assert seen[4]["ok"] is True

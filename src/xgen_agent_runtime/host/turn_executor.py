@@ -101,34 +101,16 @@ class AgentTurnExecutor:
             result_sink: Dict[str, str] = {}
             # ── CLI 백엔드의 도구 표면 ───────────────────────────────────
             # CLI(claude_code/codex)는 자기 루프를 소유해 이 registry 를 직접 보지
-            # 못한다. 도구를 건네는 표준 경로는 MCP 뿐이라, 호스트가 **registry 자체를
-            # MCP 로 내줄 수 있으면**(OPTIONAL cli_local_tool_surface) CLI 턴도 SDK 와
-            # **같은 조립**을 지나고 그 결과물을 host.build_cli_runtime 이 가져간다.
-            #   * LocalHostServices → True (프로세스 안 루프백 서버)
-            #   * ServerHostServices → 미정의 = False (자기 stdio 브릿지가 따로 조립)
-            # 이 한 플래그가 "서버/로컬이 같은 파이프라인" 을 CLI 경로까지 넓힌다.
-            _local_tool_surface = False
-            if provider in _CLI_BACKENDS:
-                _lts = getattr(host, "cli_local_tool_surface", None)
-                if callable(_lts):
-                    try:
-                        _local_tool_surface = bool(_lts(provider))
-                    except Exception as _ltexc:  # noqa: BLE001 — 판정 실패 = 레거시 경로
-                        logger.warning(
-                            "agents/geny: cli_local_tool_surface 판정 실패 (레거시 경로): %s",
-                            _ltexc,
-                        )
-            #: registry 를 조립하는가. CLI 라도 로컬 표면이 있으면 조립한다.
-            _sdk_tools = provider not in _CLI_BACKENDS or _local_tool_surface
-            #: CLI 에 도구가 광고되는 MCP 서버 이름 — 프롬프트의 이름 규약 안내가 쓴다.
-            #: 안내와 실제 도구 이름이 어긋나면 모델이 부를 수 없는 이름을 부른다.
+            # 못한다. 도구를 건네는 표준 경로는 MCP 뿐이고, 서버 CLI 브릿지가 자기
+            # 조립으로 그 표면을 만든다 — 그래서 여기서는 registry 를 조립하지 않는다.
+            #
+            # (예전엔 데스크톱에서 런타임을 직접 돌리는 경로가 있어, 호스트가 registry
+            #  자체를 루프백 MCP 로 내주는 분기가 있었다. 로컬 실행은 폐기됐다 —
+            #  에이전트는 언제나 서버 세션에서 돈다.)
+            _sdk_tools = provider not in _CLI_BACKENDS
+            #: CLI 에 도구가 광고되는 MCP 서버 이름 — 프롬프트 이름 규약 안내가 쓴다.
             _cli_mcp_server = "connector"
-            _sn = getattr(host, "cli_mcp_server_name", None)
-            if callable(_sn):
-                try:
-                    _cli_mcp_server = str(_sn() or "connector")
-                except Exception:  # noqa: BLE001 — 이름 판정 실패 = 레거시 이름
-                    pass
+
             registry = adapt_tools(
                 kwargs.get("tools"), result_sink=result_sink, core=(exposure != "search")
             )
@@ -143,10 +125,9 @@ class AgentTurnExecutor:
                 )
             # Connector-hosted Local MCP 도구 자동 주입 — 실행자(user_id)의 데스크톱 커넥터가
             # 로컬 MCP 서버 도구를 노출하고 있으면 registry 에 core 로 합산한다(그래프 노드
-            # 없이 실행 시점 자동). 커넥터 미연결 시 빈 리스트 → no-op. 실패는 방어적으로 무시.
-            # ⚠ CLI 백엔드(claude_code/codex)는 이 registry 를 직접 못 본다 — 로컬 표면이
-            # 있으면 이 registry 가 그대로 MCP 로 나가므로 여기서 합산하고, 없으면
-            # 서버 CLI 브릿지가 자기 조립으로 커넥터 도구를 따로 광고한다.
+            # 없이 실행 시점 자동). 커넥터 미연결 시 빈 리스트 → no-op.
+            # ⚠ CLI 백엔드는 이 registry 를 못 본다 — 서버 CLI 브릿지가 자기 조립으로
+            # 커넥터 도구를 따로 광고한다.
             if _sdk_tools:
                 try:
                     # client_surface 게이트(host 내부): 대화 출처가 데스크톱 커넥터일
@@ -234,22 +215,12 @@ class AgentTurnExecutor:
             #
             # codex 만 제외: 자체 OS 샌드박스라 파일/셸을 ToolContext.sandbox 로
             # 돌릴 표면이 없다.
-            _connector_ws: Optional[dict] = host.probe_connector_workspace(
-                kwargs.get("user_id"),
-                str(kwargs.get("workflow_id") or ""),
-                str(kwargs.get("workflow_name") or ""),
-                kwargs.get("client_surface"),
-                provider,
-            )
-
             _cloud_mount: Optional[tuple] = None
             try:
-                # 로컬 모드에서는 러너 세션이 없다 — 클라우드 fs_* 스킬이 쓸 트리를
-                # 이 파드에 복원한다(pod_local; 턴 끝 publish 도 파드 경로).
                 _cloud_mount = host.prepare_cloud(
                     kwargs.get("user_id"),
                     str(kwargs.get("workflow_id") or ""),
-                    pod_local=_connector_ws is not None,
+                    pod_local=False,
                 )
             except Exception as _cexc:  # noqa: BLE001 — 클라우드가 실행을 막으면 안 된다
                 logger.warning("agents/geny: 클라우드 연결 준비 실패 (스킵): %s", _cexc)
@@ -313,30 +284,20 @@ class AgentTurnExecutor:
             _sandbox = host.make_sandbox(
                 str(kwargs.get("workflow_id") or ""),
                 kwargs.get("user_id"),
-                _connector_ws,
             )
-            if _connector_ws is not None:
-                logger.info(
-                    "agents/geny: 커넥터 로컬 워크스페이스 실행 (user=%s, workflow=%s, dir=%s)",
-                    kwargs.get("user_id"),
-                    kwargs.get("workflow_id"),
-                    _connector_ws.get("dir"),
-                )
             # 연결된 클라우드를 이 세션에서 다룰 수 있게 연다.
             #
             # 형제 트리다 — 에이전트 workspace 와 **다른 인덱스**를 갖는다.
             # 한 트리로 합치면 에이전트 산출물과 사용자 파일이 같은 인덱스에
             # 잡히고, 한쪽의 삭제 전파가 다른 쪽 파일을 지운다.
             #
-            # 커넥터 로컬 모드는 open_tree 가 없다 — 클라우드는 사용자 PC 에
-            # 마운트된 드라이브(/cloud 가상 루트)로 직접 닿는다.
-            if _sandbox is not None and _cloud_mount and _connector_ws is None:
+            if _sandbox is not None and _cloud_mount:
                 _sandbox.open_tree(_cloud_mount[0], _cloud_mount[1])
             # 다른 사람이 공유한 폴더도 같은 방식으로 연다 — 형제 트리다.
             # 소유자는 바뀌지 않고, 무엇을 할 수 있는지는 공유 레코드가 정한다
             # (읽기 공유는 읽기 전용으로 열린다).
             _shared_mounts = []
-            if _sandbox is not None and _connector_ws is None and kwargs.get("user_id"):
+            if _sandbox is not None and kwargs.get("user_id"):
                 try:
                     _shared_mounts = host.open_shared(
                         _sandbox,
@@ -378,7 +339,7 @@ class AgentTurnExecutor:
             kwargs["_job_tools"] = _job_tools
             if _job_tools:
                 system_prompt = system_prompt + "\n\n" + host.jobs_prompt_block()
-            if _cloud_skill is not None and _sandbox is not None and _connector_ws is None:
+            if _cloud_skill is not None and _sandbox is not None:
                 # 어댑터의 바이트 경로를 러너로 돌린다 — 러너가 붙어 있으면
                 # 이 파드의 클라우드 트리는 복원되지 않은 캐시라 읽으면 안 된다.
                 # (커넥터 로컬 모드는 pod_local 복원 트리를 그대로 쓴다 — 로컬
@@ -390,7 +351,7 @@ class AgentTurnExecutor:
             # 실행 환경 안내 — 도구가 어디서 도는지 host 가 설명한다(서버: 러너/
             # 커넥터 로컬 sandbox, 커넥터 사이드카: 이 PC). 안 알려 주면 에이전트는
             # 자기 코드가 어디서 도는지 모른 채 /tmp 에 쓰고 다음 턴에 잃는다.
-            _env_block = host.environment_prompt(_sandbox, _connector_ws, provider)
+            _env_block = host.environment_prompt(_sandbox, provider)
             if _env_block:
                 system_prompt = system_prompt + "\n\n" + _env_block
             if _shared_mounts:
@@ -808,7 +769,7 @@ class AgentTurnExecutor:
                         # 매 호출이 NO_SUBAGENT_MANAGER 로 죽는 유령 도구가 된다 —
                         # WorkflowSelf 와 같은 원칙으로 등록·노트 모두 생략.
                         logger.info("agents/geny: 위임 미배선 — host 미제공")
-                    elif provider == "claude_code" and not _local_tool_surface:
+                    elif provider == "claude_code":
                         # 서버 CLI 경로: 도구는 커넥터 MCP 브릿지가 광고/실행한다 —
                         # _build_connector_mcp_bridge 가 run ctx 로 가져가도록 스태시.
                         # (로컬 표면이면 아래 SDK 분기가 registry 에 직접 등록한다.)
@@ -934,19 +895,9 @@ class AgentTurnExecutor:
             if provider in _CLI_BACKENDS:
                 # CLI 백엔드는 에이전트 루프를 CLI 가 소유한다 — 파이프라인 Stage 10 이
                 # 돌지 않으므로 registry 를 파이프라인에 넘겨도 아무도 보지 않는다.
-                # 그래서 여기서 registry 는 항상 떼어내되, **로컬 표면이면 버리지 않고**
-                # host 에게 넘긴다(kwargs 스태시 — _cloud_skill/_sandbox_session 과 같은
-                # 규약. 시그니처 인자로 넣었다가 CLI 백엔드 전체가 기동 실패한 적 있다).
-                # host 는 이 registry 를 루프백 MCP 로 열어 CLI 에 그대로 광고한다.
-                if _local_tool_surface:
-                    kwargs["_tool_registry"] = registry
-                    kwargs["_run_tool_context"] = run_tool_context
-                    logger.info(
-                        "agents/geny: %s 백엔드 — 런타임 도구 %d개를 MCP 표면으로 넘긴다",
-                        provider,
-                        len(registry) if registry else 0,
-                    )
-                elif registry:
+                # 그래서 여기서 registry 는 떼어낸다 — 서버 CLI 브릿지가 자기 조립으로
+                # 같은 표면을 만들어 mcp__connector__* 로 광고한다.
+                if registry:
                     logger.warning(
                         "agents/geny: %s 백엔드는 Tools 포트 연결 도구 %d개를 이번 실행에서 "
                         "사용할 수 없습니다 (서버 CLI 브릿지가 자기 표면을 별도 조립)",
@@ -1115,7 +1066,6 @@ class AgentTurnExecutor:
                 hydrated_ws=_hydrated_ws,
                 shared_mounts=_shared_mounts,
                 cloud_mount=_cloud_mount,
-                connector_ws=_connector_ws,
             )
             # CLI 워크스페이스/브릿지 토큰 + built-in run workspace 정리 (순서 무관, 둘 다 방어적)
             for fn in (cli_cleanup, run_dir_cleanup):
