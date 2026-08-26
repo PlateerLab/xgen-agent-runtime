@@ -104,7 +104,9 @@ def _forward(envelope: dict) -> dict:
         # Pass through only a real JSON-RPC envelope (the endpoint's own error
         # response). Anything else — e.g. FastAPI's {"detail": ...} on a 401 —
         # is wrapped so the CLI never sees a non-protocol body.
-        if isinstance(parsed, dict) and ("error" in parsed or "result" in parsed or parsed.get("jsonrpc")):
+        if isinstance(parsed, dict) and (
+            "error" in parsed or "result" in parsed or parsed.get("jsonrpc")
+        ):
             return parsed
         detail = parsed.get("detail") if isinstance(parsed, dict) else None
         return _err(req_id, -32603, f"HTTP {exc.code}: {detail or str(parsed)[:200]}")

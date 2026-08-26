@@ -177,7 +177,9 @@ class LocalHostServices:
                 }
             }
         }
-        settings_json = json.dumps({"permissions": {"allow": ["mcp__connector"]}}, ensure_ascii=False)
+        settings_json = json.dumps(
+            {"permissions": {"allow": ["mcp__connector"]}}, ensure_ascii=False
+        )
         return mcp_config, settings_json, ("mcp__connector",)
 
     def cli_bridge_available(self, provider: str) -> bool:
@@ -454,7 +456,10 @@ class LocalHostServices:
 
                 data = await _aio.to_thread(
                     self._bridge_ref.connector_mcp_call,
-                    self._path, self._server, self._tool, dict(input or {}),
+                    self._path,
+                    self._server,
+                    self._tool,
+                    dict(input or {}),
                 )
                 if not isinstance(data, dict):
                     return ToolResult(
@@ -580,8 +585,8 @@ class LocalHostServices:
                 if not isinstance(data, dict):
                     return ToolResult(
                         content="WorkflowSelf server call failed — the server is "
-                                "unreachable or refused the request. The graph was "
-                                "not changed; try again shortly.",
+                        "unreachable or refused the request. The graph was "
+                        "not changed; try again shortly.",
                         is_error=True,
                     )
                 if not data.get("ok"):
@@ -592,12 +597,16 @@ class LocalHostServices:
                 return ToolResult(
                     content=str(data.get("content") or ""),
                     is_error=bool(data.get("is_error")),
-                    metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+                    metadata=data.get("metadata")
+                    if isinstance(data.get("metadata"), dict)
+                    else None,
                 )
 
         try:
             registry.register(_WorkflowSelfProxy(), core=True)
-            logger.info("local-host: WorkflowSelf(자기진화) 서버-RPC 프록시 등록 (wf=%s)", workflow_id)
+            logger.info(
+                "local-host: WorkflowSelf(자기진화) 서버-RPC 프록시 등록 (wf=%s)", workflow_id
+            )
         except Exception:  # noqa: BLE001 — 등록 실패가 턴을 죽이면 안 된다
             logger.warning("local-host: WorkflowSelf 프록시 등록 실패 (스킵)", exc_info=True)
         return None
