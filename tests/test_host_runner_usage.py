@@ -374,32 +374,34 @@ def test_claude_code_client_accepts_prewarm_spawn_kwarg() -> None:
     assert "prewarm_spawn" in inspect.signature(ClaudeCodeCLIClient.__init__).parameters
 
 
-# ── 네이티브 도구 선택(도구 제한) 계약 ────────────────────────────────────
+# ── 네이티브 도구 전면 차단 계약 ────────────────────────────────────
 
 
-def test_native_default_disabled_keeps_only_bash() -> None:
-    kept, removed = runner.resolve_native_tools(None)
-    assert kept == ["Bash"]
-    assert "Bash" not in removed and set(removed) == set(runner.CLI_NATIVE_TOOL_CATALOG) - {"Bash"}
+def test_natives_fully_disallowed_when_local_tools_off(captured_cli) -> None:
+    """``allow_local_tools=False`` → 카탈로그 **전체**가 차단된다.
+
+    예전엔 fs/셸 9종만 막아 WebSearch·WebFetch·TodoWrite 세 네이티브가 살아남았다
+    (실측). 규약은 "네이티브는 전부 끄고 우리 런타임 도구만 쓴다" 이므로 Bash 를
+    포함한 카탈로그 전체가 나가야 한다 — 같은 능력은 MCP 표면이 준다.
+    """
+    runner.build_cli_client(auth_mode="api_key", api_key="sk", allow_local_tools=False)
+    disallowed = set(captured_cli.get("disallow_tools", ()))
+    assert set(runner.CLI_NATIVE_TOOL_CATALOG) <= disallowed
+    assert "Bash" in disallowed and "WebSearch" in disallowed and "TodoWrite" in disallowed
+    assert "CronCreate" in disallowed  # 세션 한정 스케줄 도구는 언제나 차단
 
 
-def test_native_parse_respects_explicit_empty_and_selection() -> None:
-    # "[]" = 전부 켬 (기본정책 덮음)
-    assert runner.parse_disabled_native_tools("[]") == set()
-    # 명시 선택
-    assert runner.parse_disabled_native_tools('["Read","Write"]') == {"Read", "Write"}
-    # 미설정(None/"") = 기본정책(Bash 제외 전부)
-    assert runner.parse_disabled_native_tools(None) == set(runner.native_default_disabled())
-    assert runner.parse_disabled_native_tools("  ") == set(runner.native_default_disabled())
+def test_build_cli_client_adds_caller_disallows(captured_cli) -> None:
+    """호출자 추가분(위임 시 CLI 자체 Task/Agent)은 차단 목록에 합쳐진다.
 
-
-def test_build_cli_client_disallows_removed_natives(captured_cli) -> None:
-    # 기본(러너 없음): Bash 만 열고 나머지는 disallow 로 제거.
+    ``allow_local_tools=True`` 는 sub-worker 팩토리에만 남은 예외다 — 거기엔 아직
+    MCP 브릿지가 없어 네이티브가 유일한 도구 경로다.
+    """
     runner.build_cli_client(
         auth_mode="api_key", api_key="sk", allow_local_tools=True,
-        disallow_tools_extra=tuple(runner.native_default_disabled()),
+        disallow_tools_extra=("Task", "Agent"),
     )
     disallowed = set(captured_cli.get("disallow_tools", ()))
-    assert {"Read", "Write", "Edit", "WebSearch", "TodoWrite"} <= disallowed
-    assert "Bash" not in disallowed
+    assert {"Task", "Agent"} <= disallowed
+    assert "Bash" not in disallowed  # 카탈로그는 열려 있다(예외 경로)
     assert "CronCreate" in disallowed  # 스케줄 도구는 항상 차단

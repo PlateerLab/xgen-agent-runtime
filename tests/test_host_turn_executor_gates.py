@@ -398,28 +398,133 @@ def test_missing_system_prompt_still_falls_back_to_default(capture) -> None:
 # ── [감사 #25] enable_builtin_tools=False ─────────────────────────────
 
 
-def test_cli_builtin_tools_off_drops_self_evolution_and_delegation_even_if_host_true(
-    capture, caplog
-) -> None:
+def test_cli_builtin_tools_off_keeps_self_evolution(capture, caplog) -> None:
+    """내장 도구를 꺼도 자기진화는 살아 있어야 한다.
+
+    WorkflowSelf 는 registry + workflow_id 만 필요하다(편집은 DB, workspace 불필요).
+    예전엔 CLI 경로가 run ctx 바인딩을 enable_builtin_tools 에 묶어 둬서, 내장 도구를
+    끈 에이전트는 자기진화까지 조용히 잃었다 — SDK 경로에서 한 번 고친 회귀
+    (감사 HIGH)가 CLI 경로에 그대로 남아 있었다.
+    """
     host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=True)
     with caplog.at_level(logging.INFO):
         seen = _run(host, capture, provider="claude_code", enable_builtin_tools=False)
     sp = seen["system_prompt"]
-    # run ctx 가 바인딩되지 않는다 → WorkflowSelf/DelegateTask 는 CLI 에 없다
-    assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
-    assert "mcp__connector__DelegateTask" not in sp
-    assert "_delegation_extras" not in host.cli_params
-    assert "enable_builtin_tools=off" in caplog.text
-    # memory_* 는 run ctx 와 무관(memory eager) — host 가 브릿지 있다고 했으니 유지
+    assert SELF_EVOLUTION_PROMPT_BLOCK in sp
+    assert "mcp__connector__DelegateTask" in sp
+    assert "_delegation_extras" in host.cli_params
     assert "mcp__connector__memory_write" in sp
 
 
-def test_cli_legacy_host_builtin_tools_off_also_gated(capture) -> None:
-    """프로브가 없는 레거시 호스트도 enable_builtin_tools=False 면 run ctx 가 없다."""
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=None)
-    seen = _run(host, capture, provider="claude_code", enable_builtin_tools=False)
+def test_cli_builtin_off_and_self_evolution_off_drops_run_ctx_tools(capture, caplog) -> None:
+    """둘 다 꺼지면 run ctx 가 바인딩되지 않는다 → 그 위에 사는 도구는 광고 금지.
+
+    memory_* 는 run ctx 와 무관(memory eager)하므로 그대로 남는다.
+    """
+    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=True)
+    with caplog.at_level(logging.INFO):
+        seen = _run(host, capture, provider="claude_code",
+                    enable_builtin_tools=False, enable_self_evolution=False)
     sp = seen["system_prompt"]
     assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
     assert "mcp__connector__DelegateTask" not in sp
     assert "_delegation_extras" not in host.cli_params
     assert "mcp__connector__memory_write" in sp
+
+
+def test_cli_legacy_host_builtin_tools_off_also_keeps_self_evolution(capture) -> None:
+    """프로브가 없는 레거시 호스트도 같은 판정(브릿지 있음으로 간주)."""
+    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=None)
+    seen = _run(host, capture, provider="claude_code", enable_builtin_tools=False)
+    sp = seen["system_prompt"]
+    assert SELF_EVOLUTION_PROMPT_BLOCK in sp
+    assert "mcp__connector__DelegateTask" in sp
+    assert "mcp__connector__memory_write" in sp
+
+
+# ── [LOCAL_TOOL_SURFACE] CLI 백엔드가 SDK 와 같은 registry 조립을 지난다 ──────
+#
+# 호스트가 registry 자체를 MCP 로 내줄 수 있다고 하면(cli_local_tool_surface),
+# CLI 턴도 SDK 경로와 **같은** 조립을 지나고 그 결과물이 host.build_cli_runtime
+# 으로 넘어간다. 이게 "서버/로컬이 같은 파이프라인" 을 CLI 경로까지 넓히는 지점이다.
+
+
+class _LocalSurfaceHost(_FakeHost):
+    """루프백 MCP 를 여는 호스트(데스크톱 사이드카) 대역."""
+
+    def cli_local_tool_surface(self, provider: str) -> bool:
+        return True
+
+    def cli_mcp_server_name(self) -> str:
+        return "xgen"
+
+    def cli_bridge_available(self, provider: str) -> bool:
+        return True
+
+    def register_builtin_tools(self, registry, **k):
+        from xgen_agent_runtime.tools.built_in import get_builtin_tools
+
+        names = []
+        for name, cls in get_builtin_tools(features=["shell"]).items():
+            registry.register(cls(), core=True)
+            names.append(name)
+        return {"tools": names, "extras": {}, "families": ["shell"]}
+
+    def register_workflow_self_tools(self, registry, **k):
+        from xgen_agent_runtime.tools.base import Tool, ToolResult
+
+        class _WS(Tool):
+            @property
+            def name(self):
+                return "WorkflowSelf"
+
+            @property
+            def description(self):
+                return "edit your own graph"
+
+            @property
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+
+            async def execute(self, input, context):  # noqa: A002
+                return ToolResult(content="ok")
+
+        registry.register(_WS(), core=True)
+
+
+def test_local_surface_hands_the_live_registry_to_the_cli(capture) -> None:
+    """registry 를 버리지 않고 host 로 넘긴다 — 그게 CLI 의 도구 표면이 된다."""
+    host = _LocalSurfaceHost(delegation_extras={}, cli_bridge=None)
+    _run(host, capture, provider="claude_code")
+
+    reg = host.cli_params["_tool_registry"]
+    assert reg is not None, "로컬 표면인데 registry 를 버렸다"
+    names = set(reg.list_names())
+    # 내장 도구(파일/셸)가 실려 있다 — 네이티브가 전면 차단이라 이게 유일한 경로다.
+    assert "Bash" in names
+    # 메모리·자기진화도 같은 registry 에 산다(SDK 경로와 동일).
+    assert "memory_write" in names and "WorkflowSelf" in names
+    # ToolContext 도 함께 — 실행 위치·경로 가드가 SDK 와 어긋나지 않게.
+    assert host.cli_params["_run_tool_context"] is not None
+    # 파이프라인에는 넘기지 않는다(CLI 가 루프를 소유해 Stage 10 이 돌지 않는다).
+    assert capture.get("registry") is None
+
+
+def test_local_surface_prompt_notes_use_the_right_server_name(capture) -> None:
+    """이름 규약 안내가 실제 광고 이름과 일치해야 한다 — 어긋나면 모델이 부를 수
+    없는 이름을 부른다(mcp__connector__* 는 서버 브릿지 이름이다)."""
+    host = _LocalSurfaceHost(delegation_extras={}, cli_bridge=None)
+    seen = _run(host, capture, provider="claude_code")
+    sp = seen["system_prompt"]
+    assert "mcp__xgen__memory_write" in sp
+    assert "mcp__xgen__WorkflowSelf" in sp
+    assert "mcp__connector__" not in sp
+
+
+def test_server_cli_still_drops_the_registry(capture) -> None:
+    """로컬 표면이 아닌 호스트(서버)는 예전 그대로 — 자기 stdio 브릿지가 따로
+    조립하므로 여기 registry 를 넘기면 같은 도구가 두 벌 광고된다."""
+    host = _FakeHost(delegation_extras={}, cli_bridge=True)
+    _run(host, capture, provider="claude_code")
+    assert "_tool_registry" not in (host.cli_params or {})
+    assert capture.get("registry") is None

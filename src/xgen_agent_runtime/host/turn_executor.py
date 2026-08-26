@@ -99,6 +99,36 @@ class AgentTurnExecutor:
             # 연결된 지식소스의 1차 도구이므로 항상 core 로 즉시 노출한다.
             exposure = (kwargs.get("tool_exposure") or "all").strip()
             result_sink: Dict[str, str] = {}
+            # ── CLI 백엔드의 도구 표면 ───────────────────────────────────
+            # CLI(claude_code/codex)는 자기 루프를 소유해 이 registry 를 직접 보지
+            # 못한다. 도구를 건네는 표준 경로는 MCP 뿐이라, 호스트가 **registry 자체를
+            # MCP 로 내줄 수 있으면**(OPTIONAL cli_local_tool_surface) CLI 턴도 SDK 와
+            # **같은 조립**을 지나고 그 결과물을 host.build_cli_runtime 이 가져간다.
+            #   * LocalHostServices → True (프로세스 안 루프백 서버)
+            #   * ServerHostServices → 미정의 = False (자기 stdio 브릿지가 따로 조립)
+            # 이 한 플래그가 "서버/로컬이 같은 파이프라인" 을 CLI 경로까지 넓힌다.
+            _local_tool_surface = False
+            if provider in _CLI_BACKENDS:
+                _lts = getattr(host, "cli_local_tool_surface", None)
+                if callable(_lts):
+                    try:
+                        _local_tool_surface = bool(_lts(provider))
+                    except Exception as _ltexc:  # noqa: BLE001 — 판정 실패 = 레거시 경로
+                        logger.warning(
+                            "agents/geny: cli_local_tool_surface 판정 실패 (레거시 경로): %s",
+                            _ltexc,
+                        )
+            #: registry 를 조립하는가. CLI 라도 로컬 표면이 있으면 조립한다.
+            _sdk_tools = provider not in _CLI_BACKENDS or _local_tool_surface
+            #: CLI 에 도구가 광고되는 MCP 서버 이름 — 프롬프트의 이름 규약 안내가 쓴다.
+            #: 안내와 실제 도구 이름이 어긋나면 모델이 부를 수 없는 이름을 부른다.
+            _cli_mcp_server = "connector"
+            _sn = getattr(host, "cli_mcp_server_name", None)
+            if callable(_sn):
+                try:
+                    _cli_mcp_server = str(_sn() or "connector")
+                except Exception:  # noqa: BLE001 — 이름 판정 실패 = 레거시 이름
+                    pass
             registry = adapt_tools(
                 kwargs.get("tools"), result_sink=result_sink, core=(exposure != "search")
             )
@@ -114,9 +144,10 @@ class AgentTurnExecutor:
             # Connector-hosted Local MCP 도구 자동 주입 — 실행자(user_id)의 데스크톱 커넥터가
             # 로컬 MCP 서버 도구를 노출하고 있으면 registry 에 core 로 합산한다(그래프 노드
             # 없이 실행 시점 자동). 커넥터 미연결 시 빈 리스트 → no-op. 실패는 방어적으로 무시.
-            # ⚠ CLI 백엔드(claude_code/codex)는 이 registry 를 못 보므로(CLI 가 루프 소유) 건너뛰고,
-            # 각 CLI 런타임 빌더가 별도로 MCP 설정으로 커넥터 도구를 노출한다.
-            if provider not in _CLI_BACKENDS:
+            # ⚠ CLI 백엔드(claude_code/codex)는 이 registry 를 직접 못 본다 — 로컬 표면이
+            # 있으면 이 registry 가 그대로 MCP 로 나가므로 여기서 합산하고, 없으면
+            # 서버 CLI 브릿지가 자기 조립으로 커넥터 도구를 따로 광고한다.
+            if _sdk_tools:
                 try:
                     # client_surface 게이트(host 내부): 대화 출처가 데스크톱 커넥터일
                     # 때만 로컬 도구를 주입한다 (web 대화엔 커넥터가 연결돼 있어도 no-op).
@@ -365,11 +396,26 @@ class AgentTurnExecutor:
             if _shared_mounts:
                 # 여는 것과 알려 주는 것은 다른 일이다 — 클라우드에서 배웠다.
                 system_prompt = system_prompt + "\n\n" + host.shared_prompt_block(_shared_mounts)
+            # ── 자기진화(self-evolution) 판정 — 배선보다 **먼저** ────────────
+            # 여기서 정하는 이유: 호스트의 CLI 브릿지 가용성 판정이 이 결과를 본다
+            # (내장 도구를 꺼도 WorkflowSelf 하나 때문에 run ctx 를 바인딩해야 한다).
+            # 늦게 스태시하면 probe 가 항상 '미허용'을 보고, 내장 도구를 끈 에이전트는
+            # 자기진화를 조용히 잃는다.
+            #
+            # ★ 보안: 배포(deploy_)·게스트(guest_) 실행에서는 절대 허용하지 않는다. 그
+            # 실행은 워크플로 OWNER user_id 로 돌아 write-access 검사를 통과하므로,
+            # 익명 사용자/문서 프롬프트 인젝션이 라이브 프로덕션 그래프를 영구 변조할
+            # 수 있다(감사 CRITICAL). 판정은 SDK/CLI 공용이다.
+            _se_allowed, _se_reason = _self_evolution_policy(kwargs, host.setting)
+            kwargs["_self_evolution_allowed"] = _se_allowed
+            if not _se_allowed:
+                logger.info("agents/geny: self-evolution 미배선 — %s", _se_reason)
+
             # ── CLI 도구 브릿지 가용성 (claude_code/codex 전용) ───────────
             # CLI 백엔드는 registry 를 못 보고, 비네이티브 도구(memory_*/WorkflowSelf/
-            # DelegateTask…)는 host 의 MCP 브릿지가 mcp__connector__* 로 광고할 때만
-            # 존재한다. 브릿지가 없는 host(데스크톱 사이드카)에서 그 도구를 프롬프트로
-            # 약속하면 유령 호출이 된다(감사 #25). host.cli_bridge_available 은
+            # DelegateTask…)는 host 의 MCP 브릿지가 mcp__<서버>__* 로 광고할 때만
+            # 존재한다. 브릿지가 없는 host 에서 그 도구를 프롬프트로 약속하면 유령
+            # 호출이 된다(감사 #25). host.cli_bridge_available 은
             # OPTIONAL — 없으면 True(레거시 서버 동작). 예외도 True(판정 불가 = 레거시).
             _cli_bridge_ok = True
             _cli_bridge_reason = ""
@@ -386,12 +432,15 @@ class AgentTurnExecutor:
                             _bexc,
                         )
             # 도구(run ctx) 표면 — WorkflowSelf/위임은 브릿지 run ctx 에 산다. 서버는
-            # enable_builtin_tools 가 꺼지면 run ctx 를 바인딩하지 않으므로(감사 #25)
-            # host 가 True 라 해도 여기서 '브릿지 없음'으로 본다. memory_* 는 run ctx 와
-            # 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
-            _cli_tools_bridge_ok = _cli_bridge_ok and bool(kwargs.get("enable_builtin_tools", True))
+            # 내장 도구가 꺼져 **있어도** 자기진화가 허용되면 run ctx 를 바인딩한다
+            # (WorkflowSelf 는 registry + workflow_id 만 필요하다). 둘 다 아니면
+            # 바인딩이 없으므로 host 가 True 라 해도 여기서 '없음'으로 본다.
+            # memory_* 는 run ctx 와 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
+            _cli_tools_bridge_ok = _cli_bridge_ok and (
+                bool(kwargs.get("enable_builtin_tools", True)) or _se_allowed
+            )
             _cli_tools_bridge_reason = _cli_bridge_reason or (
-                "enable_builtin_tools=off (브릿지 run ctx 미바인딩)"
+                "enable_builtin_tools=off + 자기진화 미허용 (브릿지 run ctx 미바인딩)"
             )
             if bool(kwargs.get("enable_memory", True)):
                 from xgen_agent_runtime.host._constants import (
@@ -411,27 +460,28 @@ class AgentTurnExecutor:
                         "agents/geny: CLI 메모리 도구 미광고 — %s (자동 계층만 동작)",
                         _cli_bridge_reason,
                     )
-                if memory_provider is not None and provider == "claude_code" and _cli_bridge_ok:
-                    # CLI 백엔드: memory_* 는 내부 MCP 브릿지가 광고한다
-                    # (mcp__connector__memory_* 이름). 자동 계층(주입/기록)과 별개로
-                    # 에이전트가 도구를 인지하도록 동일 정책 블록 + 이름 규약 노트.
+                if (
+                    memory_provider is not None
+                    and provider in _CLI_BACKENDS
+                    and _cli_bridge_ok
+                    and not _sdk_tools
+                ):
+                    # 서버 CLI 브릿지 경로: memory_* 는 그 브릿지가 자기 조립으로
+                    # 광고한다(여기 registry 에는 넣지 않는다). 자동 계층(주입/기록)과
+                    # 별개로 에이전트가 도구를 인지하도록 정책 블록 + 이름 규약 노트.
                     system_prompt = (
                         system_prompt
                         + MEMORY_PROMPT_BLOCK
-                        + "\n(Note: on this backend the memory tools appear as"
-                        + " mcp__connector__memory_write, mcp__connector__memory_read, etc.)"
+                        + (
+                            f"\n(Note: on this backend the memory tools appear as"
+                            f" mcp__{_cli_mcp_server}__memory_write,"
+                            f" mcp__{_cli_mcp_server}__memory_read, etc.)"
+                            if provider == "claude_code"
+                            else f"\n(Note: on this backend the memory tools are served by the"
+                            f" '{_cli_mcp_server}' MCP server.)"
+                        )
                     )
-                if memory_provider is not None and provider == "codex" and _cli_bridge_ok:
-                    # Codex: 자기서브(self-serve) 메모리 도구는 커넥터 MCP 브릿지가
-                    # 광고한다 (mcp_config → -c mcp_servers.connector). 이름 규약은
-                    # Codex 의 MCP 표기(서버명 connector)를 따른다.
-                    system_prompt = (
-                        system_prompt
-                        + MEMORY_PROMPT_BLOCK
-                        + "\n(Note: on this backend the memory tools are served by the"
-                        + " 'connector' MCP server.)"
-                    )
-                if memory_provider is not None and provider not in _CLI_BACKENDS:
+                if memory_provider is not None and _sdk_tools:
                     try:
                         from xgen_agent_runtime.tools import ToolRegistry
 
@@ -440,6 +490,16 @@ class AgentTurnExecutor:
                         for mem_tool in build_memory_tools(memory_provider):
                             registry.register(mem_tool, core=True)
                         system_prompt = system_prompt + MEMORY_PROMPT_BLOCK
+                        if provider in _CLI_BACKENDS:
+                            # 같은 registry 가 MCP 로 나가므로 도구 이름에 접두가 붙는다.
+                            system_prompt += (
+                                f"\n(Note: on this backend the memory tools appear as"
+                                f" mcp__{_cli_mcp_server}__memory_write,"
+                                f" mcp__{_cli_mcp_server}__memory_read, etc.)"
+                                if provider == "claude_code"
+                                else f"\n(Note: on this backend the memory tools are served"
+                                f" by the '{_cli_mcp_server}' MCP server.)"
+                            )
                         logger.info("agents/geny: 내장 메모리 활성 (self-serve 도구 6개 등록)")
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
@@ -447,8 +507,9 @@ class AgentTurnExecutor:
                         )
 
             # ── built-in 도구 패밀리 (web/documents/browser/ssh/workflow) ──
-            # geny-executor 옵셔널 전부 채택 (Geny 동형) — SDK 경로 전용. CLI 백엔드는
-            # 자체 네이티브 도구를 쓴다. 파일 도구는 실행별 임시 workspace 에 격리되고
+            # geny-executor 옵셔널 전부 채택 (Geny 동형). CLI 백엔드도 로컬 표면이
+            # 있으면 **같은 조립**을 지난다 — 네이티브는 전면 차단이므로 파일/셸도
+            # 여기서 나온 우리 도구가 유일한 경로다. 파일 도구는 workspace 에 격리되고
             # (path guard), 문서 산출물은 사용자 스토리지 '결과물' 폴더로 업로드되어
             # 다운로드 버튼으로 나타난다. 관리자 차단: GENY_TOOLS_*_ENABLED.
             run_tool_context = None
@@ -458,7 +519,7 @@ class AgentTurnExecutor:
             # 통째로 날아간다.
             _hydrated_ws: Optional[str] = None
             _hydrated_wf: str = ""
-            if provider not in _CLI_BACKENDS and bool(kwargs.get("enable_builtin_tools", True)):
+            if _sdk_tools and bool(kwargs.get("enable_builtin_tools", True)):
                 try:
                     import shutil as _shutil
                     import tempfile as _tempfile
@@ -585,24 +646,16 @@ class AgentTurnExecutor:
                 except Exception as exc:  # noqa: BLE001 — 내장 도구는 실행을 깨지 않는다
                     logger.warning("agents/geny: built-in 도구 등록 실패 (스킵): %s", exc)
 
-            # ── 자기진화(self-evolution) — built-in tools 와 독립 등록 ──────────
+            # ── 자기진화(self-evolution) 등록 — built-in tools 와 독립 ──────────
             # WorkflowSelf 는 registry + workflow_id 만 있으면 되고(편집은 DB, workspace
             # 불필요), built-in tools 설정과 무관해야 한다. 예전엔 enable_builtin_tools 와
             # `if bt_summary['tools']` 안에 중첩돼, 내장도구를 끄거나 모든 패밀리를 kill-switch
-            # 로 비우면 self-evolution 이 조용히 죽었다(감사 HIGH). 여기서 독립 게이트로 등록.
-            #
-            # ★ 보안: 배포(deploy_)·게스트(guest_) 실행에서는 절대 등록하지 않는다. 그 실행은
-            # 워크플로 OWNER user_id 로 돌아 write-access 검사를 통과하므로, 익명 사용자/문서
-            # 프롬프트 인젝션이 라이브 프로덕션 그래프를 영구 변조할 수 있다(감사 CRITICAL).
-            # 판정은 SDK/CLI 공용 (_self_evolution_policy) — CLI 백엔드는 여기서
-            # registry 에 넣지 않고(어차피 CLI 에 안 보인다) 커넥터 MCP 브릿지가
-            # 같은 판정으로 WorkflowSelf 를 광고한다 (build_cli_run_context 의
-            # self_evolution 플래그 → cli_bridge_registry).
-            _se_allowed, _se_reason = _self_evolution_policy(kwargs, host.setting)
-            kwargs["_self_evolution_allowed"] = _se_allowed
-            if not _se_allowed:
-                logger.info("agents/geny: self-evolution 미배선 — %s", _se_reason)
-            if provider not in _CLI_BACKENDS and _se_allowed:
+            # 로 비우면 self-evolution 이 조용히 죽었다(감사 HIGH).
+            # (판정 _se_allowed 는 위에서 끝났다 — 브릿지 가용성 판정이 그 결과를 본다.)
+            # 서버 CLI 경로는 여기서 registry 에 넣지 않고(그 registry 를 CLI 가 못 본다)
+            # 커넥터 MCP 브릿지가 같은 판정으로 WorkflowSelf 를 광고한다
+            # (build_cli_run_context 의 self_evolution 플래그 → cli_bridge_registry).
+            if _sdk_tools and _se_allowed:
                 try:
                     from xgen_agent_runtime.tools import ToolRegistry as _ToolRegistry
 
@@ -619,6 +672,20 @@ class AgentTurnExecutor:
                     # 있다"고 말해 놓고 도구가 없는 유령 안내가 된다.
                     if registry.get("WorkflowSelf") is not None:
                         system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK
+                        if provider == "claude_code":
+                            # 하네스 자체 'Workflow'(서브에이전트 조율)와 이름이 비슷해
+                            # 그래프 편집 요청을 그쪽으로 오인하는 회귀가 있었다(프로드 실증).
+                            system_prompt += (
+                                f"\n(Note: on this backend the graph-editing tool appears as"
+                                f" mcp__{_cli_mcp_server}__WorkflowSelf. Your harness's own"
+                                " 'Workflow' tool is subagent orchestration — NOT XGEN"
+                                " graph editing.)"
+                            )
+                        elif provider == "codex":
+                            system_prompt += (
+                                f"\n(Note: on this backend the WorkflowSelf tool is served"
+                                f" by the '{_cli_mcp_server}' MCP server.)"
+                            )
                     else:
                         logger.info(
                             "agents/geny: self-evolution 미배선 — host 가 WorkflowSelf 를 제공하지 않음"
@@ -741,9 +808,10 @@ class AgentTurnExecutor:
                         # 매 호출이 NO_SUBAGENT_MANAGER 로 죽는 유령 도구가 된다 —
                         # WorkflowSelf 와 같은 원칙으로 등록·노트 모두 생략.
                         logger.info("agents/geny: 위임 미배선 — host 미제공")
-                    elif provider == "claude_code":
-                        # CLI 경로: 도구는 커넥터 MCP 브릿지가 광고/실행한다 —
+                    elif provider == "claude_code" and not _local_tool_surface:
+                        # 서버 CLI 경로: 도구는 커넥터 MCP 브릿지가 광고/실행한다 —
                         # _build_connector_mcp_bridge 가 run ctx 로 가져가도록 스태시.
+                        # (로컬 표면이면 아래 SDK 분기가 registry 에 직접 등록한다.)
                         kwargs["_delegation_extras"] = delegation_extras
                         # 도구 계약은 도구 설명이 담는다 (Geny 동형 — 위임 프롬프트
                         # 블록 없음). CLI 에만 이름 매핑/내장 Task 비활성 사실을 한 줄로.
@@ -863,19 +931,30 @@ class AgentTurnExecutor:
 
             llm_client = None
             cli_cleanup = None
-            if provider == "claude_code":
-                # CLI 백엔드는 에이전트 루프를 CLI 가 소유한다 — 파이프라인 ToolRegistry
-                # (Tools 포트/RAG 임베디드 도구)는 CLI 에 보이지 않으므로 이번 실행에서
-                # 제외한다. 단, 커넥터 Local MCP 도구는 _build_cli_runtime 이 --mcp-config
-                # stdio 셔틀로 CLI 에 별도 노출한다(위 injector 는 건너뜀). Tools 포트 도구의
-                # 일반 registry→CLI 브리지는 별도 과제로 남는다.
-                if registry:
+            if provider in _CLI_BACKENDS:
+                # CLI 백엔드는 에이전트 루프를 CLI 가 소유한다 — 파이프라인 Stage 10 이
+                # 돌지 않으므로 registry 를 파이프라인에 넘겨도 아무도 보지 않는다.
+                # 그래서 여기서 registry 는 항상 떼어내되, **로컬 표면이면 버리지 않고**
+                # host 에게 넘긴다(kwargs 스태시 — _cloud_skill/_sandbox_session 과 같은
+                # 규약. 시그니처 인자로 넣었다가 CLI 백엔드 전체가 기동 실패한 적 있다).
+                # host 는 이 registry 를 루프백 MCP 로 열어 CLI 에 그대로 광고한다.
+                if _local_tool_surface:
+                    kwargs["_tool_registry"] = registry
+                    kwargs["_run_tool_context"] = run_tool_context
+                    logger.info(
+                        "agents/geny: %s 백엔드 — 런타임 도구 %d개를 MCP 표면으로 넘긴다",
+                        provider,
+                        len(registry) if registry else 0,
+                    )
+                elif registry:
                     logger.warning(
-                        "agents/geny: Claude Code 백엔드는 Tools 포트 연결 도구 %d개를 이번 실행에서 "
-                        "사용할 수 없습니다 (커넥터 Local MCP 는 --mcp-config 로 별도 노출됨)",
+                        "agents/geny: %s 백엔드는 Tools 포트 연결 도구 %d개를 이번 실행에서 "
+                        "사용할 수 없습니다 (서버 CLI 브릿지가 자기 표면을 별도 조립)",
+                        provider,
                         len(registry),
                     )
-                    registry = None
+                registry = None
+            if provider == "claude_code":
                 # cloud_skill 은 시그니처로 나르지 않는다 — Geny 규약대로 kwargs
                 # 스태시(_cloud_skill)를 브릿지가 읽는다. 여기에 인자로도 넣었다가
                 # 시그니처에 없어 CLI 백엔드 전체가 기동 실패했다 (프로드 실증).
@@ -895,14 +974,6 @@ class AgentTurnExecutor:
                         _cli_wf,
                     )
             elif provider == "codex":
-                # Codex 도 CLI 가 루프를 소유한다 — registry 도구는 보이지 않는다.
-                if registry:
-                    logger.warning(
-                        "agents/geny: Codex 백엔드는 Tools 포트 연결 도구 %d개를 이번 실행에서 "
-                        "사용할 수 없습니다 (커넥터 Local MCP 는 -c mcp_servers 로 별도 노출됨)",
-                        len(registry),
-                    )
-                    registry = None
                 llm_client, cli_cleanup = host.build_cli_runtime(
                     "codex",
                     kwargs,

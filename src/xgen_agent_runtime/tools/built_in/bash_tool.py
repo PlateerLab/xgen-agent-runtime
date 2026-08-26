@@ -8,7 +8,12 @@ import os
 import sys
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
-from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.base import (
+    HOST_IS_EXECUTION_TARGET,
+    Tool,
+    ToolContext,
+    ToolResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -251,18 +256,28 @@ class BashTool(Tool):
                 metadata={"exit_code": exit_code, "sandboxed": True},
             )
 
-        # No sandbox attached. By design every XGeny agent has one, so this
-        # is a degraded path (feature disabled via XGENY_SANDBOX_EXEC, or a
-        # non-agent context) that runs the command on the HOST/pod, not in an
-        # isolated session. Never fail silently: warn and tag the result so
-        # the degradation is visible in logs and telemetry rather than the
-        # command quietly touching the serving pod.
-        logger.warning(
-            "Bash executing on the HOST (no sandbox attached to ToolContext); "
-            "command will run on the serving pod, not in an isolated session. "
-            "This is a degraded path — check that the agent's sandbox session "
-            "is being propagated into the tool dispatch context."
-        )
+        # No sandbox attached — which of two very different situations is this?
+        #
+        #   (a) The host IS the execution target: the desktop connector's local
+        #       turn runs on the user's own PC, where "no sandbox" is the whole
+        #       point (path guard = allowed_paths). Hosts say so by setting
+        #       ``extras[HOST_IS_EXECUTION_TARGET]``.
+        #   (b) Anything else: a serving pod that was supposed to have a runner
+        #       session. The command then quietly touches the pod and the files
+        #       vanish with it — that must never pass silently.
+        #
+        # Warning on (a) too would be a false alarm every single local turn, and
+        # it told the reader to go "check sandbox propagation" for something that
+        # is working exactly as designed.
+        if context.extras.get(HOST_IS_EXECUTION_TARGET):
+            logger.debug("Bash executing on the host (local run — no sandbox by design)")
+        else:
+            logger.warning(
+                "Bash executing on the HOST (no sandbox attached to ToolContext); "
+                "command will run on the serving pod, not in an isolated session. "
+                "This is a degraded path — check that the agent's sandbox session "
+                "is being propagated into the tool dispatch context."
+            )
         cwd = context.working_dir or None
 
         # Build a SCRUBBED environment (audit S3): a benign base +

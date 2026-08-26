@@ -5,21 +5,22 @@ of xgen-workflow's ``scripts/connector_mcp_bridge.py``.
 Why this exists
 ---------------
 CLI backends (claude_code / codex) own their own agent loop and can only see
-external tools through MCP. On the server that surface is provided by the
-workflow repo's stdio bridge. A **local** CLI turn (the desktop connector's
-python sidecar) had no bridge at all, so it saw only the CLI's native tools —
-no connector browser (the user's visible XGEN tab), no memory tools, no
-self-evolution. MCP is our standard way of handing tools to Claude Code, and it
-must not depend on the user's optional "local MCP servers" setting.
+external tools through MCP. Their **native** tools are fully blocked (server and
+local alike), so what this shim carries is not a supplement — it is the agent's
+entire tool surface: files, shell, documents, browser, memory, WorkflowSelf.
 
-So this shim gives a local CLI turn the same MCP surface the server gives:
-every JSON-RPC envelope is forwarded to the server's connector-MCP RPC endpoint
-(``/api/internal/connector-mcp/{user_id}/rpc``), which dispatches to
-  * the user's connector over the reverse WebSocket (browser/desktop tools) and
-  * server-owned tools bound to the ephemeral token (memory_*, WorkflowSelf).
+The shim is a thin, dumb proxy. It does not build or filter tools; it forwards
+each JSON-RPC envelope to whatever endpoint its env points at:
 
-File/shell work stays on the CLI's **native** tools — the server binds no
-built-in families for local turns, so nothing here competes with them.
+  * **Local turn** — ``http://127.0.0.1:<port>/rpc``, the loopback server that
+    :class:`~xgen_agent_runtime.host.local_tool_mcp.LocalToolMcpServer` opened
+    **inside the turn process**. That server owns the live ``ToolRegistry`` and
+    ``ToolContext`` this turn assembled, so the CLI sees exactly the SDK
+    surface, executing at exactly the SDK location (``sandbox=None`` → this PC,
+    ``working_dir`` = the synced workspace, guarded by ``allowed_paths``).
+  * **Server turn** — the workflow repo's own stdio bridge plays this role
+    (``scripts/connector_mcp_bridge.py``); same protocol, same shape, but its
+    ToolContext carries the runner sandbox so the same tools run there instead.
 
 Design (mirrors the proven server shim):
   - **Stdlib only** (``urllib``) and synchronous line-by-line stdio: one
@@ -30,10 +31,10 @@ Design (mirrors the proven server shim):
     ``notifications/tools/list_changed`` push so a tool created mid-turn is
     callable in the same turn.
 
-Env (set by LocalHostServices when spawning the CLI with --mcp-config):
-  XGEN_MCP_URL        — server base URL (REQUIRED, e.g. https://xgen.example)
-  XGEN_MCP_PATH       — RPC path incl. user id (REQUIRED)
-  XGEN_MCP_TOKEN      — ephemeral bridge token (REQUIRED)
+Env (set by the host when spawning the CLI with --mcp-config):
+  XGEN_MCP_URL        — base URL (REQUIRED; loopback origin for local turns)
+  XGEN_MCP_PATH       — RPC path (REQUIRED)
+  XGEN_MCP_TOKEN      — ephemeral bearer token (REQUIRED)
   XGEN_MCP_TIMEOUT_S  — per-RPC HTTP timeout (default 300)
 """
 

@@ -90,6 +90,14 @@ class PermissionDecision:
 # Tool execution context
 # ─────────────────────────────────────────────────────────────────
 
+#: ``ToolContext.extras`` key: this host **is** the execution target, so a
+#: missing ``sandbox`` is by design, not a lost runner session. The desktop
+#: connector's local turn sets it — there the user's own PC is where work is
+#: supposed to land, and ``allowed_paths`` is the fence. Without this flag a
+#: missing sandbox means a serving pod lost its runner, which tools must
+#: surface loudly (files written there vanish with the pod).
+HOST_IS_EXECUTION_TARGET = "host_is_execution_target"
+
 
 @dataclass
 class ToolContext:
