@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import sys
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 logger = logging.getLogger("xgen_agent_runtime.host.local_host")
@@ -130,16 +131,65 @@ class LocalHostServices:
         raw = self.setting(flag).strip().lower()
         return raw not in ("0", "false", "no", "off")
 
-    def cli_bridge_available(self, provider: str) -> bool:
-        """CLI(claude_code/codex) 턴에 ``mcp__connector__*`` 브릿지가 붙는가 — 로컬은 **항상 False**.
+    def _cli_mcp_meta(self) -> Dict[str, Any]:
+        """로컬 CLI 턴의 **내장 MCP 브릿지** 설정(서버가 컨텍스트로 실어 준 것).
 
-        로컬 CLI 턴은 서버로 되돌아가는 MCP 브릿지가 없다(네이티브 도구가 곧 로컬
-        파일). 실행기는 이 값으로 CLI 전용 프롬프트 안내(mcp__connector__memory_*
-        메모리 도구·DelegateTask 위임·SELF_EVOLUTION 블록)를 **붙이지 않는다** —
-        없는 도구를 안내하면 유령 도구가 된다. 기억은 RemoteMemoryProvider 단계
-        (주입/STM 기록)가 자동으로 처리하므로 도구 없이도 웹과 같은 기억을 쓴다.
+        MCP 는 CLI 백엔드에 도구를 건네는 표준 경로다. 사용자의 '로컬 MCP 사용'
+        (외부 MCP 서버) 설정과 **무관하게** 내장 표면은 주입되어야 한다.
         """
-        return False
+        meta = self._ctx.get("cli_mcp")
+        if not isinstance(meta, dict) or not meta.get("enabled"):
+            return {}
+        if not str(meta.get("path") or "").strip() or not str(meta.get("token") or "").strip():
+            return {}
+        if self._bridge is None or not str(getattr(self._bridge, "base_url", "") or "").strip():
+            return {}
+        return meta
+
+    def _cli_mcp_config(self) -> tuple:
+        """``(mcp_config, settings_json, allow_tools)`` — 없으면 ``(None, "", ())``.
+
+        서버 CLI 경로(agent_geny._build_connector_mcp_bridge)와 **같은 모양**:
+        stdio shim 을 ``--mcp-config`` 로 물리고 ``mcp__connector`` 를 통째로 사전
+        허용한다(--print 비대화 모드가 권한 프롬프트에서 막히지 않게). 차이는 셋뿐
+        — shim 이 런타임 패키지 안에 있고(모듈 실행), URL 이 이 PC 에서 도달 가능한
+        **서버 공개 주소**이며, 토큰을 서버가 로컬 턴 컨텍스트로 실어 준다.
+        """
+        meta = self._cli_mcp_meta()
+        if not meta:
+            return None, "", ()
+        base = str(self._bridge.base_url).rstrip("/")
+        env = {
+            "XGEN_MCP_URL": base,
+            "XGEN_MCP_PATH": str(meta.get("path")),
+            "XGEN_MCP_TOKEN": str(meta.get("token")),
+            "XGEN_MCP_TIMEOUT_S": str(meta.get("timeout_s") or 300),
+        }
+        mcp_config = {
+            "mcpServers": {
+                "connector": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    # 파일 경로가 아니라 **모듈 실행** — 설치 레이아웃(번들/휠/개발
+                    # 트리)에 상관없이 같은 인터프리터가 패키지를 찾는다.
+                    "args": ["-m", "xgen_agent_runtime.host.cli_mcp_shim"],
+                    "env": env,
+                }
+            }
+        }
+        settings_json = json.dumps({"permissions": {"allow": ["mcp__connector"]}}, ensure_ascii=False)
+        return mcp_config, settings_json, ("mcp__connector",)
+
+    def cli_bridge_available(self, provider: str) -> bool:
+        """CLI(claude_code/codex) 턴에 ``mcp__connector__*`` 브릿지가 붙는가.
+
+        서버가 로컬 턴 컨텍스트에 ``cli_mcp`` (RPC 경로+토큰)를 실어 주면 True —
+        그 브릿지가 커넥터 데스크톱 도구(브라우저 등)·memory_*·WorkflowSelf 를
+        실제로 광고한다. 실행기는 이 값으로 CLI 전용 프롬프트 안내를 붙이므로
+        **광고되는 표면과 정확히 일치**해야 한다(없는 도구를 안내하면 유령 도구).
+        브릿지가 없으면(구서버/미로그인) 예전처럼 False — 네이티브 도구만.
+        """
+        return bool(self._cli_mcp_meta())
 
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str:
         # 에이전트 설정(provider/model)은 서버 저장 에이전트에서 온다 = run() kwargs.
@@ -826,13 +876,18 @@ class LocalHostServices:
             # 샌드박스/승인: CodexCLIClient 기본 ``--sandbox workspace-write`` + ``codex exec``
             # (헤드리스 — 승인 정책 never) 로 cwd(=동기화 폴더) 안 쓰기는 프롬프트 없이
             # 허용되고 밖은 거부된다. bypass(--dangerously-bypass…)는 쓰지 않는다.
+            # 내장 MCP 표면 — 사용자의 '로컬 MCP 사용'(외부 서버) 설정과 무관하게
+            # 서버가 실어 준 브릿지를 물린다 (커넥터 브라우저·memory_*·WorkflowSelf).
+            _mcp_config, _mcp_settings, _mcp_allow = self._cli_mcp_config()
+            if _mcp_config:
+                logger.info("local-host(codex): 내장 MCP 브릿지 연결 (mcp__connector)")
             client = build_codex_cli_client(
                 auth_mode=auth_mode,
                 api_key=api_key,
                 binary_path=self.setting("CODEX_BINARY_PATH"),
                 workspace_dir=self._workspace,
                 timeout_s=timeout_s,
-                mcp_config=None,
+                mcp_config=_mcp_config,
                 env_extras=env_extras or None,
             )
             return client, None
@@ -864,7 +919,16 @@ class LocalHostServices:
             extra_env["CLAUDE_CONFIG_DIR"] = claude_home
         # --print(비대화) 는 허용 목록 밖 도구 호출을 프롬프트 없이 자동 거부한다 —
         # 네이티브 표면을 settings(permissions.allow) + --allowedTools 로 사전 허용.
-        settings_path = self._claude_local_settings(claude_home, allow_tools=_kept_natives)
+        # 내장 MCP 표면 — 사용자의 '로컬 MCP 사용'(외부 서버) 설정과 무관하게 서버가
+        # 실어 준 브릿지를 물린다: 커넥터 데스크톱 도구(사용자가 보는 XGEN 브라우저
+        # 탭)·memory_*·WorkflowSelf. MCP 가 CLI 백엔드에 도구를 건네는 표준 경로다.
+        _mcp_config, _mcp_settings, _mcp_allow = self._cli_mcp_config()
+        # --print 비대화 모드가 권한 프롬프트에서 막히지 않게 브릿지 서버 전체를
+        # 네이티브와 **같은 settings 파일**에 함께 사전 허용한다.
+        _pre_allow = list(_kept_natives) + list(_mcp_allow)
+        settings_path = self._claude_local_settings(claude_home, allow_tools=_pre_allow)
+        if _mcp_config:
+            logger.info("local-host(claude): 내장 MCP 브릿지 연결 (mcp__connector)")
         client = build_cli_client(
             auth_mode=auth_mode,
             api_key=api_key,
@@ -874,16 +938,16 @@ class LocalHostServices:
             timeout_s=timeout_s,
             max_budget_usd=budget,
             # ⚠ 로컬: CLI 의 **네이티브** 도구(Read/Write/Edit/Bash/…)를 켠다.
-            # 서버는 러너 sandbox 가 붙어 있어 끄고 mcp__connector__* 로 브릿지하지만,
-            # 여기엔 브릿지가 없다 — 끄면 모델에게 파일/셸 도구가 하나도 남지 않는다.
+            # 파일/셸은 이 PC 가 곧 실행 위치라 네이티브가 정답이다 — MCP 브릿지가
+            # 붙어도 서버는 로컬 턴에 내장 파일/셸 패밀리를 바인딩하지 않는다.
             allow_local_tools=True,
             permission_mode="default",
             settings_path=settings_path,
-            # 유지된 네이티브만 사전 허용하고, 제거된 것은 disallow 로 차단한다
-            # (--disallowedTools 가 우선). 기본은 Bash 만 유지.
-            allow_tools=tuple(_kept_natives),
+            # 유지된 네이티브 + (있으면) 브릿지 서버 전체를 사전 허용하고,
+            # 제거된 네이티브는 disallow 로 차단한다(--disallowedTools 가 우선).
+            allow_tools=tuple(_pre_allow),
             disallow_tools_extra=tuple(_removed_natives),
-            mcp_config=None,
+            mcp_config=_mcp_config,
             extra_env=extra_env or None,
             # 이 호스트는 턴마다 파이프라인/CLI 클라이언트를 새로 만들고 턴 끝에 닫는다
             # (one-shot). hot-spare 프리웜은 '다음 턴'이 이 클라이언트를 재사용할 때만

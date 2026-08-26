@@ -4,6 +4,31 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.13.0] — 2026-08-26
+
+### Added — 로컬 CLI 턴의 **내장 MCP 표면** (사용자 MCP 설정과 무관)
+
+MCP 는 CLI 백엔드(claude_code/codex)에 도구를 건네는 표준 경로다. 서버 실행은
+이미 stdio 브릿지로 그 표면을 주지만, **로컬 CLI 턴은 브릿지가 아예 없어**
+네이티브 도구만 보였다 — 커넥터 브라우저(사용자가 보는 XGEN 탭)도, memory_* 도,
+WorkflowSelf 도 없었다. 사용자의 '로컬 MCP 사용'(외부 MCP 서버 등록)은 **추가**
+서버용 설정이므로, 내장 표면은 그 설정과 무관하게 주입되어야 한다.
+
+- `host/cli_mcp_shim.py`(신규) — stdio JSON-RPC 를 서버의 connector-MCP RPC 로
+  전달하는 얇은 프록시(stdlib 전용). 서버 shim 과 같은 규약: HTTP/전송 실패는
+  MCP 형식 JSON-RPC 에러로, `_meta.genyToolsChanged` 는
+  `notifications/tools/list_changed` 로 밀어 같은 턴 도구 활성화를 지원한다.
+- `LocalHostServices._cli_mcp_config()` — 서버가 실어 준 `cli_mcp`(경로+토큰)로
+  `--mcp-config` 를 구성하고 `mcp__connector` 를 settings/allowedTools 에 사전
+  허용한다(--print 가 권한 프롬프트에서 막히지 않게). shim 은 **모듈 실행**이라
+  설치 레이아웃과 무관하다. claude/codex 양 백엔드에 배선.
+- `cli_bridge_available()` — 이제 브릿지 유무를 정직하게 반환한다(전엔 항상
+  False). 실행기가 이 값으로 CLI 프롬프트 안내를 붙이므로 **광고 표면과 정확히
+  일치**해야 한다. 브릿지가 없으면 예전 그대로 네이티브 전용.
+- 파일/셸은 계속 **네이티브** — 서버는 로컬 턴에 내장 파일/셸 패밀리를 바인딩하지
+  않는다(그 일은 이 PC 에서 해야 한다).
+- 서브프로세스 실증 테스트(`tests/test_cli_mcp_shim.py`) 포함.
+
 ## [3.12.0] — 2026-08-26
 
 ### Changed — 브라우저 표면은 언제나 하나 (커넥터 브라우저 vs an-web)
