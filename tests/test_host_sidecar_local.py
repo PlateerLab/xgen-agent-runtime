@@ -312,7 +312,7 @@ def test_local_host_codex_cli_runtime_isolates_home_and_materializes(tmp_path, m
     assert captured["env_extras"] is None
 
 
-def test_local_host_claude_cli_runtime_allows_native_tools_and_isolates(tmp_path, monkeypatch) -> None:
+def test_local_host_claude_cli_runtime_blocks_natives_and_isolates(tmp_path, monkeypatch) -> None:
     import xgen_agent_runtime.host.runner as runner
 
     captured: Dict[str, Any] = {}
@@ -338,7 +338,9 @@ def test_local_host_claude_cli_runtime_allows_native_tools_and_isolates(tmp_path
         },
     )
     host.build_cli_runtime("claude_code", {})
-    assert captured["allow_local_tools"] is True  # 로컬 base 는 열고, 제거분만 disallow 로 뺀다
+    # 네이티브는 전면 차단 — 같은 능력은 루프백 MCP 가 우리 런타임 도구로 준다
+    # (registry 스태시가 없는 이 호출은 mcp_config 도 None: 도구 0개가 정직한 결과).
+    assert captured["allow_local_tools"] is False
     assert captured["auth_mode"] == "setup_token" and captured["oauth_token"] == "tok"
     assert captured["api_key"] == ""
     assert captured["extra_env"] == {"CLAUDE_CONFIG_DIR": str(claude_home)}
@@ -524,7 +526,14 @@ def test_local_host_run_tool_context_confines_allowed_paths(tmp_path) -> None:
     host = LocalHostServices(str(ws))
     ctx = host.build_run_tool_context(interaction_id="i1", run_dir=str(ws), extras={"a": 1})
     assert ctx.allowed_paths == [str(ws)]
-    assert ctx.working_dir == str(ws) and ctx.sandbox is None and ctx.metadata == {"a": 1}
+    assert ctx.working_dir == str(ws) and ctx.sandbox is None
+    # ⚠ extras 다 — metadata 가 아니다. 도구는 ctx.extras 만 읽는다(docs api_key,
+    # ssh servers, subagent_manager…). metadata 로 실으면 전부 조용히 미배선이 된다.
+    assert ctx.extras["a"] == 1 and ctx.metadata == {}
+    # 로컬은 호스트가 곧 실행 대상 — sandbox 없음이 설계라는 표식이 실린다.
+    from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET
+
+    assert ctx.extras[HOST_IS_EXECUTION_TARGET] is True
     extra = tmp_path / "cloud"
     ctx2 = host.build_run_tool_context(run_dir=str(ws), extra_allowed=[str(extra), str(extra), ""])
     assert ctx2.allowed_paths == [str(ws), str(extra)]
@@ -563,9 +572,22 @@ def test_local_host_file_tools_reject_paths_outside_workspace(tmp_path) -> None:
     assert r_out.is_error and "top secret" not in r_out.content
 
 
-def test_local_host_claude_cli_preallows_native_tools(tmp_path, monkeypatch) -> None:
-    """--print 자동 거부 방지 + 네이티브 도구 선택: 기본은 Bash 만 사전 허용하고
-    나머지는 disallow 로 제거한다(에이전트별 tool-toggle-list). permission_mode=default."""
+def _registry_stash(ws: str) -> Dict[str, Any]:
+    """turn_executor 가 CLI 백엔드에 넘기는 스태시(레지스트리 + run ctx)."""
+    from xgen_agent_runtime.tools import ToolRegistry
+    from xgen_agent_runtime.tools.base import ToolContext
+    from xgen_agent_runtime.tools.built_in import get_builtin_tools
+
+    reg = ToolRegistry()
+    for name, cls in get_builtin_tools(features=["shell"]).items():
+        reg.register(cls(), core=True)
+    ctx = ToolContext(session_id="i1", working_dir=ws, allowed_paths=[ws], sandbox=None)
+    return {"_tool_registry": reg, "_run_tool_context": ctx}
+
+
+def test_local_host_claude_preallows_loopback_surface_only(tmp_path, monkeypatch) -> None:
+    """--print 자동 거부 방지: 사전 허용되는 것은 **루프백 MCP 서버 하나**뿐이고
+    CLI 네이티브는 전면 차단된다(같은 능력은 우리 런타임 도구가 준다)."""
     import xgen_agent_runtime.host.runner as runner
     from xgen_agent_runtime.host import local_host as lh
 
@@ -577,8 +599,10 @@ def test_local_host_claude_cli_preallows_native_tools(tmp_path, monkeypatch) -> 
 
     monkeypatch.setattr(runner, "build_cli_client", _fake_claude)
     claude_home = tmp_path / "claude-home"
+    ws = tmp_path / "ws"
+    ws.mkdir()
     host = LocalHostServices(
-        str(tmp_path / "ws"),
+        str(ws),
         context={
             "api_keys": {"anthropic": "ak"},
             "settings": {
@@ -588,39 +612,59 @@ def test_local_host_claude_cli_preallows_native_tools(tmp_path, monkeypatch) -> 
             },
         },
     )
-    host.build_cli_runtime("claude_code", {})
-    settings_file = claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME
-    assert captured["settings_path"] == str(settings_file)
-    allow = json.loads(settings_file.read_text(encoding="utf-8"))["permissions"]["allow"]
-    # 기본 정책: Bash 만 유지.
-    assert allow == ["Bash"]
-    assert tuple(captured["allow_tools"]) == ("Bash",)
-    # 제거분은 disallow_tools_extra 로 넘어간다.
-    removed = set(captured["disallow_tools_extra"])
-    assert {"Read", "Write", "Edit", "WebSearch", "WebFetch", "TodoWrite"} <= removed
-    assert "Bash" not in removed
-    assert captured["permission_mode"] == "default"
-    assert captured["allow_local_tools"] is True
-    # 멱등 — 두 번째 호출도 같은 파일
-    host.build_cli_runtime("claude_code", {})
-    assert captured["settings_path"] == str(settings_file)
-    # 사용자가 전부 켜면("[]") 카탈로그 전체가 사전 허용된다.
-    host.build_cli_runtime("claude_code", {"cli_native_tools_disabled": "[]"})
-    allow_all = json.loads(
-        (claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME).read_text(encoding="utf-8")
-    )["permissions"]["allow"]
-    assert set(lh.CLAUDE_LOCAL_ALLOW_TOOLS) <= set(allow_all)
-    assert not set(captured["disallow_tools_extra"])
+    _client, cleanup = host.build_cli_runtime("claude_code", _registry_stash(str(ws)))
+    try:
+        settings_file = claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME
+        assert captured["settings_path"] == str(settings_file)
+        allow = json.loads(settings_file.read_text(encoding="utf-8"))["permissions"]["allow"]
+        expect = f"mcp__{lh.CLI_MCP_SERVER_NAME}"
+        assert allow == [expect] and tuple(captured["allow_tools"]) == (expect,)
+        # 네이티브 전면 차단 — runner 가 카탈로그 전체를 disallow 로 만든다.
+        assert captured["allow_local_tools"] is False
+        assert not captured.get("disallow_tools_extra")
+        assert captured["permission_mode"] == "default"
+        # 루프백이 실제로 물렸는지: mcp_config 가 shim 을 모듈 실행으로 가리킨다.
+        server = captured["mcp_config"]["mcpServers"][lh.CLI_MCP_SERVER_NAME]
+        assert server["args"] == ["-m", "xgen_agent_runtime.host.cli_mcp_shim"]
+        assert server["env"]["XGEN_MCP_URL"].startswith("http://127.0.0.1:")
+        assert server["env"]["XGEN_MCP_TOKEN"]
+        # 표면이 곧 도구 전부 → CLI 자체 tool-search 재유예는 끈다.
+        assert captured["extra_env"]["ENABLE_TOOL_SEARCH"] == "false"
+    finally:
+        if cleanup:
+            cleanup()
+
+
+def test_local_host_claude_without_registry_has_no_tools(tmp_path, monkeypatch) -> None:
+    """레지스트리가 없으면 mcp_config 도 없다 — 네이티브도 차단이므로 도구 0개.
+    조용히 네이티브로 되돌아가지 않는 것이 요점(그건 가드 없는 실행이 된다)."""
+    import xgen_agent_runtime.host.runner as runner
+
+    captured: Dict[str, Any] = {}
+    monkeypatch.setattr(runner, "build_cli_client", lambda **kw: captured.update(kw) or "c")
+    host = LocalHostServices(
+        str(tmp_path / "ws"),
+        context={"api_keys": {"anthropic": "ak"}, "settings": {"CLAUDE_CODE_ENABLED": "true"}},
+    )
+    _c, cleanup = host.build_cli_runtime("claude_code", {})
+    assert cleanup is None
+    assert captured["mcp_config"] is None
+    assert captured["allow_local_tools"] is False
+    assert tuple(captured["allow_tools"]) == ()
 
 
 def test_local_host_claude_argv_carries_allow_surface(tmp_path) -> None:
-    """실제 build_cli_client → ClaudeCodeCLIClient argv 에 --allowedTools/--settings 가 실리고 네이티브 도구가 차단 목록에 없다."""
+    """실제 build_cli_client → argv 에 --allowedTools/--settings 가 실리고,
+    네이티브 카탈로그 전체가 --disallowedTools 로 차단된다."""
     from xgen_agent_runtime.host import local_host as lh
+    from xgen_agent_runtime.host.runner import CLI_NATIVE_TOOL_CATALOG
     from xgen_agent_runtime.llm_client.types import APIRequest
 
     claude_home = tmp_path / "claude-home"
+    ws = tmp_path / "ws"
+    ws.mkdir()
     host = LocalHostServices(
-        str(tmp_path / "ws"),
+        str(ws),
         context={
             "api_keys": {"anthropic": "ak"},
             "settings": {
@@ -630,18 +674,25 @@ def test_local_host_claude_argv_carries_allow_surface(tmp_path) -> None:
             },
         },
     )
-    client, _ = host.build_cli_runtime("claude_code", {})
-    argv = client._build_argv(APIRequest(model="claude-sonnet-4-5", messages=[{"role": "user", "content": "x"}]))
-    allowed = argv[argv.index("--allowedTools") + 1].split()
-    # 기본 정책: Bash 만 --allowedTools 에 실린다.
-    assert "Bash" in allowed and "Read" not in allowed
-    assert argv[argv.index("--settings") + 1] == str(claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME)
-    assert "--permission-mode" not in argv  # default 유지(허용 목록으로 충분)
-    disallowed = argv[argv.index("--disallowedTools") + 1].split() if "--disallowedTools" in argv else []
-    # 제거된 네이티브(기본 Bash 제외 전부)가 --disallowedTools 에 실린다.
-    assert {"Read", "Write", "Edit", "WebSearch", "WebFetch", "TodoWrite"} <= set(disallowed)
-    assert "Bash" not in disallowed
-    assert "CronCreate" in disallowed  # 세션 한정 스케줄 도구는 여전히 차단
+    client, cleanup = host.build_cli_runtime("claude_code", _registry_stash(str(ws)))
+    try:
+        argv = client._build_argv(
+            APIRequest(model="claude-sonnet-4-5", messages=[{"role": "user", "content": "x"}])
+        )
+        allowed = argv[argv.index("--allowedTools") + 1].split()
+        assert allowed == [f"mcp__{lh.CLI_MCP_SERVER_NAME}"]
+        assert argv[argv.index("--settings") + 1] == str(
+            claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME
+        )
+        assert "--permission-mode" not in argv  # default 유지(허용 목록으로 충분)
+        disallowed = set(argv[argv.index("--disallowedTools") + 1].split())
+        # 네이티브 카탈로그 **전체** — Bash 도 포함된다(런타임 레지스트리가 대신 준다).
+        assert set(CLI_NATIVE_TOOL_CATALOG) <= disallowed
+        assert "Bash" in disallowed
+        assert "CronCreate" in disallowed  # 세션 한정 스케줄 도구도 여전히 차단
+    finally:
+        if cleanup:
+            cleanup()
 
 
 def test_local_host_codex_runs_workspace_write_without_bypass(tmp_path, monkeypatch) -> None:
@@ -667,8 +718,11 @@ def test_local_host_flags_for_runner_and_executor(tmp_path) -> None:
     host = LocalHostServices(str(tmp_path / "ws"))
     assert LocalHostServices.record_failed_starts is False
     assert getattr(host, "record_failed_starts", True) is False
-    assert host.cli_bridge_available("claude_code") is False
-    assert host.cli_bridge_available("codex") is False
+    # 로컬 CLI 표면은 프로세스 안 루프백이라 선행 조건이 없다 — 서버 연결도,
+    # 커넥터 카탈로그도 필요 없다. 실행기는 이 값으로 CLI 도구 표면 존재를 읽는다.
+    for provider in ("claude_code", "codex"):
+        assert host.cli_bridge_available(provider) is True
+        assert host.cli_local_tool_surface(provider) is True
 
 
 def test_history_messages_accepts_plain_dicts() -> None:
@@ -832,101 +886,119 @@ def test_connector_browser_tools_replace_anweb_locally() -> None:
         assert "browser" in h.builtin_families()
 
 
-def test_local_cli_gets_builtin_mcp_bridge(tmp_path, monkeypatch) -> None:
-    """로컬 CLI 턴의 **내장 MCP 표면** — 사용자의 '로컬 MCP 사용'(외부 서버) 설정과
-    무관하게 주입된다. MCP 가 CLI 백엔드에 도구를 건네는 표준 경로이기 때문.
+def test_local_cli_loopback_serves_live_registry(tmp_path, monkeypatch) -> None:
+    """로컬 CLI 턴의 도구 표면 = **이 턴의 살아 있는 레지스트리**.
 
-    서버가 실어 준 cli_mcp(경로+토큰)를 stdio shim 으로 물리고, ``mcp__connector``
-    를 settings/allowedTools 에 사전 허용한다(--print 가 권한 프롬프트로 막히지
-    않게). 네이티브 도구(파일/셸)는 그대로 — 로컬 파일 작업은 이 PC 가 맞다.
+    turn_executor 가 스태시한 registry/ToolContext 를 그대로 루프백 JSON-RPC 로
+    열고 shim 이 그 앞단 프록시가 된다. 여기서 확인하는 것은 "설정이 그럴듯한가"
+    가 아니라 **실제로 그 도구가 그 컨텍스트로 실행되는가** 다 — 레지스트리와
+    ToolContext 가 하나여야 서버/로컬의 표면·경로 가드가 어긋나지 않는다.
     """
+    import urllib.request
+
     import xgen_agent_runtime.host.runner as runner
     from xgen_agent_runtime.host import local_host as lh
 
     captured: Dict[str, Any] = {}
+    monkeypatch.setattr(runner, "build_cli_client", lambda **kw: captured.update(kw) or "c")
 
-    def _fake_claude(**kw: Any) -> str:
-        captured.clear()
-        captured.update(kw)
-        return "client"
-
-    monkeypatch.setattr(runner, "build_cli_client", _fake_claude)
-
-    class _FakeBridge:
-        base_url = "https://xgen.example"
-        token = "user-token"
-
-    cli_mcp = {
-        "enabled": True,
-        "path": "/api/internal/connector-mcp/42/rpc",
-        "token": "tok-abc",
-        "timeout_s": 3600,
-    }
-    claude_home = tmp_path / "claude-home"
+    ws = tmp_path / "ws"
+    ws.mkdir()
     host = LocalHostServices(
-        str(tmp_path / "ws"),
+        str(ws),
         context={
             "api_keys": {"anthropic": "ak"},
-            "settings": {
-                "CLAUDE_CODE_ENABLED": "true",
-                "CLAUDE_CODE_AUTH_MODE": "api_key",
-                "XGEN_LOCAL_CLAUDE_CONFIG_DIR": str(claude_home),
-            },
-            "cli_mcp": cli_mcp,
+            "settings": {"CLAUDE_CODE_ENABLED": "true", "CLAUDE_CODE_AUTH_MODE": "api_key"},
         },
-        server_bridge=_FakeBridge(),
     )
+    _c, cleanup = host.build_cli_runtime("claude_code", _registry_stash(str(ws)))
+    server = captured["mcp_config"]["mcpServers"][lh.CLI_MCP_SERVER_NAME]
+    base, token = server["env"]["XGEN_MCP_URL"], server["env"]["XGEN_MCP_TOKEN"]
 
-    # 프롬프트 계약: 브릿지가 실제로 붙으므로 CLI 도구 안내가 정직해진다.
-    assert host.cli_bridge_available("claude_code") is True
+    def rpc(method: str, params: Any = None, *, tok: str = token) -> Dict[str, Any]:
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
+                           "params": params or {}}).encode()
+        req = urllib.request.Request(
+            base + server["env"]["XGEN_MCP_PATH"], data=body, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {tok}"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
 
-    host.build_cli_runtime("claude_code", {})
-    cfg = captured["mcp_config"]
-    server = cfg["mcpServers"]["connector"]
-    assert server["type"] == "stdio"
-    # 파일 경로가 아니라 모듈 실행 — 번들/휠/개발 트리 어디서도 같은 인터프리터가 찾는다.
-    assert server["args"] == ["-m", "xgen_agent_runtime.host.cli_mcp_shim"]
-    assert server["env"]["XGEN_MCP_URL"] == "https://xgen.example"
-    assert server["env"]["XGEN_MCP_PATH"] == cli_mcp["path"]
-    assert server["env"]["XGEN_MCP_TOKEN"] == "tok-abc"
+    try:
+        assert rpc("initialize")["result"]["protocolVersion"] == "2024-11-05"
+        names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
+        assert "Bash" in names  # 네이티브가 아니라 **우리** Bash 가 표면이다
+        # 스태시한 ToolContext 그대로 실행된다 — cwd 가 동기화 워크스페이스.
+        out = rpc("tools/call", {"name": "Bash", "arguments": {"command": "pwd"}})["result"]
+        assert out["isError"] is False
+        assert str(ws) in out["content"][0]["text"]
+        # 토큰이 없으면 아무것도 안 열린다(루프백이라도 같은 PC 의 다른 프로세스가 있다).
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            rpc("tools/list", tok="wrong")
+        assert exc.value.code == 401
+    finally:
+        cleanup()
 
-    # mcp__connector 사전 허용 + 네이티브(Bash) 유지 — 둘 다 같은 settings 파일에.
-    allow = set(captured["allow_tools"])
-    assert "mcp__connector" in allow and "Bash" in allow
-    perms = json.loads(
-        (claude_home / lh.CLAUDE_LOCAL_SETTINGS_FILENAME).read_text(encoding="utf-8")
-    )["permissions"]["allow"]
-    assert "mcp__connector" in perms and "Bash" in perms
-    assert captured["allow_local_tools"] is True  # 파일/셸은 여전히 네이티브
+    # 회수 후에는 포트가 닫힌다 — 턴이 끝나면 도구 표면도 사라져야 한다.
+    with pytest.raises(Exception):
+        rpc("tools/list")
 
 
-def test_local_cli_without_bridge_stays_native_only(tmp_path, monkeypatch) -> None:
-    """구서버/미로그인 등 브릿지가 없으면 예전 그대로 — 네이티브 도구만, 프롬프트도
-    CLI 도구를 약속하지 않는다(유령 방지)."""
-    import xgen_agent_runtime.host.runner as runner
+def test_local_cli_loopback_reports_tool_surface_changes(tmp_path) -> None:
+    """턴 중간에 레지스트리가 바뀌면 _meta 로 알린다 — shim 이 그걸 보고
+    list_changed 를 밀어 CLI 가 **같은 턴 안에서** 새 도구를 쓴다."""
+    from xgen_agent_runtime.host.local_tool_mcp import LocalToolMcpServer
+    from xgen_agent_runtime.tools import ToolRegistry
+    from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 
-    captured: Dict[str, Any] = {}
-    monkeypatch.setattr(
-        runner, "build_cli_client", lambda **kw: (captured.update(kw), "c")[1]
-    )
+    class _Spawner(Tool):
+        def __init__(self, reg: Any) -> None:
+            self._reg = reg
 
-    class _FakeBridge:
-        base_url = "https://xgen.example"
-        token = "t"
+        @property
+        def name(self) -> str:
+            return "Spawn"
 
-    base_ctx = {
-        "api_keys": {"anthropic": "ak"},
-        "settings": {"CLAUDE_CODE_ENABLED": "true", "CLAUDE_CODE_AUTH_MODE": "api_key"},
-    }
-    # (1) 메타 없음 (2) enabled=False (3) 토큰 없음 (4) 브릿지 객체 없음
-    for ctx, bridge in (
-        (dict(base_ctx), _FakeBridge()),
-        ({**base_ctx, "cli_mcp": {"enabled": False, "path": "/p", "token": "t"}}, _FakeBridge()),
-        ({**base_ctx, "cli_mcp": {"enabled": True, "path": "/p", "token": ""}}, _FakeBridge()),
-        ({**base_ctx, "cli_mcp": {"enabled": True, "path": "/p", "token": "t"}}, None),
-    ):
-        host = LocalHostServices(str(tmp_path / "ws"), context=ctx, server_bridge=bridge)
-        assert host.cli_bridge_available("claude_code") is False
-        host.build_cli_runtime("claude_code", {})
-        assert captured["mcp_config"] is None
-        assert "mcp__connector" not in set(captured["allow_tools"])
+        @property
+        def description(self) -> str:
+            return "registers another tool"
+
+        @property
+        def input_schema(self) -> Dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+            self._reg.register(_Quiet(), core=True)
+            return ToolResult(content="ok")
+
+    class _Quiet(Tool):
+        @property
+        def name(self) -> str:
+            return "Quiet"
+
+        @property
+        def description(self) -> str:
+            return "no-op"
+
+        @property
+        def input_schema(self) -> Dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+            return ToolResult(content="quiet")
+
+    reg = ToolRegistry()
+    reg.register(_Spawner(reg), core=True)
+    srv = LocalToolMcpServer(reg, ToolContext(session_id="s", working_dir=str(tmp_path)))
+    srv.start()
+    try:
+        changed = srv._dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                 "params": {"name": "Spawn", "arguments": {}}})
+        assert changed["result"]["_meta"]["genyToolsChanged"] is True
+        # 표면이 바뀌지 않는 호출에는 붙지 않는다 (매번 붙으면 신호가 죽는다).
+        quiet = srv._dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                               "params": {"name": "Quiet", "arguments": {}}})
+        assert "_meta" not in quiet["result"]
+    finally:
+        srv.stop()

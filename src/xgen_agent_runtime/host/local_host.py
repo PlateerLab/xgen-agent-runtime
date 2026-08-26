@@ -56,25 +56,13 @@ _FAMILY_FLAGS = {
 #: 커넥터가 넘기는 로컬 CLI 홈 격리 설정 이름.
 SETTING_LOCAL_CODEX_HOME = "XGEN_LOCAL_CODEX_HOME"
 SETTING_LOCAL_CLAUDE_CONFIG_DIR = "XGEN_LOCAL_CLAUDE_CONFIG_DIR"
-#: Claude Code **네이티브** 도구 사전 허용 표면(로컬 턴). ``--print`` 비대화 모드는
-#: 허용되지 않은 도구 호출을 프롬프트 없이 **자동 거부**하므로, 서버가 mcp__connector
-#: 를 settings+allowedTools 로 통째로 사전 허용하는 것과 같은 방식으로 네이티브 도구를
-#: 미리 연다(settings permissions.allow + --allowedTools, permission_mode 는 default 유지
-#: — bypassPermissions 는 root 차단·dontAsk 는 거부 모드라 쓰지 않는다).
-CLAUDE_LOCAL_ALLOW_TOOLS = (
-    "Bash",
-    "Read",
-    "Write",
-    "Edit",
-    "MultiEdit",
-    "Glob",
-    "Grep",
-    "LS",
-    "WebFetch",
-    "WebSearch",
-    "NotebookEdit",
-    "TodoWrite",
-)
+#: 루프백 도구 서버의 MCP 서버 이름 — CLI 에는 ``mcp__xgen__<도구>`` 로 보인다.
+#: 서버 실행의 브릿지 이름(``connector``)과 일부러 다르게 둔다: 저쪽은 사용자
+#: 데스크톱을 경유하는 표면이고 이쪽은 런타임 자기 레지스트리다.
+CLI_MCP_SERVER_NAME = "xgen"
+#: shim → 루프백 1회 RPC 상한(초). 도구 자체 상한(Bash 기본 10분)보다 넉넉히 둔다 —
+#: 여기서 먼저 끊으면 도구는 계속 도는데 CLI 만 오류를 받는 어긋난 상태가 된다.
+_LOOPBACK_RPC_TIMEOUT_S = 3600
 #: 격리 CLAUDE_CONFIG_DIR 안에 쓰는 settings 파일 이름(--settings <path>).
 CLAUDE_LOCAL_SETTINGS_FILENAME = "xgen-local-settings.json"
 
@@ -131,43 +119,37 @@ class LocalHostServices:
         raw = self.setting(flag).strip().lower()
         return raw not in ("0", "false", "no", "off")
 
-    def _cli_mcp_meta(self) -> Dict[str, Any]:
-        """로컬 CLI 턴의 **내장 MCP 브릿지** 설정(서버가 컨텍스트로 실어 준 것).
+    def _cli_mcp_config(self, registry: Any, tool_context: Any) -> tuple:
+        """``(mcp_config, settings_json, allow_tools, server)`` — 루프백 도구 서버.
 
-        MCP 는 CLI 백엔드에 도구를 건네는 표준 경로다. 사용자의 '로컬 MCP 사용'
-        (외부 MCP 서버) 설정과 **무관하게** 내장 표면은 주입되어야 한다.
+        CLI 백엔드는 자기 루프를 소유해서 런타임 ``ToolRegistry`` 를 못 본다. 도구를
+        건네는 표준 경로는 MCP 뿐이므로, **이 턴에 조립된 바로 그 registry**를
+        127.0.0.1 루프백 JSON-RPC 로 열고 stdio shim 을 그 앞단 프록시로 물린다
+        (``--mcp-config``). 서버 CLI 경로(agent_geny._build_connector_mcp_bridge)와
+        같은 모양이고, 다른 것은 종착지뿐이다: 서버는 파드의 브릿지 엔드포인트로,
+        여기는 **같은 프로세스 안**으로 간다.
+
+        레지스트리와 ToolContext 가 하나라서 SDK 경로와 표면·실행 위치·경로 가드가
+        정확히 같아진다 — 서버/로컬 차이는 ``ToolContext.sandbox`` 하나로 수렴한다.
+
+        ``mcp__xgen`` 을 통째로 사전 허용한다: ``--print``(비대화)는 허용 목록 밖
+        호출을 프롬프트 없이 자동 거부하므로, 이게 없으면 모든 도구가 막힌다.
         """
-        meta = self._ctx.get("cli_mcp")
-        if not isinstance(meta, dict) or not meta.get("enabled"):
-            return {}
-        if not str(meta.get("path") or "").strip() or not str(meta.get("token") or "").strip():
-            return {}
-        if self._bridge is None or not str(getattr(self._bridge, "base_url", "") or "").strip():
-            return {}
-        return meta
+        if registry is None or tool_context is None or not len(registry):
+            return None, "", (), None
+        from xgen_agent_runtime.host.local_tool_mcp import LocalToolMcpServer
 
-    def _cli_mcp_config(self) -> tuple:
-        """``(mcp_config, settings_json, allow_tools)`` — 없으면 ``(None, "", ())``.
-
-        서버 CLI 경로(agent_geny._build_connector_mcp_bridge)와 **같은 모양**:
-        stdio shim 을 ``--mcp-config`` 로 물리고 ``mcp__connector`` 를 통째로 사전
-        허용한다(--print 비대화 모드가 권한 프롬프트에서 막히지 않게). 차이는 셋뿐
-        — shim 이 런타임 패키지 안에 있고(모듈 실행), URL 이 이 PC 에서 도달 가능한
-        **서버 공개 주소**이며, 토큰을 서버가 로컬 턴 컨텍스트로 실어 준다.
-        """
-        meta = self._cli_mcp_meta()
-        if not meta:
-            return None, "", ()
-        base = str(self._bridge.base_url).rstrip("/")
+        server = LocalToolMcpServer(registry, tool_context)
+        base_url, token = server.start()
         env = {
-            "XGEN_MCP_URL": base,
-            "XGEN_MCP_PATH": str(meta.get("path")),
-            "XGEN_MCP_TOKEN": str(meta.get("token")),
-            "XGEN_MCP_TIMEOUT_S": str(meta.get("timeout_s") or 300),
+            "XGEN_MCP_URL": base_url,
+            "XGEN_MCP_PATH": "/rpc",
+            "XGEN_MCP_TOKEN": token,
+            "XGEN_MCP_TIMEOUT_S": str(int(_LOOPBACK_RPC_TIMEOUT_S)),
         }
         mcp_config = {
             "mcpServers": {
-                "connector": {
+                CLI_MCP_SERVER_NAME: {
                     "type": "stdio",
                     "command": sys.executable,
                     # 파일 경로가 아니라 **모듈 실행** — 설치 레이아웃(번들/휠/개발
@@ -177,21 +159,33 @@ class LocalHostServices:
                 }
             }
         }
-        settings_json = json.dumps(
-            {"permissions": {"allow": ["mcp__connector"]}}, ensure_ascii=False
-        )
-        return mcp_config, settings_json, ("mcp__connector",)
+        allow = f"mcp__{CLI_MCP_SERVER_NAME}"
+        settings_json = json.dumps({"permissions": {"allow": [allow]}}, ensure_ascii=False)
+        return mcp_config, settings_json, (allow,), server
+
+    def cli_mcp_server_name(self) -> str:
+        """CLI 에 도구가 광고되는 MCP 서버 이름 — 프롬프트 이름 규약 안내가 쓴다."""
+        return CLI_MCP_SERVER_NAME
+
+    def cli_local_tool_surface(self, provider: str) -> bool:
+        """CLI 턴에 **런타임 레지스트리 자체**를 MCP 로 내주는가 — 로컬은 항상 True.
+
+        True 면 실행기가 CLI 백엔드에도 SDK 경로와 **같은** registry 조립을 태우고
+        (내장 도구·메모리·WorkflowSelf·커넥터 브라우저·위임), 그 registry 를 넘긴다.
+        루프백 서버는 이 프로세스 안에서 뜨므로 서버 연결·커넥터 카탈로그 같은
+        선행 조건이 없다 — 조립된 도구가 0개면 그때 mcp_config 가 안 만들어진다.
+        """
+        return True
 
     def cli_bridge_available(self, provider: str) -> bool:
-        """CLI(claude_code/codex) 턴에 ``mcp__connector__*`` 브릿지가 붙는가.
+        """CLI 턴에 비네이티브 도구 표면이 붙는가 — 로컬은 루프백이라 항상 True.
 
-        서버가 로컬 턴 컨텍스트에 ``cli_mcp`` (RPC 경로+토큰)를 실어 주면 True —
-        그 브릿지가 커넥터 데스크톱 도구(브라우저 등)·memory_*·WorkflowSelf 를
-        실제로 광고한다. 실행기는 이 값으로 CLI 전용 프롬프트 안내를 붙이므로
-        **광고되는 표면과 정확히 일치**해야 한다(없는 도구를 안내하면 유령 도구).
-        브릿지가 없으면(구서버/미로그인) 예전처럼 False — 네이티브 도구만.
+        실행기는 이 값으로 CLI 전용 프롬프트 안내를 붙이므로 **광고되는 표면과
+        일치**해야 한다. 개별 안내는 각각 자기 게이트를 또 본다(WorkflowSelf 는
+        registry 등록 여부, 위임은 배선 여부) — 여기 True 가 곧 "그 도구가 있다"
+        는 뜻은 아니고 "표면 자체는 존재한다" 는 뜻이다.
         """
-        return bool(self._cli_mcp_meta())
+        return True
 
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str:
         # 에이전트 설정(provider/model)은 서버 저장 에이전트에서 온다 = run() kwargs.
@@ -714,7 +708,7 @@ class LocalHostServices:
         return {"families": families, "tools": names, "extras": extras}
 
     def build_run_tool_context(self, **kwargs: Any) -> Any:
-        from xgen_agent_runtime.tools.base import ToolContext
+        from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 
         run_dir = str(kwargs.get("run_dir") or self._workspace)
         # 서버 builtin_tools.build_run_tool_context 와 같은 규약: 허용 트리는
@@ -725,12 +719,27 @@ class LocalHostServices:
         for extra in kwargs.get("extra_allowed") or []:
             if extra and str(extra) not in allowed:
                 allowed.append(str(extra))
+        # storage_path 는 executor 의 **내부** 저장소(tool-results/·ssh/servers.json).
+        # 서버 build_run_tool_context 와 같은 규약: 비어 있으면 run_dir 로 떨어뜨리고
+        # 있으면 미리 만든다. None 으로 두면 그 파일을 쓰는 도구가 턴마다 실패한다.
+        storage = str(kwargs.get("storage_dir") or "") or run_dir
+        if kwargs.get("storage_dir"):
+            os.makedirs(storage, exist_ok=True)
         return ToolContext(
             session_id=str(kwargs.get("interaction_id") or ""),
             working_dir=run_dir,
-            storage_path=kwargs.get("storage_dir"),
+            storage_path=storage,
             allowed_paths=allowed,
-            metadata=dict(kwargs.get("extras") or {}),
+            # ⚠ ``extras`` 다 — ``metadata`` 가 아니다. 도구는 전부 ``ctx.extras`` 만
+            # 읽는다(docs api_key, ssh servers, subagent_manager, task_runner…).
+            # 여기가 metadata 로 가 있던 동안 로컬 턴의 그 도구들은 배선이 들어와도
+            # 전부 "미배선"으로 죽었다 — 서버는 처음부터 extras 였다.
+            extras={
+                **dict(kwargs.get("extras") or {}),
+                # 이 호스트가 곧 실행 대상이다 — sandbox 없음이 설계다. 이 표식이
+                # 없으면 도구가 "러너 세션을 잃었다" 로 읽고 매 턴 경고를 찍는다.
+                HOST_IS_EXECUTION_TARGET: True,
+            },
             sandbox=kwargs.get("sandbox"),  # None → 로컬 호스트 실행
         )
 
@@ -827,12 +836,15 @@ class LocalHostServices:
             return False
 
     def _claude_local_settings(self, claude_home: str, allow_tools: Any = None) -> str:
-        """네이티브 도구 사전 허용 settings — 격리 홈이 있으면 그 안의 파일 경로,
-        없으면 인라인 JSON(서버 agent_geny 의 mcp__connector 사전 허용과 같은 형식).
-        둘 다 ``--settings`` 로 전달된다. ``allow_tools`` 로 **유지된 네이티브만**
-        사전 허용한다(에이전트별 도구 선택) — None 이면 전체 카탈로그."""
-        allow = list(allow_tools) if allow_tools is not None else list(CLAUDE_LOCAL_ALLOW_TOOLS)
-        payload = {"permissions": {"allow": allow}}
+        """도구 사전 허용 settings — 격리 홈이 있으면 그 안의 파일 경로, 없으면
+        인라인 JSON(서버 agent_geny 의 브릿지 사전 허용과 같은 형식). 둘 다
+        ``--settings`` 로 전달된다.
+
+        ``--print``(비대화)는 허용 목록 밖 호출을 프롬프트 없이 자동 거부하므로,
+        여기 실리는 것이 곧 CLI 가 부를 수 있는 전부다. 네이티브는 전면 차단이니
+        실질적으로 루프백 서버(``mcp__xgen``) 하나가 들어온다.
+        """
+        payload = {"permissions": {"allow": list(allow_tools or ())}}
         body = json.dumps(payload, ensure_ascii=False)
         if not claude_home:
             return body
@@ -859,9 +871,14 @@ class LocalHostServices:
         cloud_workspace: str = "",
         shared_workspaces: Optional[Sequence[str]] = None,
     ) -> Any:
-        # 커넥터에서는 codex/claude_code 가 **로컬 프로세스**로 뜨고 cwd 가 로컬
-        # 워크스페이스라, 네이티브 도구가 곧 로컬 파일이다. 서버로 되돌리는 MCP
-        # 브릿지(mcp_config)는 없다 — 로컬엔 필요 없다.
+        # 도구 표면은 **런타임 레지스트리 하나**다. CLI 네이티브는 전면 차단하고
+        # (runner.build_*_cli_client 의 allow_local_tools=False), 이 턴에 조립된
+        # registry 를 루프백 MCP 로 내준다 — 서버 실행이 브릿지로 같은 registry 를
+        # 내주는 것과 같은 구조이고, 차이는 ToolContext.sandbox 하나뿐이다
+        # (서버=러너 세션, 로컬=None → 이 PC). turn_executor 가 kwargs 스태시로
+        # 넘긴다(시그니처에 넣었다가 CLI 백엔드 전체가 기동 실패한 적 있다).
+        _registry = params.get("_tool_registry")
+        _tool_ctx = params.get("_run_tool_context")
         if provider == "codex":
             from xgen_agent_runtime.host.runner import build_codex_cli_client
 
@@ -885,36 +902,52 @@ class LocalHostServices:
             # 샌드박스/승인: CodexCLIClient 기본 ``--sandbox workspace-write`` + ``codex exec``
             # (헤드리스 — 승인 정책 never) 로 cwd(=동기화 폴더) 안 쓰기는 프롬프트 없이
             # 허용되고 밖은 거부된다. bypass(--dangerously-bypass…)는 쓰지 않는다.
-            # 내장 MCP 표면 — 사용자의 '로컬 MCP 사용'(외부 서버) 설정과 무관하게
-            # 서버가 실어 준 브릿지를 물린다 (커넥터 브라우저·memory_*·WorkflowSelf).
-            _mcp_config, _mcp_settings, _mcp_allow = self._cli_mcp_config()
-            if _mcp_config:
-                logger.info("local-host(codex): 내장 MCP 브릿지 연결 (mcp__connector)")
-            client = build_codex_cli_client(
-                auth_mode=auth_mode,
-                api_key=api_key,
-                binary_path=self.setting("CODEX_BINARY_PATH"),
-                workspace_dir=self._workspace,
-                timeout_s=timeout_s,
-                mcp_config=_mcp_config,
-                env_extras=env_extras or None,
+            # 도구 표면 = 루프백 MCP(런타임 레지스트리). 사용자의 '로컬 MCP 사용'
+            # (외부 MCP 서버) 설정과 무관하게 주입된다 — 그건 *추가* 서버 얘기다.
+            _mcp_config, _mcp_settings, _mcp_allow, _mcp_server = self._cli_mcp_config(
+                _registry, _tool_ctx
             )
-            return client, None
+            if _mcp_config:
+                logger.info(
+                    "local-host(codex): 루프백 도구 서버 연결 (%s, 도구 %d종)",
+                    CLI_MCP_SERVER_NAME,
+                    len(_registry),
+                )
+                # 브릿지 표면이 곧 도구 전부다 — CLI 자체 tool-search 재유예를 꺼
+                # 턴1부터 upfront 로 싣는다(서버 CLI 경로와 같은 규약).
+                env_extras["ENABLE_TOOL_SEARCH"] = "false"
+            else:
+                logger.warning(
+                    "local-host(codex): 도구 표면이 비었다 — 네이티브도 차단이라 이 턴은 "
+                    "도구 0개로 돈다 (내장 도구 설정 확인)"
+                )
+            try:
+                client = build_codex_cli_client(
+                    auth_mode=auth_mode,
+                    api_key=api_key,
+                    binary_path=self.setting("CODEX_BINARY_PATH"),
+                    workspace_dir=self._workspace,
+                    timeout_s=timeout_s,
+                    mcp_config=_mcp_config,
+                    env_extras=env_extras or None,
+                )
+            except Exception:
+                # 클라이언트 생성 실패(키 없음 등) — 이미 뜬 루프백을 **즉시** 회수한다.
+                # 여기서 안 닫으면 cleanup 을 받아 갈 호출자가 없어 프로세스가 살 동안
+                # 소켓과 실행 루프가 남는다.
+                if _mcp_server is not None:
+                    _mcp_server.stop()
+                raise
+            # cleanup — 턴 끝에 실행기가 부른다(루프백 소켓·실행 루프 회수).
+            return client, (_mcp_server.stop if _mcp_server is not None else None)
 
-        from xgen_agent_runtime.host.runner import build_cli_client, resolve_native_tools
+        from xgen_agent_runtime.host.runner import build_cli_client
 
         if not self.setting_truthy("CLAUDE_CODE_ENABLED"):
             raise ValueError(
                 "Claude Code 백엔드가 비활성화되어 있습니다. "
                 "관리자 설정(CLAUDE_CODE_ENABLED)에서 활성화 후 사용하세요."
             )
-        # 네이티브 도구 선택(에이전트별 tool-toggle-list) — 유지/제거 분리.
-        # 커넥터 로컬엔 MCP 브릿지가 없어 네이티브가 파일/셸의 유일 경로이므로
-        # 기본 정책(Bash 만 유지)이 그대로 로컬에도 적용된다. 제거된 도구는
-        # --disallowedTools 로 차단(비어 있어도 무해). 서버와 같은 판정 함수를 쓴다.
-        _kept_natives, _removed_natives = resolve_native_tools(
-            params.get("cli_native_tools_disabled"), catalog=CLAUDE_LOCAL_ALLOW_TOOLS
-        )
         auth_mode = (self.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key").strip()
         api_key = self.resolve_api_key("anthropic", params) if auth_mode == "api_key" else ""
         oauth_token = self.setting("CLAUDE_CODE_OAUTH_TOKEN") if auth_mode == "setup_token" else ""
@@ -926,45 +959,62 @@ class LocalHostServices:
         claude_home = self._isolated_home(SETTING_LOCAL_CLAUDE_CONFIG_DIR)
         if claude_home:
             extra_env["CLAUDE_CONFIG_DIR"] = claude_home
-        # --print(비대화) 는 허용 목록 밖 도구 호출을 프롬프트 없이 자동 거부한다 —
-        # 네이티브 표면을 settings(permissions.allow) + --allowedTools 로 사전 허용.
-        # 내장 MCP 표면 — 사용자의 '로컬 MCP 사용'(외부 서버) 설정과 무관하게 서버가
-        # 실어 준 브릿지를 물린다: 커넥터 데스크톱 도구(사용자가 보는 XGEN 브라우저
-        # 탭)·memory_*·WorkflowSelf. MCP 가 CLI 백엔드에 도구를 건네는 표준 경로다.
-        _mcp_config, _mcp_settings, _mcp_allow = self._cli_mcp_config()
-        # --print 비대화 모드가 권한 프롬프트에서 막히지 않게 브릿지 서버 전체를
-        # 네이티브와 **같은 settings 파일**에 함께 사전 허용한다.
-        _pre_allow = list(_kept_natives) + list(_mcp_allow)
-        settings_path = self._claude_local_settings(claude_home, allow_tools=_pre_allow)
-        if _mcp_config:
-            logger.info("local-host(claude): 내장 MCP 브릿지 연결 (mcp__connector)")
-        client = build_cli_client(
-            auth_mode=auth_mode,
-            api_key=api_key,
-            oauth_token=oauth_token,
-            binary_path=self.setting("CLAUDE_CODE_BINARY_PATH"),
-            workspace_dir=self._workspace,
-            timeout_s=timeout_s,
-            max_budget_usd=budget,
-            # ⚠ 로컬: CLI 의 **네이티브** 도구(Read/Write/Edit/Bash/…)를 켠다.
-            # 파일/셸은 이 PC 가 곧 실행 위치라 네이티브가 정답이다 — MCP 브릿지가
-            # 붙어도 서버는 로컬 턴에 내장 파일/셸 패밀리를 바인딩하지 않는다.
-            allow_local_tools=True,
-            permission_mode="default",
-            settings_path=settings_path,
-            # 유지된 네이티브 + (있으면) 브릿지 서버 전체를 사전 허용하고,
-            # 제거된 네이티브는 disallow 로 차단한다(--disallowedTools 가 우선).
-            allow_tools=tuple(_pre_allow),
-            disallow_tools_extra=tuple(_removed_natives),
-            mcp_config=_mcp_config,
-            extra_env=extra_env or None,
-            # 이 호스트는 턴마다 파이프라인/CLI 클라이언트를 새로 만들고 턴 끝에 닫는다
-            # (one-shot). hot-spare 프리웜은 '다음 턴'이 이 클라이언트를 재사용할 때만
-            # 이득인데, 여기선 매 턴 새 클라이언트라 프리웜된 프로세스가 즉시 teardown
-            # 에 회수될 뿐이다 → 매 CLI 턴 낭비 spawn. 끈다(runner.build_cli_client 지침).
-            prewarm_spawn=False,
+        # 도구 표면 = 루프백 MCP(런타임 레지스트리) 하나. 사용자의 '로컬 MCP 사용'
+        # (외부 MCP 서버) 설정과 무관하게 주입된다 — 그건 *추가* 서버 얘기다.
+        _mcp_config, _mcp_settings, _mcp_allow, _mcp_server = self._cli_mcp_config(
+            _registry, _tool_ctx
         )
-        return client, None
+        # --print(비대화)는 허용 목록 밖 호출을 프롬프트 없이 자동 거부한다 —
+        # 루프백 서버를 settings(permissions.allow) + --allowedTools 로 사전 허용.
+        settings_path = self._claude_local_settings(claude_home, allow_tools=_mcp_allow)
+        if _mcp_config:
+            logger.info(
+                "local-host(claude): 루프백 도구 서버 연결 (%s, 도구 %d종)",
+                CLI_MCP_SERVER_NAME,
+                len(_registry),
+            )
+            # 브릿지 표면이 곧 도구 전부다 — CLI 자체 tool-search 재유예를 꺼
+            # 턴1부터 upfront 로 싣는다(서버 CLI 경로와 같은 규약).
+            extra_env["ENABLE_TOOL_SEARCH"] = "false"
+        else:
+            logger.warning(
+                "local-host(claude): 도구 표면이 비었다 — 네이티브도 차단이라 이 턴은 "
+                "도구 0개로 돈다 (내장 도구 설정 확인)"
+            )
+        try:
+            client = build_cli_client(
+                auth_mode=auth_mode,
+                api_key=api_key,
+                oauth_token=oauth_token,
+                binary_path=self.setting("CLAUDE_CODE_BINARY_PATH"),
+                workspace_dir=self._workspace,
+                timeout_s=timeout_s,
+                max_budget_usd=budget,
+                # ⚠ CLI **네이티브** 도구(Read/Write/Edit/Bash/…)는 전면 차단한다.
+                #
+                # 같은 능력을 루프백 MCP 가 우리 런타임 도구로 준다. 네이티브를 함께
+                # 켜 두면 같은 일을 하는 도구가 두 벌 광고되고, 그중 한 벌만 우리
+                # 경로 가드(allowed_paths)·훅·결과 기록을 지난다 — 어느 쪽을 썼는지는
+                # 사후에 구분되지도 않는다. 서버 실행도 같은 규약이다.
+                allow_local_tools=False,
+                permission_mode="default",
+                settings_path=settings_path,
+                allow_tools=tuple(_mcp_allow),
+                mcp_config=_mcp_config,
+                extra_env=extra_env or None,
+                # 이 호스트는 턴마다 파이프라인/CLI 클라이언트를 새로 만들고 턴 끝에 닫는다
+                # (one-shot). hot-spare 프리웜은 '다음 턴'이 이 클라이언트를 재사용할 때만
+                # 이득인데, 여기선 매 턴 새 클라이언트라 프리웜된 프로세스가 즉시 teardown
+                # 에 회수될 뿐이다 → 매 CLI 턴 낭비 spawn. 끈다(runner.build_cli_client 지침).
+                prewarm_spawn=False,
+            )
+        except Exception:
+            # 클라이언트 생성 실패 — 이미 뜬 루프백을 즉시 회수한다(codex 와 동일).
+            if _mcp_server is not None:
+                _mcp_server.stop()
+            raise
+        # cleanup — 턴 끝에 실행기가 부른다(루프백 소켓·실행 루프 회수).
+        return client, (_mcp_server.stop if _mcp_server is not None else None)
 
     # ── G. teardown ──────────────────────────────────────────────────────
     def finalize_turn(self, **kwargs: Any) -> None:

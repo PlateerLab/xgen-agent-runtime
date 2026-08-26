@@ -80,11 +80,8 @@ def build_client(
     return client_cls(**kwargs)
 
 
-# Claude Code CLI 의 네이티브 fs/셸 도구. 샌드박스(러너)가 붙으면 이 목록을
-# 통째로 차단하고 브릿지의 executor fs 도구가 격리 실행으로 대체한다
-# (allow_local_tools=False). 러너가 없으면 base 로 열되, 에이전트별 네이티브
-# 도구 선택(cli_native_tools_disabled, 아래 CLI_NATIVE_TOOL_CATALOG)에서
-# 제거된 도구를 disallow_tools_extra 로 개별 차단한다 — 기본은 Bash 만 유지.
+# Claude Code CLI 의 네이티브 fs/셸 도구 (참고용 부분집합 — 실제 차단 단위는
+# 아래 CLI_NATIVE_TOOL_CATALOG 전체다).
 _CLI_LOCAL_TOOLS = (
     "Bash",
     "Read",
@@ -106,10 +103,15 @@ _CLI_LOCAL_TOOLS = (
 #: 담당한다 — 같은 일을 하는 반쪽 도구가 곁에 있으면 모델은 반드시 그걸 집는다.
 _CLI_SESSION_SCHED_TOOLS = ("CronCreate", "CronDelete", "CronList", "ScheduleWakeup")
 
-#: Claude Code 네이티브 도구 **전체 카탈로그** — 에이전트별로 일부만 켜는 선택
-#: 대상. _CLI_LOCAL_TOOLS(fs/셸) + 웹/Todo 를 합친 집합이며 LocalHostServices 의
-#: CLAUDE_LOCAL_ALLOW_TOOLS 와 같은 이름 공간을 쓴다. (스케줄 도구는 항상 차단이라
-#: 선택 대상이 아니다 — _CLI_SESSION_SCHED_TOOLS 로 별도 관리.)
+#: Claude Code 네이티브 도구 **전체 카탈로그** — ``allow_local_tools=False`` 일 때
+#: 통째로 ``--disallowedTools`` 로 나가는 집합이다.
+#:
+#: 예전엔 이 중 일부만 켜는 에이전트별 선택(cli_native_tools_disabled)이 있었지만
+#: 폐지했다. 네이티브를 하나라도 켜면 같은 능력을 하는 도구가 두 벌 광고되고
+#: (우리 런타임 Bash vs CLI 네이티브 Bash), 그중 한 벌만 우리 경로 가드·훅·결과
+#: 기록을 지난다 — 어느 쪽이 돌았는지는 사후에 구분되지도 않는다. 지금은 서버·
+#: 로컬 모두 전면 차단이고, 같은 능력은 런타임 레지스트리가 MCP 로 준다.
+#: (스케줄 도구는 별개로 항상 차단 — _CLI_SESSION_SCHED_TOOLS.)
 CLI_NATIVE_TOOL_CATALOG = (
     "Bash",
     "Read",
@@ -125,65 +127,14 @@ CLI_NATIVE_TOOL_CATALOG = (
     "TodoWrite",
 )
 
-#: 기본 정책 — **Bash 만** 유지하고 나머지 네이티브는 전부 끈다. 우리의 커스텀
-#: 도구(mcp__connector__* : web/filesystem/shell/workflow/…)가 같은 기능을 제공하므로
-#: 네이티브를 함께 열어두면 모델에게 같은 도구가 두 벌씩 보인다(충돌). Bash 만
-#: 남기는 이유: 커넥터 로컬 턴엔 브릿지가 없어 파일/셸의 유일 경로가 네이티브
-#: Bash 다. 에이전트별로 tool-toggle-list 에서 더 켤 수 있다.
-CLI_NATIVE_KEEP_DEFAULT = ("Bash",)
-
-
-def native_default_disabled() -> tuple:
-    """파라미터 미설정(구 워크플로우/신규 기본)일 때 끄는 네이티브 집합."""
-    keep = set(CLI_NATIVE_KEEP_DEFAULT)
-    return tuple(t for t in CLI_NATIVE_TOOL_CATALOG if t not in keep)
-
-
-def parse_disabled_native_tools(value: Any) -> set:
-    """``cli_native_tools_disabled`` 파라미터 → 비활성 네이티브 이름 집합.
-
-    ``None`` / 빈 문자열 = **미설정** → 기본 정책(Bash 만 유지)을 적용한다.
-    명시적으로 저장된 값(빈 배열 ``"[]"`` 포함)은 그대로 존중한다 — ``"[]"`` 는
-    사용자가 '전부 켬' 을 고른 것이라 기본 정책을 덮는다. 캔버스는 STR 을
-    JSON 문자열로 내려주지만 list/콤마 문자열도 방어한다.
-    """
-    if value is None:
-        return set(native_default_disabled())
-    if isinstance(value, (list, tuple, set)):
-        return {str(v).strip() for v in value if str(v).strip()}
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return set(native_default_disabled())
-        try:
-            parsed = json.loads(text)
-        except (ValueError, TypeError):
-            return {p.strip() for p in text.split(",") if p.strip()}
-        if isinstance(parsed, (list, tuple)):
-            return {str(v).strip() for v in parsed if str(v).strip()}
-        return set()
-    return set()
-
-
-def resolve_native_tools(value: Any, *, catalog: Any = None) -> tuple:
-    """``(kept, removed)`` — 카탈로그를 선택값으로 갈라 유지/제거 목록으로 반환.
-
-    카탈로그 순서를 보존해 리포트가 안정적이다. 카탈로그에 없는 이름은 무시한다.
-    """
-    tools = tuple(catalog) if catalog else CLI_NATIVE_TOOL_CATALOG
-    disabled = parse_disabled_native_tools(value)
-    kept = [t for t in tools if t not in disabled]
-    removed = [t for t in tools if t in disabled]
-    return kept, removed
-
 
 def _log_native_tool_report(disallowed: Any) -> None:
     """빌드 시점에 **유지/제거된 네이티브 도구 리포트**를 로그로 남긴다.
 
     ``build_cli_client`` 는 최종 disallow 집합을 아는 유일한 지점이라(서버·커넥터
-    로컬 공통), 여기서 카탈로그를 갈라 출력한다. 사용자 요구:
-    (1) 선택(유지)된 도구, (2) 제거된 도구를 각각 리포트한다. 리포트가 실행을
-    막으면 안 되므로 절대 raise 하지 않는다.
+    로컬 공통), 여기서 카탈로그를 갈라 출력한다. 정상 상태는 "유지 0개" 다 —
+    유지 목록에 뭔가 남아 있으면 그 도구는 우리 가드를 지나지 않는다는 뜻이므로
+    로그에서 바로 보여야 한다. 리포트가 실행을 막으면 안 되므로 절대 raise 하지 않는다.
     """
     try:
         blocked = set(disallowed or ())
@@ -270,12 +221,19 @@ def build_cli_client(
         kwargs["workspace_dir"] = workspace_dir
     if max_budget_usd and float(max_budget_usd) > 0:
         kwargs["max_budget_usd"] = float(max_budget_usd)
-    # 차단 목록 = (로컬도구 차단 시 _CLI_LOCAL_TOOLS) + 호출자 추가분.
+    # 차단 목록 = (네이티브 차단 시 **카탈로그 전부**) + 호출자 추가분.
+    #
+    # ⚠ 예전엔 여기서 _CLI_LOCAL_TOOLS(fs/셸 9종)만 막아, allow_local_tools=False
+    # 인데도 WebSearch·WebFetch·TodoWrite 세 네이티브가 살아남았다(실측). 우리 규약은
+    # "네이티브는 전부 끄고 우리 런타임 도구만 쓴다" 이므로 **CLI_NATIVE_TOOL_CATALOG
+    # 전체**를 막는다 — Bash 를 포함한 같은 능력은 런타임 레지스트리가 MCP 로 제공한다
+    # (서버=샌드박스 라우팅, 로컬=이 PC 실행. 도구 클래스는 양쪽 동일).
+    #
     # disallow_tools_extra: agent_geny 가 위임 배선 시 CLI 의 자체 서브에이전트
     # 도구(Task/Agent)를 차단하는 데 쓴다 — CLI 내부 위임은 우리 매니저/작업
     # 내역/완료 트리거를 전부 우회하므로(추적 불가), 위임은 반드시
     # mcp__connector__* 표면으로만 흐르게 강제한다.
-    disallowed = list(_CLI_LOCAL_TOOLS) if not allow_local_tools else []
+    disallowed = list(CLI_NATIVE_TOOL_CATALOG) if not allow_local_tools else []
     disallowed.extend(t for t in _CLI_SESSION_SCHED_TOOLS if t not in disallowed)
     for name in tuple(disallow_tools_extra or ()):
         if name and name not in disallowed:
