@@ -486,3 +486,55 @@ def test_cli_legacy_host_builtin_tools_off_also_keeps_self_evolution(capture) ->
     assert SELF_EVOLUTION_PROMPT_BLOCK in sp
     assert "mcp__connector__DelegateTask" in sp
     assert "mcp__connector__memory_write" in sp
+
+
+# ── 그래프 연결 도구는 CLI 백엔드에도 도달한다 ─────────────────────────
+#
+# CLI 는 파이프라인 registry 를 보지 못하므로, 실행기가 그걸 **버리지 않고**
+# host 의 CLI 런타임 빌더에 넘겨야 브릿지가 광고할 수 있다. 예전엔 정말로 버렸고
+# (registry = None), 그래서 캔버스에서 붙인 도구 노드가 claude_code/codex 에
+# 영원히 도달하지 않았다.
+
+
+class _GraphTool(Tool):
+    name = "jira_search"
+    description = "search jira"
+    input_schema = {"type": "object", "properties": {}}
+
+    async def execute(self, input, context):  # noqa: A002
+        return ToolResult(content="ok")
+
+
+def test_cli_hands_graph_tools_to_the_bridge_instead_of_dropping_them(capture) -> None:
+    host = _FakeHost(delegation_extras={})
+    _run(host, capture, provider="claude_code", tools=[_GraphTool()])
+    # 파이프라인에는 안 넘긴다(Stage 10 이 안 돈다).
+    assert capture.get("registry") is None
+    # 대신 CLI 런타임 빌더가 받는 kwargs 에 실려 있다.
+    graph = host.cli_params.get("_graph_tools")
+    assert graph is not None, "그래프 도구가 버려졌다 — 브릿지가 광고할 수 없다"
+    assert "jira_search" in graph.list_names()
+
+
+def test_sdk_backend_keeps_graph_tools_in_the_pipeline_registry(capture) -> None:
+    """SDK 는 원래대로 registry 로 직접 쓴다 — 두 경로가 같은 도구를 갖는다."""
+    host = _FakeHost(delegation_extras={})
+    _run(host, capture, provider="openai", tools=[_GraphTool()])
+    assert "jira_search" in _registry_names(capture)
+
+
+def test_cli_says_so_when_graph_tools_cannot_be_delivered(capture, caplog) -> None:
+    """브릿지가 없으면 정말 못 준다 — 그때 침묵하면 에이전트가 원인을 지어낸다.
+
+    프롬프트에 사실을 실어, 사용자가 물으면 설정 문제라고 정확히 답하게 한다.
+    """
+    host = _FakeHost(delegation_extras={}, cli_bridge=False)
+    out = _run(host, capture, provider="claude_code", tools=[_GraphTool()])
+    assert "cannot be delivered on this backend" in out["system_prompt"]
+    assert "1 tool(s)" in out["system_prompt"]
+
+
+def test_no_such_note_when_the_bridge_is_available(capture) -> None:
+    host = _FakeHost(delegation_extras={})
+    out = _run(host, capture, provider="claude_code", tools=[_GraphTool()])
+    assert "cannot be delivered" not in out["system_prompt"]
