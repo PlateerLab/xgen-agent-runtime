@@ -896,15 +896,35 @@ class AgentTurnExecutor:
             if provider in _CLI_BACKENDS:
                 # CLI 백엔드는 에이전트 루프를 CLI 가 소유한다 — 파이프라인 Stage 10 이
                 # 돌지 않으므로 registry 를 파이프라인에 넘겨도 아무도 보지 않는다.
-                # 그래서 여기서 registry 는 떼어낸다 — 서버 CLI 브릿지가 자기 조립으로
-                # 같은 표면을 만들어 mcp__connector__* 로 광고한다.
+                # 그래서 파이프라인에서는 떼어내되, **버리지는 않는다**: host 의 CLI
+                # 브릿지가 이 레지스트리를 그대로 받아 mcp__connector__* 로 광고한다.
+                #
+                # 예전엔 정말로 버렸다(registry = None + logger.warning 한 줄). 그래서
+                # 그래프에 도구 노드를 붙여도 claude_code/codex 에이전트에는 **영원히**
+                # 도달하지 않았고 — 자기진화의 핵심 약속이 조용히 실패했다 — 아무도
+                # 그 사실을 알 수 없었다. 에이전트 자신조차 몰라 "새 세션을 열면 될 것"
+                # 같은 추측을 사용자에게 전했다(실증). Tools 포트와 Context 포트의
+                # 임베디드 검색 도구가 모두 이 레지스트리에 있다.
                 if registry:
-                    logger.warning(
-                        "agents/geny: %s 백엔드는 Tools 포트 연결 도구 %d개를 이번 실행에서 "
-                        "사용할 수 없습니다 (서버 CLI 브릿지가 자기 표면을 별도 조립)",
+                    kwargs["_graph_tools"] = registry
+                    logger.info(
+                        "agents/geny: %s 백엔드 — 그래프 연결 도구 %d개를 CLI 브릿지로 넘긴다",
                         provider,
                         len(registry),
                     )
+                    if not _cli_tools_bridge_ok:
+                        # 브릿지가 없으면 정말로 못 준다. 그때는 **조용히 넘어가지
+                        # 않는다** — 에이전트가 이유를 알아야 사용자에게 정확히 말한다.
+                        logger.warning(
+                            "agents/geny: 그래프 연결 도구 %d개를 전달할 수 없다 — %s",
+                            len(registry), _cli_tools_bridge_reason,
+                        )
+                        system_prompt = system_prompt + (
+                            f"\n\n(Note: {len(registry)} tool(s) are wired into this agent's graph"
+                            " but cannot be delivered on this backend this turn"
+                            f" — {_cli_tools_bridge_reason}. Do not claim they exist; tell the user"
+                            " this configuration issue if they ask for those capabilities.)"
+                        )
                 registry = None
             if provider == "claude_code":
                 # cloud_skill 은 시그니처로 나르지 않는다 — Geny 규약대로 kwargs
