@@ -1,7 +1,7 @@
 # xgen-agent-runtime
 
-[![PyPI version](https://img.shields.io/pypi/v/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
-[![Python 3.11+](https://img.shields.io/pypi/pyversions/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
+[![GitHub release](https://img.shields.io/github/v/release/PlateerLab/xgen-agent-runtime)](https://github.com/PlateerLab/xgen-agent-runtime/releases)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/PlateerLab/xgen-agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime/actions/workflows/ci.yml)
 
@@ -20,7 +20,7 @@ These projects are built to work together. **Geny** is the product at the top of
 | Project | What it is | Role in the stack |
 |---|---|---|
 | [**Geny**](https://github.com/PlateerLab/xgen-agent-runtime) | Multi-agent VTuber + autonomous-worker platform | The product — uses every project below |
-| ➡️ [**xgen-agent-runtime**](https://github.com/PlateerLab/xgen-agent-runtime) | 21-stage, manifest-driven agent pipeline · PyPI · Apache-2.0 | The engine everything runs on |
+| ➡️ [**xgen-agent-runtime**](https://github.com/PlateerLab/xgen-agent-runtime) | 21-stage, manifest-driven agent pipeline · GitHub Releases · Apache-2.0 | The engine everything runs on |
 | [**GAPT**](https://github.com/PlateerLab/xgen-agent-runtime) | Self-hosted AI DevOps platform — sandbox · edit · build · deploy | Where agents safely touch real repos |
 | [**geny-avatar**](https://github.com/PlateerLab/xgen-agent-runtime) | 2D live-avatar editor with AI texture generation | Where Geny's faces are made |
 
@@ -104,19 +104,36 @@ The full stage list with strategy options lives in [`docs/architecture.md`](docs
 
 ## Installation
 
-```bash
-pip install xgen-agent-runtime
-```
-
-Optional extras:
+This package is **not on PyPI** — it ships as a wheel attached to each [GitHub Release](https://github.com/PlateerLab/xgen-agent-runtime/releases). Pin the exact version you want with a direct URL dependency (find the latest tag on the [releases page](https://github.com/PlateerLab/xgen-agent-runtime/releases/latest)):
 
 ```bash
-pip install xgen-agent-runtime[memory]   # numpy for vector retrieval
-pip install xgen-agent-runtime[all]      # everything
-pip install xgen-agent-runtime[dev]      # dev/test tooling
+pip install "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"
 ```
 
-**Requirements**: Python 3.11+. At least one provider's credentials (Anthropic API key, OpenAI API key, …) or a local CLI binary (`claude` for `claude_code_cli`).
+Optional extras work the same way, appended to the package name before `@`:
+
+```bash
+pip install "xgen-agent-runtime[memory] @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"   # numpy for vector retrieval
+pip install "xgen-agent-runtime[all] @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"      # everything
+pip install "xgen-agent-runtime[dev] @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"     # dev/test tooling
+```
+
+If your project uses this the same way, write the URL straight into your own `pyproject.toml` `dependencies` (see this repo's own `pyproject.toml` for how downstream consumers like xgen-workflow do it) — that's the single source of truth for what's actually installed, with no separate lockfile to drift out of sync.
+
+**Requirements**: Python 3.12+. At least one provider's credentials (Anthropic API key, OpenAI API key, …) or a local CLI binary (`claude` for `claude_code_cli`).
+
+---
+
+## Releasing (maintainers)
+
+Cutting a release is a single step — bump the version and merge:
+
+1. In your PR, bump `version` in `pyproject.toml` (e.g. `4.0.0` → `4.0.1`).
+2. Merge to `main`.
+
+Once `main`'s CI (lint/type-check/test/security-audit/build) is green, the `auto-tag` job reads the new version straight out of `pyproject.toml`. If a matching `vX.Y.Z` tag doesn't exist yet, it creates and pushes one — which in turn triggers [`release.yml`](.github/workflows/release.yml) to build the wheel/sdist and publish them as a GitHub Release. No one has to remember to run `git tag` by hand anymore (that manual step is exactly how [v4.0.1 briefly landed on `main` with no release at all](https://github.com/PlateerLab/xgen-agent-runtime/compare/v4.0.0...v4.0.1) — merged, but never actually shipped).
+
+If you ever do need to cut a release without a version bump (e.g. re-running a failed build), trigger [`release.yml`](.github/workflows/release.yml) manually via `workflow_dispatch`, or push a `vX.Y.Z` tag by hand — both still work.
 
 ---
 

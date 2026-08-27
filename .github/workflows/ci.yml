@@ -156,3 +156,34 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  # main 에 버전이 오른 pyproject.toml 이 merge 됐는데 아무도 `git tag vX.Y.Z &&
+  # git push origin vX.Y.Z` 를 안 하면 release.yml(태그 push 로만 트리거)이 영영
+  # 안 돈다 — 실제로 v4.0.1 이 이렇게 몇 시간 동안 릴리즈 없이 main 에만 남아
+  # 있었다(#24). 사람이 잊을 수 있는 수동 스텝을 지운다: 위 4개 잡이 전부 통과한
+  # main push 에서 pyproject 버전에 해당하는 태그가 아직 없으면 여기서 만들어
+  # push 하고, 그 태그 push 가 release.yml 을 그대로 트리거한다(로직 중복 없음).
+  auto-tag:
+    name: Auto-tag release version
+    runs-on: ubuntu-latest
+    needs: [lint, type-check, test, security-audit, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: pyproject 버전에 맞는 태그가 없으면 생성 + push
+        run: |
+          V=$(python3 -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          TAG="v$V"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "이미 존재: $TAG — 이번 push 는 버전이 안 바뀌었거나 이미 릴리즈됨"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"

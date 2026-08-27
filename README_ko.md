@@ -1,7 +1,7 @@
 # xgen-agent-runtime
 
-[![PyPI version](https://img.shields.io/pypi/v/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
-[![Python 3.11+](https://img.shields.io/pypi/pyversions/xgen-agent-runtime.svg)](https://pypi.org/project/xgen-agent-runtime/)
+[![GitHub release](https://img.shields.io/github/v/release/PlateerLab/xgen-agent-runtime)](https://github.com/PlateerLab/xgen-agent-runtime/releases)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/CocoRoF/xgen-agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/CocoRoF/xgen-agent-runtime/actions/workflows/ci.yml)
 
@@ -20,7 +20,7 @@ xgen-agent-runtime는 **21단계 파이프라인**과 **이중 추상화 (Dual A
 | 프로젝트 | 무엇인가 | 스택에서의 역할 |
 |---|---|---|
 | [**Geny**](https://github.com/CocoRoF/Geny) | 멀티 에이전트 VTuber + 자율 워커 플랫폼 | 최상위 제품 — 아래 전부를 사용 |
-| ➡️ [**xgen-agent-runtime**](https://github.com/CocoRoF/xgen-agent-runtime) | 21단계 manifest 기반 에이전트 파이프라인 · PyPI · Apache-2.0 | 모든 것이 돌아가는 엔진 |
+| ➡️ [**xgen-agent-runtime**](https://github.com/CocoRoF/xgen-agent-runtime) | 21단계 manifest 기반 에이전트 파이프라인 · GitHub Releases · Apache-2.0 | 모든 것이 돌아가는 엔진 |
 | [**GAPT**](https://github.com/CocoRoF/geny-adapted-project-toolkit) | 셀프호스트 AI DevOps 플랫폼 — 샌드박스·편집·빌드·배포 | 에이전트가 실제 레포를 안전하게 다루는 곳 |
 | [**geny-avatar**](https://github.com/CocoRoF/geny-avatar) | AI 텍스처 생성 기반 2D 라이브 아바타 에디터 | Geny 의 얼굴이 만들어지는 곳 |
 
@@ -104,19 +104,36 @@ Phase C — Surface (1회)
 
 ## 설치
 
-```bash
-pip install xgen-agent-runtime
-```
-
-선택적 extras:
+이 패키지는 **PyPI에 배포되지 않습니다** — 각 [GitHub Release](https://github.com/PlateerLab/xgen-agent-runtime/releases)에 첨부된 wheel로 배포됩니다. 원하는 버전을 [releases 페이지](https://github.com/PlateerLab/xgen-agent-runtime/releases/latest)에서 확인하고, URL을 직접 의존성으로 고정하세요:
 
 ```bash
-pip install xgen-agent-runtime[memory]   # vector retrieval용 numpy
-pip install xgen-agent-runtime[all]      # 전체
-pip install xgen-agent-runtime[dev]      # 개발/테스트 도구
+pip install "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"
 ```
 
-**요구사항**: Python 3.11+. 최소 1개 provider의 자격증명 (Anthropic API key, OpenAI API key, …) 또는 로컬 CLI binary (`claude_code_cli` provider용 `claude`).
+선택적 extras도 같은 방식으로, 패키지 이름 뒤 `@` 앞에 붙입니다:
+
+```bash
+pip install "xgen-agent-runtime[memory] @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"   # vector retrieval용 numpy
+pip install "xgen-agent-runtime[all] @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"      # 전체
+pip install "xgen-agent-runtime[dev] @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/vX.Y.Z/xgen_agent_runtime-X.Y.Z-py3-none-any.whl"     # 개발/테스트 도구
+```
+
+같은 방식으로 쓸 프로젝트라면 이 URL을 여러분의 `pyproject.toml` `dependencies`에 그대로 적으세요(다운스트림 소비자인 xgen-workflow가 실제로 이렇게 씁니다 — 이 저장소 자신의 `pyproject.toml`도 참고) — 별도 락파일 없이 이 한 줄이 실제로 설치되는 것의 단일 진실 소스가 됩니다.
+
+**요구사항**: Python 3.12+. 최소 1개 provider의 자격증명 (Anthropic API key, OpenAI API key, …) 또는 로컬 CLI binary (`claude_code_cli` provider용 `claude`).
+
+---
+
+## 릴리즈 (메인테이너용)
+
+릴리즈는 단 한 단계입니다 — 버전을 올리고 merge만 하면 됩니다:
+
+1. PR에서 `pyproject.toml`의 `version`을 올립니다 (예: `4.0.0` → `4.0.1`).
+2. `main`에 merge합니다.
+
+`main`의 CI(lint/type-check/test/security-audit/build)가 전부 통과하면, `auto-tag` job이 `pyproject.toml`에서 새 버전을 바로 읽습니다. 해당 `vX.Y.Z` 태그가 아직 없으면 만들어 push하고, 그 태그 push가 [`release.yml`](.github/workflows/release.yml)을 트리거해 wheel/sdist를 빌드하고 GitHub Release로 게시합니다. 더 이상 `git tag`를 수동으로 기억해서 실행할 필요가 없습니다 (그 수동 단계가 정확히 [v4.0.1이 `main`에 merge만 되고 릴리즈는 전혀 안 나간 채로 방치됐던](https://github.com/PlateerLab/xgen-agent-runtime/compare/v4.0.0...v4.0.1) 원인입니다).
+
+버전을 올리지 않고 릴리즈를 다시 내야 할 때(예: 실패한 빌드 재시도)는 [`release.yml`](.github/workflows/release.yml)을 `workflow_dispatch`로 수동 실행하거나 `vX.Y.Z` 태그를 직접 push해도 됩니다 — 두 방법 모두 여전히 동작합니다.
 
 ---
 
