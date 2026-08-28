@@ -38,9 +38,22 @@ _PW_SERVER = {"name": "prod", "host": "1.2.3.4", "port": 2222, "user": "hrjang",
 
 # ── SSHServerStore ───────────────────────────────────────────────────
 
-def test_store_from_extras_writes_per_session_file(tmp_path):
-    store = SSHServerStore.from_context(_ctx(tmp_path, [_PW_SERVER]))
-    # Persisted to <storage_path>/ssh/servers.json (the "파일형태" record).
+def test_store_does_not_persist_credentials_by_default(tmp_path):
+    """Decrypted credentials must not outlive the turn that needed them.
+
+    The host re-injects every turn (that is what makes a rotated password take
+    effect), so a file on disk buys nothing and can only go stale.
+    """
+    SSHServerStore.from_context(_ctx(tmp_path, [_PW_SERVER]))
+    assert not (tmp_path / "ssh" / "servers.json").exists()
+
+
+def test_store_writes_an_owner_only_file_when_a_host_opts_in(tmp_path):
+    ctx = ToolContext(
+        session_id="s1", storage_path=str(tmp_path),
+        extras={"ssh": {"servers": [_PW_SERVER], "persist": True}},
+    )
+    SSHServerStore.from_context(ctx)
     f = tmp_path / "ssh" / "servers.json"
     assert f.is_file()
     assert json.loads(f.read_text())[0]["name"] == "prod"
