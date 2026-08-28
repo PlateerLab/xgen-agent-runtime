@@ -49,7 +49,7 @@ def _resolve_or_error(store: SSHServerStore, name: Optional[str]):
     name = (name or "").strip()
     if not name:
         return None, _err("NO_SERVER", "Provide 'server' (a configured server name).")
-    server = store.resolve(name)
+    server = store.target(name)
     if server is None:
         avail = ", ".join(store.names()) or "(none configured)"
         return None, _err(
@@ -104,8 +104,10 @@ class SshListServersTool(_SSHToolBase):
     def description(self) -> str:
         return (
             "List the SSH servers configured for this session — name, host, "
-            "port, user, and description. Passwords/keys are never shown. Use a "
-            "server's 'name' with SshRun / SshUpload / SshDownload."
+            "port, user, description, and 'via' (the jump/bastion path used to "
+            "reach it, if any). Passwords/keys are never shown. Use a server's "
+            "'name' with SshRun / SshUpload / SshDownload; jump hosts are dialled "
+            "automatically, so you never connect to a bastion yourself."
         )
 
     @property
@@ -122,11 +124,15 @@ class SshListServersTool(_SSHToolBase):
                 content={"servers": []},
                 display_text="No SSH servers are configured for this session.",
             )
-        lines = [
-            f"- {s['name']}: {s['user']}@{s['host']}:{s['port']} "
-            f"[{s['auth']}]" + (f" — {s['description']}" if s["description"] else "")
-            for s in servers
-        ]
+        lines = []
+        for s in servers:
+            line = f"- {s['name']}: {s['user']}@{s['host']}:{s['port']} [{s['auth']}]"
+            # 경유 경로는 실패를 읽는 데 필수다 — 명령이 잘못된 건지 경로가 끊긴 건지.
+            if s.get("via"):
+                line += " via " + " → ".join(s["via"])
+            if s.get("description"):
+                line += f" — {s['description']}"
+            lines.append(line)
         return ToolResult(
             content={"servers": servers},
             display_text="Configured SSH servers:\n" + "\n".join(lines),
@@ -171,7 +177,8 @@ class SshRunTool(_SSHToolBase):
         return ToolCapabilities(network_egress=True, interrupt="cancel")
 
     async def execute(self, input: Dict[str, Any], context: Any) -> ToolResult:
-        server, err = _resolve_or_error(_store(context), input.get("server"))
+        store = _store(context)
+        server, err = _resolve_or_error(store, input.get("server"))
         if err is not None:
             return err
         command = str(input.get("command") or "").strip()
@@ -193,7 +200,14 @@ class SshRunTool(_SSHToolBase):
 
         name = server.get("name")
         try:
-            rc, out, err_out = await ssh_exec(server, command, timeout=timeout, cwd=cwd, sudo=sudo)
+            rc, out, err_out = await ssh_exec(
+                server,
+                command,
+                timeout=timeout,
+                cwd=cwd,
+                sudo=sudo,
+                resolver=store.resolve,
+            )
         except SSHUnavailableError as exc:
             return _err("SSH_UNAVAILABLE", str(exc))
         except SSHConfigError as exc:
@@ -259,7 +273,8 @@ class SshUploadTool(_SSHToolBase):
         return ToolCapabilities(network_egress=True)
 
     async def execute(self, input: Dict[str, Any], context: Any) -> ToolResult:
-        server, err = _resolve_or_error(_store(context), input.get("server"))
+        store = _store(context)
+        server, err = _resolve_or_error(store, input.get("server"))
         if err is not None:
             return err
         local, lerr = _guarded_local(context, str(input.get("local_path") or ""))
@@ -276,7 +291,7 @@ class SshUploadTool(_SSHToolBase):
             return _err("NO_REMOTE_PATH", "Provide 'remote_path'.")
         name = server.get("name")
         try:
-            await sftp_put(server, str(local), remote_path)
+            await sftp_put(server, str(local), remote_path, resolver=store.resolve)
         except SSHUnavailableError as exc:
             return _err("SSH_UNAVAILABLE", str(exc))
         except SSHConfigError as exc:
@@ -320,7 +335,8 @@ class SshDownloadTool(_SSHToolBase):
         return ToolCapabilities(network_egress=True)
 
     async def execute(self, input: Dict[str, Any], context: Any) -> ToolResult:
-        server, err = _resolve_or_error(_store(context), input.get("server"))
+        store = _store(context)
+        server, err = _resolve_or_error(store, input.get("server"))
         if err is not None:
             return err
         local, lerr = _guarded_local(context, str(input.get("local_path") or ""))
@@ -332,7 +348,7 @@ class SshDownloadTool(_SSHToolBase):
         name = server.get("name")
         try:
             local.parent.mkdir(parents=True, exist_ok=True)
-            await sftp_get(server, remote_path, str(local))
+            await sftp_get(server, remote_path, str(local), resolver=store.resolve)
         except SSHUnavailableError as exc:
             return _err("SSH_UNAVAILABLE", str(exc))
         except SSHConfigError as exc:

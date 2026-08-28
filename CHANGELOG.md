@@ -4,6 +4,50 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.2.0] — 2026-08-28
+
+### Added — SSH **점프 호스트(bastion)** 체인
+
+지금까지 `Ssh*` 도구는 최종 호스트로 **직접** 다이얼했다. 사내 장비는 대개 그렇게
+닿지 않는다 — bastion 을 거쳐야 하고, 그 bastion 조차 또 한 단계 뒤에 있는 경우가
+있다. 그래서 서버 레코드에 경로를 적을 수 있게 했다.
+
+- `jump` — 이 호스트에 닿기 위해 거치는 **다른 설정된 서버들의 이름**, 가까운 홉부터.
+  자격증명을 중첩해 넣지 않고 이름으로 가리키는 이유: 한 장비는 한 번만 기술되고,
+  그 장비는 어떤 곳의 경유지이면서 동시에 그 자체로 목적지일 수 있다. 비밀번호를
+  바꿀 자리도 한 곳이다.
+- `_ssh._open()` 이 `contextlib.AsyncExitStack` 으로 체인을 연다 — 각 홉은 직전
+  홉의 연결을 `tunnel=` 로 물고 열리고, 나갈 때 역순으로 **전부 닫힌다**(asyncssh
+  는 `tunnel` 로 넘긴 연결을 소유하지 않아, 안 닫으면 세션이 끝날 때까지 샌다).
+- `resolve_chain()` 이 다이얼 전에 거절하는 것들: 등록되지 않은 경유지 이름,
+  순환(`a → b → a`), `MAX_JUMP_DEPTH`(8) 초과. 순환은 특히 실행 시점에 두면 홉마다
+  타임아웃을 다 쓰고서야 실패한다.
+- 중간 홉이 실패하면 **어느 홉인지** 말한다(`ConnectionError: jump host 'bastion': …`).
+  3단 경로에서 "실패"만 알면 어디를 고쳐야 할지 알 수 없다.
+- `ssh_test_connection()` 이 실제로 탄 `hops` 를 함께 돌려준다.
+- `SshListServers` 가 `via` 를 노출한다 — 명령이 잘못된 건지 경로가 끊긴 건지를
+  모델이 구분할 수 있어야 한다.
+
+### Added — 경유 전용 서버(`listable: false`)
+
+호스트가 "이 레코드는 경로 해석에만 필요하다"고 표시할 수 있다. 사용자가 bastion
+하나를 잠시 꺼도 그 뒤의 목적지는 계속 닿아야 하지만, 꺼 둔 bastion 자체에 명령을
+쏠 수 있으면 끈 것이 아니다. `store.target()` 이 목적지 권한을, `store.resolve()`
+가 경로 해석을 맡는다.
+
+### Changed — 세션 SSH 파일: 호스트가 말하면 호스트가 진실
+
+개인별 SSH 설정이 대화 중에 바뀔 수 있게 되면서(회전된 비밀번호·삭제된 서버),
+디스크에 남은 사본이 **조용히 이기는** 경로를 없앴다.
+
+- `extras["ssh"]["servers"]` 가 있으면 그것이 그 턴의 전부다 — **빈 리스트도
+  포함**. 예전에는 빈 리스트가 falsy 라 디스크의 옛 목록으로 되돌아갔고, 그러면
+  사용자가 지운 서버가 계속 살아 있게 된다.
+- 복호화된 자격증명을 **기본적으로 디스크에 쓰지 않는다**. 턴마다 다시 주입되는
+  호스트에게 그 파일은 아무 이득이 없고 낡을 위험만 있다. 예전 버전이 남긴 파일도
+  지운다. 굳이 필요한 호스트는 `extras["ssh"]["persist"] = True` 로 옵트인한다
+  (그때는 여전히 0600).
+
 ## [3.13.0] — 2026-08-26
 
 ### Added — 로컬 CLI 턴의 **내장 MCP 표면** (사용자 MCP 설정과 무관)

@@ -917,7 +917,8 @@ class AgentTurnExecutor:
                         # 않는다** — 에이전트가 이유를 알아야 사용자에게 정확히 말한다.
                         logger.warning(
                             "agents/geny: 그래프 연결 도구 %d개를 전달할 수 없다 — %s",
-                            len(registry), _cli_tools_bridge_reason,
+                            len(registry),
+                            _cli_tools_bridge_reason,
                         )
                         system_prompt = system_prompt + (
                             f"\n\n(Note: {len(registry)} tool(s) are wired into this agent's graph"
