@@ -201,7 +201,11 @@ class SshRunTool(_SSHToolBase):
         name = server.get("name")
         try:
             rc, out, err_out = await ssh_exec(
-                server, command, timeout=timeout, cwd=cwd, sudo=sudo,
+                server,
+                command,
+                timeout=timeout,
+                cwd=cwd,
+                sudo=sudo,
                 resolver=store.resolve,
             )
         except SSHUnavailableError as exc:

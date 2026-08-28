@@ -149,9 +149,7 @@ def jump_names(server: Dict[str, Any]) -> List[str]:
     return out
 
 
-def resolve_chain(
-    server: Dict[str, Any], resolver: Optional[Resolver]
-) -> List[Dict[str, Any]]:
+def resolve_chain(server: Dict[str, Any], resolver: Optional[Resolver]) -> List[Dict[str, Any]]:
     """Expand *server* into the full dial order: ``[hop1, hop2, …, server]``.
 
     A record with no ``jump`` resolves to just ``[server]``, so callers can use
@@ -185,8 +183,7 @@ def resolve_chain(
             nxt = resolver(hop) if resolver else None
             if nxt is None:
                 raise SSHConfigError(
-                    f"server '{name}' declares jump host '{hop}', which is not a "
-                    "configured server"
+                    f"server '{name}' declares jump host '{hop}', which is not a configured server"
                 )
             walk(nxt, depth + 1)
         chain.append(node)
@@ -218,9 +215,7 @@ async def _open(
             if tunnel is not None:
                 kwargs["tunnel"] = tunnel
             try:
-                conn = await stack.enter_async_context(
-                    await asyncssh.connect(host, **kwargs)
-                )
+                conn = await stack.enter_async_context(await asyncssh.connect(host, **kwargs))
             except (SSHUnavailableError, SSHConfigError):
                 raise
             except Exception as exc:  # noqa: BLE001 — say WHICH hop failed
@@ -303,7 +298,9 @@ async def ssh_test_connection(
             latency_ms = (time.monotonic() - start) * 1000.0
             ok = (r.exit_status == 0) and ("geny-ssh-ok" in str(r.stdout or ""))
             out: Dict[str, Any] = {
-                "success": bool(ok), "latency_ms": round(latency_ms, 1), "hops": hops,
+                "success": bool(ok),
+                "latency_ms": round(latency_ms, 1),
+                "hops": hops,
             }
             if not ok:
                 out["error"] = "connected but test command failed"
