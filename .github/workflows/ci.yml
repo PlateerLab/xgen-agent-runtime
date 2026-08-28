@@ -158,11 +158,16 @@ jobs:
           path: dist/
 
   # main 에 버전이 오른 pyproject.toml 이 merge 됐는데 아무도 `git tag vX.Y.Z &&
-  # git push origin vX.Y.Z` 를 안 하면 release.yml(태그 push 로만 트리거)이 영영
-  # 안 돈다 — 실제로 v4.0.1 이 이렇게 몇 시간 동안 릴리즈 없이 main 에만 남아
-  # 있었다(#24). 사람이 잊을 수 있는 수동 스텝을 지운다: 위 4개 잡이 전부 통과한
-  # main push 에서 pyproject 버전에 해당하는 태그가 아직 없으면 여기서 만들어
-  # push 하고, 그 태그 push 가 release.yml 을 그대로 트리거한다(로직 중복 없음).
+  # git push origin vX.Y.Z` 를 안 하면 release.yml 이 영영 안 돈다 — 실제로 v4.0.1
+  # 이 이렇게 몇 시간 동안 릴리즈 없이 main 에만 남아 있었다(#24). 사람이 잊을 수
+  # 있는 수동 스텝을 지운다: 위 4개 잡이 전부 통과한 main push 에서 pyproject
+  # 버전의 태그가 없으면 여기서 만들어 push 한다.
+  #
+  # ⚠ **태그 push 만으로는 release.yml 이 돌지 않는다.** GITHUB_TOKEN 으로 만든
+  # 이벤트는 다른 워크플로를 트리거하지 않는 것이 GitHub 의 규칙이라(무한 루프
+  # 방지), v4.2.0 이 태그만 생기고 릴리즈가 없는 상태로 남았다. 그래서 태그를
+  # push 한 뒤 release.yml 을 **명시적으로 dispatch** 한다 — workflow_dispatch 는
+  # GITHUB_TOKEN 으로도 허용되는 경로다.
   auto-tag:
     name: Auto-tag release version
     runs-on: ubuntu-latest
@@ -170,6 +175,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
+      # release.yml 을 dispatch 하려면 필요하다 — 없으면 태그만 생기고 릴리즈가
+      # 없는 상태(v4.2.0 이 그랬다)로 조용히 남는다.
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -187,3 +195,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: release.yml 을 그 태그로 dispatch
+        # 태그를 방금 만든 경우에만 — 위 스텝이 조기 exit 하면 TAG 가 비어 있다.
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release.yml --ref "$TAG"
