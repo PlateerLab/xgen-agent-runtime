@@ -155,24 +155,38 @@ def resolve_chain(server: Dict[str, Any], resolver: Optional[Resolver]) -> List[
     A record with no ``jump`` resolves to just ``[server]``, so callers can use
     one code path for both.
 
-    Refuses three things that would otherwise fail late and confusingly:
-    a jump name nothing resolves to; a loop (``a`` via ``b`` via ``a``), which
-    would hang until every hop timed out; and a chain past
+    Refuses three things that would otherwise fail late and confusingly: a jump
+    name nothing resolves to; a **loop** (``a`` via ``b`` via ``a``), which would
+    otherwise hang until every hop timed out; and a chain past
     :data:`MAX_JUMP_DEPTH`.
+
+    A loop is a name repeating on the **path currently being walked** — not a
+    name seen anywhere before. Those are different, and conflating them breaks
+    the most ordinary real topology there is::
+
+        target : via [bastion, inner]
+        inner  : via [bastion]
+
+    ``bastion`` is the one way in, so it is a prerequisite of both branches. It
+    is visited twice while walking, and the answer is simply that it is dialled
+    once, first: ``bastion → inner → target``. Treating the second visit as a
+    loop rejects a correct config; emitting it twice would open the same bastion
+    twice and tunnel the second copy through the first.
     """
     chain: List[Dict[str, Any]] = []
-    seen: List[str] = []
+    placed: set = set()  # 이미 다이얼 순서에 자리를 잡은 홉
 
-    def walk(node: Dict[str, Any], depth: int) -> None:
+    def walk(node: Dict[str, Any], path: List[str]) -> None:
         name = str(node.get("name") or "").strip() or "(unnamed)"
-        if name in seen:
-            path = " → ".join([*seen, name])
-            raise SSHConfigError(f"jump host loop: {path}")
-        if depth > MAX_JUMP_DEPTH:
+        if name in path:
+            raise SSHConfigError("jump host loop: " + " → ".join([*path, name]))
+        if len(path) >= MAX_JUMP_DEPTH:
             raise SSHConfigError(
                 f"jump path is deeper than {MAX_JUMP_DEPTH} hops (starting at '{name}')"
             )
-        seen.append(name)
+        if name in placed:
+            # 다른 갈래에서 이미 열기로 한 홉 — 그 자리가 앞에 있으므로 그대로 둔다.
+            return
         hops = jump_names(node)
         if hops and resolver is None:
             raise SSHConfigError(
@@ -185,10 +199,11 @@ def resolve_chain(server: Dict[str, Any], resolver: Optional[Resolver]) -> List[
                 raise SSHConfigError(
                     f"server '{name}' declares jump host '{hop}', which is not a configured server"
                 )
-            walk(nxt, depth + 1)
+            walk(nxt, [*path, name])
+        placed.add(name)
         chain.append(node)
 
-    walk(server, 0)
+    walk(server, [])
     return chain
 
 
