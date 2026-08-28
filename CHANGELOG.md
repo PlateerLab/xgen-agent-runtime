@@ -4,6 +4,24 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.2.1] — 2026-08-28
+
+### Fixed — 공통 bastion 을 순환으로 오판하던 문제
+
+가장 흔한 실제 형태에서 정상 설정이 거절됐다. 들어가는 문이 하나뿐인 망에서는::
+
+    target : via [bastion, inner]
+    inner  : via [bastion]
+
+``bastion`` 이 두 갈래의 **공통 선행 홉**이라 경로 해석 중에 두 번 만나게 된다.
+순환 판정을 "이미 본 적 있는 이름"으로 했던 탓에 이걸 `jump host loop` 로 거절했다
+(도커 3홉 토폴로지 실측에서 발견).
+
+순환은 **지금 걷고 있는 경로에 같은 이름이 다시 나오는 것**이다. 그래서 판정을
+방문 집합이 아니라 경로 스택으로 바꾸고, 이미 앞자리를 잡은 홉은 다시 넣지 않는다
+— 두 번 넣으면 같은 bastion 을 두 번 열어 두 번째를 첫 번째로 터널링한다. 진짜
+순환(``a → b → a``)은 그대로 거절된다.
+
 ## [4.2.0] — 2026-08-28
 
 ### Added — SSH **점프 호스트(bastion)** 체인

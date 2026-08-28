@@ -76,6 +76,34 @@ def test_nested_jump_is_expanded_transitively():
     ]
 
 
+def test_a_shared_bastion_is_dialled_once_not_called_a_loop():
+    """가장 흔한 실제 형태다: 들어가는 문이 하나뿐인 망.
+
+        target : via [bastion, inner]
+        inner  : via [bastion]
+
+    bastion 은 두 갈래의 공통 선행 홉이라 walk 중에 두 번 만난다. 이걸 순환으로
+    보면 **정상 설정이 거절되고**(실제 도커 3홉 토폴로지에서 그렇게 터졌다), 두 번
+    넣으면 같은 bastion 을 두 번 열어 두 번째를 첫 번째로 터널링한다. 정답은
+    "앞자리에 한 번".
+    """
+    servers = {s["name"]: s for s in [
+        _srv("bastion"),
+        _srv("inner", jump=["bastion"]),
+        _srv("db", jump=["bastion", "inner"]),
+    ]}
+    chain = resolve_chain(servers["db"], servers.get)
+    assert [h["name"] for h in chain] == ["bastion", "inner", "db"]
+
+
+def test_two_targets_behind_the_same_bastion_each_resolve():
+    servers = {s["name"]: s for s in [
+        _srv("bastion"), _srv("a", jump=["bastion"]), _srv("b", jump=["bastion"]),
+    ]}
+    assert [h["name"] for h in resolve_chain(servers["a"], servers.get)] == ["bastion", "a"]
+    assert [h["name"] for h in resolve_chain(servers["b"], servers.get)] == ["bastion", "b"]
+
+
 def test_missing_jump_host_is_refused_by_name():
     servers = {"db": _srv("db", jump=["ghost"])}
     with pytest.raises(SSHConfigError) as exc:
