@@ -115,9 +115,7 @@ class AgentTurnExecutor:
             #: CLI 에 도구가 광고되는 MCP 서버 이름 — 프롬프트 이름 규약 안내가 쓴다.
             _cli_mcp_server = "connector"
 
-            registry = adapt_tools(
-                kwargs.get("tools"), result_sink=result_sink, core=_flat_tools
-            )
+            registry = adapt_tools(kwargs.get("tools"), result_sink=result_sink, core=_flat_tools)
             rag_block, embedded_tools = collect_rag(
                 text,
                 kwargs.get("context"),
