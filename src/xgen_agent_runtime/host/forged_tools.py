@@ -27,16 +27,13 @@ RAG 와 같은 '상태는 서버, 실행은 여기' 규약이다. 엔진이 저�
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
 import shutil
-import subprocess
-import sys
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol
 
 logger = logging.getLogger("xgen_agent_runtime.host.forged_tools")
 
