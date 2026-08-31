@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "4.2.2"
+version = "4.2.3"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -91,7 +91,7 @@ dependencies = [
     # 없으므로 이름으로만 요구하면 `pip install -e .` 이 해석에 실패한다 —
     # 실제로 이 저장소는 개발 설치도 CI 테스트도 되지 않는 상태였다.
     "xgen-an-web @ https://github.com/PlateerLab/xgen-an-web/releases/download/v0.11.0/xgen_an_web-0.11.0-py3-none-any.whl",
-    "xgen-edit2docs @ https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.19.0/xgen_edit2docs-0.19.0-py3-none-any.whl",
+    "xgen-edit2docs @ https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.20.0/xgen_edit2docs-0.20.0-py3-none-any.whl",
     "asyncssh>=2.14",
 ]
 
