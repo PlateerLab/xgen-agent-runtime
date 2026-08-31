@@ -4,6 +4,30 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.3.0] — 2026-08-31
+
+### Changed — 도구 표면을 계층적으로 (기본값 변경)
+
+도구 목록은 **재고 목록이 아니라 지도**다. 이번 턴에 부르지도 않을 수백 개의 스키마에
+컨텍스트를 쓰면, 모델은 더 많이 읽고 더 못 고른다. 그런데 기본값이 정확히 그것이었다 —
+`tool_exposure` 의 기본이 `all`(연결된 도구 스키마를 매 요청에 전부 선노출)이었다.
+
+이제 표면은 두 층이다. **기본 도구**(웹·파일·셸·위임·기억, 연결된 지식소스의 검색
+도구, 커넥터 도구)는 언제나 즉시 보이고, **연결된 API/DB/MCP 노드**는 이름과 한 줄로만
+알려 둔 뒤 ToolSearch 로 필요할 때 스키마를 끌어온다. 계층이 어디서 갈리는지는
+`host/tool_exposure.py` 한 곳에 적혀 있다.
+
+설정 값은 둘이다:
+
+- `hierarchy` — 기본. 기본 도구는 보이고, 나머지는 필요할 때 찾는다.
+- `flat` — 전부 선노출. 탐색 단계를 못 도는 모델을 위한 탈출구이고, 매 요청마다
+  토큰을 쓴다.
+
+**저장된 값의 해석이 바뀐다.** 예전 `all`(전부 선노출)과 `search`(전부 유예)는 계층
+이전의 두 극단이었고, 이제 **둘 다 `hierarchy` 로 읽힌다.** 즉 기존 에이전트도 계층형으로
+동작한다 — 계층이 플랫폼의 동작이고, 플랫한 표면은 명시적으로 고른 에이전트만 갖는다.
+예전 동작이 필요하면 `tool_exposure` 를 `flat` 으로 두면 된다.
+
 ## [4.2.1] — 2026-08-28
 
 ### Fixed — 공통 bastion 을 순환으로 오판하던 문제

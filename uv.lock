@@ -4086,7 +4086,7 @@ wheels = [
 
 [[package]]
 name = "xgen-agent-runtime"
-version = "3.8.8"
+version = "4.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic", extra = ["bedrock"] },
@@ -4146,7 +4146,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "websockets", specifier = ">=12.0" },
     { name = "xgen-an-web", url = "https://github.com/PlateerLab/xgen-an-web/releases/download/v0.11.0/xgen_an_web-0.11.0-py3-none-any.whl" },
-    { name = "xgen-edit2docs", url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.18.0/xgen_edit2docs-0.18.0-py3-none-any.whl" },
+    { name = "xgen-edit2docs", url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.21.1/xgen_edit2docs-0.21.1-py3-none-any.whl" },
 ]
 provides-extras = ["dev"]
 
@@ -4277,8 +4277,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "xgen-edit2docs"
-version = "0.18.0"
-source = { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.18.0/xgen_edit2docs-0.18.0-py3-none-any.whl" }
+version = "0.21.1"
+source = { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.21.1/xgen_edit2docs-0.21.1-py3-none-any.whl" }
 dependencies = [
     { name = "anthropic" },
     { name = "beautifulsoup4" },
@@ -4308,7 +4308,7 @@ dependencies = [
     { name = "xlsxwriter" },
 ]
 wheels = [
-    { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.18.0/xgen_edit2docs-0.18.0-py3-none-any.whl", hash = "sha256:72e173022e31a9964785afbc7334aa06292a616f1a1a470aea9098b541cc0b10" },
+    { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.21.1/xgen_edit2docs-0.21.1-py3-none-any.whl", hash = "sha256:90dc739c019b83f199cd0a754901064e36755ab1b417005be3f4c1e6ee1f43be" },
 ]
 
 [package.metadata]

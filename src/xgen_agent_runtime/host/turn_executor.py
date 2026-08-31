@@ -23,6 +23,7 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
     default_prompt,
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
+from xgen_agent_runtime.host.tool_exposure import sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
 logger = logging.getLogger("editor.nodes.xgen.agent.agent_geny")
@@ -94,11 +95,13 @@ class AgentTurnExecutor:
                 else None
             )
 
-            # Tools port + embedded tools carried on Context dicts (tool-search mode).
-            # tool_exposure="search" → Tools 포트는 deferred 등록(2.42.0 노출 모델,
-            # ToolSearch 가 런타임 발견·활성화). Context 포트의 내장 검색 도구는
-            # 연결된 지식소스의 1차 도구이므로 항상 core 로 즉시 노출한다.
-            exposure = (kwargs.get("tool_exposure") or "all").strip()
+            # 도구 표면은 **계층적**이다. 기본 도구(웹·파일·셸·위임·기억)와 연결된
+            # 지식소스의 검색 도구는 언제나 즉시 보이고, 연결된 API/DB/MCP 노드는
+            # 이름과 한 줄로만 알려 둔 뒤 ToolSearch 로 필요할 때 스키마를 끌어온다.
+            # 도구 목록은 재고 목록이 아니라 지도다 — 이번 턴에 부르지도 않을 수백 개의
+            # 스키마에 컨텍스트를 쓰면, 모델은 더 많이 읽고 더 못 고른다.
+            # 'flat' 은 그 계층을 포기하고 전부 선노출하는 탈출구다.
+            _flat_tools = sends_every_schema(kwargs.get("tool_exposure"))
             result_sink: Dict[str, str] = {}
             # ── CLI 백엔드의 도구 표면 ───────────────────────────────────
             # CLI(claude_code/codex)는 자기 루프를 소유해 이 registry 를 직접 보지
@@ -113,7 +116,7 @@ class AgentTurnExecutor:
             _cli_mcp_server = "connector"
 
             registry = adapt_tools(
-                kwargs.get("tools"), result_sink=result_sink, core=(exposure != "search")
+                kwargs.get("tools"), result_sink=result_sink, core=_flat_tools
             )
             rag_block, embedded_tools = collect_rag(
                 text,
@@ -492,7 +495,7 @@ class AgentTurnExecutor:
                         registry = ToolRegistry()
                     bt_summary = host.register_builtin_tools(
                         registry,
-                        core=(exposure != "search"),
+                        core=_flat_tools,
                         user_id=kwargs.get("user_id"),
                         anthropic_api_key=host.resolve_api_key("anthropic", kwargs),
                         ssh_servers=host.load_ssh_servers(),
@@ -597,7 +600,7 @@ class AgentTurnExecutor:
                                     registry,
                                     workflow_id=_wf_for_ws,
                                     workspace_dir=run_dir,
-                                    core=(exposure != "search"),
+                                    core=_flat_tools,
                                     sandboxed=_sandbox is not None,
                                 )
                             except Exception as _fexc:  # noqa: BLE001
