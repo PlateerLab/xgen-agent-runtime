@@ -1,8 +1,11 @@
 """자가제작 도구(forged tools) — 엔진 계약.
 
 핵심 주장 하나: **엔진은 저장소를 모른다.** 스펙 저장소는 호스트가 주입하고
-(:class:`ForgedToolSpecStore`), 스크립트 실행지는 다른 도구와 똑같이
-``ToolContext.sandbox`` 가 정한다.
+(:class:`ForgedToolSpecStore`), 스크립트는 다른 코드와 똑같이 **에이전트의
+sandbox 세션에서만** 돈다.
+
+그래서 여기 테스트는 실행되는 sandbox 대역(:class:`_LocalSandbox`)을 물린다 —
+스크립트는 진짜로 돌고(stdout/stderr/rc 가 진짜다), 다만 세션 계약을 지나간다.
 """
 
 from __future__ import annotations
@@ -54,8 +57,36 @@ def _ws(tmp_path) -> str:
     return str(tmp_path)
 
 
+class _LocalSandbox:
+    """세션 대역 — 계약(``workdir``/``exec``/``exists``/``ensure``)만 지키고
+    실행은 진짜로 한다. 코드가 도는 곳은 언제나 세션이므로, 테스트도 그 문을
+    지나야 실제 경로를 덮는다."""
+
+    def __init__(self, workdir: str) -> None:
+        self.workdir = workdir
+
+    async def ensure(self) -> None:
+        return None
+
+    async def exists(self, path: str) -> bool:
+        return os.path.isfile(os.path.join(self.workdir, path))
+
+    async def exec(self, argv, *, cwd=None, stdin=None, env=None, timeout_s=120.0, **_kw):
+        import subprocess
+
+        from xgen_agent_runtime.tools._xgeny_sandbox import ExecResult
+
+        proc = subprocess.run(  # noqa: S603
+            list(argv), cwd=cwd or self.workdir, input=stdin or b"",
+            capture_output=True, timeout=timeout_s,
+        )
+        return ExecResult(proc.returncode, proc.stdout, proc.stderr)
+
+
 def _ctx(ws: str) -> ToolContext:
-    return ToolContext(session_id="i1", working_dir=ws, allowed_paths=[ws], sandbox=None)
+    return ToolContext(
+        session_id="i1", working_dir=ws, allowed_paths=[ws], sandbox=_LocalSandbox(ws)
+    )
 
 
 def _write_script(ws: str, name: str = "greet.py") -> str:
@@ -141,7 +172,7 @@ def test_missing_script_is_not_advertised_locally(tmp_path) -> None:
 
 
 def test_script_runs_in_the_workspace_not_the_cwd(tmp_path) -> None:
-    """실행 위치는 workspace 다 — 여기가 어긋나면 파일이 엉뚱한 곳에 생긴다."""
+    """실행 위치는 **이 에이전트의 workspace** 다 — 어긋나면 파일이 엉뚱한 곳에 생긴다."""
     ws, store = _ws(tmp_path), _MemStore()
     with open(os.path.join(ws, "where.py"), "w", encoding="utf-8") as fh:
         fh.write("import json, os, sys\nsys.stdin.read()\nprint(json.dumps({'cwd': os.getcwd()}))\n")

@@ -4,6 +4,26 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.5.0] — 2026-08-31
+
+### Removed — 코드가 sandbox 밖에서 도는 길
+
+sandbox 는 이제 **표준**이다. 에이전트가 실행하는 코드 — 제작 도구 스크립트,
+파이썬 환경 — 는 그 에이전트의 세션에서만 돈다.
+
+그래서 러너가 없을 때를 위한 로컬 폴백을 걷어냈다. 그건 **두 번째 세계**를
+만들고 있었다: `PythonEnv` 는 workspace 안의 `pip install --target` 디렉터리에
+설치하는데, 그 디렉터리를 `PYTHONPATH` 에 얹는 것은 제작 도구뿐이었다. 그래서
+`Bash` 로 테스트하는 에이전트는 "설치는 됐다는데 못 찾는다"를 반복하며 재설치
+루프를 돌았다(프로드 실증).
+
+사라진 것: `_session_local_env_dir` · `_tool_env_dir` · `_local_pythonpath` ·
+`_pip_install_target` · `_pin_from_target` · `_ensure_local_env` · `_child_env`
+와 `ForgedScriptTool` 의 로컬 subprocess 실행, `PythonEnvTool._execute_local`.
+
+세션이 없으면 **도는 척하지 않는다** — 왜 못 도는지 말하고 멈춘다. 예전엔
+조용히 다른 환경에서 돌아, 더 나쁘게는 이 파드의 다른 버전으로 다른 답을 냈다.
+
 ## [4.4.1] — 2026-08-31
 
 ### Fixed — 제작 도구가 자기 workspace 에서 돈다

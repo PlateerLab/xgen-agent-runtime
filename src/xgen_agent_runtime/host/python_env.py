@@ -17,8 +17,9 @@
                 **이 턴 안에서 즉시** 적용된다.
 
 ad-hoc ``pip install`` (Bash) 과의 관계: 그것도 동작한다 — 세션 HOME 의
-user-site 에 앉아 이 파드에 사는 동안 유지된다. 영속이 필요하면 이 도구다.
-둘의 역할이 겹치지 않고, 어느 쪽도 막지 않는다.
+user-site 에 앉아 그 세션이 사는 동안 유지된다. 영속이 필요하면 이 도구다.
+둘의 역할이 겹치지 않고, 어느 쪽도 막지 않는다. **둘 다 같은 sandbox 세션
+안에서 일어난다** — 설치한 곳과 실행하는 곳이 갈릴 여지가 없다.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ import json
 import logging
 import os
 import re
-import shutil
 from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger("xgen_agent_runtime.host.python_env")
@@ -193,10 +193,17 @@ class PythonEnvTool:
 
         sandbox = getattr(context, "sandbox", None)
         if sandbox is None:
-            # 러너(sandbox)가 없으면 workspace 로컬 세션 env 로 폴백한다 —
-            # pip install --target 로 설치하고, forged 도구는 이 경로를 PYTHONPATH 에
-            # 얹어 import 한다(모든 Agent-XGeny 가 자기 환경을 갖도록).
-            return await self._execute_local(input)
+            # 예전엔 workspace 안에 `pip install --target` 으로 로컬 env 를 만드는
+            # 폴백이 있었다. 그게 두 번째 세계를 만들었다 — 그 디렉터리를
+            # PYTHONPATH 에 얹는 건 제작 도구뿐이라, Bash 로 테스트하는 에이전트는
+            # "설치했는데 못 찾는다" 를 반복했다(프로드 실증). 환경은 하나여야 한다.
+            return ToolResult(
+                content=(
+                    "파이썬 환경을 관리할 실행 환경이 없습니다. 이 에이전트의 "
+                    "sandbox 세션에 붙은 뒤 다시 시도하세요."
+                ),
+                is_error=True,
+            )
 
         action = str(input.get("action") or "").strip()
         packages = [str(p).strip() for p in (input.get("packages") or []) if str(p).strip()]
@@ -259,102 +266,6 @@ class PythonEnvTool:
                     f"세션 환경 적용 완료 — 지금부터 Bash/python 이 이 환경으로 돕니다. "
                     f"{len(final)}개 패키지(전이 포함, 정확한 핀). 이후 세션·다른 파드에서도 "
                     "자동 복원됩니다."
-                ),
-            }
-        )
-
-    # ── 로컬(무-sandbox) 폴백 ─────────────────────────────────────
-    def _load_local(self, manifest_path: str) -> Dict[str, Any]:
-        try:
-            with open(manifest_path, encoding="utf-8") as fh:
-                data = json.load(fh)
-            return data if isinstance(data, dict) else {"packages": [], "env_id": ""}
-        except FileNotFoundError:
-            return {"packages": [], "env_id": ""}
-        except Exception:  # noqa: BLE001
-            return {"packages": [], "env_id": ""}
-
-    def _save_local(self, manifest_path: str, packages: List[str]) -> None:
-        try:
-            os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
-            with open(manifest_path, "w", encoding="utf-8") as fh:
-                json.dump(
-                    {"packages": packages, "env_id": "local"}, fh, ensure_ascii=False, indent=2
-                )
-        except Exception:  # noqa: BLE001
-            logger.warning("python-env: 로컬 매니페스트 저장 실패", exc_info=True)
-
-    async def _execute_local(self, input: Dict[str, Any]) -> Any:  # noqa: A002
-        from xgen_agent_runtime.tools.base import ToolResult
-        from xgen_agent_runtime.host.forged_tools import (
-            _pin_from_target,
-            _pip_install_target,
-            _session_local_env_dir,
-        )
-
-        ws = self._workspace()
-        if not ws:
-            return ToolResult(
-                content="workspace 를 찾을 수 없어 로컬 파이썬 환경을 관리할 수 없습니다.",
-                is_error=True,
-            )
-        manifest = os.path.join(ws, ENV_FILE)
-        env_dir = _session_local_env_dir(ws)
-        stored = self._load_local(manifest)
-        action = str(input.get("action") or "").strip()
-        packages = [str(p).strip() for p in (input.get("packages") or []) if str(p).strip()]
-
-        if action == "list":
-            return ToolResult(
-                content={
-                    "packages": stored.get("packages", []),
-                    "env_dir": env_dir,
-                    "manifest": ENV_FILE,
-                    "local": True,
-                    "note": "sandbox 없이 로컬 세션 환경입니다 — forged 도구가 이 환경을 씁니다(임의 Bash 에는 자동 적용 안 됨).",
-                }
-            )
-        if action not in ("install", "remove"):
-            return ToolResult(
-                content=f"알 수 없는 action: {action!r} (install|remove|list)", is_error=True
-            )
-        if not packages:
-            return ToolResult(content=f"{action} 에는 packages 가 필요합니다.", is_error=True)
-
-        merged = (
-            merge_requirements(stored.get("packages", []), packages)
-            if action == "install"
-            else remove_requirements(stored.get("packages", []), packages)
-        )
-
-        if not merged:
-            shutil.rmtree(env_dir, ignore_errors=True)
-            self._save_local(manifest, [])
-            return ToolResult(
-                content={"packages": [], "local": True, "message": "로컬 세션 환경을 비웠습니다."}
-            )
-
-        try:
-            # pip --target 은 additive 라 remove 반영을 위해 전체 재빌드(멱등).
-            shutil.rmtree(env_dir, ignore_errors=True)
-            proc = await asyncio.to_thread(_pip_install_target, env_dir, merged)
-            if getattr(proc, "returncode", 1) != 0:
-                raise RuntimeError((proc.stderr or proc.stdout or "pip install 실패")[-1500:])
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(
-                content=f"로컬 환경 구성 실패: {exc}\n패키지 이름/버전을 확인하세요(모듈명≠pip명: pptx→python-pptx).",
-                is_error=True,
-            )
-        pinned = _pin_from_target(env_dir) or merged
-        self._save_local(manifest, pinned)
-        return ToolResult(
-            content={
-                "packages": pinned,
-                "local": True,
-                "env_dir": env_dir,
-                "message": (
-                    f"로컬 세션 환경 적용({len(pinned)}개) — forged 도구가 지금부터 이 패키지를 "
-                    "씁니다. 동기화로 다음 세션·파드에도 유지됩니다."
                 ),
             }
         )
