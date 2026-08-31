@@ -6,8 +6,9 @@
 * [CLI_BRIDGE] host.cli_bridge_available(provider) 가 False 면 CLI 전용 노트
   (memory_* 이름 규약 / SELF_EVOLUTION / 위임 노트·스태시)를 붙이지 않고 메모리는
   '자동'이라고만 안내한다. 메서드 부재 → True(레거시 서버).
-* [감사 #25] enable_builtin_tools=False 면 (host 가 True 라 해도) 브릿지 run ctx 가
-  없으므로 SELF_EVOLUTION/위임 노트는 빠진다 — memory 노트는 run ctx 와 무관(memory eager).
+* 한 스위치가 옆 능력을 끌고 내려가지 않는다: 자기진화를 꺼도 위임·메모리는
+  그대로다. (내장 도구를 통째로 끄던 enable_builtin_tools 는 폐기됐다 —
+  표면을 정하는 축은 tool_exposure 의 계층 하나뿐이다.)
 """
 
 from __future__ import annotations
@@ -441,47 +442,35 @@ def test_missing_system_prompt_still_falls_back_to_default(capture) -> None:
     assert default_prompt in sp
 
 
-# ── [감사 #25] enable_builtin_tools=False ─────────────────────────────
+# ── 내장 도구 표면은 설정이 아니라 계층이다 ───────────────────────────
+#
+# 예전엔 ``enable_builtin_tools`` 스위치가 있었다. 그 스위치는 우리가 **주고 싶은**
+# 도구(셸·파일·웹·문서)를 통째로 껐는데, 정작 끄고 싶었던 것은 CLI 하네스가
+# 자기 것으로 들고 오는 네이티브 도구였다. 끄면 셸도 파일도 사라져 에이전트가
+# 아무것도 못 하고, 켜면 계층이 없어 전부 쏟아졌다 — 어느 쪽도 원하는 상태가
+# 아니어서 스위치를 걷어냈다. 남은 축은 하나, ``tool_exposure`` 의 계층이다.
 
 
-def test_cli_builtin_tools_off_keeps_self_evolution(capture, caplog) -> None:
-    """내장 도구를 꺼도 자기진화는 살아 있어야 한다.
+def test_run_ctx_는_자기진화만_꺼도_살아_있다(capture, caplog) -> None:
+    """자기진화를 꺼도 위임·메모리는 그대로다.
 
     WorkflowSelf 는 registry + workflow_id 만 필요하다(편집은 DB, workspace 불필요).
-    예전엔 CLI 경로가 run ctx 바인딩을 enable_builtin_tools 에 묶어 둬서, 내장 도구를
-    끈 에이전트는 자기진화까지 조용히 잃었다 — SDK 경로에서 한 번 고친 회귀
-    (감사 HIGH)가 CLI 경로에 그대로 남아 있었다.
+    한 스위치가 옆 능력을 조용히 끌고 내려가던 회귀(감사 HIGH)를 여기서 막는다.
     """
     host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=True)
     with caplog.at_level(logging.INFO):
-        seen = _run(host, capture, provider="claude_code", enable_builtin_tools=False)
+        seen = _run(host, capture, provider="claude_code", enable_self_evolution=False)
     sp = seen["system_prompt"]
-    assert SELF_EVOLUTION_PROMPT_BLOCK in sp
+    assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
     assert "mcp__connector__DelegateTask" in sp
     assert "_delegation_extras" in host.cli_params
     assert "mcp__connector__memory_write" in sp
 
 
-def test_cli_builtin_off_and_self_evolution_off_drops_run_ctx_tools(capture, caplog) -> None:
-    """둘 다 꺼지면 run ctx 가 바인딩되지 않는다 → 그 위에 사는 도구는 광고 금지.
-
-    memory_* 는 run ctx 와 무관(memory eager)하므로 그대로 남는다.
-    """
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=True)
-    with caplog.at_level(logging.INFO):
-        seen = _run(host, capture, provider="claude_code",
-                    enable_builtin_tools=False, enable_self_evolution=False)
-    sp = seen["system_prompt"]
-    assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
-    assert "mcp__connector__DelegateTask" not in sp
-    assert "_delegation_extras" not in host.cli_params
-    assert "mcp__connector__memory_write" in sp
-
-
-def test_cli_legacy_host_builtin_tools_off_also_keeps_self_evolution(capture) -> None:
+def test_cli_legacy_host_also_keeps_self_evolution(capture) -> None:
     """프로브가 없는 레거시 호스트도 같은 판정(브릿지 있음으로 간주)."""
     host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=None)
-    seen = _run(host, capture, provider="claude_code", enable_builtin_tools=False)
+    seen = _run(host, capture, provider="claude_code")
     sp = seen["system_prompt"]
     assert SELF_EVOLUTION_PROMPT_BLOCK in sp
     assert "mcp__connector__DelegateTask" in sp
