@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.4.1] — 2026-08-31
+
+### Fixed — 제작 도구가 자기 workspace 에서 돈다
+
+`_run_in_sandbox` 만 `cwd` 를 넘기지 않았다. `entrypoint` 는 workspace 기준 상대
+경로이고 다른 모든 도구(`sb_run`)는 세션 workdir 을 명시하는데, 여기만 러너의
+기본값에 기대고 있었다. 그 기본값이 바뀌는 날 "도구는 등록됐는데 스크립트를 못
+찾는다"가 되고, 아무 로그도 그 이유를 말해 주지 않는다.
+
 ## [4.4.0] — 2026-08-31
 
 ### Changed — 계층이 문서에만 있고 등록부엔 없었다

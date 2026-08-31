@@ -595,11 +595,19 @@ async def _run_in_sandbox(sandbox: Any, spec: "ForgedToolSpec", payload: bytes) 
 
     로컬 실행과 **같은 계약**이다 (stdin JSON → stdout JSON). 달라지는 것은
     어디서 도는가와, 이 도구가 요구한 패키지가 있는 인터프리터로 돈다는 것뿐이다.
+
+    ``cwd`` 를 **명시한다.** entrypoint 는 workspace 기준 상대 경로이고, 다른 모든
+    도구(sb_run)는 이미 세션 workdir 을 명시해서 넘긴다. 여기만 비워 두면 실행
+    위치가 러너의 기본값에 달리고, 그 기본값이 바뀌는 날 "도구는 등록됐는데
+    스크립트를 못 찾는다"가 된다 — 아무 로그도 그 이유를 말해 주지 않는다.
     """
+    from xgen_agent_runtime.tools._xgeny_sandbox import _cwd
+
     kwargs: Dict[str, Any] = {
         "stdin": payload,
         "env": dict(spec.env or {}),
         "timeout_s": float(spec.timeout_s),
+        "cwd": _cwd(sandbox, ""),
     }
     # "local:" 은 무-sandbox 로컬 폴백 마커라 러너 env_id 가 아니다 — 넘기지 않는다
     # (러너에 붙어 실행되면 deps 가 없을 수 있으나, 로컬 폴백으로 만든 도구를 러너에서
