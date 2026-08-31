@@ -27,16 +27,13 @@ RAG 와 같은 '상태는 서버, 실행은 여기' 규약이다. 엔진이 저�
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
 import shutil
-import subprocess
-import sys
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol
 
 logger = logging.getLogger("xgen_agent_runtime.host.forged_tools")
 
@@ -255,128 +252,16 @@ def _missing_module_hint(stderr: str) -> str:
     )
 
 
-def _child_env(
-    spec_env: Dict[str, str], extra_pythonpath: Optional[List[str]] = None
-) -> Dict[str, str]:
-    env = {k: os.environ[k] for k in _ENV_ALLOWLIST if k in os.environ}
-    env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUNBUFFERED"] = "1"
-    # 로컬 폴백 환경(도구별 + 세션 PythonEnv)을 PYTHONPATH 앞에 얹는다 — 러너 없이도
-    # 의존성 도구가 자기 패키지를 import 할 수 있게 한다.
-    paths = [p for p in (extra_pythonpath or []) if p and os.path.isdir(p)]
-    if paths:
-        existing = os.environ.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = os.pathsep.join(paths + ([existing] if existing else []))
-    env.update({str(k): str(v) for k, v in (spec_env or {}).items()})
-    return env
-
-
-# ── 로컬(무-sandbox) 파이썬 환경 폴백 ──────────────────────────────────
-# 러너(sandbox)가 없을 때도 의존성 도구가 동작하도록, workspace 안에
-# `pip install --target <dir>` 로 격리 디렉터리를 만들고 실행 시 PYTHONPATH 에
-# 얹는다. 러너의 content-addressed env 를 로컬로 근사한 것 — 같은 핀이면 같은 dir,
-# 멱등(marker), workspace 동기화로 파드/재시작을 가로질러 유지된다.
-_LOCAL_ENV_ROOT = ".xgeny/tool-envs"  # 도구별 (deps 해시)
-_SESSION_LOCAL_ENV = ".xgeny/python-local-env"  # 세션 전체 (PythonEnv 무-sandbox 폴백)
-_LOCAL_ENV_TIMEOUT = 600
-
-
-def _deps_hash(dependencies: List[str]) -> str:
-    canon = "\n".join(sorted(str(d).strip() for d in (dependencies or []) if str(d).strip()))
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
-
-
-def _tool_env_dir(workspace_dir: str, dependencies: List[str]) -> str:
-    return os.path.join(str(workspace_dir), _LOCAL_ENV_ROOT, _deps_hash(dependencies))
-
-
-def _session_local_env_dir(workspace_dir: str) -> str:
-    return os.path.join(str(workspace_dir), _SESSION_LOCAL_ENV)
-
-
-def _pin_from_target(env_dir: str) -> List[str]:
-    """`pip install --target` 디렉터리의 *.dist-info 로부터 name==version 핀 목록."""
-    pins: List[str] = []
-    try:
-        for name in os.listdir(env_dir):
-            if name.endswith(".dist-info"):
-                base = name[: -len(".dist-info")]
-                if "-" in base:
-                    pkg, ver = base.rsplit("-", 1)
-                    pins.append(f"{pkg.replace('_', '-')}=={ver}")
-    except Exception:  # noqa: BLE001
-        pass
-    return sorted(set(pins))
-
-
-def _pip_install_target(env_dir: str, dependencies: List[str]) -> "subprocess.CompletedProcess":  # type: ignore  # noqa: F821
-    import subprocess
-
-    os.makedirs(env_dir, exist_ok=True)
-    tail = [
-        "install",
-        "--no-input",
-        "--disable-pip-version-check",
-        "--target",
-        env_dir,
-        *[str(d) for d in dependencies],
-    ]
-    # 1) 이 인터프리터의 pip(가장 정확). 2) PATH 의 pip3/pip 실행 파일 폴백 —
-    # 일부 환경(uv 등)은 `python -m pip` 가 없어도 pip 실행 파일은 있다.
-    bases: List[List[str]] = [[sys.executable, "-m", "pip"]]
-    for exe in ("pip3", "pip"):
-        if shutil.which(exe):
-            bases.append([exe])
-    last = None
-    for base in bases:
-        proc = subprocess.run(
-            [*base, *tail], capture_output=True, text=True, timeout=_LOCAL_ENV_TIMEOUT
-        )
-        last = proc
-        if proc.returncode == 0:
-            return proc
-        # 'No module named pip' 는 이 진입점만의 문제 → 다음 후보 시도.
-        # 그 외(패키지명 오류 등)는 실제 실패이므로 즉시 반환.
-        if "no module named pip" not in ((proc.stderr or "") + (proc.stdout or "")).lower():
-            return proc
-    return last  # type: ignore[return-value]
-
-
-async def _ensure_local_env(workspace_dir: str, dependencies: List[str]) -> Tuple[str, List[str]]:
-    """sandbox 없이 workspace 로컬 격리 디렉터리에 deps 를 설치한다.
-
-    반환 ``("local:<hash>", pinned)``. 멱등 — marker 가 있으면 재설치하지 않는다.
-    """
-    deps = [str(d).strip() for d in (dependencies or []) if str(d).strip()]
-    h = _deps_hash(deps)
-    env_dir = _tool_env_dir(workspace_dir, deps)
-    marker = os.path.join(env_dir, ".installed")
-    if os.path.isfile(marker):
-        try:
-            pinned = [ln for ln in open(marker, encoding="utf-8").read().splitlines() if ln.strip()]
-        except Exception:  # noqa: BLE001
-            pinned = deps
-        return f"local:{h}", pinned or deps
-    proc = await asyncio.to_thread(_pip_install_target, env_dir, deps)
-    if getattr(proc, "returncode", 1) != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "pip install 실패")[-1500:])
-    pinned = _pin_from_target(env_dir) or deps
-    try:
-        with open(marker, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(pinned))
-    except Exception:  # noqa: BLE001
-        pass
-    return f"local:{h}", pinned
-
-
-def _local_pythonpath(workspace_dir: str, dependencies: List[str]) -> List[str]:
-    """도구별 로컬 env + 세션 로컬 env 를 PYTHONPATH 후보로 돌려준다(존재하는 것만)."""
-    out: List[str] = []
-    if dependencies:
-        out.append(_tool_env_dir(workspace_dir, dependencies))
-    out.append(_session_local_env_dir(workspace_dir))
-    return out
+# ── 실행지 ─────────────────────────────────────────────────────────────
+#
+# 하나뿐이다: **에이전트의 sandbox 세션.** 예전엔 러너가 없을 때를 위한 로컬
+# 폴백이 있었다 — workspace 안에 `pip install --target` 으로 격리 디렉터리를
+# 만들고 실행 시 PYTHONPATH 에 얹는 방식. 그게 두 번째 세계를 만들었다:
+# PythonEnv 는 그 디렉터리에 설치하고, Bash 는 그걸 보지 못해서, 에이전트는
+# "설치했는데 못 찾는다" 를 반복하며 재설치 루프를 돌았다(프로드 실증).
+#
+# sandbox 가 표준이 된 지금 그 세계는 존재하지 않는다. 코드는 sandbox 에서만
+# 돈다 — 없으면 도는 척하지 않고 그렇다고 말한다.
 
 
 class ForgedScriptTool:
@@ -437,75 +322,25 @@ class ForgedScriptTool:
         # ModuleNotFoundError 가 나거나, 더 나쁘게는 이 파드의 다른 버전으로
         # 조용히 다른 답을 낸다.
         sandbox = getattr(context, "sandbox", None)
-        if sandbox is not None:
-            try:
-                res = await _run_in_sandbox(sandbox, spec, payload_early)
-            except Exception as exc:  # noqa: BLE001
-                self._record(str(exc))
-                return ToolResult(content=f"도구 '{spec.name}' 실행 실패: {exc}", is_error=True)
-            return self._interpret(
-                res.stdout.decode("utf-8", "replace")[:_STDOUT_CAP],
-                res.stderr.decode("utf-8", "replace")[-_STDERR_CAP:],
-                int(res.rc),
-            )
-
-        try:
-            runtime = resolve_runtime(spec.runtime)
-            script = resolve_entrypoint(self._workspace, spec.entrypoint)
-        except ForgedToolError as exc:
-            self._record(str(exc))
-            return ToolResult(
-                content=f"도구 '{spec.name}' 을(를) 실행할 수 없습니다: {exc}", is_error=True
-            )
-        if not os.path.isfile(script):
+        if sandbox is None:
+            # 도는 척하지 않는다. 스크립트도 의존성 환경도 세션 쪽에 있고,
+            # 여기서 돌리면 ModuleNotFoundError 가 나거나 — 더 나쁘게 — 이
+            # 파드의 다른 버전으로 조용히 다른 답을 낸다.
             msg = (
-                f"스크립트가 없어졌습니다: {spec.entrypoint} "
-                "— workspace 에서 삭제되었을 수 있습니다."
+                f"도구 '{spec.name}' 을(를) 실행할 실행 환경이 없습니다. "
+                "제작 도구는 이 에이전트의 sandbox 세션에서만 돕니다."
             )
             self._record(msg)
             return ToolResult(content=msg, is_error=True)
-
-        # 러너 없이 로컬 실행: 의존성이 있으면 로컬 격리 env 를 보장(멱등)하고,
-        # 도구별 env + 세션 PythonEnv 로컬 폴백을 PYTHONPATH 에 얹어 import 가 되게 한다.
-        if spec.dependencies:
-            try:
-                await _ensure_local_env(self._workspace, spec.dependencies)
-            except Exception as exc:  # noqa: BLE001 — 준비 실패해도 실행은 시도
-                logger.warning("로컬 도구 환경 준비 실패 (실행은 시도): %s", exc)
-        pythonpath = _local_pythonpath(self._workspace, spec.dependencies)
-
-        payload = json.dumps(dict(input or {}), ensure_ascii=False).encode("utf-8")
         try:
-            proc = await asyncio.create_subprocess_exec(
-                runtime,
-                script,
-                *spec.argv,
-                cwd=self._workspace,
-                env=_child_env(spec.env, pythonpath),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError as exc:
+            res = await _run_in_sandbox(sandbox, spec, payload_early)
+        except Exception as exc:  # noqa: BLE001
             self._record(str(exc))
-            return ToolResult(content=f"도구 '{spec.name}' 기동 실패: {exc}", is_error=True)
-
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(payload), timeout=spec.timeout_s)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:  # noqa: BLE001
-                pass
-            msg = f"도구 '{spec.name}' 이(가) {spec.timeout_s:g}초 안에 끝나지 않았습니다"
-            self._record(msg)
-            return ToolResult(content=msg, is_error=True)
-
+            return ToolResult(content=f"도구 '{spec.name}' 실행 실패: {exc}", is_error=True)
         return self._interpret(
-            out.decode("utf-8", "replace")[:_STDOUT_CAP],
-            err.decode("utf-8", "replace")[-_STDERR_CAP:],
-            proc.returncode or 0,
+            res.stdout.decode("utf-8", "replace")[:_STDOUT_CAP],
+            res.stderr.decode("utf-8", "replace")[-_STDERR_CAP:],
+            int(res.rc),
         )
 
     def _interpret(self, stdout: str, stderr: str, rc: int) -> Any:
@@ -609,9 +444,9 @@ async def _run_in_sandbox(sandbox: Any, spec: "ForgedToolSpec", payload: bytes) 
         "timeout_s": float(spec.timeout_s),
         "cwd": _cwd(sandbox, ""),
     }
-    # "local:" 은 무-sandbox 로컬 폴백 마커라 러너 env_id 가 아니다 — 넘기지 않는다
-    # (러너에 붙어 실행되면 deps 가 없을 수 있으나, 로컬 폴백으로 만든 도구를 러너에서
-    #  도로 돌리는 경우는 드물고, 넘기면 러너가 알 수 없는 env 라 실패한다).
+    # 폐기된 로컬 폴백이 남긴 "local:" env_id 는 러너가 모르는 이름이다 — 넘기면
+    # 실패하므로 빼고 세션 기본 환경으로 돈다 (그 도구는 다시 등록하면 러너 환경을
+    # 받는다). 새로 만들어지는 일은 없다.
     if spec.env_id and not spec.env_id.startswith("local:"):
         kwargs["env_id"] = spec.env_id
     return await sandbox.exec([spec.runtime, spec.entrypoint, *spec.argv], **kwargs)
@@ -772,62 +607,52 @@ class ForgeTool:
         # 거기 있으므로 이 파드의 파일시스템을 봐서는 안 된다 — 그러면 항상
         # "스크립트를 찾을 수 없습니다" 가 된다.
         _sandbox = getattr(context, "sandbox", None)
+        if _sandbox is None:
+            return ToolResult(
+                content=(
+                    "도구를 만들 실행 환경이 없습니다. 제작 도구는 이 에이전트의 "
+                    "sandbox 세션에서 등록되고 실행됩니다."
+                ),
+                is_error=True,
+            )
+        # 파일은 세션에 있다 — 이 파드의 파일시스템을 봐서는 안 된다. 보면
+        # 항상 "스크립트를 찾을 수 없습니다" 가 된다.
         try:
-            validate_spec(spec, self._workspace, check_file=(_sandbox is None))
+            validate_spec(spec, self._workspace, check_file=False)
         except ForgedToolError as exc:
             return ToolResult(content=f"도구를 만들 수 없습니다: {exc}", is_error=True)
-        if _sandbox is not None:
-            try:
-                found = await _sandbox.exists(spec.entrypoint)
-            except Exception as exc:  # noqa: BLE001 — 확인 실패를 '없음' 으로 읽지 않는다
-                logger.warning("스크립트 존재 확인 실패 (등록은 진행): %s", exc)
-                found = True
-            if not found:
-                return ToolResult(
-                    content=(
-                        f"스크립트를 찾을 수 없습니다: {spec.entrypoint} "
-                        "— 먼저 workspace 에 파일을 만든 뒤 등록하세요"
-                    ),
-                    is_error=True,
-                )
+        try:
+            found = await _sandbox.exists(spec.entrypoint)
+        except Exception as exc:  # noqa: BLE001 — 확인 실패를 '없음' 으로 읽지 않는다
+            logger.warning("스크립트 존재 확인 실패 (등록은 진행): %s", exc)
+            found = True
+        if not found:
+            return ToolResult(
+                content=(
+                    f"스크립트를 찾을 수 없습니다: {spec.entrypoint} "
+                    "— 먼저 workspace 에 파일을 만든 뒤 등록하세요"
+                ),
+                is_error=True,
+            )
 
         # 의존성이 있으면 **등록 시점에** 환경을 세운다. 첫 호출로 미루면
         # 에이전트가 도구를 부른 순간 몇 분을 기다리게 되고, 그 지연이
         # "도구가 고장났다" 로 읽힌다.
         if spec.dependencies:
-            sandbox = getattr(context, "sandbox", None)
-            if sandbox is None:
-                # 러너(sandbox)가 없으면 workspace 로컬 격리 환경으로 폴백한다 —
-                # pip install --target 후 실행 시 PYTHONPATH 에 얹어, 러너 없이도
-                # 의존성 도구가 그대로 동작한다(모든 Agent-XGeny 가 자기 환경을 갖도록).
-                try:
-                    spec.env_id, _pinned = await _ensure_local_env(
-                        self._workspace, spec.dependencies
-                    )
-                    if _pinned:
-                        spec.dependencies = _pinned
-                except Exception as exc:  # noqa: BLE001
-                    return ToolResult(
-                        content=(
-                            f"로컬 의존성 설치에 실패했습니다: {exc}\n"
-                            "패키지 이름과 버전을 확인하세요(모듈명≠pip명일 수 있음: pptx→python-pptx)."
-                        ),
-                        is_error=True,
-                    )
-            else:
-                try:
-                    spec.env_id, _pinned = await _ensure_env(sandbox, spec.dependencies)
-                    if _pinned:
-                        # 확정된 핀으로 갈아 끼운다 — 재현의 근거는 에이전트가 적은
-                        # 이름이 아니라 실제로 설치된 버전이다.
-                        spec.dependencies = _pinned
-                except Exception as exc:  # noqa: BLE001 — 원인을 에이전트가 읽어야 한다
-                    return ToolResult(
-                        content=(
-                            f"의존성 설치에 실패했습니다: {exc}\n패키지 이름과 버전을 확인하세요."
-                        ),
-                        is_error=True,
-                    )
+            try:
+                spec.env_id, _pinned = await _ensure_env(_sandbox, spec.dependencies)
+                if _pinned:
+                    # 확정된 핀으로 갈아 끼운다 — 재현의 근거는 에이전트가 적은
+                    # 이름이 아니라 실제로 설치된 버전이다.
+                    spec.dependencies = _pinned
+            except Exception as exc:  # noqa: BLE001 — 원인을 에이전트가 읽어야 한다
+                return ToolResult(
+                    content=(
+                        f"의존성 설치에 실패했습니다: {exc}\n패키지 이름과 버전을 확인하세요"
+                        "(모듈명≠pip명일 수 있습니다: pptx→python-pptx)."
+                    ),
+                    is_error=True,
+                )
 
         # ── 등록 전 검증 (verify-before-register) ──
         # 스크립트를 **에이전트가 부를 때와 똑같은 경로**로 한 번 실행한다.

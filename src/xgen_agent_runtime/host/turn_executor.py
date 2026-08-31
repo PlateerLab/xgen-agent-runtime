@@ -111,6 +111,7 @@ class AgentTurnExecutor:
                 있고, 여기서는 그 계획에 물을 뿐이다.
                 """
                 return registers_core(name, flat=_flat_tools)
+
             result_sink: Dict[str, str] = {}
             # ── CLI 백엔드의 도구 표면 ───────────────────────────────────
             # CLI(claude_code/codex)는 자기 루프를 소유해 이 registry 를 직접 보지
