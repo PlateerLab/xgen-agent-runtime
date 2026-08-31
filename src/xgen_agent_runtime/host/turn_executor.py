@@ -23,7 +23,7 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
     default_prompt,
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
-from xgen_agent_runtime.host.tool_exposure import sends_every_schema
+from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
 logger = logging.getLogger("editor.nodes.xgen.agent.agent_geny")
@@ -102,6 +102,15 @@ class AgentTurnExecutor:
             # 스키마에 컨텍스트를 쓰면, 모델은 더 많이 읽고 더 못 고른다.
             # 'flat' 은 그 계층을 포기하고 전부 선노출하는 탈출구다.
             _flat_tools = sends_every_schema(kwargs.get("tool_exposure"))
+
+            def _turn_one(name: str) -> bool:
+                """이 도구가 이번 턴 **첫 화면**에 스키마까지 나가는가.
+
+                등록 지점마다 제 판단으로 ``core=True`` 를 쓰면 표면은 아무도
+                의도하지 않은 모양이 된다 — 그래서 계획은 tool_exposure 한 곳에
+                있고, 여기서는 그 계획에 물을 뿐이다.
+                """
+                return registers_core(name, flat=_flat_tools)
             result_sink: Dict[str, str] = {}
             # ── CLI 백엔드의 도구 표면 ───────────────────────────────────
             # CLI(claude_code/codex)는 자기 루프를 소유해 이 registry 를 직접 보지
@@ -138,8 +147,15 @@ class AgentTurnExecutor:
                         kwargs.get("user_id"), kwargs.get("client_surface")
                     )
                     if connector_tools:
+                        # 커넥터 도구도 계층을 지킨다 — 브라우저 조작 6종은
+                        # BrowserGuide 뒤에 두고, 로컬 셸 같은 기본 동사만 남긴다.
+                        # (예전엔 전부 core 였다: 커넥터를 연결하는 순간 첫 턴
+                        #  표면이 두 배가 됐다.)
                         registry = adapt_tools(
-                            connector_tools, result_sink=result_sink, registry=registry, core=True
+                            connector_tools,
+                            result_sink=result_sink,
+                            registry=registry,
+                            core=_turn_one,
                         )
                         logger.info(
                             "agents/geny: Connector MCP 도구 %d개 자동 주입", len(connector_tools)
@@ -315,14 +331,7 @@ class AgentTurnExecutor:
             # 세션 한정 Cron* 은 runner 가 차단하므로, 이게 없으면 반복 요청을
             # 받을 길 자체가 없다.
             _job_tools = []
-            # enable_builtin_tools 게이트에 함께 묶는다 — 아래 SDK registry/CLI
-            # ctx 등록이 이 플래그 안에 있어서, 여기서만 만들면 도구 없이
-            # 프롬프트만 "JobSchedule 로 걸어라"라고 약속하는 유령이 된다.
-            if (
-                kwargs.get("workflow_id")
-                and kwargs.get("user_id")
-                and bool(kwargs.get("enable_builtin_tools", True))
-            ):
+            if kwargs.get("workflow_id") and kwargs.get("user_id"):
                 try:
                     _job_tools = host.build_job_tools(
                         str(kwargs.get("workflow_id")),
@@ -399,12 +408,8 @@ class AgentTurnExecutor:
             # (WorkflowSelf 는 registry + workflow_id 만 필요하다). 둘 다 아니면
             # 바인딩이 없으므로 host 가 True 라 해도 여기서 '없음'으로 본다.
             # memory_* 는 run ctx 와 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
-            _cli_tools_bridge_ok = _cli_bridge_ok and (
-                bool(kwargs.get("enable_builtin_tools", True)) or _se_allowed
-            )
-            _cli_tools_bridge_reason = _cli_bridge_reason or (
-                "enable_builtin_tools=off + 자기진화 미허용 (브릿지 run ctx 미바인딩)"
-            )
+            _cli_tools_bridge_ok = _cli_bridge_ok
+            _cli_tools_bridge_reason = _cli_bridge_reason
             if bool(kwargs.get("enable_memory", True)):
                 from xgen_agent_runtime.host._constants import (
                     MEMORY_AUTO_PROMPT_BLOCK,
@@ -451,7 +456,7 @@ class AgentTurnExecutor:
                         if registry is None:
                             registry = ToolRegistry()
                         for mem_tool in build_memory_tools(memory_provider):
-                            registry.register(mem_tool, core=True)
+                            registry.register(mem_tool, core=_turn_one(mem_tool.name))
                         system_prompt = system_prompt + MEMORY_PROMPT_BLOCK
                         if provider in _CLI_BACKENDS:
                             # 같은 registry 가 MCP 로 나가므로 도구 이름에 접두가 붙는다.
@@ -482,7 +487,7 @@ class AgentTurnExecutor:
             # 통째로 날아간다.
             _hydrated_ws: Optional[str] = None
             _hydrated_wf: str = ""
-            if _sdk_tools and bool(kwargs.get("enable_builtin_tools", True)):
+            if _sdk_tools:
                 try:
                     import shutil as _shutil
                     import tempfile as _tempfile
@@ -493,6 +498,9 @@ class AgentTurnExecutor:
                         registry = ToolRegistry()
                     bt_summary = host.register_builtin_tools(
                         registry,
+                        # 불리언을 넘긴다 — 이 함수는 다른 레포(workflow)에 있고,
+                        # 시그니처를 바꾸면 두 레포의 배포 순서가 계약이 된다.
+                        # 계획(tool_exposure)은 그쪽에서도 import 할 수 있다.
                         core=_flat_tools,
                         user_id=kwargs.get("user_id"),
                         anthropic_api_key=host.resolve_api_key("anthropic", kwargs),
@@ -504,7 +512,8 @@ class AgentTurnExecutor:
                             registry.register(_cloud_tool, core=True)
                     for _jt in _job_tools:
                         if registry.get(_jt.name) is None:
-                            registry.register(_jt, core=True)
+                            # JobGuide 가 문이고 Schedule/List/Cancel 은 그 뒤다.
+                            registry.register(_jt, core=_turn_one(_jt.name))
                     if bt_summary["tools"]:
                         # 영속 workspace (Drive형 동기화의 전제): workflow(에이전트)
                         # 축의 안정 디렉터리 — 턴을 가로질러 파일이 살아남고,
@@ -611,9 +620,9 @@ class AgentTurnExecutor:
 
             # ── 자기진화(self-evolution) 등록 — built-in tools 와 독립 ──────────
             # WorkflowSelf 는 registry + workflow_id 만 있으면 되고(편집은 DB, workspace
-            # 불필요), built-in tools 설정과 무관해야 한다. 예전엔 enable_builtin_tools 와
-            # `if bt_summary['tools']` 안에 중첩돼, 내장도구를 끄거나 모든 패밀리를 kill-switch
-            # 로 비우면 self-evolution 이 조용히 죽었다(감사 HIGH).
+            # 불필요), 내장 도구 조립과 무관해야 한다. 예전엔 `if bt_summary['tools']`
+            # 안에 중첩돼, 모든 패밀리를 kill-switch 로 비우면 self-evolution 이
+            # 조용히 죽었다(감사 HIGH).
             # (판정 _se_allowed 는 위에서 끝났다 — 브릿지 가용성 판정이 그 결과를 본다.)
             # 서버 CLI 경로는 여기서 registry 에 넣지 않고(그 registry 를 CLI 가 못 본다)
             # 커넥터 MCP 브릿지가 같은 판정으로 WorkflowSelf 를 광고한다
@@ -793,19 +802,22 @@ class AgentTurnExecutor:
                         # DelegateTask = 단일 위임 동사 (background 전용, Geny
                         # send_direct_message 동형). one-shot `agent` 패밀리는
                         # 의도적으로 미등록 — 턴 블로킹 위임 회귀 방지.
+                        # 위임 표면은 넓다(DelegateTask + SubAgent* 5 + Task* 6).
+                        # 첫 턴에 서는 것은 DelegationGuide 하나뿐이고, 그 문이
+                        # 세 표면의 결정 지도를 편다.
                         for name, tool_cls in host.delegation_extra_tool_classes().items():
                             if registry.get(name) is None:
-                                registry.register(tool_cls(), core=True)
+                                registry.register(tool_cls(), core=_turn_one(name))
                                 added.append(name)
                         for fam in ("subagent", "tasks"):
                             for name, tool_cls in _gbt(features=[fam]).items():
                                 if registry.get(name) is None:
-                                    registry.register(tool_cls(), core=True)
+                                    registry.register(tool_cls(), core=_turn_one(name))
                                     added.append(name)
                         if run_tool_context is not None:
                             run_tool_context.extras.update(delegation_extras)
                         else:
-                            # built-in 도구가 꺼져 있어도 위임 도구는 돈다.
+                            # 내장 패밀리가 하나도 안 붙어도 위임 도구는 돈다.
                             # 이 폴백에도 실행 기반과 내부 저장소를 똑같이 준다 —
                             # 여기만 빠지면 "도구는 러너에서 도는데 위임만 이
                             # 파드에서 도는" 상태가 되고, 그건 어느 로그를 봐도

@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.tools import Tool, ToolRegistry, ToolResult, build_tool
 
@@ -198,7 +198,7 @@ def adapt_tools(
     *,
     result_sink: Optional[Dict[str, str]] = None,
     registry: Optional[ToolRegistry] = None,
-    core: bool = True,
+    core: "bool | Callable[[str], bool]" = True,
 ) -> Optional[ToolRegistry]:
     """Adapt everything on the Tools port into a ``ToolRegistry``.
 
@@ -208,7 +208,10 @@ def adapt_tools(
 
     ``core=False`` registers the tools *deferred* (2.42.0 exposure model):
     schemas stay out of the LLM request until a ``ToolSearch`` hit activates
-    them — the token-saving mode for large tool sets.
+    them — the token-saving mode for large tool sets. ``core`` may instead be a
+    predicate over the tool name, for a surface where some of a batch belongs on
+    the first turn and the rest sits behind a gateway (the connector's browser
+    tools, say) — a batch is rarely all one thing.
 
     Returns ``None`` when nothing usable was connected (and no registry was
     passed in), so callers can skip tool stages entirely.
@@ -217,6 +220,7 @@ def adapt_tools(
     if not tools and registry is None:
         return None
     registry = registry if registry is not None else ToolRegistry()
+    decide = core if callable(core) else (lambda _name, _c=bool(core): _c)
     for tool in tools:
-        registry.register(tool, core=core)
+        registry.register(tool, core=bool(decide(getattr(tool, "name", ""))))
     return registry

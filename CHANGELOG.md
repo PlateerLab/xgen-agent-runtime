@@ -4,6 +4,48 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.4.0] — 2026-08-31
+
+### Changed — 계층이 문서에만 있고 등록부엔 없었다
+
+4.3.0 은 표면을 "계층적"이라고 선언했지만, 실제로 첫 턴에 무엇이 서는지는 등록
+지점 다섯 군데(내장 패밀리·메모리·작업·위임·커넥터)가 각자 정하고 있었다. 그래서
+표면은 정확히 거꾸로 섰다 — **Bash·파일·웹·브라우저는 숨고**, 위임 6종·작업 4종·
+메모리 6종이 통째로 첫 턴에 쏟아졌다. "무슨 도구가 있냐"고 물으면 에이전트는 재고
+목록을 읊고, 정작 셸은 "숨겨진 도구"라고 답했다.
+
+계획을 `host/tool_exposure.py` 한 곳으로 옮겼다. `TURN_ONE_TOOLS` 는 첫 턴에
+스키마까지 나가는 이름의 화이트리스트이고, 각 줄은 **능력 하나가 아니라 입구
+하나**다:
+
+| 첫 턴에 서는 것 | 그 뒤에 있는 것 |
+|---|---|
+| `Bash` `Read` `Write` `Edit` `Glob` `Grep` | — (셸을 여는 문은 셸이다) |
+| `ToolSearch` | 아래 계층 전부 |
+| `memory_*` 6종 | — |
+| `JobGuide` | `JobSchedule` `JobList` `JobCancel` |
+| `DelegationGuide` | `DelegateTask` `SubAgent*` `Task*` |
+| `ForgeTool` `ListForgedTools` `DeleteForgedTool` `PythonEnv` | — |
+| `WorkflowSelf` | action 별 심층 가이드 |
+| `FileCloud` | `fs_*` 37종 |
+| `WebFetch` `WebSearch` | — (브라우저가 없는 표면의 유일한 바깥 통로) |
+| `BrowserGuide` | 브라우저 조작 도구 |
+
+문서 편집(`Doc*`)은 첫 턴에 없다 — `ToolSearch` 로 찾아 꺼낸다.
+
+`adapt_tools(core=...)` 는 이제 불리언 대신 **이름에 대한 술어**도 받는다. 한 뭉치로
+들어오는 커넥터 도구 안에서도 브라우저 조작은 `BrowserGuide` 뒤로 가고 기본 동사만
+남는다 — 커넥터를 연결하는 순간 첫 턴 표면이 두 배가 되던 자리다.
+
+`flat` 은 그대로 탈출구다: 전부 선노출한다.
+
+### Removed — `enable_builtin_tools`
+
+우리가 **주고 싶은** 도구(셸·파일·웹·문서)를 통째로 끄는 스위치였다. 정작 끄고
+싶었던 것은 CLI 하네스가 자기 것으로 들고 오는 네이티브 도구인데, 그건 이미 전면
+차단돼 있다. 끄면 에이전트가 아무것도 못 하고, 켜면 계층이 없어 전부 쏟아졌다 —
+어느 쪽도 원하는 상태가 아니었다. 표면을 정하는 축은 이제 `tool_exposure` 하나다.
+
 ## [4.3.0] — 2026-08-31
 
 ### Changed — 도구 표면을 계층적으로 (기본값 변경)
