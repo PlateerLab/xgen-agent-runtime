@@ -4,6 +4,38 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.5.1] — 2026-09-01
+
+### Fixed — 로그인 셸이 선언된 파이썬 환경을 지우고 있었다
+
+`PythonEnv` 로 설치한 패키지를 바로 다음 `Bash` 가 못 찾았다. 에이전트는
+"설치했는데 못 찾는다"를 겪고 `pip install` 로 다시 깔았고, 그건 됐다.
+
+러너는 선언된 환경의 `bin` 을 PATH 앞에 얹어 명령에 넘긴다. 그런데 `sb_run` 이
+**로그인 셸**(`bash -lc`)로 실행했고, 로그인 셸은 `/etc/profile` 을 읽는다 —
+러너 이미지(`python:3.14-slim`)는 Debian 계열이고 그 파일은 PATH 를 **통째로
+덮어쓴다**:
+
+```
+넘긴 PATH:  <env>/bin:<home>/.local/bin:/usr/local/bin:/usr/bin:/bin
+-lc 안에서: /usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+```
+
+그래서 기본 인터프리터가 돌았다. `pip install` 이 됐던 이유도 같다 — 그건 기본
+인터프리터가 읽는 곳에 앉는다. 두 명령 다 rc=0 이라 아무 데도 오류가 없었다.
+
+`bash -c` 로 바꾼다. 로그인 셸이 이 이미지에서 더해 주는 것은 없었다(PATH 를
+profile 로 구성하지 않는다). 빼는 것만 있었다. 같은 이유로 사라지던
+`<session home>/.local/bin`(pip --user 콘솔 스크립트)도 함께 살아난다.
+
+### Changed — `PythonEnv` 는 설치가 **적용됐는지** 확인하고 답한다
+
+이 도구의 유일한 실패 방식은 조용한 것이었다: "적용 완료" 라고 답해 놓고 다음
+명령에서 `ModuleNotFoundError`. 이제 그 환경의 인터프리터에게 직접 물어보고
+(`importlib.metadata`, 셸을 거치지 않으므로 PATH 와 무관), 확인이 실패하면
+성공이라고 답하지 않는다. 확인 자체를 못 한 경우(러너 오류)는 실패로 단정하지
+않는다 — 모르는 것을 실패로 읽으면 멀쩡한 설치가 고장 난 것처럼 보인다.
+
 ## [4.5.0] — 2026-08-31
 
 ### Removed — 코드가 sandbox 밖에서 도는 길

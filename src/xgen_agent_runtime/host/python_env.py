@@ -184,6 +184,49 @@ class PythonEnvTool:
         ).encode("utf-8")
         await sandbox.write_bytes(ENV_FILE, body)
 
+    # ── 확인 ─────────────────────────────────────────────────────
+
+    async def _verify(self, sandbox: Any, env_id: str, requested: Sequence[str]) -> List[str]:
+        """이 환경의 인터프리터가 요청한 배포판을 실제로 갖고 있는가.
+
+        **배포판 이름으로 묻는다** — import 로 확인하려면 모듈명을 알아야 하는데
+        pip 이름과 다른 경우가 흔하다(python-pptx→pptx). ``importlib.metadata``
+        는 우리가 설치를 요청할 때 쓴 바로 그 이름을 안다.
+
+        확인 자체가 실패하면(러너 오류·타임아웃) **없는 것으로 보고하지 않는다** —
+        모르는 것을 실패로 단정하면 멀쩡한 설치를 고장 난 것처럼 만든다.
+        """
+        names = sorted({_req_name(r) for r in requested if str(r).strip()})
+        if not names:
+            return []
+        code = (
+            "import importlib.metadata as m, json, sys\n"
+            f"names = {names!r}\n"
+            "missing = []\n"
+            "for n in names:\n"
+            "    try:\n"
+            "        m.version(n)\n"
+            "    except Exception:\n"
+            "        missing.append(n)\n"
+            "print(json.dumps(missing))\n"
+        )
+        try:
+            res = await sandbox.exec(["python3", "-c", code], env_id=env_id, timeout_s=60.0)
+        except Exception:  # noqa: BLE001 — 확인 불가는 실패가 아니다
+            logger.warning("python-env: 적용 확인 실패 (설치는 유지)", exc_info=True)
+            return []
+        if getattr(res, "rc", 1) != 0:
+            logger.warning(
+                "python-env: 적용 확인이 rc=%s 로 끝났다 (설치는 유지)",
+                getattr(res, "rc", None),
+            )
+            return []
+        try:
+            out = res.stdout.decode("utf-8", "replace").strip().splitlines()[-1]
+            return [str(x) for x in json.loads(out)]
+        except Exception:  # noqa: BLE001
+            return []
+
     # ── 실행 ─────────────────────────────────────────────────────
 
     async def execute(self, input: Dict[str, Any], context: Any) -> Any:  # noqa: A002
@@ -256,6 +299,24 @@ class PythonEnvTool:
         await self._save(sandbox, final, env_id)
         # 이번 턴 안에서 즉시 적용 — 다음 Bash/python 부터 이 환경이다.
         sandbox.env_id = env_id
+
+        # **적용됐는지 확인한다.** "설치 완료" 라고 답해 놓고 다음 명령에서
+        # ModuleNotFoundError 가 나는 것이 이 도구의 유일한 실패 방식이었고,
+        # 그건 조용해서 에이전트가 원인을 짚지 못한 채 재설치를 반복했다.
+        # 확인은 이 환경의 인터프리터에게 **직접** 묻는다 — 셸을 거치지 않으므로
+        # PATH 가 무엇이든 답이 흔들리지 않는다.
+        missing = await self._verify(sandbox, env_id, merged)
+        if missing:
+            return ToolResult(
+                content=(
+                    f"환경은 만들었지만 이 세션에 적용되지 않았습니다 (env {env_id[:12]}).\n"
+                    f"확인 실패: {', '.join(missing)}\n"
+                    "같은 이름으로 다시 시도하거나, 이름이 맞는지 확인하세요"
+                    "(모듈명≠pip명일 수 있습니다: pptx→python-pptx)."
+                ),
+                is_error=True,
+            )
+
         return ToolResult(
             content={
                 "packages": final,

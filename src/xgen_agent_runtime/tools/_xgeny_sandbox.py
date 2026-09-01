@@ -223,10 +223,27 @@ async def sb_run(
     env: Optional[Mapping[str, str]] = None,
     timeout_s: float = 120.0,
 ) -> Tuple[int, str, str]:
-    """셸 명령 하나. ``(rc, stdout, stderr)`` — 문자열로 디코딩해서 준다."""
+    """셸 명령 하나. ``(rc, stdout, stderr)`` — 문자열로 디코딩해서 준다.
+
+    **로그인 셸(`-l`)을 쓰지 않는다.** 세션의 환경은 러너가 정한다 — 선언된
+    파이썬 환경(``PythonEnv``)의 ``bin`` 과 세션 HOME 의 ``.local/bin`` 을 PATH
+    앞에 얹어 넘긴다. 그런데 로그인 셸은 ``/etc/profile`` 을 읽고, Debian
+    계열(러너 이미지는 python:3.14-slim)의 그 파일은 PATH 를 **통째로
+    덮어쓴다**:
+
+        넘긴 PATH:  <env>/bin:/usr/local/bin:/usr/bin:/bin
+        -lc 안에서: /usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+
+    그래서 ``PythonEnv`` 로 깐 패키지는 안 보이고 ``pip install`` 로 깐 것만
+    보였다 — 후자는 기본 인터프리터가 읽는 곳에 앉기 때문이다. 에이전트는
+    "설치했는데 못 찾는다"를 겪고 직접 pip 로 다시 깔았다(프로드 실증).
+
+    로그인 셸이 우리에게 더해 주는 것은 없다(러너 이미지는 PATH 를 profile 로
+    구성하지 않는다). 빼는 것만 있었다.
+    """
     await sandbox.ensure()
     result = await sandbox.exec(
-        ["bash", "-lc", command],
+        ["bash", "-c", command],
         cwd=_cwd(sandbox, workdir),
         env=env,
         timeout_s=timeout_s,
