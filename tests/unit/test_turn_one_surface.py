@@ -50,7 +50,7 @@ def test_기억과_자기확장은_첫_턴에_있다():
     for name in (
         "memory_write", "memory_read", "memory_list",
         "memory_search", "memory_pin", "memory_categories",
-        "WorkflowSelf", "ForgeTool", "FileCloud", "ToolSearch",
+        "WorkflowSelf", "ForgeTool", "ToolSearch",
     ):
         assert is_turn_one(name), name
 

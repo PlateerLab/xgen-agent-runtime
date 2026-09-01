@@ -4,11 +4,11 @@
 is host-agnostic: it assembles a turn (tools, sandbox, memory, prompt, provider
 client), runs the ``xgen_agent_runtime`` pipeline, and tears down. Everything it
 cannot do in pure Python — read admin settings, resolve credentials, reach the
-sandbox runner, hydrate/publish a workspace, mount the user's cloud, build the
+sandbox runner, hydrate/publish a workspace, build the
 server-owned tool families — it obtains through this ``HostServices`` protocol.
 
 One implementation exists: ``ServerHostServices`` (in xgen-workflow) — admin
-config DB, MinIO+DB workspace store, the sandbox HTTP runner, cloud DB, and the
+config DB, MinIO+DB workspace store, the sandbox HTTP runner, and the
 connector reverse-WS bridge. **Every** agent turn runs there, in its own runner
 session, whatever the conversation came from (web or desktop connector).
 
@@ -53,8 +53,6 @@ if TYPE_CHECKING:
     from xgen_agent_runtime.tools import ToolRegistry
     from xgen_agent_runtime.tools._xgeny_sandbox import XgenySandbox
 
-#: Cloud/shared mount tuple as produced by cloud_mount: (index, local_path[, mode]).
-CloudMount = Tuple[Any, ...]
 #: Result of a built provider LLM client + its per-run cleanup callback.
 CliRuntime = Tuple[Any, Optional[Any]]
 
@@ -106,25 +104,11 @@ class HostServices(Protocol):
     # web↔connector share the same memory (confirmed decision: state is shared).
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]: ...
 
-    # ── D. user cloud (④ server-resident) ────────────────────────────────
-    def prepare_cloud(
-        self, user_id: Any, workflow_id: str, *, pod_local: bool
-    ) -> Optional[CloudMount]: ...
-    def cloud_inventory(self, user_id: Any, path: str) -> str: ...
-    def cloud_not_mounted_note(self, user_id: Any, workflow_id: str) -> str: ...
-    def open_shared(self, sandbox: Any, user_id: Any, *, workflow_id: str) -> List[CloudMount]: ...
-    def build_cloud_skill(
-        self, index: Any, path: str, session: Any, user_id: Any
-    ) -> Optional[Any]: ...
-    #: Server-resident feature **prompt blocks** — tell the agent what cloud /
-    #: jobs / shared folders are available. Server returns the product's prompt
-    #: text; connector returns "" (feature absent locally) until wired via RPC.
-    def cloud_prompt_block(self, path: str) -> str: ...
+    # ── D. (제거됨) ambient user cloud ───────────────────────────────────
+    # 에이전트는 노드가 도구를 제공할 때만 저장소를 안다 — 클라우드 자동
+    # 마운트/프롬프트/FileCloud 스킬/공유 폴더 마운트는 폐기됐다. 파일
+    # 저장소 접근은 workflow 의 file_system/filestore_search 노드가 담당한다.
     def jobs_prompt_block(self) -> str: ...
-    def shared_prompt_block(self, mounts: Sequence[Any]) -> str: ...
-    #: The cloud byte-plane tool (registered into the SDK ToolRegistry) for a
-    #: built cloud skill. Server returns the tool instance; connector → None.
-    def build_cloud_file_tool(self, cloud_skill: Any) -> Optional[Any]: ...
 
     # ── E. server-owned tool families ────────────────────────────────────
     # Injected as tools into the runtime ToolRegistry (SDK path) or advertised
@@ -226,9 +210,9 @@ class HostServices(Protocol):
 
     # ── G. turn teardown: reflect the turn's file changes ────────────────
     # The 3-way publish decision (connector-local flush / runner publish / pod
-    # publish) + cloud/shared publish. Server does the real reflection; the
-    # connector sidecar flushes through its own sync engine. Local resource
-    # cleanups (cli/run-dir) stay in the executor — they are not host state.
+    # publish). Server does the real reflection; the connector sidecar flushes
+    # through its own sync engine. Local resource cleanups (cli/run-dir) stay
+    # in the executor — they are not host state.
     def finalize_turn(
         self,
         *,
@@ -237,8 +221,6 @@ class HostServices(Protocol):
         user_id: Any,
         hydrated_wf: str,
         hydrated_ws: Optional[str],
-        shared_mounts: Sequence[Any],
-        cloud_mount: Optional[CloudMount],
     ) -> None: ...
 
     # ── F. CLI provider runtime (process spawn + connector MCP bridge) ────
@@ -249,9 +231,6 @@ class HostServices(Protocol):
         self,
         provider: str,
         params: Mapping[str, Any],
-        *,
-        cloud_workspace: str = "",
-        shared_workspaces: Optional[Sequence[str]] = None,
     ) -> CliRuntime: ...
 
     #: **OPTIONAL** — does this host advertise the turn's non-native tool surface

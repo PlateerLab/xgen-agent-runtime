@@ -129,32 +129,16 @@ class _FakeHost:
         return _FakeMemoryProvider() if self._memory else None
 
     # D
-    def prepare_cloud(self, *a, **k):
-        return None
 
-    def cloud_inventory(self, *a, **k):
-        return ""
 
-    def cloud_not_mounted_note(self, *a, **k):
-        return ""
 
-    def open_shared(self, *a, **k):
-        return []
 
-    def build_cloud_skill(self, *a, **k):
-        return None
 
-    def cloud_prompt_block(self, path):
-        return ""
 
     def jobs_prompt_block(self):
         return ""
 
-    def shared_prompt_block(self, mounts):
-        return ""
 
-    def build_cloud_file_tool(self, cloud_skill):
-        return None
 
     # E
     def build_connector_mcp_tools(self, *a, **k):
@@ -214,7 +198,7 @@ class _FakeHost:
     def finalize_turn(self, **k):
         return None
 
-    def build_cli_runtime(self, provider, params, *, cloud_workspace="", shared_workspaces=None):
+    def build_cli_runtime(self, provider, params):
         # kwargs 사전 그 자체가 넘어온다 — 위임 스태시(_delegation_extras) 관찰 지점.
         self.cli_params = params
         return object(), None
