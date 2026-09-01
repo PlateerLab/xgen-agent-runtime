@@ -15,7 +15,7 @@ is import-clean of xgen-workflow — the product coupling is injected via the ho
 
 from __future__ import annotations
 
-from xgen_agent_runtime.host.host import CliRuntime, CloudMount, HostServices
+from xgen_agent_runtime.host.host import CliRuntime, HostServices
 
-__all__ = ["HostServices", "CloudMount", "CliRuntime"]
+__all__ = ["HostServices", "CliRuntime"]
 __version__ = "0.1.0"

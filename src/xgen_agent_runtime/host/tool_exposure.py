@@ -107,8 +107,6 @@ TURN_ONE_TOOLS = frozenset(
         "PythonEnv",
         # 7. 자기 진화 — 한 도구가 action 으로 자기 안을 연다.
         "WorkflowSelf",
-        # 8. 클라우드 파일 — 한 도구가 action 으로 37종을 접어 둔다.
-        "FileCloud",
         # 웹 — 브라우저가 없는 표면(웹 대화)의 유일한 바깥 통로라 항상 둔다.
         "WebFetch",
         "WebSearch",

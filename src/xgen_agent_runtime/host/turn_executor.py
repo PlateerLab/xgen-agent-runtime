@@ -234,57 +234,9 @@ class AgentTurnExecutor:
             #
             # codex 만 제외: 자체 OS 샌드박스라 파일/셸을 ToolContext.sandbox 로
             # 돌릴 표면이 없다.
-            _cloud_mount: Optional[tuple] = None
-            try:
-                _cloud_mount = host.prepare_cloud(
-                    kwargs.get("user_id"),
-                    str(kwargs.get("workflow_id") or ""),
-                    pod_local=False,
-                )
-            except Exception as _cexc:  # noqa: BLE001 — 클라우드가 실행을 막으면 안 된다
-                logger.warning("agents/geny: 클라우드 연결 준비 실패 (스킵): %s", _cexc)
-            if _cloud_mount:
-                system_prompt = system_prompt + host.cloud_prompt_block(_cloud_mount[1])
-                # 무엇이 있는지까지 말해 준다. 경로만 열어 주면 에이전트는
-                # 뒤지지 않는다 — 두 번 겪었다. 최상위 목록이 프롬프트에 있으면
-                # "클라우드에 뭐 있어?"에 ls 없이 정확히 답하고, 파일 요청은
-                # 정확한 경로로 바로 연다.
-                _inv = host.cloud_inventory(kwargs.get("user_id"), _cloud_mount[1])
-                if _inv:
-                    system_prompt = system_prompt + "\nCurrent top-level entries:\n" + _inv + "\n"
-            else:
-                # 클라우드를 못 열었다 — **절대 침묵하지 않는다.** 침묵하면(프롬프트도
-                # 안내도 없으면) 에이전트는 '클라우드가 없다'고 보고 외부 서비스
-                # (Drive/Dropbox/S3)로 오판한다 (실증). not_mounted_note 는 항상
-                # 문자열을 돌려주므로, "XgenCloud 는 이 플랫폼 저장소이고 이번 턴엔
-                # 이 사유로 접근 불가"를 못박아 연결된 에이전트가 무조건 클라우드의
-                # 존재를 인식하게 한다. 진단 보조라 실패는 조용히 무시(실행 안 막음).
-                try:
-                    _note = host.cloud_not_mounted_note(
-                        kwargs.get("user_id"), str(kwargs.get("workflow_id") or "")
-                    )
-                    if _note:
-                        system_prompt = (
-                            system_prompt + "\n## User cloud storage (XgenCloud)\n" + _note + "\n"
-                        )
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # 파일 클라우드 위의 fs_* 스킬 — 문서/표/OCR 전문 도구 37종.
-            # 캔버스 노드 없이 **기본 내장**이다: 클라우드가 마운트되면 항상.
-            # 한 번만 세워 SDK·CLI 가 같은 객체를 쓴다 (표면이 갈리면 안 된다).
-            _cloud_skill = None
-            if _cloud_mount:
-                try:
-                    _cloud_skill = host.build_cloud_skill(
-                        _cloud_mount[0],
-                        _cloud_mount[1],
-                        None,
-                        kwargs.get("user_id"),
-                    )
-                except Exception as _cfexc:  # noqa: BLE001
-                    logger.warning("agents/geny: FileCloud 스킬 실패 (스킵): %s", _cfexc)
-
+            # (ambient 클라우드 마운트/프롬프트/FileCloud 스킬은 제거됐다 —
+            #  에이전트는 노드가 도구를 제공할 때만 저장소를 안다. 파일 저장소는
+            #  file_system/filestore_search 노드가 담당한다.)
             # ── 코드 실행 기반 (xgen-workflow-sandbox) ─────────────────
             #
             # 켜져 있으면 파일/셸 도구는 **이 파드가 아니라** 러너 세션에서
@@ -304,30 +256,8 @@ class AgentTurnExecutor:
                 str(kwargs.get("workflow_id") or ""),
                 kwargs.get("user_id"),
             )
-            # 연결된 클라우드를 이 세션에서 다룰 수 있게 연다.
-            #
-            # 형제 트리다 — 에이전트 workspace 와 **다른 인덱스**를 갖는다.
-            # 한 트리로 합치면 에이전트 산출물과 사용자 파일이 같은 인덱스에
-            # 잡히고, 한쪽의 삭제 전파가 다른 쪽 파일을 지운다.
-            #
-            if _sandbox is not None and _cloud_mount:
-                _sandbox.open_tree(_cloud_mount[0], _cloud_mount[1])
-            # 다른 사람이 공유한 폴더도 같은 방식으로 연다 — 형제 트리다.
-            # 소유자는 바뀌지 않고, 무엇을 할 수 있는지는 공유 레코드가 정한다
-            # (읽기 공유는 읽기 전용으로 열린다).
-            _shared_mounts = []
-            if _sandbox is not None and kwargs.get("user_id"):
-                try:
-                    _shared_mounts = host.open_shared(
-                        _sandbox,
-                        kwargs.get("user_id"),
-                        workflow_id=str(kwargs.get("workflow_id") or ""),
-                    )
-                except Exception as _shexc:  # noqa: BLE001
-                    logger.warning("agents/geny: 공유 폴더 열기 실패 (스킵): %s", _shexc)
             # CLI 백엔드의 브릿지 run ctx 가 여기서 꺼내 쓴다 (같은 세션).
             kwargs["_sandbox_session"] = _sandbox
-            kwargs["_cloud_skill"] = _cloud_skill
             # 영구 작업 도구 — 서버 스케줄러에 이 에이전트를 건다. CLI 의
             # 세션 한정 Cron* 은 runner 가 차단하므로, 이게 없으면 반복 요청을
             # 받을 길 자체가 없다.
@@ -351,24 +281,12 @@ class AgentTurnExecutor:
             kwargs["_job_tools"] = _job_tools
             if _job_tools:
                 system_prompt = system_prompt + "\n\n" + host.jobs_prompt_block()
-            if _cloud_skill is not None and _sandbox is not None:
-                # 어댑터의 바이트 경로를 러너로 돌린다 — 러너가 붙어 있으면
-                # 이 파드의 클라우드 트리는 복원되지 않은 캐시라 읽으면 안 된다.
-                # (커넥터 로컬 모드는 pod_local 복원 트리를 그대로 쓴다 — 로컬
-                #  어댑터는 파드 실경로를 모른다.)
-                try:
-                    _cloud_skill._ctx.adapter._session = _sandbox
-                except Exception:  # noqa: BLE001
-                    pass
             # 실행 환경 안내 — 도구가 어디서 도는지 host 가 설명한다(서버: 러너/
             # 커넥터 로컬 sandbox, 커넥터 사이드카: 이 PC). 안 알려 주면 에이전트는
             # 자기 코드가 어디서 도는지 모른 채 /tmp 에 쓰고 다음 턴에 잃는다.
             _env_block = host.environment_prompt(_sandbox, provider)
             if _env_block:
                 system_prompt = system_prompt + "\n\n" + _env_block
-            if _shared_mounts:
-                # 여는 것과 알려 주는 것은 다른 일이다 — 클라우드에서 배웠다.
-                system_prompt = system_prompt + "\n\n" + host.shared_prompt_block(_shared_mounts)
             # ── 자기진화(self-evolution) 판정 — 배선보다 **먼저** ────────────
             # 여기서 정하는 이유: 호스트의 CLI 브릿지 가용성 판정이 이 결과를 본다
             # (내장 도구를 꺼도 WorkflowSelf 하나 때문에 run ctx 를 바인딩해야 한다).
@@ -507,10 +425,6 @@ class AgentTurnExecutor:
                         anthropic_api_key=host.resolve_api_key("anthropic", kwargs),
                         ssh_servers=host.load_ssh_servers(),
                     )
-                    if _cloud_skill is not None and registry.get("FileCloud") is None:
-                        _cloud_tool = host.build_cloud_file_tool(_cloud_skill)
-                        if _cloud_tool is not None:
-                            registry.register(_cloud_tool, core=True)
                     for _jt in _job_tools:
                         if registry.get(_jt.name) is None:
                             # JobGuide 가 문이고 Schedule/List/Cancel 은 그 뒤다.
@@ -567,34 +481,12 @@ class AgentTurnExecutor:
                             def run_dir_cleanup(_d: str = run_dir) -> None:
                                 _shutil.rmtree(_d, ignore_errors=True)
 
-                        # 연결된 에이전트는 사용자 클라우드도 만진다. 위에서
-                        # 이미 준비했으므로 여기서는 경로만 연다 — 형제 트리다
-                        # (하위로 끼우면 같은 파일이 두 인덱스에 잡혀, 한쪽의
-                        # delete_missing 이 다른 쪽 파일을 지운다).
-                        # 클라우드 + 공유받은 폴더 — executor 의 로컬 경로
-                        # 가드가 보는 목록이다. 여기 없으면 샌드박스 가드가
-                        # 허용해도 도구가 먼저 막는다.
-                        _cloud_extra = ([_cloud_mount[1]] if _cloud_mount else []) + [
-                            _p for _o, _p, _m in _shared_mounts
-                        ]
-                        # 클라우드 extras 는 서버 자산(editor.geny_bridge.cloud_mount) —
-                        # 데스크톱 호스트(사이드카)에는 그 모듈이 없다. 마운트가 있을
-                        # 때만, 그리고 import 가 가능할 때만 붙인다(호스트 비의존 유지).
-                        _cloud_extras_kv: Dict[str, Any] = {}
-                        if _cloud_mount:
-                            try:
-                                _cloud_extras_kv = __import__(
-                                    "editor.geny_bridge.cloud_mount", fromlist=["describe"]
-                                ).describe(_cloud_mount[1])
-                            except Exception:  # noqa: BLE001 — 서버 전용 헬퍼 부재
-                                _cloud_extras_kv = {}
-
                         run_tool_context = host.build_run_tool_context(
                             interaction_id=interaction_id,
                             run_dir=run_dir,
-                            extras={**bt_summary["extras"], **_cloud_extras_kv},
+                            extras=bt_summary["extras"],
                             storage_dir=_storage_dir,
-                            extra_allowed=_cloud_extra,
+                            extra_allowed=[],
                             sandbox=_sandbox,
                         )
 
@@ -942,14 +834,9 @@ class AgentTurnExecutor:
                         )
                 registry = None
             if provider == "claude_code":
-                # cloud_skill 은 시그니처로 나르지 않는다 — Geny 규약대로 kwargs
-                # 스태시(_cloud_skill)를 브릿지가 읽는다. 여기에 인자로도 넣었다가
-                # 시그니처에 없어 CLI 백엔드 전체가 기동 실패했다 (프로드 실증).
                 llm_client, cli_cleanup = host.build_cli_runtime(
                     "claude_code",
                     kwargs,
-                    cloud_workspace=(_cloud_mount[1] if _cloud_mount else ""),
-                    shared_workspaces=[_p for _o, _p, _m in _shared_mounts],
                 )
                 # 러너가 붙어 있으면 복원·발행의 주체는 러너다. 여기서 표식을
                 # 남기면 턴 끝에 이 파드가 자기 로컬 트리로 publish 하게 되고,
@@ -964,7 +851,6 @@ class AgentTurnExecutor:
                 llm_client, cli_cleanup = host.build_cli_runtime(
                     "codex",
                     kwargs,
-                    cloud_workspace=(_cloud_mount[1] if _cloud_mount else ""),
                 )
                 # 영속 workspace 사용 시 턴 끝 publish 표식 — claude 경로와 동일 규약.
                 _codex_wf = str(kwargs.get("workflow_id") or "")
@@ -1101,8 +987,6 @@ class AgentTurnExecutor:
                 user_id=kwargs.get("user_id"),
                 hydrated_wf=_hydrated_wf,
                 hydrated_ws=_hydrated_ws,
-                shared_mounts=_shared_mounts,
-                cloud_mount=_cloud_mount,
             )
             # CLI 워크스페이스/브릿지 토큰 + built-in run workspace 정리 (순서 무관, 둘 다 방어적)
             for fn in (cli_cleanup, run_dir_cleanup):
