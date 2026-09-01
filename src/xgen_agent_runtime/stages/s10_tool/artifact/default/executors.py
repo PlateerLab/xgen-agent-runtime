@@ -83,6 +83,21 @@ def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) 
     )
 
 
+#: 실패 사유를 사건에 실을 때의 상한. 사람이 읽을 첫 화면 분량이면 충분하다.
+_ERROR_TEXT_CAP = 2000
+
+
+def _error_text(result_dict: Dict[str, Any]) -> str:
+    """실패한 도구가 남긴 말. 없으면 빈 문자열."""
+    for key in ("content", "display_text", "error"):
+        value = result_dict.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:_ERROR_TEXT_CAP]
+        if value not in (None, "", [], {}):
+            return str(value)[:_ERROR_TEXT_CAP]
+    return ""
+
+
 def _emit_call_complete(
     on_event: Optional[ToolEventCallback],
     tc: Dict[str, Any],
@@ -91,15 +106,21 @@ def _emit_call_complete(
 ) -> None:
     if on_event is None:
         return
-    on_event(
-        "tool.call_complete",
-        {
-            "tool_use_id": tc.get("tool_use_id", ""),
-            "name": tc.get("tool_name", ""),
-            "is_error": bool(result_dict.get("is_error")),
-            "duration_ms": duration_ms,
-        },
-    )
+    is_error = bool(result_dict.get("is_error"))
+    data: Dict[str, Any] = {
+        "tool_use_id": tc.get("tool_use_id", ""),
+        "name": tc.get("tool_name", ""),
+        "is_error": is_error,
+        "duration_ms": duration_ms,
+    }
+    if is_error:
+        # **사유를 함께 싣는다.** 성공 결과는 크고 모델이 이미 받지만, 실패
+        # 사유는 작고 **아무 데도 남지 않았다**: 호스트는 이 사건에 내용이 없어
+        # "tool execution failed" 라는 고정 문구로 UI·트레이스에 적었고, 그래서
+        # [전체로그]에는 같은 줄만 여덟 번 쌓였다. 무엇을 고쳐야 하는지 아무도
+        # 알 수 없었다 (프로드 실증).
+        data["error"] = _error_text(result_dict)
+    on_event("tool.call_complete", data)
 
 
 class SequentialExecutor(ToolExecutor):

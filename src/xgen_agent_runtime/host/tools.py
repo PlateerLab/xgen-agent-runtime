@@ -204,7 +204,8 @@ def adapt_tools(
 
     ``result_sink`` (tool name → last stringified output) lets the streaming
     bridge attach result content to xgen ``tool_result`` events — geny-executor's
-    ``tool.call_complete`` event carries only name/is_error/duration.
+    ``tool.call_complete`` event carries name/is_error/duration (+ the
+    failure reason when it failed), not the successful output.
 
     ``core=False`` registers the tools *deferred* (2.42.0 exposure model):
     schemas stay out of the LLM request until a ``ToolSearch`` hit activates
