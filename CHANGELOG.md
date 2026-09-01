@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.6.0] — 2026-09-01
+
+### Fixed — 실패한 도구가 **왜** 실패했는지 아무 데도 남지 않았다
+
+`tool.call_complete` 는 이름·성패·소요시간만 실었다. 호스트는 그 사건에 내용이
+없어 `result_sink` 를 봤는데, 그건 `adapt_tools` 의 래퍼가 채우는 것 — 즉
+**그래프 포트 도구만** 채운다. 내장·작업·제작 도구의 실패는 늘 빈 문자열이었고
+`"tool execution failed"` 라는 고정 문구로 뭉개졌다.
+
+프로드에서 `JobSchedule` 이 여덟 번 실패했고 [전체로그]에는 같은 줄만 여덟 번
+쌓였다. 무엇을 고쳐야 하는지 아무 데도 없었고, 에이전트는 자기 인자를 의심하며
+같은 호출을 반복했다.
+
+이제 **실패한 경우에만** 사유를 사건에 싣는다(2000자 상한). 성공 결과는 크고
+모델이 이미 받았으므로 싣지 않는다.
+
 ## [4.5.2] — 2026-09-01
 
 ### Fixed — 로그인 셸이 선언된 파이썬 환경을 지우고 있었다

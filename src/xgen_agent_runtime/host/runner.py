@@ -888,7 +888,11 @@ def stream_turn(
                     "type": "agent_event",
                     "data": _tool_end_event(
                         name,
-                        (result_sink or {}).get(name, ""),
+                        # 실패면 **사건이 들고 온 사유**가 먼저다. result_sink 는
+                        # 그래프 포트 도구만 채우므로(adapt_tools 의 래퍼), 내장·
+                        # 작업·제작 도구의 실패는 여기서 늘 빈 문자열이었고
+                        # "tool execution failed" 라는 고정 문구로 뭉개졌다.
+                        str(event.data.get("error") or "") or (result_sink or {}).get(name, ""),
                         is_error=bool(event.data.get("is_error")),
                         duration_ms=event.data.get("duration_ms"),
                     ),
