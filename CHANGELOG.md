@@ -4,7 +4,7 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [4.5.1] — 2026-09-01
+## [4.5.2] — 2026-09-01
 
 ### Fixed — 로그인 셸이 선언된 파이썬 환경을 지우고 있었다
 
@@ -35,6 +35,12 @@ profile 로 구성하지 않는다). 빼는 것만 있었다. 같은 이유로 �
 (`importlib.metadata`, 셸을 거치지 않으므로 PATH 와 무관), 확인이 실패하면
 성공이라고 답하지 않는다. 확인 자체를 못 한 경우(러너 오류)는 실패로 단정하지
 않는다 — 모르는 것을 실패로 읽으면 멀쩡한 설치가 고장 난 것처럼 보인다.
+
+## [4.5.1] — 2026-09-01
+
+### Changed
+
+xgen-edit2docs 0.22.0 → 0.23.0 (#39).
 
 ## [4.5.0] — 2026-08-31
 
