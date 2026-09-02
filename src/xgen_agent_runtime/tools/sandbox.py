@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from xgen_agent_runtime.core._head_tail_buffer import HeadTailBuffer
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 
 
@@ -99,9 +100,14 @@ class ToolSandbox:
 
         # 4. Output size limit
         if isinstance(result.content, str):
-            if len(result.content) > self._config.max_output_size:
+            encoded = result.content.encode("utf-8")
+            if len(encoded) > self._config.max_output_size:
+                output = HeadTailBuffer(self._config.max_output_size)
+                output.push_chunk(encoded)
                 result = ToolResult(
-                    content=result.content[: self._config.max_output_size] + "\n... (truncated)",
+                    content=output.to_bytes_with_omission_marker().decode(
+                        "utf-8", errors="replace"
+                    ),
                     is_error=result.is_error,
                     metadata=result.metadata,
                 )

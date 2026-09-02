@@ -18,7 +18,7 @@ def test_keeps_prefix_and_suffix_when_over_budget() -> None:
     assert buffer.total_bytes == 12
     assert buffer.to_bytes() == b"01234789ab"
     assert buffer.to_bytes_with_omission_marker() == (
-        b"01234\n... 2 bytes omitted ...\n789ab"
+        b"01234\n... 2 bytes omitted (truncated) ...\n789ab"
     )
 
 

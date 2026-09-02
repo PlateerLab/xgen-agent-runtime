@@ -58,6 +58,8 @@ from typing import (
     Sequence,
 )
 
+from xgen_agent_runtime.core._head_tail_buffer import HeadTailBuffer
+
 logger = logging.getLogger(__name__)
 
 # ── CLI stdout stream limit ────────────────────────────────────────────
@@ -73,6 +75,7 @@ logger = logging.getLogger(__name__)
 #: the child is still alive. Only ever costs a wakeup when no line has
 #: arrived, so a busy stream never pays it.
 _EXIT_POLL_S = 0.25
+_CLI_STDERR_RETAIN_BYTES = 400
 
 
 def _cli_stream_limit() -> int:
@@ -380,7 +383,7 @@ class CLIProcessRunner:
             proc.stdin.close()
 
         # Side-collect stderr.
-        stderr_buf: list[bytes] = []
+        stderr_buf = HeadTailBuffer(_CLI_STDERR_RETAIN_BYTES)
         stderr_task = asyncio.create_task(_collect_stderr(proc.stderr, stderr_buf))
 
         try:
@@ -408,9 +411,11 @@ class CLIProcessRunner:
                 await self._kill_tree(proc)
 
         if rc != 0:
-            tail = b"".join(stderr_buf).decode("utf-8", errors="replace")
+            tail = stderr_buf.to_bytes_with_omission_marker().decode(
+                "utf-8", errors="replace"
+            )
             raise CLIProtocolError(
-                f"CLI {self.binary!r} exited with code {rc}: {tail.strip()[:400]}"
+                f"CLI {self.binary!r} exited with code {rc}: {tail.strip()}"
             )
 
     # ---------------------------------------------------------------- spawn
@@ -647,7 +652,7 @@ async def _drain_stdin(
 
 async def _collect_stderr(
     stream: Optional[asyncio.StreamReader],
-    sink: list[bytes],
+    sink: HeadTailBuffer,
 ) -> None:
     if stream is None:
         return
@@ -656,7 +661,7 @@ async def _collect_stderr(
             chunk = await stream.read(4096)
             if not chunk:
                 return
-            sink.append(chunk)
+            sink.push_chunk(chunk)
     except asyncio.CancelledError:
         return
     except Exception:

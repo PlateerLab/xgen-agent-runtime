@@ -216,6 +216,22 @@ async def test_runner_stream_failure_raises_protocol_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_stream_failure_bounds_stderr_and_keeps_tail() -> None:
+    runner = CLIProcessRunner(binary=FAKE_CLI)
+    stderr = "BEGIN_CONTEXT-" + ("x" * 4_000) + "-FINAL_ERROR"
+
+    with pytest.raises(CLIProtocolError) as error:
+        async for _ in runner.stream(["fail", "3", stderr]):
+            pass
+
+    rendered = str(error.value)
+    assert "BEGIN_CONTEXT" in rendered
+    assert "FINAL_ERROR" in rendered
+    assert "bytes omitted" in rendered
+    assert len(rendered.encode()) < 600
+
+
+@pytest.mark.asyncio
 async def test_runner_stream_timeout() -> None:
     runner = CLIProcessRunner(binary=FAKE_CLI, timeout_s=0.3, kill_grace_s=0.2)
     with pytest.raises(CLITimeout):

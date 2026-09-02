@@ -90,6 +90,5 @@ class HeadTailBuffer:
 
         if self.omitted_bytes == 0:
             return self.to_bytes()
-        marker = f"... {self.omitted_bytes} bytes omitted ...".encode()
+        marker = f"... {self.omitted_bytes} bytes omitted (truncated) ...".encode()
         return bytes(self._head) + b"\n" + marker + b"\n" + bytes(self._tail)
-
