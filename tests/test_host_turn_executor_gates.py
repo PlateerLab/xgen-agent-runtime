@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -29,6 +31,10 @@ from xgen_agent_runtime.host._constants import (
     default_prompt,
 )
 from xgen_agent_runtime.host.host import HostServices
+from xgen_agent_runtime.host.rollouts import (
+    ROLLOUT_ENABLED_SETTING,
+    rollout_directory,
+)
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 
@@ -74,9 +80,13 @@ class _FakeHost:
         delegation_extras: Optional[Dict[str, Any]] = None,
         memory: bool = True,
         cli_bridge: Optional[bool] = None,
+        rollout_enabled: bool = False,
+        storage_root: str = "/tmp/ws-storage",
     ) -> None:
         self._delegation_extras = delegation_extras
         self._memory = memory
+        self._rollout_enabled = rollout_enabled
+        self._storage_root = storage_root
         self.calls: List[str] = []
         self.cli_params: Optional[Dict[str, Any]] = None
         if cli_bridge is not None:
@@ -88,7 +98,7 @@ class _FakeHost:
         return default
 
     def setting_truthy(self, name: str) -> bool:
-        return False
+        return self._rollout_enabled if name == ROLLOUT_ENABLED_SETTING else False
 
     def resolve_model(self, provider, params):
         return "m"
@@ -113,7 +123,7 @@ class _FakeHost:
         return "/tmp/ws"
 
     def workspace_storage_root(self, workflow_id):
-        return "/tmp/ws-storage"
+        return self._storage_root
 
     def hydrate_workspace(self, workflow_id, run_dir):
         return None
@@ -216,10 +226,17 @@ def capture(monkeypatch):
     monkeypatch.setattr(runner_mod, "build_pipeline", _fake_build_pipeline)
     def _fake_stream_turn(*args, **kwargs):
         seen["stream_input"] = args[1]
+        seen["stream_kwargs"] = dict(kwargs)
         return iter([])
 
     monkeypatch.setattr(runner_mod, "stream_turn", _fake_stream_turn)
-    monkeypatch.setattr(runner_mod, "run_turn", lambda *a, **k: "")
+
+    def _fake_run_turn(*args, **kwargs):
+        seen["run_input"] = args[1]
+        seen["run_kwargs"] = dict(kwargs)
+        return "done"
+
+    monkeypatch.setattr(runner_mod, "run_turn", _fake_run_turn)
     return seen
 
 
@@ -511,3 +528,123 @@ def test_no_such_note_when_the_bridge_is_available(capture) -> None:
     host = _FakeHost(delegation_extras={})
     out = _run(host, capture, provider="claude_code", tools=[_GraphTool()])
     assert "cannot be delivered" not in out["system_prompt"]
+
+
+# ── durable rollout host gate ────────────────────────────────────────
+
+
+def test_rollout_recording_is_opt_in_and_passes_no_path_by_default(capture) -> None:
+    host = _FakeHost(delegation_extras={}, memory=False)
+
+    seen = _run(host, capture)
+
+    assert seen["stream_kwargs"]["rollout_path"] is None
+
+
+def test_rollout_recording_allocates_safe_workflow_scoped_path(
+    capture, tmp_path: Path
+) -> None:
+    host = _FakeHost(
+        delegation_extras={},
+        memory=False,
+        rollout_enabled=True,
+        storage_root=str(tmp_path),
+    )
+
+    seen = _run(host, capture, interaction_id="../../customer/대화")
+
+    path = Path(seen["stream_kwargs"]["rollout_path"])
+    assert path.parent == rollout_directory(tmp_path)
+    assert path.suffix == ".jsonl"
+    assert "customer" not in path.name and "대화" not in path.name
+    assert not path.exists(), "the runner, not turn assembly, creates the file"
+
+
+def test_rollout_recording_reaches_non_stream_runner(capture, tmp_path: Path) -> None:
+    host = _FakeHost(
+        delegation_extras={},
+        memory=False,
+        rollout_enabled=True,
+        storage_root=str(tmp_path),
+    )
+
+    output = AgentTurnExecutor().run(
+        host,
+        text="hi",
+        provider="openai",
+        workflow_id="wf-1",
+        workflow_name="wf",
+        user_id="u1",
+        interaction_id="inter-1",
+        streaming=False,
+        memory_distill=False,
+        enable_compaction=False,
+    )
+
+    assert output == "done"
+    assert Path(capture["run_kwargs"]["rollout_path"]).parent == rollout_directory(tmp_path)
+
+
+def test_rollout_recording_skips_unscoped_turn_with_warning(capture, caplog) -> None:
+    host = _FakeHost(delegation_extras={}, memory=False, rollout_enabled=True)
+
+    with caplog.at_level(logging.WARNING):
+        seen = _run(host, capture, workflow_id="")
+
+    assert seen["stream_kwargs"]["rollout_path"] is None
+    assert "workflow_id is unavailable" in caplog.text
+
+
+def test_rollout_recording_runs_end_to_end_without_public_result_change(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from xgen_agent_runtime.core.state import TokenUsage
+    from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
+    from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+
+    class _Client(BaseClient):
+        provider = "fake"
+        capabilities = ClientCapabilities()
+
+        async def _send(self, request: Any, *, purpose: str = "") -> APIResponse:
+            return APIResponse(
+                content=[ContentBlock(type="text", text="done")],
+                stop_reason="end_turn",
+                usage=TokenUsage(input_tokens=2, output_tokens=1),
+                model="fake-model",
+            )
+
+    monkeypatch.setattr(
+        runner_mod,
+        "build_client",
+        lambda *args, **kwargs: _Client(api_key="k"),
+    )
+    host = _FakeHost(
+        delegation_extras={},
+        memory=False,
+        rollout_enabled=True,
+        storage_root=str(tmp_path),
+    )
+
+    output = AgentTurnExecutor().run(
+        host,
+        text="hi",
+        provider="openai",
+        workflow_id="wf-1",
+        workflow_name="wf",
+        user_id="u1",
+        interaction_id="inter-1",
+        streaming=False,
+        memory_distill=False,
+        enable_compaction=False,
+    )
+
+    assert output == "done"
+    files = list(rollout_directory(tmp_path).glob("rollout-*.jsonl"))
+    assert len(files) == 1
+    records = [
+        json.loads(line)
+        for line in files[0].read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[0]["type"] == "pipeline.start"
+    assert records[-1]["type"] == "pipeline.complete"

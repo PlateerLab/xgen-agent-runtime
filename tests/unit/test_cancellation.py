@@ -64,6 +64,7 @@ class _GateStage(Stage):
     def __init__(self) -> None:
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
+        self.exited = asyncio.Event()
 
     @property
     def name(self) -> str:
@@ -75,8 +76,11 @@ class _GateStage(Stage):
 
     async def execute(self, input, state):  # noqa: ANN001
         self.entered.set()
-        await self.release.wait()
-        return input
+        try:
+            await self.release.wait()
+            return input
+        finally:
+            self.exited.set()
 
 
 def _pipeline(provider: Any = None) -> Pipeline:
@@ -258,6 +262,7 @@ async def test_cancelled_run_releases_lock_and_next_run_succeeds():
         await task
 
     assert pipeline.run_in_progress is False
+    assert pipeline._active_run_tasks == set()
 
     # The pipeline is immediately usable for the next turn.
     gate.release.set()
@@ -284,3 +289,61 @@ async def test_cancelled_run_leaves_no_pending_lock_for_refresh():
         await task
 
     pipeline.refresh_runtime(session_runtime=object())  # must not raise
+
+
+# ── pipeline teardown cancels active runs ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_and_reaps_active_run_before_returning():
+    pipeline = Pipeline(PipelineConfig(name="close-active-run"))
+    pipeline.register_stage(InputStage())
+    gate = _GateStage()
+    pipeline.register_stage(gate)
+    pipeline.register_stage(APIStage(provider=MockProvider()))
+    pipeline.register_stage(YieldStage())
+    state = PipelineState(session_id="close-active")
+
+    class RunAwareMCPManager:
+        def __init__(self) -> None:
+            self.run_had_exited = False
+
+        async def disconnect_all(self) -> None:
+            self.run_had_exited = gate.exited.is_set()
+
+    manager = RunAwareMCPManager()
+    pipeline._mcp_manager = manager
+
+    task = asyncio.create_task(pipeline.run("in flight", state))
+    await gate.entered.wait()
+    assert pipeline.run_in_progress is True
+    assert pipeline._active_run_tasks == {task}
+
+    await pipeline.aclose()
+
+    assert task.cancelled()
+    assert gate.exited.is_set()
+    assert pipeline.run_in_progress is False
+    assert state._turn_in_flight is False
+    assert pipeline._active_run_tasks == set()
+    assert manager.run_had_exited is True
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_abandoned_stream_background_run():
+    pipeline = _pipeline(_SlowStreamProvider(words=100, delay_s=0.02))
+    state = PipelineState(session_id="close-abandoned-stream")
+
+    run_id = await _abandon_after_first_delta(pipeline, state)
+    assert pipeline.run_in_progress is True
+    assert len(pipeline._active_run_tasks) == 1
+
+    await asyncio.wait_for(pipeline.aclose(), timeout=2.0)
+
+    assert pipeline.run_in_progress is False
+    assert state._turn_in_flight is False
+    assert pipeline._active_run_tasks == set()
+    assert not any(
+        event.type == "pipeline.complete" and event.run_id == run_id
+        for event in pipeline._event_journal
+    )

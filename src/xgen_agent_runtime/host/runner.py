@@ -17,10 +17,11 @@ token/cost totals (:func:`turn_usage`).
 from __future__ import annotations
 
 import asyncio
-import time
 import json
 import logging
+import os
 import re
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
@@ -534,7 +535,7 @@ def build_pipeline(
                 ),
             )
             # 턴-종료 증류(distillation) 스펙 — teardown 이 백그라운드로 발사.
-            pipeline._memory_distill_spec = memory_distill_spec
+            setattr(pipeline, "_memory_distill_spec", memory_distill_spec)
             logger.info(
                 "geny_bridge: memory wired (context retriever + memory strategy + prompt blocks)"
             )
@@ -805,6 +806,72 @@ def _close_memory_provider(pipeline: Pipeline, loop: asyncio.AbstractEventLoop) 
             logger.debug("geny_bridge: distillation launch failed", exc_info=True)
 
 
+class _RolloutRuntimeOverlay:
+    """Expose a recorder while preserving an existing free-shape runtime."""
+
+    def __init__(self, base: Any, recorder: Any) -> None:
+        self._base = base
+        self.rollout_recorder = recorder
+
+    def __getattr__(self, name: str) -> Any:
+        if self._base is None:
+            raise AttributeError(name)
+        return getattr(self._base, name)
+
+
+async def _attach_rollout_recorder(
+    pipeline: Pipeline,
+    state: PipelineState,
+    rollout_path: str | os.PathLike[str],
+) -> tuple[Any, Any]:
+    """Create and attach a host-owned recorder inside the turn event loop.
+
+    Returns ``(recorder, original_runtime)``.  ``original_runtime`` is the
+    object the state would have seen without the overlay and is restored by
+    teardown so reusing a state never retains a shut-down recorder.
+    """
+    from xgen_agent_runtime.core.rollout_recorder import RolloutRecorder
+
+    recorder = RolloutRecorder(rollout_path)
+    original_runtime = state.session_runtime
+    if original_runtime is None:
+        original_runtime = getattr(pipeline, "_attached_session_runtime", None)
+    overlay = _RolloutRuntimeOverlay(original_runtime, recorder)
+    try:
+        pipeline.attach_runtime(session_runtime=overlay)
+        # A caller-supplied state runtime takes precedence over the pipeline's
+        # attached slot in _init_state, so install the same overlay on both.
+        state.session_runtime = overlay
+    except BaseException:
+        await recorder.shutdown()
+        raise
+    return recorder, original_runtime
+
+
+def _close_rollout_recorder(
+    recorder: Any,
+    rollout_path: str | os.PathLike[str],
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Durably stop one recorder and enforce host storage retention."""
+    try:
+        loop.run_until_complete(recorder.shutdown())
+    except Exception:  # noqa: BLE001 — teardown must not mask the turn
+        logger.error("geny_bridge: rollout recorder shutdown failed", exc_info=True)
+    try:
+        from xgen_agent_runtime.host.rollouts import ROLLOUT_KEEP_LAST, prune_rollout_files
+
+        loop.run_until_complete(
+            asyncio.to_thread(
+                prune_rollout_files,
+                os.fspath(os.path.dirname(os.fspath(rollout_path))),
+                keep_last=ROLLOUT_KEEP_LAST,
+            )
+        )
+    except Exception:  # noqa: BLE001 — retention is best-effort
+        logger.debug("geny_bridge: rollout retention failed", exc_info=True)
+
+
 def stream_turn(
     pipeline: Pipeline,
     text: Any,
@@ -816,6 +883,7 @@ def stream_turn(
     output_schema: Optional[Dict[str, Any]] = None,
     on_close: Optional[Callable[[], None]] = None,
     host: Optional[Any] = None,
+    rollout_path: Optional[str | os.PathLike[str]] = None,
 ) -> Iterator[Union[str, Dict[str, Any]]]:
     """Drive ``run_stream`` from a sync generator.
 
@@ -840,9 +908,15 @@ def stream_turn(
     ``host`` — 선택. ``host.record_failed_starts`` (기본 True) 가 False 이면
     "출력 0 + 실패/취소" 턴의 메모리 실행 기록을 건너뛴다
     (:func:`_should_record_execution`).
+
+    ``rollout_path`` — host가 명시한 경우에만 기존 ``session_runtime`` 슬롯에
+    durable recorder를 겹쳐 붙인다. 생성·기록·종료는 이 private event loop에서
+    모두 끝나며, public Pipeline 입력/출력 타입은 바뀌지 않는다.
     """
     loop = asyncio.new_event_loop()
-    agen = pipeline.run_stream(text, state)
+    agen: Any = None
+    rollout_recorder: Any = None
+    original_runtime: Any = state.session_runtime
     streamed_text = False
     cli_tool_names: Dict[str, str] = {}  # tool_use_id → name (CLI 내부 실행 짝맞춤)
     turn_started = time.monotonic()
@@ -850,6 +924,11 @@ def stream_turn(
     turn_error = ""
     turn_completed = False
     try:
+        if rollout_path is not None:
+            rollout_recorder, original_runtime = loop.run_until_complete(
+                _attach_rollout_recorder(pipeline, state, rollout_path)
+            )
+        agen = pipeline.run_stream(text, state)
         while True:
             if cancel_check is not None and cancel_check():
                 logger.info("geny_bridge: cancellation requested — stopping stream")
@@ -933,14 +1012,18 @@ def stream_turn(
             if usage is not None:
                 yield {"type": "usage", "data": usage}
     finally:
-        try:
-            loop.run_until_complete(agen.aclose())
-        except Exception:  # noqa: BLE001 - teardown must not mask the run
-            pass
+        if agen is not None:
+            try:
+                loop.run_until_complete(agen.aclose())
+            except Exception:  # noqa: BLE001 - teardown must not mask the run
+                pass
         try:
             loop.run_until_complete(pipeline.aclose())
         except Exception:  # noqa: BLE001
             pass
+        if rollout_recorder is not None and rollout_path is not None:
+            _close_rollout_recorder(rollout_recorder, rollout_path, loop)
+            state.session_runtime = original_runtime
         turn_failed = bool(turn_error) or not turn_completed
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
             _record_execution(
@@ -976,6 +1059,7 @@ def run_turn(
     output_schema: Optional[Dict[str, Any]] = None,
     host: Optional[Any] = None,
     usage_sink: Optional[Dict[str, Any]] = None,
+    rollout_path: Optional[str | os.PathLike[str]] = None,
 ) -> str:
     """Run one turn to completion and return the final text (non-streaming).
 
@@ -983,14 +1067,21 @@ def run_turn(
     ``usage_sink`` (dict) 를 넘기면 실행 후 :func:`turn_usage` 페이로드
     (stream_turn 의 ``usage`` 청크 ``data`` 와 동일 shape)로 채워 준다.
     ``host`` 는 stream_turn 과 같은 record_failed_starts 게이트.
+    ``rollout_path`` 는 stream_turn 과 같은 opt-in host-owned 기록 경로다.
     """
     loop = asyncio.new_event_loop()
+    rollout_recorder: Any = None
+    original_runtime: Any = state.session_runtime
     turn_started = time.monotonic()
     turn_output = ""
     turn_success = False
     turn_error = ""
     produced_output = False
     try:
+        if rollout_path is not None:
+            rollout_recorder, original_runtime = loop.run_until_complete(
+                _attach_rollout_recorder(pipeline, state, rollout_path)
+            )
         result = loop.run_until_complete(pipeline.run(text, state))
         produced_output = bool(getattr(result, "text", "") or "")
         if usage_sink is not None:
@@ -1017,6 +1108,9 @@ def run_turn(
             loop.run_until_complete(pipeline.aclose())
         except Exception:  # noqa: BLE001
             pass
+        if rollout_recorder is not None and rollout_path is not None:
+            _close_rollout_recorder(rollout_recorder, rollout_path, loop)
+            state.session_runtime = original_runtime
         if _should_record_execution(
             host, produced_output=produced_output or bool(turn_output), failed=not turn_success
         ):

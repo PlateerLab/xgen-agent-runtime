@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from xgen_agent_runtime.core.message_repair import (
+    normalize_messages_for_request,
     repair_dangling_tool_calls,
     strip_leading_orphan_tool_results,
 )
@@ -16,6 +19,128 @@ def _assistant_tool_use(tid: str):
 
 def _tool_result(tid: str):
     return {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}
+
+
+class TestNormalizeMessagesForRequest:
+    def test_clean_history_is_equal_and_source_is_untouched(self):
+        messages = [
+            {"role": "user", "content": "question"},
+            _assistant_tool_use("t1"),
+            _tool_result("t1"),
+            {"role": "assistant", "content": "answer"},
+        ]
+        before = deepcopy(messages)
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert normalized == before
+        assert normalized is not messages
+        assert messages == before
+
+    def test_repairs_dangling_calls_across_the_entire_history(self):
+        messages = [
+            _assistant_tool_use("old"),
+            {"role": "user", "content": "continued after interruption"},
+            _assistant_tool_use("latest"),
+        ]
+        before = deepcopy(messages)
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert messages == before
+        result_ids = [
+            block["tool_use_id"]
+            for message in normalized
+            for block in message.get("content", [])
+            if isinstance(block, dict) and block.get("type") == "tool_result"
+        ]
+        assert result_ids == ["old", "latest"]
+        assert normalized[1]["content"][0]["is_error"] is True
+        assert normalized[-1]["content"][0]["is_error"] is True
+
+    def test_removes_orphans_anywhere_but_preserves_sibling_content(self):
+        messages = [
+            _tool_result("never-called"),
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "also-orphan", "content": "x"},
+                    {"type": "text", "text": "keep me"},
+                ],
+            },
+            _assistant_tool_use("valid"),
+            _tool_result("valid"),
+        ]
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert normalized == [
+            {"role": "user", "content": [{"type": "text", "text": "keep me"}]},
+            _assistant_tool_use("valid"),
+            _tool_result("valid"),
+        ]
+
+    def test_result_before_its_call_is_orphaned_and_replaced_after_call(self):
+        messages = [_tool_result("future"), _assistant_tool_use("future")]
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert normalized[0] == _assistant_tool_use("future")
+        assert normalized[1]["content"][0]["tool_use_id"] == "future"
+        assert normalized[1]["content"][0]["is_error"] is True
+
+    def test_malformed_ids_do_not_crash_normalization(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": {"not": "hashable"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": ["not", "hashable"]}],
+            },
+        ]
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert normalized == [messages[0]]
+
+    def test_partial_answer_fills_only_missing_call_and_is_idempotent(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "done", "name": "x", "input": {}},
+                    {"type": "tool_use", "id": "missing", "name": "y", "input": {}},
+                ],
+            },
+            _tool_result("done"),
+        ]
+
+        once = normalize_messages_for_request(messages)
+        twice = normalize_messages_for_request(once)
+
+        assert twice == once
+        synthetic = once[1]["content"]
+        assert [block["tool_use_id"] for block in synthetic] == ["missing"]
+
+    def test_api_stage_normalizes_without_mutating_pipeline_state(self):
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s06_api import APIStage
+
+        state = PipelineState()
+        state.messages = [_tool_result("orphan"), _assistant_tool_use("dangling")]
+        before = deepcopy(state.messages)
+        stage = APIStage()
+        config = stage.resolve_model_config(state)
+
+        kwargs = stage._call_kwargs(config, state)
+        request = stage._build_request(state)
+
+        assert state.messages == before
+        assert kwargs["messages"] == request.messages
+        assert kwargs["messages"][0] == _assistant_tool_use("dangling")
+        assert kwargs["messages"][1]["content"][0]["tool_use_id"] == "dangling"
 
 
 class TestRepairDangling:

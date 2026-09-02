@@ -4,6 +4,40 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.8.0] — 2026-09-02
+
+### Added — 입력·출력 계약을 바꾸지 않는 durable rollout
+
+Codex harness의 append-only rollout 방식을 기존 Pipeline 위에 opt-in으로 붙였다.
+`Pipeline.run`/`run_stream`, `PipelineState`, `PipelineEvent`와 agent node 결과 shape는
+그대로다. Host가 기존 free-shape `session_runtime.rollout_recorder` 슬롯으로 recorder를
+주입하면, 모든 run event가 순서대로 JSONL에 기록되고 terminal event는 소비자에게
+공개되기 전에 flush·fsync된다.
+
+XGEN host 경로는 `GENY_ROLLOUT_RECORDING_ENABLED=true`일 때만 workflow별 executor
+storage에 turn당 한 파일을 만든다. interaction ID는 파일명에 노출하지 않고 해시하며,
+최근 100개만 보존하고 symlink는 따라가지 않는다. prompt·응답·도구 인자가 들어갈 수
+있으므로 기본값은 off다.
+
+### Fixed — 종료와 저장 실패가 기록을 조용히 훼손하지 않는다
+
+- stream consumer가 중간에 닫혀도 active run을 먼저 취소·회수한 뒤 accepted rollout
+  prefix를 비우고 recorder writer를 종료한다.
+- 영구적인 디스크 오류로 shutdown barrier가 실패해도 background writer task를
+  cancel·reap해 닫힌 event loop에 task를 남기지 않는다.
+- recorder backpressure나 저장 실패 뒤에 다시 기록을 이어 붙이지 않는다. 기존
+  `pipeline.error`/`PipelineResult` 경로로 실패를 드러내 그럴듯하지만 중간이 빈 감사
+  파일을 만들지 않는다.
+- File checkpoint는 unsafe ID를 hash component로 변환하고 path containment·symlink
+  차단·unique tempfile·file/directory fsync·동시 쓰기 보존을 적용한다.
+
+### Changed — harness 경계의 회귀 방지
+
+- 공개 runtime contract를 테스트로 동결하고 portable CLI probe fixture를 추가했다.
+- 요청 경계에서 tool history pair를 정규화한다.
+- sandbox path는 문자열 prefix가 아니라 component containment로 검증한다.
+- subprocess output은 byte 제한 안에서 head와 tail을 함께 보존한다.
+
 ## [4.6.0] — 2026-09-01
 
 ### Fixed — 실패한 도구가 **왜** 실패했는지 아무 데도 남지 않았다

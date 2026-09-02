@@ -84,7 +84,7 @@ class BigOutputTool(Tool):
         return {"type": "object"}
 
     async def execute(self, input, context):
-        return ToolResult(content="x" * 5_000_000)
+        return ToolResult(content="HEAD\n" + "x" * 5_000_000 + "\nTAIL_ERROR")
 
 
 # ══════════════════════════════════════════════════════════
@@ -459,8 +459,25 @@ class TestToolSandbox:
         sandbox = ToolSandbox(SandboxConfig(max_output_size=100))
         tool = BigOutputTool()
         result = await sandbox.execute_tool(tool, {}, _ctx())
-        assert len(result.content) <= 120  # 100 + "... (truncated)"
+        assert len(result.content.encode()) <= 160  # retained bytes + omission marker
+        assert result.content.startswith("HEAD")
+        assert result.content.endswith("TAIL_ERROR")
+        assert "bytes omitted" in result.content
         assert "truncated" in result.content
+
+    @pytest.mark.asyncio
+    async def test_output_limit_is_utf8_bytes_not_characters(self):
+        class UnicodeOutputTool(DummyTool):
+            async def execute(self, input, context):
+                return ToolResult(content="시작" + ("가" * 16) + "끝")
+
+        sandbox = ToolSandbox(SandboxConfig(max_output_size=30))
+
+        result = await sandbox.execute_tool(UnicodeOutputTool(), {}, _ctx())
+
+        assert "bytes omitted" in result.content
+        assert result.content.startswith("시작")
+        assert result.content.endswith("끝")
 
     @pytest.mark.asyncio
     async def test_path_validation_blocked(self):
@@ -483,6 +500,71 @@ class TestToolSandbox:
             {"path": "/tmp/test.txt"},
             _ctx(working_dir="/tmp"),
         )
+        assert not result.is_error
+
+    @pytest.mark.asyncio
+    async def test_path_validation_rejects_sibling_with_same_prefix(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        sibling = tmp_path / "workspace-escape"
+        allowed.mkdir()
+        sibling.mkdir()
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"path": str(sibling / "secret.txt")},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert result.is_error
+        assert "outside" in result.content
+
+    @pytest.mark.asyncio
+    async def test_path_validation_rejects_parent_traversal(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        allowed.mkdir()
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"file_path": "../secret.txt"},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert result.is_error
+        assert "outside" in result.content
+
+    @pytest.mark.asyncio
+    async def test_path_validation_rejects_symlink_escape(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        outside = tmp_path / "outside"
+        allowed.mkdir()
+        outside.mkdir()
+        (allowed / "link").symlink_to(outside, target_is_directory=True)
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"directory": "link"},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert result.is_error
+        assert "outside" in result.content
+
+    @pytest.mark.asyncio
+    async def test_path_validation_allows_real_descendant(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        nested = allowed / "a" / "b"
+        nested.mkdir(parents=True)
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"path": str(nested / "file.txt")},
+            _ctx(working_dir=str(allowed)),
+        )
+
         assert not result.is_error
 
 

@@ -21,6 +21,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
+from xgen_agent_runtime.core.message_repair import normalize_messages_for_request
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
@@ -515,7 +516,7 @@ class APIStage(Stage[Any, APIResponse]):
         cfg = self.resolve_model_config(state)
         request = APIRequest(
             model=cfg.model,
-            messages=list(state.messages),
+            messages=normalize_messages_for_request(state.messages),
             max_tokens=cfg.max_tokens,
             system=state.system,
             temperature=cfg.temperature,
@@ -592,6 +593,7 @@ class APIStage(Stage[Any, APIResponse]):
             messages = self._inject_turn_context(messages, turn_context)
         if extra_messages:
             messages.extend(extra_messages)
+        messages = normalize_messages_for_request(messages)
         kwargs: Dict[str, Any] = {
             "model_config": cfg,
             "messages": messages,

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import stat
 
 import pytest
 
@@ -130,6 +133,145 @@ class TestFilePersister:
             )
         leftover = list((tmp_path / "sess").glob("*.json.tmp"))
         assert leftover == []
+
+    @pytest.mark.asyncio
+    async def test_unsafe_ids_are_encoded_and_round_trip_without_path_escape(self, tmp_path):
+        base = tmp_path / "checkpoints"
+        p = FilePersister(base_dir=base)
+        record = CheckpointRecord(
+            checkpoint_id="../../outside-checkpoint",
+            session_id="../outside-session/child",
+            payload={"safe": True},
+        )
+
+        await p.write(record, _state())
+
+        files = list(base.rglob("*.json"))
+        assert len(files) == 1
+        assert files[0].resolve().is_relative_to(base.resolve())
+        assert not (tmp_path / "outside-session").exists()
+        loaded = await p.read(record.checkpoint_id)
+        assert loaded is not None
+        assert loaded.checkpoint_id == record.checkpoint_id
+        assert loaded.session_id == record.session_id
+        assert await p.list_checkpoints(record.session_id) == [loaded]
+
+    @pytest.mark.asyncio
+    async def test_backslash_nul_unicode_and_oversized_ids_remain_components(self, tmp_path):
+        p = FilePersister(base_dir=tmp_path)
+        records = [
+            CheckpointRecord(checkpoint_id="..\\escape", session_id="C:\\outside"),
+            CheckpointRecord(checkpoint_id="nul\0id", session_id="세션/하위"),
+            CheckpointRecord(checkpoint_id="x" * 500, session_id="y" * 500),
+        ]
+
+        for record in records:
+            await p.write(record, _state())
+
+        assert len(list(tmp_path.rglob("*.json"))) == 3
+        for record in records:
+            loaded = await p.read(record.checkpoint_id)
+            assert loaded is not None
+            assert loaded.checkpoint_id == record.checkpoint_id
+
+    def test_windows_device_names_and_trailing_dots_are_encoded(self):
+        for value in ("CON", "con.txt", "NUL", "COM1", "LPT9.log", "name."):
+            component = FilePersister._storage_component(value, label="checkpoint")
+            assert component != value
+            assert component.startswith("_checkpoint_")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_instances_use_unique_temp_files(self, tmp_path):
+        first = FilePersister(base_dir=tmp_path)
+        second = FilePersister(base_dir=tmp_path)
+        record_a = CheckpointRecord(
+            checkpoint_id="same-id", session_id="sess", payload={"writer": "a"}
+        )
+        record_b = CheckpointRecord(
+            checkpoint_id="same-id", session_id="sess", payload={"writer": "b"}
+        )
+
+        await asyncio.gather(
+            first.write(record_a, _state()),
+            second.write(record_b, _state()),
+        )
+
+        data = json.loads((tmp_path / "sess" / "same-id.json").read_text(encoding="utf-8"))
+        assert data["payload"]["writer"] in {"a", "b"}
+        assert list(tmp_path.rglob("*.tmp")) == []
+
+    @pytest.mark.asyncio
+    async def test_serialization_failure_removes_unique_temp_file(self, tmp_path, monkeypatch):
+        from xgen_agent_runtime.stages.s20_persist.artifact.default import persisters
+
+        p = FilePersister(base_dir=tmp_path)
+
+        def fail_dump(*args, **kwargs):
+            raise TypeError("injected serialization failure")
+
+        monkeypatch.setattr(persisters.json, "dump", fail_dump)
+
+        with pytest.raises(TypeError, match="injected serialization failure"):
+            await p.write(CheckpointRecord(session_id="sess"), _state())
+        assert list(tmp_path.rglob("*.tmp")) == []
+        assert list(tmp_path.rglob("*.json")) == []
+
+    @pytest.mark.asyncio
+    async def test_atomic_rename_is_followed_by_directory_fsync(self, tmp_path, monkeypatch):
+        from xgen_agent_runtime.stages.s20_persist.artifact.default import persisters
+
+        p = FilePersister(base_dir=tmp_path)
+        fsync_targets: list[str] = []
+        original_fsync = persisters.os.fsync
+
+        def observe_fsync(fd: int) -> None:
+            mode = os.fstat(fd).st_mode
+            fsync_targets.append("directory" if stat.S_ISDIR(mode) else "file")
+            original_fsync(fd)
+
+        monkeypatch.setattr(persisters.os, "fsync", observe_fsync)
+
+        await p.write(CheckpointRecord(session_id="sess"), _state())
+
+        assert fsync_targets[:2] == ["file", "directory"]
+
+    @pytest.mark.asyncio
+    async def test_symlinked_session_directory_cannot_escape_base(self, tmp_path):
+        base = tmp_path / "base"
+        outside = tmp_path / "outside"
+        base.mkdir()
+        outside.mkdir()
+        try:
+            (base / "sess").symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("directory symlinks are unavailable on this platform")
+        p = FilePersister(base_dir=base)
+
+        with pytest.raises(ValueError, match="must not be a symlink"):
+            await p.write(CheckpointRecord(session_id="sess"), _state())
+        assert list(outside.iterdir()) == []
+
+    @pytest.mark.asyncio
+    async def test_read_and_list_ignore_symlinked_checkpoint_files(self, tmp_path):
+        session_dir = tmp_path / "sess"
+        session_dir.mkdir()
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.json"
+        outside.write_text(
+            json.dumps(CheckpointRecord(checkpoint_id="leak").to_dict()),
+            encoding="utf-8",
+        )
+        link = session_dir / "leak.json"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            outside.unlink(missing_ok=True)
+            pytest.skip("file symlinks are unavailable on this platform")
+        p = FilePersister(base_dir=tmp_path)
+        try:
+            assert await p.read("leak") is None
+            assert await p.list_checkpoints("sess") == []
+        finally:
+            outside.unlink(missing_ok=True)
 
 
 # ── Frequency policies ───────────────────────────────────────────

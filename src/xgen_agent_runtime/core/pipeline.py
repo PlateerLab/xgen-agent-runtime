@@ -924,6 +924,13 @@ class Pipeline:
         self._credentials: CredentialBundle = CredentialBundle()  # set by from_manifest_async
         self._subagent_registry: Any = None  # set by attach_runtime; populates state + agent stage
         self._attached_session_runtime: Any = None  # v0.30.0 plugin slot; propagated in _init_state
+        # Optional Codex-style durable rollout sink, discovered through the
+        # existing free-shape ``session_runtime.rollout_recorder`` slot.  The
+        # mapping is per-run so overlapping states may use different recorders
+        # without adding a kwarg or field to any public contract.
+        self._run_rollout_recorders: Dict[str, Any] = {}
+        self._run_rollout_failures: Dict[str, Exception] = {}
+        self._run_rollout_failure_logged: Set[str] = set()
         # S9c.1 Pipeline.resume: token → asyncio.Future[HITLDecision].
         # The HITL stage's PipelineResumeRequester registers a future
         # here when it issues a request and awaits it. ``resume(token,
@@ -965,6 +972,12 @@ class Pipeline:
         # unlock each other early). Exposed via .run_in_progress; the
         # mutator and refresh_runtime() consult it.
         self._runs_in_flight: int = 0
+        # Concrete asyncio tasks that own those runs. The counter answers
+        # "is mutation legal?"; this registry gives aclose() something it can
+        # cancel and await before tearing down the resources those runs use.
+        # It is deliberately private so the public run/run_stream surface and
+        # state schema stay unchanged.
+        self._active_run_tasks: Set[asyncio.Task[Any]] = set()
         # aclose() idempotency latch.
         self._closed: bool = False
         self._close_task: Optional[Any] = None  # keeps fire-and-forget close() task alive
@@ -1062,14 +1075,16 @@ class Pipeline:
           1. pending HITL futures — cancelled (``HITLDecision.CANCEL``)
              so any stage coroutine blocked on an approval unwinds
              instead of awaiting forever;
-          2. live :meth:`events` taps — each subscriber queue receives
+          2. active run tasks — cancelled and awaited before their MCP,
+             provider, or LLM-client resources are disconnected;
+          3. live :meth:`events` taps — each subscriber queue receives
              a close sentinel so tap generators return instead of
              awaiting an event that will never come (2.2.0 — a host
              ``async for`` over a closed pipeline's tap would otherwise
              hang its consumer task forever);
-          3. the owned :class:`MCPManager` — ``disconnect_all()``
+          4. the owned :class:`MCPManager` — ``disconnect_all()``
              (reaps stdio child processes);
-          4. started :class:`ToolProvider` bundles —
+          5. started :class:`ToolProvider` bundles —
              :meth:`shutdown_tool_providers`.
 
         Best-effort and idempotent: each step's failure is logged and
@@ -1094,7 +1109,23 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: cancelling HITL token %r failed", token, exc_info=True)
 
-        # 1.5. Cancel a pending background compaction summary (Stage 2) —
+        # 2. Cancel and reap active runs BEFORE disconnecting any runtime
+        # resource they may currently be awaiting. Exclude the current task:
+        # aclose() can be called from teardown code reached by a run itself,
+        # and self-cancellation here would prevent the remaining cleanup.
+        current_task = asyncio.current_task()
+        active_runs = [
+            task
+            for task in list(self._active_run_tasks)
+            if task is not current_task and not task.done()
+        ]
+        for task in active_runs:
+            task.cancel()
+        if active_runs:
+            await asyncio.gather(*active_runs, return_exceptions=True)
+        self._active_run_tasks.difference_update(active_runs)
+
+        # 2.5. Cancel a pending background compaction summary (Stage 2) —
         # a one-shot host closing its loop mid-flight otherwise leaves a
         # destroyed-but-pending task behind (3.3.1).
         context_stage = self._stages.get(2)
@@ -1104,7 +1135,7 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: cancelling background compaction failed", exc_info=True)
 
-        # 2. Wake every events() tap with the close sentinel; the tap
+        # 3. Wake every events() tap with the close sentinel; the tap
         # generators see it and return, detaching their queues.
         for tap_queue in list(self._event_taps):
             try:
@@ -1112,7 +1143,7 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: closing an events() tap failed", exc_info=True)
 
-        # 3. MCP servers (stdio child processes — the §2.4 leak).
+        # 4. MCP servers (stdio child processes — the §2.4 leak).
         manager = self._mcp_manager
         if manager is not None and hasattr(manager, "disconnect_all"):
             try:
@@ -1120,13 +1151,13 @@ class Pipeline:
             except Exception:  # noqa: BLE001
                 logger.warning("aclose: MCPManager.disconnect_all failed", exc_info=True)
 
-        # 4. Tool provider bundles.
+        # 5. Tool provider bundles.
         try:
             await self.shutdown_tool_providers()
         except Exception:  # noqa: BLE001
             logger.warning("aclose: shutdown_tool_providers failed", exc_info=True)
 
-        # 5. LLM client teardown (audit L3): the claude_code CLI client
+        # 6. LLM client teardown (audit L3): the claude_code CLI client
         # holds a prewarmed hot-spare subprocess; its aclose() reaps it so
         # a session ending inside the 90s TTL doesn't linger the child.
         # Covers the attached/warmed/legacy-resolved instances.
@@ -1855,6 +1886,14 @@ class Pipeline:
                 not enforce a Protocol — schema collisions between
                 competing plugins are a host-policy concern.
 
+                When the object exposes ``rollout_recorder``, the pipeline
+                treats it as an optional durable event sink. It must provide
+                synchronous ``record_nowait(event)`` and asynchronous
+                ``flush()`` methods; all events for that run are recorded in
+                sequence and flushed at terminal/cancellation boundaries.
+                The host retains lifecycle ownership and must call the
+                recorder's ``shutdown()`` when the session itself ends.
+
         Raises:
             RuntimeError: If the pipeline has already started a run. State
                 from the prior run has already captured references to the
@@ -2495,6 +2534,9 @@ class Pipeline:
         # window would bypass MutationLocked while the run is morally
         # already in flight.
         self._runs_in_flight += 1
+        run_task = asyncio.current_task()
+        if run_task is not None:
+            self._active_run_tasks.add(run_task)
         success = False
         try:
             await self._emit(
@@ -2512,7 +2554,7 @@ class Pipeline:
 
             result = PipelineResult.from_state(state)
             success = result.success
-            await self._emit(
+            await self._emit_rollout_terminal(
                 "pipeline.complete",
                 data={"iterations": state.iteration},
                 session_id=state.session_id,
@@ -2521,16 +2563,20 @@ class Pipeline:
             return result
 
         except Exception as e:
-            await self._emit(
+            success = False
+            await self._emit_rollout_terminal(
                 "pipeline.error",
                 data=_error_event_data(e),
                 session_id=state.session_id,
                 run_id=state._run_id,
+                suppress_rollout_failure=True,
             )
             return PipelineResult.error_result(str(e), state)
         finally:
             self._runs_in_flight -= 1
             self._end_turn(state)
+            if run_task is not None:
+                self._active_run_tasks.discard(run_task)
             if self._hook_runner is not None:
                 await self._flush_lifecycle_hooks()
                 await self._fire_lifecycle_hook(
@@ -2538,6 +2584,10 @@ class Pipeline:
                     state,
                     details={"success": success, "iterations": state.iteration},
                 )
+            # Also runs under task cancellation and captures any event a
+            # PIPELINE_END hook emitted after the first terminal barrier.
+            await self._flush_run_rollout(state._run_id, suppress=True)
+            self._release_run_rollout(state._run_id)
 
     async def run_stream(
         self,
@@ -2607,6 +2657,9 @@ class Pipeline:
         # covering consumers that abandon the stream mid-run.
         self._runs_in_flight += 1
         counter_owned_by_task = False
+        stream_owner_task = asyncio.current_task()
+        if stream_owner_task is not None:
+            self._active_run_tasks.add(stream_owner_task)
 
         async def _run_pipeline() -> None:
             """Execute pipeline phases, then push sentinel to signal completion.
@@ -2627,7 +2680,7 @@ class Pipeline:
                 await self._run_phases(input, state)
                 success = state.loop_decision != "error"
 
-                await self._emit(
+                await self._emit_rollout_terminal(
                     "pipeline.complete",
                     data={
                         # `result` is the canonical final text consumers
@@ -2642,7 +2695,8 @@ class Pipeline:
                     run_id=run_id,
                 )
             except Exception as e:
-                await self._emit(
+                success = False
+                await self._emit_rollout_terminal(
                     "pipeline.error",
                     data={
                         **_error_event_data(e),
@@ -2650,10 +2704,14 @@ class Pipeline:
                     },
                     session_id=state.session_id,
                     run_id=run_id,
+                    suppress_rollout_failure=True,
                 )
             finally:
                 self._runs_in_flight -= 1
                 self._end_turn(state)
+                active_task = asyncio.current_task()
+                if active_task is not None:
+                    self._active_run_tasks.discard(active_task)
                 if self._hook_runner is not None:
                     await self._flush_lifecycle_hooks()
                     await self._fire_lifecycle_hook(
@@ -2661,6 +2719,8 @@ class Pipeline:
                         state,
                         details={"success": success, "iterations": state.iteration},
                     )
+                await self._flush_run_rollout(run_id, suppress=True)
+                self._release_run_rollout(run_id)
                 queue.put_nowait(_SENTINEL)  # type: ignore[arg-type]
 
         try:
@@ -2676,6 +2736,9 @@ class Pipeline:
 
             # Run pipeline in background task so we can yield events as they arrive
             task = asyncio.create_task(_run_pipeline())
+            if stream_owner_task is not None:
+                self._active_run_tasks.discard(stream_owner_task)
+            self._active_run_tasks.add(task)
             counter_owned_by_task = True
 
             while True:
@@ -2706,6 +2769,11 @@ class Pipeline:
                 # The pre-emit increment was never handed to a task
                 # (emit / task creation failed) — balance it here.
                 self._runs_in_flight -= 1
+                self._end_turn(state)
+                if stream_owner_task is not None:
+                    self._active_run_tasks.discard(stream_owner_task)
+                await self._flush_run_rollout(run_id, suppress=True)
+                self._release_run_rollout(run_id)
             unsubscribe()
 
     # ── Events ──
@@ -2803,7 +2871,81 @@ class Pipeline:
         self._event_journal.append(event)
         for tap_queue in list(self._event_taps):
             tap_queue.put_nowait(event)
+        recorder = self._run_rollout_recorders.get(event.run_id)
+        if recorder is not None and event.run_id not in self._run_rollout_failures:
+            try:
+                recorder.record_nowait(event)
+            except Exception as exc:
+                # Stop admitting later records for this run: allowing a gap and
+                # then resuming would produce a plausible-looking but invalid
+                # audit trail. The caller receives the failure through the
+                # existing pipeline error path; the accepted prefix is still
+                # flushed during finalization.
+                self._run_rollout_failures[event.run_id] = exc
+                raise
         return event
+
+    def _attach_run_rollout(self, state: PipelineState) -> None:
+        """Discover an opt-in recorder without changing public runtime types."""
+        runtime = state.session_runtime
+        recorder = getattr(runtime, "rollout_recorder", None) if runtime is not None else None
+        if recorder is None:
+            return
+        if not callable(getattr(recorder, "record_nowait", None)) or not callable(
+            getattr(recorder, "flush", None)
+        ):
+            raise TypeError(
+                "session_runtime.rollout_recorder must provide "
+                "record_nowait(event) and async flush() methods"
+            )
+        self._run_rollout_recorders[state._run_id] = recorder
+
+    async def _flush_run_rollout(self, run_id: str, *, suppress: bool = False) -> None:
+        """Flush one run's accepted prefix and surface its first sink failure."""
+        recorder = self._run_rollout_recorders.get(run_id)
+        if recorder is None:
+            return
+        failure = self._run_rollout_failures.get(run_id)
+        try:
+            await recorder.flush()
+        except Exception as exc:
+            if failure is None:
+                failure = exc
+                self._run_rollout_failures[run_id] = exc
+        if failure is None:
+            return
+        if suppress:
+            if run_id not in self._run_rollout_failure_logged:
+                logger.error("rollout recording failed for run %s: %s", run_id, failure)
+                self._run_rollout_failure_logged.add(run_id)
+            return
+        raise failure
+
+    def _release_run_rollout(self, run_id: str) -> None:
+        self._run_rollout_recorders.pop(run_id, None)
+        self._run_rollout_failures.pop(run_id, None)
+        self._run_rollout_failure_logged.discard(run_id)
+
+    async def _emit_rollout_terminal(
+        self,
+        event_type: str,
+        *,
+        suppress_rollout_failure: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Record and durably flush a terminal event before bus publication.
+
+        ``pipeline.error`` uses suppression so a failed audit sink cannot hide
+        the very error event that reports it to the existing output channel.
+        """
+        event = PipelineEvent(type=event_type, **kwargs)
+        try:
+            self._record_event(event)
+        except Exception:
+            if not suppress_rollout_failure:
+                raise
+        await self._flush_run_rollout(event.run_id, suppress=suppress_rollout_failure)
+        await self._event_bus.emit(event)
 
     def _make_state_event_bridge(self, state: PipelineState, run_id: str) -> Callable:
         """Build the ``add_event`` → event-channel forwarder for one run.
@@ -3186,6 +3328,7 @@ class Pipeline:
                 guard_stage._budget_compactor = None
                 guard_stage._memory_provider = None
 
+        self._attach_run_rollout(state)
         self._has_started = True
         # Claim the concurrent-run guard now that all fallible setup is
         # done (audit R5) — a mid-setup failure above never leaves it set.
