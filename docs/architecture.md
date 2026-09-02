@@ -104,6 +104,10 @@ Pipelines are **live-mutable** between stages. `core/mutation.py` exposes `Pipel
 
 Provider selection is pinned at `stages[6].config["provider"]`. Strict-load rejects manifests that use the legacy `strategies["provider"]` slot. The same single-source rule applies to model / max_tokens / max_iterations / cost budget — each lives in exactly one manifest field.
 
+`max_iterations` is a per-slice safety bound, not a successful task verdict.
+See [Long-running execution slices](long_running_execution.md) for resumable
+status, checkpoint, host auto-continuation, and compaction ownership rules.
+
 See [manifest.md](manifest.md) for the schema and [providers.md](providers.md) for the provider catalog.
 
 ## Configuration precedence

@@ -13,6 +13,8 @@ from xgen_agent_runtime.core.stage import Stage, Strategy
 from xgen_agent_runtime.core.state import CacheMetrics, PipelineState, TokenUsage
 from xgen_agent_runtime.core.config import ModelConfig, PipelineConfig
 from xgen_agent_runtime.core.result import PipelineResult
+from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
+from xgen_agent_runtime.core.continuation import CONTINUE_RUN, ContinuationInput
 from xgen_agent_runtime.core.pipeline import Pipeline
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
@@ -46,6 +48,10 @@ __all__ = [
     "ModelConfig",
     "TokenUsage",
     "CacheMetrics",
+    "RunStatus",
+    "TerminationReason",
+    "CONTINUE_RUN",
+    "ContinuationInput",
     # Schema
     "ConfigField",
     "ConfigSchema",

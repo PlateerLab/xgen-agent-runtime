@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
+
 
 @dataclass
 class TokenUsage:
@@ -84,7 +86,8 @@ class PipelineState:
 
     **Per-turn (reset by** :meth:`begin_turn` **):**
     ``iteration``, ``current_stage``, ``stage_history``,
-    ``loop_decision``, ``completion_signal``, ``completion_detail``,
+    ``loop_decision``, ``completion_signal``, ``completion_detail``, and
+    the private slice outcome backing ``run_status`` / ``resumable``,
     ``final_text``, ``final_output``, ``pending_tool_calls``,
     ``tool_results``, ``delegate_requests``, ``agent_results``,
     ``evaluation_score``, ``evaluation_feedback``, ``events``,
@@ -199,7 +202,7 @@ class PipelineState:
     context_window_budget: int = 200_000
 
     # ── Loop control ──
-    loop_decision: str = "continue"  # continue | complete | error | escalate
+    loop_decision: str = "continue"  # continue | complete | suspend | error | escalate
     completion_signal: Optional[str] = None
     completion_detail: Optional[str] = None
 
@@ -288,6 +291,19 @@ class PipelineState:
     # _end_turn (finally).
     _turn_in_flight: bool = field(default=False, repr=False)
 
+    # ── Slice outcome (private storage, public read-only properties below) ──
+    # Kept private so the long-standing public PipelineState dataclass field
+    # contract remains positional-compatible.  A pipeline invocation is a
+    # bounded execution slice: SUSPENDED means safe to resume, not task done.
+    _run_status: str = field(default=RunStatus.RUNNING.value, repr=False)
+    _termination_reason: Optional[str] = field(default=None, repr=False)
+    _resumable: bool = field(default=False, repr=False)
+    _checkpoint_id: Optional[str] = field(default=None, repr=False)
+    _is_continuation_slice: bool = field(default=False, repr=False)
+    _accounted_turn_cost_usd: float = field(default=0.0, repr=False)
+    _context_compactor: Optional[Any] = field(default=None, repr=False, compare=False)
+    _context_memory_provider: Optional[Any] = field(default=None, repr=False, compare=False)
+
     # ── Client generation (set by Pipeline._init_state) ──
     # Records Pipeline._client_generation at the moment the pipeline
     # resolved llm_client INTO this state. None means the client (if
@@ -354,6 +370,12 @@ class PipelineState:
         self.loop_decision = "continue"
         self.completion_signal = None
         self.completion_detail = None
+        self._run_status = RunStatus.RUNNING.value
+        self._termination_reason = None
+        self._resumable = False
+        self._checkpoint_id = None
+        self._is_continuation_slice = False
+        self._accounted_turn_cost_usd = 0.0
         # Output of the previous turn
         self.final_text = ""
         self.final_output = None
@@ -405,6 +427,44 @@ class PipelineState:
         ):
             self.shared.pop(_k, None)
 
+    def begin_continuation_slice(self) -> None:
+        """Reset slice-local machinery while preserving the active user turn.
+
+        Unlike :meth:`begin_turn`, this keeps turn-level token/cost accounting
+        and retrieved context.  It is used only with ``CONTINUE_RUN`` after a
+        resumable guard, so total task budget cannot be bypassed by slicing.
+        """
+        self.iteration = 0
+        self.current_stage = ""
+        self.stage_history = []
+        self.loop_decision = "continue"
+        self.completion_signal = None
+        self.completion_detail = None
+        self._run_status = RunStatus.RUNNING.value
+        self._termination_reason = None
+        self._resumable = False
+        self._checkpoint_id = None
+        self._is_continuation_slice = True
+        self.final_text = ""
+        self.final_output = None
+        self.last_api_response = None
+        self.pending_tool_calls = []
+        self.tool_results = []
+        self.delegate_requests = []
+        self.agent_results = []
+        self.evaluation_score = None
+        self.evaluation_feedback = None
+        self.events = []
+        for key in (
+            "_api_call_t0",
+            "_api_ttft_emitted",
+            "_prompt_tokens_memo",
+            "turn_context_text",
+            "system_parts",
+            "executor.tool_calls_total",
+        ):
+            self.shared.pop(key, None)
+
     def add_event(self, event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Append an event to the log and forward it to the pipeline.
 
@@ -443,6 +503,70 @@ class PipelineState:
         # Forward to the legacy per-state listener (host-installed).
         if self._event_listener is not None:
             self._event_listener(event_dict)
+
+    @property
+    def run_status(self) -> str:
+        """Status of this execution slice (``completed`` is task completion)."""
+        return self._run_status
+
+    @property
+    def termination_reason(self) -> Optional[str]:
+        """Stable reason for the current terminal/suspended status."""
+        return self._termination_reason
+
+    @property
+    def resumable(self) -> bool:
+        """Whether the caller may safely continue from the saved state."""
+        return self._resumable
+
+    @property
+    def checkpoint_id(self) -> Optional[str]:
+        """Checkpoint written for this slice, when persistence is enabled."""
+        return self._checkpoint_id
+
+    def mark_completed(
+        self,
+        reason: str = TerminationReason.MODEL_COMPLETED.value,
+        *,
+        detail: Optional[str] = None,
+    ) -> None:
+        """Mark the user's task complete for this run."""
+        self._run_status = RunStatus.COMPLETED.value
+        self._termination_reason = reason
+        self._resumable = False
+        if detail is not None:
+            self.completion_detail = detail
+
+    def mark_suspended(self, reason: str, *, detail: Optional[str] = None) -> None:
+        """Mark a bounded slice as paused with continuation state intact."""
+        self._run_status = RunStatus.SUSPENDED.value
+        self._termination_reason = reason
+        self._resumable = True
+        if detail is not None:
+            self.completion_detail = detail
+
+    def mark_blocked(self, reason: str, *, detail: Optional[str] = None) -> None:
+        """Mark progress as requiring new authority/input/budget."""
+        self._run_status = RunStatus.BLOCKED.value
+        self._termination_reason = reason
+        self._resumable = False
+        if detail is not None:
+            self.completion_detail = detail
+
+    def mark_failed(
+        self,
+        detail: str,
+        reason: str = TerminationReason.ERROR.value,
+    ) -> None:
+        """Mark the slice as failed."""
+        self._run_status = RunStatus.FAILED.value
+        self._termination_reason = reason
+        self._resumable = False
+        self.completion_detail = detail
+
+    def set_checkpoint_id(self, checkpoint_id: Optional[str]) -> None:
+        """Attach the durable continuation point written by Stage 20."""
+        self._checkpoint_id = checkpoint_id
 
     def add_message(self, role: str, content: Any) -> None:
         """Append a message in Anthropic API format."""

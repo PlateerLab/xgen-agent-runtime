@@ -25,7 +25,14 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
-from xgen_agent_runtime import ClientRegistry, Pipeline, PipelineBuilder, PipelineState
+from xgen_agent_runtime import (
+    CONTINUE_RUN,
+    ClientRegistry,
+    Pipeline,
+    PipelineBuilder,
+    PipelineState,
+    RunStatus,
+)
 from xgen_agent_runtime.tools import ToolRegistry
 
 logger = logging.getLogger("editor.geny_bridge.runner")
@@ -884,6 +891,7 @@ def stream_turn(
     on_close: Optional[Callable[[], None]] = None,
     host: Optional[Any] = None,
     rollout_path: Optional[str | os.PathLike[str]] = None,
+    max_continuation_slices: int = 20,
 ) -> Iterator[Union[str, Dict[str, Any]]]:
     """Drive ``run_stream`` from a sync generator.
 
@@ -917,94 +925,154 @@ def stream_turn(
     agen: Any = None
     rollout_recorder: Any = None
     original_runtime: Any = state.session_runtime
-    streamed_text = False
     cli_tool_names: Dict[str, str] = {}  # tool_use_id → name (CLI 내부 실행 짝맞춤)
+    last_message_chunk = ""
     turn_started = time.monotonic()
     out_parts: List[str] = []
     turn_error = ""
     turn_completed = False
+    task_status = RunStatus.RUNNING.value
     try:
         if rollout_path is not None:
             rollout_recorder, original_runtime = loop.run_until_complete(
                 _attach_rollout_recorder(pipeline, state, rollout_path)
             )
-        agen = pipeline.run_stream(text, state)
+        next_input: Any = text
+        continuation_count = 0
+        cancelled = False
+        max_continuations = max(0, int(max_continuation_slices))
         while True:
-            if cancel_check is not None and cancel_check():
-                logger.info("geny_bridge: cancellation requested — stopping stream")
+            slice_streamed_text = False
+            slice_resumable = False
+            slice_reason = ""
+            agen = pipeline.run_stream(next_input, state)
+            while True:
+                if cancel_check is not None and cancel_check():
+                    logger.info("geny_bridge: cancellation requested — stopping stream")
+                    cancelled = True
+                    break
+                try:
+                    event = loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    break
+                if event.type == "text.delta":
+                    chunk = event.data.get("text", "")
+                    if chunk:
+                        # CLI backends stream completed assistant messages,
+                        # not tokens. Keep raw pipeline events for audit, but
+                        # coalesce exact repeated progress messages at the
+                        # user-facing bridge.
+                        if event.data.get("granularity") == "message":
+                            normalized = str(chunk).strip()
+                            if normalized and normalized == last_message_chunk:
+                                # Count it as a streamed event so the
+                                # pipeline.complete fallback does not put the
+                                # same message back after coalescing it here.
+                                slice_streamed_text = True
+                                continue
+                            last_message_chunk = normalized
+                        slice_streamed_text = True
+                        out_parts.append(chunk)
+                        yield chunk
+                elif event.type == "pipeline.complete":
+                    task_status = str(event.data.get("status") or RunStatus.COMPLETED.value)
+                    slice_resumable = bool(event.data.get("resumable"))
+                    slice_reason = str(event.data.get("termination_reason") or "")
+                    # Degraded-streaming fallback is per slice: an earlier
+                    # slice may have streamed while this one did not.
+                    result = event.data.get("result", "")
+                    if not slice_streamed_text and result:
+                        out_parts.append(result)
+                        yield result
+                elif event.type == "pipeline.error":
+                    task_status = RunStatus.FAILED.value
+                    turn_error = str(event.data.get("error", "unknown error"))
+                    yield f"\n[ERROR] {turn_error}"
+                elif tool_events and event.type == "tool.call_start":
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_call_event(
+                            event.data.get("name", ""), event.data.get("input")
+                        ),
+                    }
+                elif tool_events and event.type == "tool.call_complete":
+                    name = event.data.get("name", "")
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_end_event(
+                            name,
+                            str(event.data.get("error") or "") or (result_sink or {}).get(name, ""),
+                            is_error=bool(event.data.get("is_error")),
+                            duration_ms=event.data.get("duration_ms"),
+                        ),
+                    }
+                elif event.type == "canvas_command":
+                    yield {"type": "canvas_command", "data": event.data}
+                elif tool_events and event.type == "api.cli_tool_call":
+                    name = event.data.get("name", "") or "cli_tool"
+                    tool_use_id = event.data.get("id") or ""
+                    if tool_use_id:
+                        cli_tool_names[tool_use_id] = name
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_call_event(name, event.data.get("input")),
+                    }
+                elif (
+                    tool_events
+                    and event.type == "api.tool_result"
+                    and event.data.get("source") == "cli"
+                ):
+                    name = cli_tool_names.pop(event.data.get("tool_use_id", ""), "") or "cli_tool"
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_end_event(
+                            name,
+                            _stringify_content(event.data.get("content")),
+                            is_error=bool(event.data.get("is_error")),
+                        ),
+                    }
+            if cancelled:
                 break
-            try:
-                event = loop.run_until_complete(agen.__anext__())
-            except StopAsyncIteration:
-                turn_completed = True
-                break
-            if event.type == "text.delta":
-                chunk = event.data.get("text", "")
-                if chunk:
-                    streamed_text = True
-                    out_parts.append(chunk)
-                    yield chunk
-            elif event.type == "pipeline.complete":
-                # Degraded-streaming fallback: a client without true SSE
-                # (BaseClient default) emits no text.delta at all — the final
-                # text then arrives only on pipeline.complete. Never fires
-                # when deltas flowed, so vendor streams are not double-sent.
-                result = event.data.get("result", "")
-                if not streamed_text and result:
-                    out_parts.append(result)
-                    yield result
-            elif event.type == "pipeline.error":
-                turn_error = str(event.data.get("error", "unknown error"))
-                yield f"\n[ERROR] {turn_error}"
-            elif tool_events and event.type == "tool.call_start":
+            agen = None
+            if slice_resumable and continuation_count < max_continuations:
+                continuation_count += 1
                 yield {
                     "type": "agent_event",
-                    "data": _tool_call_event(event.data.get("name", ""), event.data.get("input")),
+                    "data": {
+                        "type": "task_progress",
+                        "status": "continuing",
+                        "reason": slice_reason,
+                        "slice": continuation_count,
+                        "timestamp": datetime.now().isoformat(),
+                    },
                 }
-            elif tool_events and event.type == "tool.call_complete":
-                name = event.data.get("name", "")
+                next_input = CONTINUE_RUN
+                continue
+            if slice_resumable:
                 yield {
                     "type": "agent_event",
-                    "data": _tool_end_event(
-                        name,
-                        # 실패면 **사건이 들고 온 사유**가 먼저다. result_sink 는
-                        # 그래프 포트 도구만 채우므로(adapt_tools 의 래퍼), 내장·
-                        # 작업·제작 도구의 실패는 여기서 늘 빈 문자열이었고
-                        # "tool execution failed" 라는 고정 문구로 뭉개졌다.
-                        str(event.data.get("error") or "") or (result_sink or {}).get(name, ""),
-                        is_error=bool(event.data.get("is_error")),
-                        duration_ms=event.data.get("duration_ms"),
-                    ),
+                    "data": {
+                        "type": "task_suspended",
+                        "status": RunStatus.SUSPENDED.value,
+                        "reason": slice_reason,
+                        "resumable": True,
+                        "checkpoint_id": state.checkpoint_id,
+                        "timestamp": datetime.now().isoformat(),
+                    },
                 }
-            elif event.type == "canvas_command":
-                # WorkflowSelf(self-evolution) 라이브 캔버스 편집 — 그래프 변경을
-                # 프론트 캔버스에 즉시 반영시키는 사이드채널 이벤트 (tool_events 무관).
-                yield {"type": "canvas_command", "data": event.data}
-            elif tool_events and event.type == "api.cli_tool_call":
-                # Claude Code CLI 가 내부에서 실행한 도구의 공지 — 파이프라인
-                # Stage 10 을 거치지 않으므로 여기서 직접 UI 이벤트로 변환한다.
-                name = event.data.get("name", "") or "cli_tool"
-                tool_use_id = event.data.get("id") or ""
-                if tool_use_id:
-                    cli_tool_names[tool_use_id] = name
+            elif task_status == RunStatus.BLOCKED.value:
                 yield {
                     "type": "agent_event",
-                    "data": _tool_call_event(name, event.data.get("input")),
+                    "data": {
+                        "type": "task_blocked",
+                        "status": RunStatus.BLOCKED.value,
+                        "reason": slice_reason,
+                        "resumable": False,
+                        "timestamp": datetime.now().isoformat(),
+                    },
                 }
-            elif (
-                tool_events
-                and event.type == "api.tool_result"
-                and event.data.get("source") == "cli"
-            ):
-                name = cli_tool_names.pop(event.data.get("tool_use_id", ""), "") or "cli_tool"
-                yield {
-                    "type": "agent_event",
-                    "data": _tool_end_event(
-                        name,
-                        _stringify_content(event.data.get("content")),
-                        is_error=bool(event.data.get("is_error")),
-                    ),
-                }
+            turn_completed = True
+            break
         if turn_completed:
             # 파이프라인 종료 후 정확히 1회 — 취소(break)로 나온 턴은 백그라운드
             # 태스크가 아직 돌고 있어 집계가 확정되지 않았으므로 내지 않는다.
@@ -1024,7 +1092,9 @@ def stream_turn(
         if rollout_recorder is not None and rollout_path is not None:
             _close_rollout_recorder(rollout_recorder, rollout_path, loop)
             state.session_runtime = original_runtime
-        turn_failed = bool(turn_error) or not turn_completed
+        turn_failed = (
+            bool(turn_error) or not turn_completed or task_status != RunStatus.COMPLETED.value
+        )
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
             _record_execution(
                 pipeline,
@@ -1032,9 +1102,13 @@ def stream_turn(
                 input_text=text,
                 state=state,
                 output_text="".join(out_parts),
-                success=turn_completed and not turn_error,
+                success=not turn_failed,
                 duration_ms=int((time.monotonic() - turn_started) * 1000),
-                error=turn_error or ("cancelled" if not turn_completed else ""),
+                error=(
+                    turn_error
+                    or ("cancelled" if not turn_completed else "")
+                    or (task_status if task_status != RunStatus.COMPLETED.value else "")
+                ),
                 cancelled=not turn_completed and not turn_error,
             )
         else:
@@ -1060,6 +1134,7 @@ def run_turn(
     host: Optional[Any] = None,
     usage_sink: Optional[Dict[str, Any]] = None,
     rollout_path: Optional[str | os.PathLike[str]] = None,
+    max_continuation_slices: int = 20,
 ) -> str:
     """Run one turn to completion and return the final text (non-streaming).
 
@@ -1083,6 +1158,11 @@ def run_turn(
                 _attach_rollout_recorder(pipeline, state, rollout_path)
             )
         result = loop.run_until_complete(pipeline.run(text, state))
+        continuation_count = 0
+        max_continuations = max(0, int(max_continuation_slices))
+        while bool(getattr(result, "resumable", False)) and continuation_count < max_continuations:
+            continuation_count += 1
+            result = loop.run_until_complete(pipeline.run(CONTINUE_RUN, state))
         produced_output = bool(getattr(result, "text", "") or "")
         if usage_sink is not None:
             try:
@@ -1092,6 +1172,15 @@ def run_turn(
             except Exception:  # noqa: BLE001 — 집계는 턴 결과를 바꾸지 않는다
                 logger.debug("geny_bridge: usage aggregation failed", exc_info=True)
         if not result.success:
+            status = str(getattr(result, "status", RunStatus.FAILED.value))
+            if status == RunStatus.SUSPENDED.value:
+                reason = str(getattr(result, "termination_reason", "") or "slice_limit")
+                turn_error = f"suspended: {reason}"
+                return f"[SUSPENDED] {reason}"
+            if status == RunStatus.BLOCKED.value:
+                reason = str(getattr(result, "termination_reason", "") or "blocked")
+                turn_error = f"blocked: {reason}"
+                return f"[BLOCKED] {reason}"
             turn_error = str(result.error or "unknown error")
             return f"[ERROR] {result.error}"
         final = result.text or ""

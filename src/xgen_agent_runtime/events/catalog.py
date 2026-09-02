@@ -50,7 +50,8 @@ from typing import Any, Dict, List
 #: v3: + ``api.internal_loop_capped`` (2.3.0 Stage 6 internal agentic
 #: loop hit its turn/budget cap and degraded to the pipeline path).
 #: v4: + ``subagent.*`` (2.7.0 persistent sub-agent lifecycle).
-EVENT_CATALOG_VERSION = 4
+#: v5: + resumable slice lifecycle (``loop.suspended`` / ``loop.blocked``).
+EVENT_CATALOG_VERSION = 5
 
 
 class EventTypes(str, Enum):
@@ -87,9 +88,14 @@ class EventTypes(str, Enum):
     LOOP_COMPLETE = "loop.complete"
     LOOP_ERROR = "loop.error"
     LOOP_ESCALATE = "loop.escalate"
+    LOOP_SUSPEND = "loop.suspend"
+    LOOP_SUSPENDED = "loop.suspended"
+    LOOP_BLOCKED = "loop.blocked"
+    LOOP_BUDGET_EXCEEDED = "loop.budget_exceeded"
 
     # ── Stage 1: Input ──
     INPUT_NORMALIZED = "input.normalized"
+    INPUT_CONTINUATION = "input.continuation"
     # 2.51.0 (audit D4): synthetic tool_results injected to repair a
     # history left dangling by an interrupted tool turn.
     INPUT_TOOL_CALLS_REPAIRED = "input.tool_calls_repaired"
@@ -107,6 +113,8 @@ class EventTypes(str, Enum):
     # off the first-token critical path.
     CONTEXT_RETRIEVAL_TIMEOUT = "context.retrieval_timeout"
     CONTEXT_COMPACTION_SCHEDULED = "context.compaction_scheduled"
+    CONTEXT_COMPACTION_REQUESTED = "context.compaction_requested"
+    CONTEXT_COMPACTION_TARGET_MISSED = "context.compaction_target_missed"
     MEMORY_COMPACTION_SUMMARIZED = "memory.compaction.summarized"
     MEMORY_COMPACTION_LLM_FAILED = "memory.compaction.llm_failed"
 
@@ -283,6 +291,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "iterations": "int — loop iterations this turn",
         "result": "str? — full final text (run_stream only; never truncated)",
         "total_cost_usd": "float? — this turn's cost (run_stream only)",
+        "status": "str — completed | suspended | blocked | failed | cancelled",
+        "termination_reason": "str|None — stable reason the execution slice stopped",
+        "resumable": "bool — caller may schedule CONTINUE_RUN",
+        "checkpoint_id": "str|None — durable continuation point when configured",
     },
     EventTypes.PIPELINE_ERROR: {
         "error": "str — message (legacy field, always present)",
@@ -341,8 +353,33 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "has_tool_results": "bool",
         "upstream_decision": "str",
     },
+    EventTypes.LOOP_SUSPEND: {
+        "iteration": "int",
+        "signal": "str|None",
+        "pending_tools": "int",
+        "has_tool_results": "bool",
+        "upstream_decision": "str",
+    },
+    EventTypes.LOOP_SUSPENDED: {
+        "reason": "str — stable TerminationReason",
+        "iteration": "int",
+        "max_iterations": "int? — configured per-slice cap",
+        "resumable": "bool — always true",
+    },
+    EventTypes.LOOP_BLOCKED: {
+        "reason": "str — stable TerminationReason",
+        "total_cost_usd": "float? — cost at the blocking boundary",
+        "budget_usd": "float? — configured cost ceiling",
+    },
+    EventTypes.LOOP_BUDGET_EXCEEDED: {
+        "dimension": "str — iteration | cost | tokens | wall_clock | tool_calls",
+        "iteration": "int",
+    },
     EventTypes.INPUT_NORMALIZED: {
         "text_length": "int — normalized text length",
+    },
+    EventTypes.INPUT_CONTINUATION: {
+        "message_count": "int — existing history continued without a new user message",
     },
     EventTypes.INPUT_TOOL_CALLS_REPAIRED: {
         "count": "int — synthetic tool_results injected for an interrupted tool turn",
@@ -355,7 +392,7 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     },
     EventTypes.CONTEXT_COMPACTED: {
         "strategy": "str — compactor name/class",
-        "trigger": "str? — 'proactive' (Stage 2) | 'guard' (Stage 4) | 'background' (applied next turn)",
+        "trigger": "str? — proactive | requested | guard | internal_loop | background",
         "messages_before": "int?",
         "messages_after": "int?",
         "saved_tokens_estimate": "int?",
@@ -372,6 +409,17 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     EventTypes.CONTEXT_COMPACTION_SCHEDULED: {
         "compactor": "str — compactor name/class",
         "snapshot_messages": "int — history length the background summary covers",
+    },
+    EventTypes.CONTEXT_COMPACTION_REQUESTED: {
+        "source": "str — loop controller requesting request-boundary maintenance",
+        "used_tokens": "int — projected prompt estimate at request time",
+        "iteration": "int",
+    },
+    EventTypes.CONTEXT_COMPACTION_TARGET_MISSED: {
+        "strategy": "str — compactor name/class",
+        "trigger": "str — proactive | requested | guard",
+        "tokens_after_estimate": "int",
+        "target_tokens": "int",
     },
     EventTypes.CONTEXT_COMPACTION_FAILED: {
         "compactor": "str",
@@ -469,6 +517,8 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     },
     EventTypes.TEXT_DELTA: {
         "text": "str — one streamed text chunk",
+        "source": "str? — api | cli",
+        "granularity": "str? — token | message | none",
     },
     EventTypes.THINKING_DELTA: {
         "text": "str — one streamed extended-thinking chunk",

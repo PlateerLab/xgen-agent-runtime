@@ -250,15 +250,35 @@ class CodexCLIClient(BaseClient):
 
     def _build_stdin(self, request: APIRequest) -> bytes:
         parts: List[str] = []
+        hint = request.session_hint or {}
+        is_resume = bool(hint.get("resume") and hint.get("session_id"))
         system = request.system
-        if isinstance(system, str) and system.strip():
+        # ``codex exec resume`` owns the prior thread, including its system
+        # instructions and compacted history.  Re-sending either duplicates
+        # context and is a common source of repeated progress prose.
+        if not is_resume and isinstance(system, str) and system.strip():
             parts.append(system.strip())
-        elif isinstance(system, list):
+        elif not is_resume and isinstance(system, list):
             texts = [str(b.get("text", "")) for b in system if isinstance(b, dict)]
             joined = "\n".join(t for t in texts if t).strip()
             if joined:
                 parts.append(joined)
-        prompt = flatten_messages_to_prompt(request.messages)
+        prompt_messages = request.messages
+        if is_resume:
+            # Runtime state contains the full canonical transcript, while
+            # the native Codex thread already contains everything through
+            # its latest assistant turn. Send only the suffix after that
+            # boundary (normally the new user message).
+            last_assistant = -1
+            for index in range(len(prompt_messages) - 1, -1, -1):
+                if prompt_messages[index].get("role") == "assistant":
+                    last_assistant = index
+                    break
+            if last_assistant >= 0:
+                prompt_messages = prompt_messages[last_assistant + 1 :]
+        prompt = flatten_messages_to_prompt(prompt_messages)
+        if not prompt and is_resume:
+            prompt = str(hint.get("continuation_prompt") or "").strip()
         if prompt:
             parts.append(prompt)
         return ("\n\n".join(parts) + "\n").encode("utf-8")

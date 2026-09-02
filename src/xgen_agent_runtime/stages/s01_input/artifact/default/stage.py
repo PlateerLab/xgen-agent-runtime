@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from xgen_agent_runtime.core.continuation import ContinuationInput
 from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
 from xgen_agent_runtime.core.state import PipelineState
@@ -83,6 +84,22 @@ class InputStage(Stage[Any, NormalizedInput]):
         return self._slots
 
     async def execute(self, input: Any, state: PipelineState) -> NormalizedInput:
+        if isinstance(input, ContinuationInput):
+            # A suspended slice already has the user request and all model /
+            # tool exchanges in state.messages.  Appending "continue" as a
+            # user message changes task semantics and duplicates history for
+            # provider-native resumable sessions, so continuation is an
+            # explicit control input consumed here.
+            repaired = repair_dangling_tool_calls(state.messages)
+            if repaired:
+                state.add_event("input.tool_calls_repaired", {"count": repaired})
+            normalized = NormalizedInput(text="", session_id=state.session_id)
+            state.add_event(
+                "input.continuation",
+                {"message_count": len(state.messages)},
+            )
+            return normalized
+
         # Validate
         error = self._validator.validate(input)
         if error:

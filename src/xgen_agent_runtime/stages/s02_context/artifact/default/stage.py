@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.core.compaction import reconcile_recorded_index, run_compaction
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
+from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
 from xgen_agent_runtime.core.state import PipelineState
@@ -143,7 +144,8 @@ class ContextStage(Stage[Any, Any]):
         # synchronously.
         self._background_compaction = bool(background_compaction)
         # In-flight background compaction (TTFT program, finding B3):
-        # {"task": asyncio.Task[_CompactionShadow], "len": int, "tail_id": int}
+        # {"task", "len", "message_ids"}. The full prefix identity tuple
+        # is the compare-and-swap token used before installing a result.
         self._bg_compaction: Optional[Dict[str, Any]] = None
 
     @property
@@ -329,7 +331,7 @@ class ContextStage(Stage[Any, Any]):
         # only WRITES these keys when chunks come back — so a retrieval
         # that times out or returns nothing would leave the previous
         # turn's situational memory presented as if it were current.
-        if state.iteration == 0:
+        if state.iteration == 0 and not state._is_continuation_slice:
             state.metadata.pop("memory_context", None)
             state.metadata.pop("memory_pinned", None)
 
@@ -338,7 +340,7 @@ class ContextStage(Stage[Any, Any]):
         # iterations re-paid the embedding + vector round-trips for
         # results that were thrown away. Skip retrieval entirely there.
         chunks: List[Any] = []
-        if state.iteration == 0:
+        if state.iteration == 0 and not state._is_continuation_slice:
             chunks = await self._retrieve_memory(query, state)
 
         if chunks:
@@ -368,7 +370,7 @@ class ContextStage(Stage[Any, Any]):
             ]
             other_chunks = [c for c in chunks if c not in pinned_chunks]
 
-            if state.messages and state.iteration == 0:
+            if state.messages and state.iteration == 0 and not state._is_continuation_slice:
                 if pinned_chunks:
                     # Pinned chunks usually carry pre-rendered prose;
                     # join with blank lines instead of the bullet
@@ -395,12 +397,27 @@ class ContextStage(Stage[Any, Any]):
         # at the next turn's Stage 2. Past 90% — or for cheap non-LLM
         # compactors — compaction stays synchronous as the safety net.
         estimated_tokens = estimate_prompt_tokens(state)
+        forced_request = state.shared.pop(SharedKeys.CONTEXT_COMPACTION_REQUEST, None)
         if self._compaction_enabled:
             if await self._apply_bg_compaction(state):
                 state.shared.pop("_prompt_tokens_memo", None)
                 estimated_tokens = estimate_prompt_tokens(state)
             budget = state.context_window_budget
-            if estimated_tokens > budget * 0.8:
+            if forced_request:
+                # A Stage-16 token dimension requested maintenance for
+                # pending work.  Run synchronously: deferring again would
+                # let the next Stage-4/API boundary hit the hard ceiling.
+                self.cancel_bg_compaction()
+                await run_compaction(
+                    state,
+                    self._compactor,
+                    trigger="requested",
+                    provider=self._provider,
+                    target_tokens=int(budget * 0.7),
+                )
+                state.shared.pop("_prompt_tokens_memo", None)
+                estimated_tokens = estimate_prompt_tokens(state)
+            elif estimated_tokens > budget * 0.8:
                 defer_to_background = (
                     self._background_compaction
                     and isinstance(self._compactor, LLMSummaryCompactor)
@@ -410,9 +427,21 @@ class ContextStage(Stage[Any, Any]):
                     self._schedule_bg_compaction(state)
                 else:
                     await run_compaction(
-                        state, self._compactor, trigger="proactive", provider=self._provider
+                        state,
+                        self._compactor,
+                        trigger="proactive",
+                        provider=self._provider,
+                        target_tokens=int(budget * 0.7),
                     )
                     estimated_tokens = estimate_prompt_tokens(state)
+        elif forced_request:
+            state.add_event(
+                "context.compaction_failed",
+                {
+                    "trigger": "requested",
+                    "error": "runtime compaction is disabled for this provider",
+                },
+            )
 
         state.add_event(
             "context.built",
@@ -447,7 +476,7 @@ class ContextStage(Stage[Any, Any]):
 
         History is append-only between turns, so a summary computed over
         messages[0:N] stays applicable as long as that prefix survives;
-        the apply step verifies it (length + tail identity) and discards
+        the apply step verifies every captured message identity and discards
         the result if a synchronous guard compaction rewrote history in
         the meantime. At most one background run is in flight per stage.
         """
@@ -457,7 +486,7 @@ class ContextStage(Stage[Any, Any]):
         if snapshot_len == 0:
             return
         shadow = _CompactionShadow(state)
-        tail_id = id(state.messages[snapshot_len - 1])
+        snapshot_ids = tuple(id(message) for message in state.messages)
 
         async def _run() -> _CompactionShadow:
             await self._compactor.compact(shadow)
@@ -472,7 +501,11 @@ class ContextStage(Stage[Any, Any]):
                 or logger.warning("background compaction failed: %s", t.exception())
             )
         )
-        self._bg_compaction = {"task": task, "len": snapshot_len, "tail_id": tail_id}
+        self._bg_compaction = {
+            "task": task,
+            "len": snapshot_len,
+            "message_ids": snapshot_ids,
+        }
         state.add_event(
             "context.compaction_scheduled",
             {
@@ -498,7 +531,8 @@ class ContextStage(Stage[Any, Any]):
 
         n = int(info["len"])
         msgs = state.messages
-        if len(msgs) < n or n == 0 or id(msgs[n - 1]) != info["tail_id"]:
+        current_prefix_ids = tuple(id(message) for message in msgs[:n])
+        if len(msgs) < n or n == 0 or current_prefix_ids != info["message_ids"]:
             # Prefix rewritten since the snapshot (e.g. the Stage 4 guard
             # compacted synchronously) — the summary no longer matches.
             return False

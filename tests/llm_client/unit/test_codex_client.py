@@ -94,6 +94,28 @@ async def test_argv_and_stdin_reach_the_binary():
 
 
 @pytest.mark.asyncio
+async def test_resume_sends_only_new_delta_not_system_or_full_history():
+    client = _client("echo_argv", session_hint={"session_id": "thr_existing", "resume": True})
+    response = await client.create_message(
+        model_config=_mc(),
+        messages=[
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content": "new question"},
+        ],
+        system="old system prompt",
+    )
+    import json
+
+    payload = json.loads(response.text)
+    assert payload["argv"][:3] == ["exec", "resume", "thr_existing"]
+    assert "new question" in payload["stdin"]
+    assert "old question" not in payload["stdin"]
+    assert "old answer" not in payload["stdin"]
+    assert "old system prompt" not in payload["stdin"]
+
+
+@pytest.mark.asyncio
 async def test_missing_binary_is_cli_not_found():
     client = CodexCLIClient(binary_path="/totally/missing/codex", api_key="k")
     with pytest.raises(APIError) as ei:

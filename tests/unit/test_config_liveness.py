@@ -395,7 +395,9 @@ async def _probe_s16_max_turns() -> None:
     stage.update_config({"max_turns": 1})
     state2 = _state()
     await stage.execute("in", state2)
-    assert state2.loop_decision == "complete"
+    assert state2.loop_decision == "suspend"
+    assert state2.run_status == "suspended"
+    assert state2.resumable is True
 
 
 async def _probe_s16_early_stop_on() -> None:

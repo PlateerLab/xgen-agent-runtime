@@ -25,12 +25,14 @@ from typing import (
 )
 
 from xgen_agent_runtime.core.config import ModelOverrides, PipelineConfig
+from xgen_agent_runtime.core.continuation import ContinuationInput
 from xgen_agent_runtime.core.errors import (
     ExecutorErrorCode,
     GenyExecutorError,
     StageError,
 )
 from xgen_agent_runtime.core.result import PipelineResult
+from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
 from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.stage import Stage, StageDescription
 from xgen_agent_runtime.core.state import PipelineState
@@ -2528,7 +2530,11 @@ class Pipeline:
                 pipeline per session.
         """
         self._ensure_not_closed()
-        state = self._init_state(state, overrides=overrides)
+        state = self._init_state(
+            state,
+            overrides=overrides,
+            continuation=isinstance(input, ContinuationInput),
+        )
         # Run-lock up BEFORE the first await (review N1): the
         # pipeline.start emit suspends, and a mutation landing in that
         # window would bypass MutationLocked while the run is morally
@@ -2556,7 +2562,13 @@ class Pipeline:
             success = result.success
             await self._emit_rollout_terminal(
                 "pipeline.complete",
-                data={"iterations": state.iteration},
+                data={
+                    "iterations": state.iteration,
+                    "status": result.status,
+                    "termination_reason": result.termination_reason,
+                    "resumable": result.resumable,
+                    "checkpoint_id": result.checkpoint_id,
+                },
                 session_id=state.session_id,
                 run_id=state._run_id,
             )
@@ -2564,6 +2576,7 @@ class Pipeline:
 
         except Exception as e:
             success = False
+            state.mark_failed(str(e))
             await self._emit_rollout_terminal(
                 "pipeline.error",
                 data=_error_event_data(e),
@@ -2636,7 +2649,11 @@ class Pipeline:
                 :meth:`aclose`'d — build a new pipeline per session.
         """
         self._ensure_not_closed()
-        state = self._init_state(state, overrides=overrides)
+        state = self._init_state(
+            state,
+            overrides=overrides,
+            continuation=isinstance(input, ContinuationInput),
+        )
         run_id = state._run_id
         queue: asyncio.Queue[PipelineEvent] = asyncio.Queue()
         _SENTINEL = object()
@@ -2678,7 +2695,7 @@ class Pipeline:
                         HookEvent.PIPELINE_START, state, details={"streaming": True}
                     )
                 await self._run_phases(input, state)
-                success = state.loop_decision != "error"
+                success = state.run_status == RunStatus.COMPLETED.value
 
                 await self._emit_rollout_terminal(
                     "pipeline.complete",
@@ -2690,12 +2707,17 @@ class Pipeline:
                         "result": state.final_text,
                         "iterations": state.iteration,
                         "total_cost_usd": state.total_cost_usd,
+                        "status": state.run_status,
+                        "termination_reason": state.termination_reason,
+                        "resumable": state.resumable,
+                        "checkpoint_id": state.checkpoint_id,
                     },
                     session_id=state.session_id,
                     run_id=run_id,
                 )
             except Exception as e:
                 success = False
+                state.mark_failed(str(e))
                 await self._emit_rollout_terminal(
                     "pipeline.error",
                     data={
@@ -3133,25 +3155,57 @@ class Pipeline:
 
             # Hard limits — checked at pipeline level, not delegated to stages
             if state.is_over_iterations:
-                state.loop_decision = "complete"
+                state.loop_decision = "suspend"
                 state.completion_signal = "MAX_ITERATIONS"
+                state.mark_suspended(
+                    TerminationReason.MAX_ITERATIONS_PER_SLICE.value,
+                    detail=(
+                        f"Execution slice reached max_iterations={state.max_iterations}; "
+                        "continuation state is preserved."
+                    ),
+                )
                 state.add_event(
-                    "loop.force_complete",
-                    {"reason": "max_iterations", "iteration": state.iteration},
+                    "loop.suspended",
+                    {
+                        "reason": TerminationReason.MAX_ITERATIONS_PER_SLICE.value,
+                        "iteration": state.iteration,
+                        "max_iterations": state.max_iterations,
+                        "resumable": True,
+                    },
                 )
                 break
             if state.is_over_budget:
-                state.loop_decision = "complete"
+                state.loop_decision = "escalate"
                 state.completion_signal = "COST_BUDGET"
+                state.mark_blocked(
+                    TerminationReason.COST_BUDGET.value,
+                    detail="Cost budget exhausted; continuation requires a new budget.",
+                )
                 state.add_event(
-                    "loop.force_complete",
+                    "loop.blocked",
                     {
-                        "reason": "cost_budget",
+                        "reason": TerminationReason.COST_BUDGET.value,
                         "total_cost_usd": state.total_cost_usd,
                         "budget_usd": state.cost_budget_usd,
                     },
                 )
                 break
+
+        # Stage 16 controls the loop verdict; the run-status layer states
+        # whether this slice actually completed the task.  Explicit marks
+        # above (slice/budget guards) win over the generic mapping.
+        if state.run_status == RunStatus.RUNNING.value:
+            if state.loop_decision == "complete":
+                state.mark_completed()
+            elif state.loop_decision == "suspend":
+                state.mark_suspended(TerminationReason.MAX_ITERATIONS_PER_SLICE.value)
+            elif state.loop_decision == "escalate":
+                state.mark_blocked(
+                    TerminationReason.USER_INPUT_REQUIRED.value,
+                    detail=state.completion_detail,
+                )
+            elif state.loop_decision == "error":
+                state.mark_failed(state.completion_detail or "Pipeline loop failed")
 
         # Phase C: Finalize
         for order in range(self.FINALIZE_START, self.FINALIZE_END + 1):
@@ -3164,6 +3218,7 @@ class Pipeline:
         state: Optional[PipelineState],
         *,
         overrides: Optional[ModelOverrides] = None,
+        continuation: bool = False,
     ) -> PipelineState:
         """Initialize or apply config to state — the turn-boundary owner.
 
@@ -3226,7 +3281,14 @@ class Pipeline:
         # pre-seeded with conversation history (checkpoint / host
         # rehydration) — must not leak the previous turn's loop verdict,
         # iteration count, or event log into this one.
-        if state._run_count > 0 or state.messages:
+        if continuation:
+            if state.run_status != RunStatus.SUSPENDED.value:
+                raise ValueError(
+                    "CONTINUE_RUN requires a PipelineState whose prior slice "
+                    "ended with status='suspended'."
+                )
+            state.begin_continuation_slice()
+        elif state._run_count > 0 or state.messages:
             state.begin_turn()
         state._run_count += 1
 
@@ -3308,6 +3370,14 @@ class Pipeline:
         # the host wired recovery explicitly via attach_budget_recovery.
         guard_stage = self._stages.get(4)
         context_stage = self._stages.get(2)
+        if context_stage is not None and getattr(context_stage, "_compaction_enabled", True):
+            state._context_compactor = getattr(context_stage, "_compactor", None)
+            state._context_memory_provider = getattr(context_stage, "_provider", None)
+        else:
+            # Subprocess/native-thread providers own their own compaction;
+            # hosts disable Stage 2 compaction for those clients.
+            state._context_compactor = None
+            state._context_memory_provider = None
         if (
             guard_stage is not None
             and context_stage is not None
@@ -3344,7 +3414,12 @@ class Pipeline:
         as "this turn's cost"; the reset happens at the NEXT turn's
         ``begin_turn``.
         """
-        state.session_cost_usd += state.total_cost_usd
+        # Continuation slices preserve the active turn's total_cost_usd.
+        # Fold only the newly accrued delta so session totals neither reset
+        # the task budget nor double-count earlier slices.
+        cost_delta = max(0.0, state.total_cost_usd - state._accounted_turn_cost_usd)
+        state.session_cost_usd += cost_delta
+        state._accounted_turn_cost_usd = state.total_cost_usd
         # Release the concurrent-run guard (audit R5) — always, on both the
         # success and failure paths (_end_turn runs in run()/run_stream()'s
         # finally), so a failed turn doesn't wedge the state forever.

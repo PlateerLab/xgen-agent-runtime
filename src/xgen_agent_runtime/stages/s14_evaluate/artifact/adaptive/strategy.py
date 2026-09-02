@@ -30,10 +30,10 @@ class BinaryClassifyConfig:
     """Configuration for binary task classification.
 
     Attributes:
-        easy_max_turns: Max turns for easy tasks. Once classified as easy,
-            state.max_iterations is reduced to this value.
-        not_easy_max_turns: Max turns for not_easy tasks. Overrides
-            state.max_iterations when classified as not_easy.
+        easy_max_turns: Advisory slice size for easy tasks.
+        not_easy_max_turns: Advisory slice size for not-easy tasks. These
+            values never overwrite the host's hard ``state.max_iterations``;
+            the evaluation decision itself ends easy tasks.
     """
 
     easy_max_turns: int = 1
@@ -150,7 +150,7 @@ class BinaryClassifyEvaluation(EvaluationStrategy):
         if has_tool_calls:
             # Tools needed → not_easy
             state.metadata["task_class"] = "not_easy"
-            state.max_iterations = self._config.not_easy_max_turns
+            state.metadata["evaluation_suggested_max_turns"] = self._config.not_easy_max_turns
             logger.info(
                 "Binary classify: not_easy (tool calls detected, max_turns=%d)",
                 self._config.not_easy_max_turns,
@@ -165,7 +165,7 @@ class BinaryClassifyEvaluation(EvaluationStrategy):
         if signal == "continue":
             # Explicit continue → not_easy
             state.metadata["task_class"] = "not_easy"
-            state.max_iterations = self._config.not_easy_max_turns
+            state.metadata["evaluation_suggested_max_turns"] = self._config.not_easy_max_turns
             logger.info(
                 "Binary classify: not_easy (continue signal, max_turns=%d)",
                 self._config.not_easy_max_turns,
@@ -179,7 +179,7 @@ class BinaryClassifyEvaluation(EvaluationStrategy):
 
         # No tools, no continue → easy (complete immediately)
         state.metadata["task_class"] = "easy"
-        state.max_iterations = self._config.easy_max_turns
+        state.metadata["evaluation_suggested_max_turns"] = self._config.easy_max_turns
         logger.info("Binary classify: easy (direct answer, 1 turn)")
         return EvaluationResult(
             passed=True,

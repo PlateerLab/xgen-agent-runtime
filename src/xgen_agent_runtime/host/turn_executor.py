@@ -1035,6 +1035,7 @@ class AgentTurnExecutor:
                 on_close=_teardown,
                 host=host,
                 rollout_path=rollout_path,
+                max_continuation_slices=int(kwargs.get("max_continuation_slices", 20)),
             )
             if clamped and schema is None:
                 # 입력이 잘렸음을 사용자에게 알린다 (agent_xgen 의 경고 관행과
@@ -1056,6 +1057,7 @@ class AgentTurnExecutor:
                 output_schema=schema,
                 host=host,
                 rollout_path=rollout_path,
+                max_continuation_slices=int(kwargs.get("max_continuation_slices", 20)),
             )
         finally:
             _teardown()

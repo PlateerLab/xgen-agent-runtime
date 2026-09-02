@@ -20,6 +20,8 @@ from xgen_agent_runtime.core.pipeline import Pipeline
 from xgen_agent_runtime.core.config import PipelineConfig, ModelConfig, ModelOverrides
 from xgen_agent_runtime.core.state import PipelineState, TokenUsage, CacheMetrics
 from xgen_agent_runtime.core.result import PipelineResult
+from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
+from xgen_agent_runtime.core.continuation import CONTINUE_RUN, ContinuationInput
 from xgen_agent_runtime.core.stage import Stage, Strategy, StageDescription, StrategyInfo
 from xgen_agent_runtime.core.errors import (
     GenyExecutorError,
@@ -138,6 +140,10 @@ __all__ = [
     "Pipeline",
     "PipelineConfig",
     "PipelineState",
+    "RunStatus",
+    "TerminationReason",
+    "CONTINUE_RUN",
+    "ContinuationInput",
     "PipelineResult",
     "ModelConfig",
     "ModelOverrides",

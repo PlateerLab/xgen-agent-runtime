@@ -142,6 +142,25 @@ def test_stream_turn_yields_usage_exactly_once_at_end() -> None:
     assert pipe.closed
 
 
+def test_stream_turn_coalesces_exact_cli_message_repeats() -> None:
+    repeated = {
+        "text": "좋습니다. 현재 파일 상태를 확인하겠습니다.",
+        "source": "cli",
+        "granularity": "message",
+    }
+    pipe = _FakePipeline(
+        [
+            ("text.delta", repeated),
+            ("text.delta", repeated),
+            ("pipeline.complete", {"result": repeated["text"]}),
+        ]
+    )
+
+    out = list(runner.stream_turn(pipe, "hi", _state()))
+
+    assert [chunk for chunk in out if isinstance(chunk, str)] == [repeated["text"]]
+
+
 def test_stream_turn_usage_prefers_provider_reported_cost() -> None:
     # CLI(claude_code) 경로: result envelope 의 total_cost_usd → TokenUsage.cost_usd
     pipe = _FakePipeline([

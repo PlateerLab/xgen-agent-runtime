@@ -49,6 +49,25 @@ def state_from_payload(payload: Dict[str, Any]) -> PipelineState:
     state.completion_signal = str(completion_signal) if completion_signal else None
     completion_detail = payload.get("completion_detail")
     state.completion_detail = str(completion_detail) if completion_detail else None
+    run_status = payload.get("run_status")
+    termination_reason = payload.get("termination_reason")
+    if run_status == "suspended":
+        state.mark_suspended(
+            str(termination_reason or "max_iterations_per_slice"),
+            detail=state.completion_detail,
+        )
+    elif run_status == "blocked":
+        state.mark_blocked(
+            str(termination_reason or "user_input_required"),
+            detail=state.completion_detail,
+        )
+    elif run_status == "failed":
+        state.mark_failed(state.completion_detail or "Checkpointed run failed")
+    elif run_status == "completed":
+        state.mark_completed(
+            str(termination_reason or "model_completed"),
+            detail=state.completion_detail,
+        )
     state.total_cost_usd = float(payload.get("total_cost_usd") or 0.0)
     usage = payload.get("token_usage") or {}
     if isinstance(usage, dict):
@@ -62,7 +81,9 @@ def state_from_payload(payload: Dict[str, Any]) -> PipelineState:
 
 def state_from_record(record: CheckpointRecord) -> PipelineState:
     """Convenience: round-trip a :class:`CheckpointRecord` to state."""
-    return state_from_payload(record.payload)
+    state = state_from_payload(record.payload)
+    state.set_checkpoint_id(record.checkpoint_id)
+    return state
 
 
 async def restore_state_from_checkpoint(persister: Persister, checkpoint_id: str) -> PipelineState:
@@ -75,7 +96,7 @@ async def restore_state_from_checkpoint(persister: Persister, checkpoint_id: str
     record: Optional[CheckpointRecord] = await persister.read(checkpoint_id)
     if record is None:
         raise CheckpointNotFound(f"checkpoint not found: {checkpoint_id!r}")
-    return state_from_payload(record.payload)
+    return state_from_record(record)
 
 
 __all__ = [

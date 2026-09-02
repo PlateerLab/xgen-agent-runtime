@@ -87,6 +87,9 @@ def _build_payload(state: PipelineState) -> Dict[str, Any]:
         "loop_decision": state.loop_decision,
         "completion_signal": state.completion_signal,
         "completion_detail": state.completion_detail,
+        "run_status": state.run_status,
+        "termination_reason": state.termination_reason,
+        "resumable": state.resumable,
         "total_cost_usd": state.total_cost_usd,
         "token_usage": {
             "input_tokens": state.token_usage.input_tokens,
@@ -163,7 +166,10 @@ class PersistStage(Stage[Any, Any]):
         return isinstance(self._persister, NoPersister)
 
     async def execute(self, input: Any, state: PipelineState) -> Any:
-        if not self._frequency.should_persist(state):
+        # A resumable slice boundary is always a durability boundary.
+        # Frequency policies may skip ordinary completed turns, but must
+        # never discard the only continuation point for a long-running task.
+        if not state.resumable and not self._frequency.should_persist(state):
             state.add_event(
                 "checkpoint.skipped",
                 {"frequency": self._frequency.name, "iteration": state.iteration},
@@ -191,6 +197,7 @@ class PersistStage(Stage[Any, Any]):
             return input
 
         state.shared[LAST_CHECKPOINT_KEY] = record.checkpoint_id
+        state.set_checkpoint_id(record.checkpoint_id)
         history: List[Any] = state.shared.setdefault(CHECKPOINT_HISTORY_KEY, [])
         history.append(
             {

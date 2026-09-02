@@ -8,11 +8,40 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
+from xgen_agent_runtime.core.run_status import TerminationReason
+from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
 from xgen_agent_runtime.stages.s16_loop.interface import LoopController, LoopDecision
 
 logger = logging.getLogger(__name__)
+
+
+def _has_follow_up_work(state: PipelineState) -> bool:
+    """True when stopping now would strand model/tool work."""
+    return bool(state.tool_results or state.pending_tool_calls)
+
+
+def _request_context_compaction(state: PipelineState, *, source: str, used_tokens: int) -> None:
+    """Request synchronous compaction at the next model-request boundary.
+
+    Compaction is context maintenance, not a loop iteration and not a task
+    verdict.  Stage 2 owns runtime history compaction and consumes this
+    sticky request at the start of the next pass.
+    """
+    state.shared[SharedKeys.CONTEXT_COMPACTION_REQUEST] = {
+        "source": source,
+        "used_tokens": used_tokens,
+        "iteration": state.iteration,
+    }
+    state.add_event(
+        "context.compaction_requested",
+        {
+            "source": source,
+            "used_tokens": used_tokens,
+            "iteration": state.iteration,
+        },
+    )
 
 
 def _require_number(strategy: str, key: str, value: Any, *, minimum: float = 0.0) -> float:
@@ -92,7 +121,14 @@ class StandardLoopController(LoopController):
 
         max_t = self._max_turns or state.max_iterations
         if state.iteration >= max_t:
-            return LoopDecision.COMPLETE
+            state.completion_signal = "MAX_ITERATIONS"
+            state.mark_suspended(
+                TerminationReason.MAX_ITERATIONS_PER_SLICE.value,
+                detail=(
+                    f"Execution slice reached max_turns={max_t}; continuation state is preserved."
+                ),
+            )
+            return LoopDecision.SUSPEND
 
         return LoopDecision.CONTINUE
 
@@ -187,7 +223,12 @@ class BudgetAwareLoopController(LoopController):
             state.cost_budget_usd
             and state.total_cost_usd >= state.cost_budget_usd * self._cost_ratio
         ):
-            return LoopDecision.COMPLETE
+            state.completion_signal = "COST_BUDGET"
+            state.mark_blocked(
+                TerminationReason.COST_BUDGET.value,
+                detail="Cost budget threshold reached; continuation requires a new budget.",
+            )
+            return LoopDecision.ESCALATE
 
         # audit R2: measure the ACTUAL next-request size (system +
         # messages + tools), NOT the session-cumulative token_usage —
@@ -196,7 +237,13 @@ class BudgetAwareLoopController(LoopController):
         # model even sees its tool results.
         used = estimate_prompt_tokens(state)
         if used >= state.context_window_budget * self._token_ratio:
-            return LoopDecision.COMPLETE
+            if _has_follow_up_work(state):
+                _request_context_compaction(
+                    state,
+                    source="budget_aware",
+                    used_tokens=used,
+                )
+                return LoopDecision.CONTINUE
 
         if state.tool_results:
             return LoopDecision.CONTINUE
@@ -721,7 +768,41 @@ class MultiDimensionalBudgetController(LoopController):
                         "MultiDimensionalBudgetController: %s exhausted — stopping loop",
                         dim.name,
                     )
-                    return LoopDecision.COMPLETE
+                    state.add_event(
+                        "loop.budget_exceeded",
+                        {"dimension": dim.name, "iteration": state.iteration},
+                    )
+                    if isinstance(dim, TokenBudget):
+                        if _has_follow_up_work(state):
+                            _request_context_compaction(
+                                state,
+                                source="multi_dim_budget",
+                                used_tokens=estimate_prompt_tokens(state),
+                            )
+                            return LoopDecision.CONTINUE
+                        # No follow-up work: token pressure must not turn an
+                        # otherwise natural model completion into a fake cap.
+                        break
+                    if isinstance(dim, CostBudget):
+                        state.completion_signal = "COST_BUDGET"
+                        state.mark_blocked(
+                            TerminationReason.COST_BUDGET.value,
+                            detail="Cost budget threshold reached; continuation requires a new budget.",
+                        )
+                        return LoopDecision.ESCALATE
+
+                    if isinstance(dim, ToolCallBudget):
+                        reason = TerminationReason.MAX_TOOL_CALLS_PER_SLICE.value
+                    elif isinstance(dim, WallClockBudget):
+                        reason = TerminationReason.WALL_CLOCK_BUDGET.value
+                    else:
+                        reason = TerminationReason.MAX_ITERATIONS_PER_SLICE.value
+                    state.completion_signal = reason.upper()
+                    state.mark_suspended(
+                        reason,
+                        detail=f"Execution slice reached its {dim.name} guard.",
+                    )
+                    return LoopDecision.SUSPEND
             except Exception:
                 # A broken dimension must not crash the loop —
                 # log + skip; if all dimensions are broken the

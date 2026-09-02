@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -56,7 +58,7 @@ class FileSessionPersistence:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         data: Dict[str, Any] = {
-            "version": 1,
+            "version": 2,
             "session_id": session_id,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             # Conversation state (essential for --resume equivalent)
@@ -65,6 +67,15 @@ class FileSessionPersistence:
             # Execution stats
             "iteration": state.iteration,
             "total_cost_usd": state.total_cost_usd,
+            "session_cost_usd": state.session_cost_usd,
+            "accounted_turn_cost_usd": state._accounted_turn_cost_usd,
+            "loop_decision": state.loop_decision,
+            "completion_signal": state.completion_signal,
+            "completion_detail": state.completion_detail,
+            "run_status": state.run_status,
+            "termination_reason": state.termination_reason,
+            "resumable": state.resumable,
+            "checkpoint_id": state.checkpoint_id,
             # Token tracking
             "token_usage": {
                 "input_tokens": state.token_usage.input_tokens,
@@ -89,7 +100,25 @@ class FileSessionPersistence:
         }
 
         try:
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            encoded = json.dumps(data, ensure_ascii=False, indent=2)
+            fd, tmp_name = tempfile.mkstemp(
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                text=True,
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp_name, path)
+                self._fsync_directory(path.parent)
+            finally:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
             logger.debug(
                 "Session state saved: %s (%d messages, cost=$%.6f)",
                 session_id,
@@ -115,7 +144,7 @@ class FileSessionPersistence:
             return None
 
         version = data.get("version", 0)
-        if version != 1:
+        if version not in (1, 2):
             logger.warning("Unknown state version %s for %s, skipping", version, session_id)
             return None
 
@@ -128,6 +157,26 @@ class FileSessionPersistence:
         # Restore stats
         state.iteration = data.get("iteration", 0)
         state.total_cost_usd = data.get("total_cost_usd", 0.0)
+        state.session_cost_usd = data.get("session_cost_usd", 0.0)
+        state._accounted_turn_cost_usd = data.get("accounted_turn_cost_usd", 0.0)
+        state.loop_decision = str(data.get("loop_decision") or "continue")
+        state.completion_signal = data.get("completion_signal")
+        state.completion_detail = data.get("completion_detail")
+        run_status = data.get("run_status")
+        reason = str(data.get("termination_reason") or "")
+        if run_status == "suspended":
+            state.mark_suspended(
+                reason or "max_iterations_per_slice", detail=state.completion_detail
+            )
+        elif run_status == "blocked":
+            state.mark_blocked(reason or "user_input_required", detail=state.completion_detail)
+        elif run_status == "failed":
+            state.mark_failed(state.completion_detail or "Persisted run failed")
+        elif run_status == "completed":
+            state.mark_completed(reason or "model_completed", detail=state.completion_detail)
+        checkpoint_id = data.get("checkpoint_id")
+        if checkpoint_id:
+            state.set_checkpoint_id(str(checkpoint_id))
 
         # Restore token usage
         tu = data.get("token_usage", {})
@@ -178,3 +227,16 @@ class FileSessionPersistence:
             path.unlink()
             return True
         return False
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        """Persist the atomic rename's directory entry when supported."""
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        try:
+            fd = os.open(directory, flags)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)

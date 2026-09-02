@@ -74,6 +74,9 @@ class SharedKeys:
     LAST_CHECKPOINT_ID: Final = "executor.last_checkpoint_id"
     """Most recent persist id from Stage 20 Persist (Phase 9)."""
 
+    CONTEXT_COMPACTION_REQUEST: Final = "context.compaction_requested"
+    """Request-boundary compaction requested by a loop token dimension."""
+
     # ── Memory -------------------------------------------------------
 
     MEMORY_CONTEXT_CHUNKS: Final = "memory.context_chunks"

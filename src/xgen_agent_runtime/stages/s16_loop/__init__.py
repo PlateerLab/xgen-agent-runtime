@@ -7,6 +7,7 @@ from xgen_agent_runtime.stages.s16_loop.controllers import (
     CostBudget,
     IterationBudget,
     LoopController,
+    LoopDecision,
     MultiDimensionalBudgetController,
     SingleTurnController,
     StandardLoopController,
@@ -18,6 +19,7 @@ from xgen_agent_runtime.stages.s16_loop.controllers import (
 __all__ = [
     "LoopStage",
     "LoopController",
+    "LoopDecision",
     "StandardLoopController",
     "SingleTurnController",
     "BudgetAwareLoopController",

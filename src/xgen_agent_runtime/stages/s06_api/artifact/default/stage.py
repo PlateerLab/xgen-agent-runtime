@@ -852,7 +852,21 @@ class APIStage(Stage[Any, APIResponse]):
             if chunk_type == "message_complete":
                 response = chunk["response"]
             elif chunk_type == "text_delta" and chunk.get("text"):
-                state.add_event("text.delta", {"text": chunk["text"]})
+                state.add_event(
+                    "text.delta",
+                    {
+                        "text": chunk["text"],
+                        "source": source,
+                        "granularity": str(
+                            getattr(
+                                getattr(client, "capabilities", None),
+                                "streaming_granularity",
+                                "token",
+                            )
+                            or "token"
+                        ),
+                    },
+                )
             elif chunk_type == "thinking_delta" and chunk.get("text"):
                 state.add_event("thinking.delta", {"text": chunk["text"]})
             elif chunk_type == "tool_use":

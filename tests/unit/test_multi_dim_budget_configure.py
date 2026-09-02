@@ -40,7 +40,7 @@ class TestConfiguredDimensionsEnforced:
         controller.configure({"dimensions": ["iterations"], "max_turns": 2})
 
         assert controller.decide(_state(iteration=1)) == LoopDecision.CONTINUE
-        assert controller.decide(_state(iteration=2)) == LoopDecision.COMPLETE
+        assert controller.decide(_state(iteration=2)) == LoopDecision.SUSPEND
         assert controller.last_exceeded_dimension == "iteration"
 
     def test_iterations_dimension_defers_to_state_when_uncapped(self):
@@ -52,7 +52,7 @@ class TestConfiguredDimensionsEnforced:
 
         state = _state(iteration=5)
         state.max_iterations = 5
-        assert controller.decide(state) == LoopDecision.COMPLETE
+        assert controller.decide(state) == LoopDecision.SUSPEND
 
         state = _state(iteration=4)
         state.max_iterations = 5
@@ -66,7 +66,7 @@ class TestConfiguredDimensionsEnforced:
         controller.configure({"dimensions": ["iterations"]})
         controller.configure({"max_turns": 3})
 
-        assert controller.decide(_state(iteration=3)) == LoopDecision.COMPLETE
+        assert controller.decide(_state(iteration=3)) == LoopDecision.SUSPEND
         assert controller.decide(_state(iteration=2)) == LoopDecision.CONTINUE
         # Round-trip keeps the merged view.
         cfg = controller.get_config()
@@ -79,14 +79,14 @@ class TestConfiguredDimensionsEnforced:
         )
         state = _state()
         state.tool_results = [{"tool_use_id": "a"}, {"tool_use_id": "b"}]
-        assert controller.decide(state) == LoopDecision.COMPLETE
+        assert controller.decide(state) == LoopDecision.SUSPEND
         assert controller.last_exceeded_dimension == "tool_calls"
 
     def test_cost_dimension_with_explicit_cap(self):
         controller = MultiDimensionalBudgetController.from_config(
             {"dimensions": ["cost_usd"], "max_cost_usd": 1.0, "cost_threshold_ratio": 0.5}
         )
-        assert controller.decide(_state(total_cost_usd=0.6)) == LoopDecision.COMPLETE
+        assert controller.decide(_state(total_cost_usd=0.6)) == LoopDecision.ESCALATE
         assert controller.decide(_state(total_cost_usd=0.4)) == LoopDecision.CONTINUE
 
     def test_unconfigured_controller_back_compat(self):
@@ -111,7 +111,7 @@ class TestStageMaxTurnsForwarding:
         controller = stage.get_strategy_slots()["controller"].strategy
         assert isinstance(controller, MultiDimensionalBudgetController)
         assert controller.get_config()["max_turns"] == 2
-        assert controller.decide(_state(iteration=2)) == LoopDecision.COMPLETE
+        assert controller.decide(_state(iteration=2)) == LoopDecision.SUSPEND
 
     def test_update_config_still_reaches_standard_controller(self):
         stage = LoopStage()  # default slot strategy is StandardLoopController
@@ -150,7 +150,7 @@ class TestProgrammaticDimensionsUntouched:
             [IterationBudget(10), ToolCallBudget(5)]
         )
         controller.configure({"max_turns": 2})
-        assert controller.decide(_state(iteration=2)) == LoopDecision.COMPLETE
+        assert controller.decide(_state(iteration=2)) == LoopDecision.SUSPEND
 
     def test_get_config_reports_live_dimension_names(self):
         controller = MultiDimensionalBudgetController([IterationBudget(10)])

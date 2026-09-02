@@ -181,7 +181,7 @@ class TestEmptyController:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Controller — dimension trips short-circuits to COMPLETE
+# Controller — dimensions preserve resumability / block semantics
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -189,11 +189,12 @@ class TestDimensionShortCircuit:
     def test_iteration_budget_stops_loop(self):
         c = MultiDimensionalBudgetController([IterationBudget(3)])
         # iteration=3 with pending tool calls would normally CONTINUE
-        result = c.decide(
-            _state(iteration=3, pending_tool_calls=[{"x": 1}])
-        )
-        assert result == LoopDecision.COMPLETE
+        state = _state(iteration=3, pending_tool_calls=[{"x": 1}])
+        result = c.decide(state)
+        assert result == LoopDecision.SUSPEND
         assert c.last_exceeded_dimension == "iteration"
+        assert state.run_status == "suspended"
+        assert state.resumable is True
 
     def test_cost_budget_stops_loop(self):
         c = MultiDimensionalBudgetController(
@@ -202,18 +203,20 @@ class TestDimensionShortCircuit:
         result = c.decide(
             _state(total_cost_usd=6.0, pending_tool_calls=[{"x": 1}])
         )
-        assert result == LoopDecision.COMPLETE
+        assert result == LoopDecision.ESCALATE
         assert c.last_exceeded_dimension == "cost"
 
     def test_token_budget_stops_loop(self):
         c = MultiDimensionalBudgetController(
             [TokenBudget(max_tokens=1000, threshold_ratio=0.5)]
         )
-        result = c.decide(
-            _state(total_tokens=600, pending_tool_calls=[{"x": 1}])
-        )
-        assert result == LoopDecision.COMPLETE
+        state = _state(total_tokens=600, pending_tool_calls=[{"x": 1}])
+        result = c.decide(state)
+        assert result == LoopDecision.CONTINUE
         assert c.last_exceeded_dimension == "tokens"
+        request = state.shared["context.compaction_requested"]
+        assert request["source"] == "multi_dim_budget"
+        assert request["used_tokens"] >= 500
 
     def test_first_exceeded_wins(self):
         # Both dimensions exceeded — first declared one is recorded.
@@ -226,7 +229,7 @@ class TestDimensionShortCircuit:
         result = c.decide(
             _state(iteration=5, total_cost_usd=10.0, pending_tool_calls=[{"x": 1}])
         )
-        assert result == LoopDecision.COMPLETE
+        assert result == LoopDecision.SUSPEND
         assert c.last_exceeded_dimension == "iteration"
 
     def test_no_dim_exceeded_falls_through(self):
@@ -264,7 +267,7 @@ class TestFailureIsolation:
         caplog.set_level("WARNING")
         result = c.decide(_state(iteration=5, pending_tool_calls=[{"x": 1}]))
         # IterationBudget still tripped despite the crashy dim above it.
-        assert result == LoopDecision.COMPLETE
+        assert result == LoopDecision.SUSPEND
         assert c.last_exceeded_dimension == "iteration"
         assert any("crashy" in r.message for r in caplog.records)
 
