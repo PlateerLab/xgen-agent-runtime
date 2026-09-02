@@ -8,6 +8,7 @@ env var.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -528,8 +529,10 @@ async def test_cli_version_in_error_message_on_cli_failure() -> None:
 async def test_cli_version_probe_failure_never_fails_call() -> None:
     """A binary that can't answer ``--version`` caches 'unknown' and the
     real call proceeds (and fails on its own merits, version-stamped)."""
+    false_binary = shutil.which("false")
+    assert false_binary is not None
     c = ClaudeCodeCLIClient(
-        binary_path="/bin/false",
+        binary_path=false_binary,
         workspace_dir=os.getcwd(),
         api_key="sk-fake",
         timeout_s=10.0,
