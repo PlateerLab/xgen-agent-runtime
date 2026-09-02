@@ -178,6 +178,29 @@ async def test_terminal_writer_failure_is_reported_instead_of_hanging(
 
 
 @pytest.mark.asyncio
+async def test_persistent_shutdown_failure_reaps_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from xgen_agent_runtime.core import rollout_recorder as module
+
+    recorder = RolloutRecorder(tmp_path / "blocked" / "rollout.jsonl")
+
+    def always_fail(self: object, *, durable: bool) -> None:
+        raise OSError("persistent disk failure")
+
+    monkeypatch.setattr(module._WriterState, "_write_pending_once", always_fail)
+    await recorder.record({"type": "one"})
+
+    with pytest.raises(OSError, match="persistent disk failure"):
+        await recorder.shutdown()
+
+    assert recorder._writer_task.done()
+    await recorder.shutdown()  # terminal failure is still idempotently closed
+    with pytest.raises(RuntimeError, match="shut down"):
+        await recorder.record({"type": "late"})
+
+
+@pytest.mark.asyncio
 async def test_empty_shutdown_does_not_materialize_file(tmp_path: Path) -> None:
     path = tmp_path / "rollout.jsonl"
     recorder = RolloutRecorder(path)

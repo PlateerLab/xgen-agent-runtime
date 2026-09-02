@@ -174,7 +174,14 @@ class RolloutRecorder:
         await self._barrier(_FLUSH)
 
     async def shutdown(self) -> None:
-        """Durably drain records and stop the writer; safe to call repeatedly."""
+        """Durably drain records and stop the writer; safe to call repeatedly.
+
+        Unlike ``flush`` (which keeps pending data available for a later
+        retry), shutdown is the terminal ownership handoff.  If its durability
+        barrier fails, the error is propagated *and* the writer is cancelled
+        and reaped so a host can safely close the event loop without leaking a
+        task that can no longer be serviced.
+        """
         async with self._shutdown_lock:
             if self._stopped:
                 return
@@ -186,12 +193,26 @@ class RolloutRecorder:
                 # Once the shutdown command is admitted it must be reaped: if
                 # cancellation left ``_stopped`` false after the writer exited,
                 # every later shutdown would report an unexpected task death.
-                await barrier
+                try:
+                    await barrier
+                except BaseException:
+                    await self._abort_writer()
+                    raise
                 self._stopped = True
                 await self._writer_task
                 raise
+            except BaseException:
+                await self._abort_writer()
+                raise
             self._stopped = True
             await self._writer_task
+
+    async def _abort_writer(self) -> None:
+        """Reap the background task after an unrecoverable shutdown barrier."""
+        self._stopped = True
+        if not self._writer_task.done():
+            self._writer_task.cancel()
+        await asyncio.gather(self._writer_task, return_exceptions=True)
 
     def _ensure_running(self) -> None:
         if self._stopped:
