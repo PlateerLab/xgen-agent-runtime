@@ -485,6 +485,71 @@ class TestToolSandbox:
         )
         assert not result.is_error
 
+    @pytest.mark.asyncio
+    async def test_path_validation_rejects_sibling_with_same_prefix(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        sibling = tmp_path / "workspace-escape"
+        allowed.mkdir()
+        sibling.mkdir()
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"path": str(sibling / "secret.txt")},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert result.is_error
+        assert "outside" in result.content
+
+    @pytest.mark.asyncio
+    async def test_path_validation_rejects_parent_traversal(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        allowed.mkdir()
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"file_path": "../secret.txt"},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert result.is_error
+        assert "outside" in result.content
+
+    @pytest.mark.asyncio
+    async def test_path_validation_rejects_symlink_escape(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        outside = tmp_path / "outside"
+        allowed.mkdir()
+        outside.mkdir()
+        (allowed / "link").symlink_to(outside, target_is_directory=True)
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"directory": "link"},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert result.is_error
+        assert "outside" in result.content
+
+    @pytest.mark.asyncio
+    async def test_path_validation_allows_real_descendant(self, tmp_path):
+        allowed = tmp_path / "workspace"
+        nested = allowed / "a" / "b"
+        nested.mkdir(parents=True)
+        sandbox = ToolSandbox(SandboxConfig(allowed_paths=[str(allowed)]))
+
+        result = await sandbox.execute_tool(
+            DummyTool(),
+            {"path": str(nested / "file.txt")},
+            _ctx(working_dir=str(allowed)),
+        )
+
+        assert not result.is_error
+
 
 class TestSandboxPolicy:
     def test_strict(self):

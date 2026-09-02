@@ -12,9 +12,20 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return whether *path* is *root* or one of its real descendants."""
+
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass
@@ -114,12 +125,10 @@ class ToolSandbox:
             if key == "command":
                 continue
 
-            resolved = os.path.realpath(
-                os.path.join(context.working_dir, val) if not os.path.isabs(val) else val
-            )
-            if not any(
-                resolved.startswith(os.path.realpath(ap)) for ap in self._config.allowed_paths
-            ):
+            candidate = Path(context.working_dir, val) if not os.path.isabs(val) else Path(val)
+            resolved = candidate.resolve()
+            allowed_roots = [Path(path).resolve() for path in self._config.allowed_paths]
+            if not any(_path_is_within(resolved, root) for root in allowed_roots):
                 return (
                     f"Path '{val}' resolves to '{resolved}' which is outside "
                     f"allowed paths: {self._config.allowed_paths}"
