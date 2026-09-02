@@ -21,9 +21,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Sequence
 
 
-_INTERRUPTED_RESULT_CONTENT = (
-    "[interrupted — the previous turn ended before this tool finished]"
-)
+_INTERRUPTED_RESULT_CONTENT = "[interrupted — the previous turn ended before this tool finished]"
 
 
 def _tool_use_ids(msg: Dict[str, Any]) -> List[str]:
@@ -107,9 +105,7 @@ def normalize_messages_for_request(
             normalized.append(message)
             continue
 
-        current_call_ids = (
-            _tool_use_ids(message) if message.get("role") == "assistant" else []
-        )
+        current_call_ids = _tool_use_ids(message) if message.get("role") == "assistant" else []
 
         content = message.get("content")
         if not isinstance(content, list):
@@ -123,7 +119,11 @@ def normalize_messages_for_request(
             is_result = isinstance(block, dict) and block.get("type") == "tool_result"
             if is_result:
                 result_id = block.get("tool_use_id")
-                if not isinstance(result_id, str) or not result_id or result_id not in seen_call_ids:
+                if (
+                    not isinstance(result_id, str)
+                    or not result_id
+                    or result_id not in seen_call_ids
+                ):
                     removed_orphan = True
                     continue
             filtered.append(block)

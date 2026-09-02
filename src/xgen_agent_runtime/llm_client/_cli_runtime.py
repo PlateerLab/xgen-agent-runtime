@@ -411,12 +411,8 @@ class CLIProcessRunner:
                 await self._kill_tree(proc)
 
         if rc != 0:
-            tail = stderr_buf.to_bytes_with_omission_marker().decode(
-                "utf-8", errors="replace"
-            )
-            raise CLIProtocolError(
-                f"CLI {self.binary!r} exited with code {rc}: {tail.strip()}"
-            )
+            tail = stderr_buf.to_bytes_with_omission_marker().decode("utf-8", errors="replace")
+            raise CLIProtocolError(f"CLI {self.binary!r} exited with code {rc}: {tail.strip()}")
 
     # ---------------------------------------------------------------- spawn
     async def _spawn(self, argv: Sequence[str]) -> tuple[asyncio.subprocess.Process, float]:

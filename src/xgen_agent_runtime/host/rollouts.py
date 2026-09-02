@@ -30,9 +30,7 @@ def rollout_directory(storage_root: str | os.PathLike[str]) -> Path:
     return Path(storage_root).resolve(strict=False) / "executor" / "rollouts"
 
 
-def allocate_rollout_path(
-    storage_root: str | os.PathLike[str], interaction_id: str
-) -> Path:
+def allocate_rollout_path(storage_root: str | os.PathLike[str], interaction_id: str) -> Path:
     """Allocate a unique, component-safe path for one host turn.
 
     The function only chooses a path; directory and file creation remain owned
