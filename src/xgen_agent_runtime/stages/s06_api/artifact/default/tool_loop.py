@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.state import PipelineState, TokenUsage
+from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
 from xgen_agent_runtime.stages.s06_api.interface import ToolLoopCall, ToolLoopStrategy
 from xgen_agent_runtime.stages.s06_api.types import APIResponse
 
@@ -386,7 +387,6 @@ class InternalAgenticLoop(ToolLoopStrategy):
         dispatcher = state.tool_dispatcher
         response = await call(None)
 
-        exchange: List[Dict[str, Any]] = []  # loop-local; lands on state at the end
         consumed_usage: Optional[TokenUsage] = None  # inner calls already resolved
         inner_cost_usd = 0.0
         turns = 0
@@ -409,10 +409,12 @@ class InternalAgenticLoop(ToolLoopStrategy):
                 tool_calls = self._as_tool_calls(response)
                 results = await self._dispatch_round(dispatcher, tool_calls, state)
 
-                exchange.append(
-                    {"role": "assistant", "content": assistant_content_blocks(response)}
-                )
-                exchange.append({"role": "user", "content": results})
+                # Commit each completed exchange immediately. This is both
+                # crash-safe (side effects are never replayed) and makes the
+                # full next-request history visible to request-boundary
+                # compaction below.
+                state.add_message("assistant", assistant_content_blocks(response))
+                state.add_message("user", results)
 
                 # This response's usage is now "consumed" — it will never be
                 # the returned response, so fold it into the running sum that
@@ -423,25 +425,30 @@ class InternalAgenticLoop(ToolLoopStrategy):
                 inner_cost_usd += response.usage.cost_usd or 0.0
                 turns += 1
 
-                response = await call(list(exchange))
+                compactor = state._context_compactor
+                projected = estimate_prompt_tokens(state)
+                if compactor is not None and projected > state.context_window_budget * 0.8:
+                    from xgen_agent_runtime.core.compaction import run_compaction
+
+                    await run_compaction(
+                        state,
+                        compactor,
+                        trigger="internal_loop",
+                        provider=state._context_memory_provider,
+                        target_tokens=int(state.context_window_budget * 0.7),
+                    )
+                    state.shared.pop("_prompt_tokens_memo", None)
+
+                response = await call(None)
         except BaseException:
             # A mid-loop API failure must NOT discard the tool rounds that
             # already ran (audit R4): commit the completed exchange so its
             # side effects aren't silently replayed next turn, and bill the
             # consumed inner usage that Stage 7 will never see (we don't
             # return a response on this path).
-            for message in exchange:
-                state.add_message(message["role"], message["content"])
             if consumed_usage is not None:
                 state.token_usage += consumed_usage
             raise
-
-        # Record the intermediate exchange in order; the stage appends
-        # the FINAL assistant content right after run() returns, so the
-        # history reads exactly like a pipeline-mode multi-iteration
-        # turn would.
-        for message in exchange:
-            state.add_message(message["role"], message["content"])
 
         if consumed_usage is not None:
             response.usage = consumed_usage + response.usage

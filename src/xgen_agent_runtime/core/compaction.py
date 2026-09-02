@@ -98,6 +98,7 @@ async def run_compaction(
     *,
     trigger: str,
     provider: Optional[Any] = None,
+    target_tokens: Optional[int] = None,
 ) -> dict:
     """Run ``compactor`` against ``state`` and return a result summary dict.
 
@@ -146,6 +147,7 @@ async def run_compaction(
     replaced = max(0, before_msgs - after_msgs)
     saved_tokens = max(0, before_tokens - after_tokens)
 
+    target_met = target_tokens is None or after_tokens <= target_tokens
     state.add_event(
         "context.compacted",
         {
@@ -154,8 +156,21 @@ async def run_compaction(
             "messages_before": before_msgs,
             "messages_after": after_msgs,
             "saved_tokens_estimate": saved_tokens,
+            "tokens_after_estimate": after_tokens,
+            "target_tokens": target_tokens,
+            "target_met": target_met,
         },
     )
+    if not target_met:
+        state.add_event(
+            "context.compaction_target_missed",
+            {
+                "strategy": _compactor_name(compactor),
+                "trigger": trigger,
+                "tokens_after_estimate": after_tokens,
+                "target_tokens": target_tokens,
+            },
+        )
 
     # Persist the snapshot unless the compactor already does it itself.
     if (
@@ -186,4 +201,7 @@ async def run_compaction(
         "after_messages": after_msgs,
         "replaced": replaced,
         "saved_tokens_estimate": saved_tokens,
+        "after_tokens_estimate": after_tokens,
+        "target_tokens": target_tokens,
+        "target_met": target_met,
     }

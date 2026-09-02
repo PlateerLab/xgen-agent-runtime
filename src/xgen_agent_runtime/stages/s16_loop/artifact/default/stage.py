@@ -21,7 +21,7 @@ class LoopStage(Stage[Any, Any]):
     """Stage 13: Loop.
 
     Dual abstraction:
-      - Level 2 controller: decides continue/complete/error/escalate
+      - Level 2 controller: decides continue/complete/suspend/error/escalate
     """
 
     def __init__(
@@ -132,7 +132,7 @@ class LoopStage(Stage[Any, Any]):
 
     async def execute(self, input: Any, state: PipelineState) -> Any:
         upstream = state.loop_decision
-        if upstream in ("complete", "error", "escalate"):
+        if upstream in ("complete", "suspend", "error", "escalate"):
             decision = upstream
         elif self._early_stop_on and state.completion_signal in self._early_stop_on:
             decision = "complete"

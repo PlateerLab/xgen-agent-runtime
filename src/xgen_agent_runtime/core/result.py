@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.core.state import PipelineState, TokenUsage, CacheMetrics
+from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
 
 
 @dataclass
@@ -50,14 +51,39 @@ class PipelineResult:
     # of the serializable result payload.
     state: Optional[PipelineState] = field(default=None, repr=False, compare=False)
 
+    @property
+    def status(self) -> str:
+        """Execution-slice status; only ``completed`` means task success."""
+        if self.state is not None:
+            return self.state.run_status
+        return RunStatus.COMPLETED.value if self.success else RunStatus.FAILED.value
+
+    @property
+    def termination_reason(self) -> Optional[str]:
+        """Machine-readable reason the slice stopped."""
+        if self.state is not None:
+            return self.state.termination_reason
+        return None if self.success else TerminationReason.ERROR.value
+
+    @property
+    def resumable(self) -> bool:
+        """Whether a host should schedule a continuation slice."""
+        return bool(self.state is not None and self.state.resumable)
+
+    @property
+    def checkpoint_id(self) -> Optional[str]:
+        """Durable checkpoint associated with a suspended slice, if any."""
+        return self.state.checkpoint_id if self.state is not None else None
+
     @classmethod
     def from_state(cls, state: PipelineState) -> PipelineResult:
         """Create a result from final pipeline state."""
-        is_error = state.loop_decision == "error"
+        is_error = state.run_status == RunStatus.FAILED.value
+        is_complete = state.run_status == RunStatus.COMPLETED.value
         return cls(
             text=state.final_text,
             output=state.final_output,
-            success=not is_error,
+            success=is_complete,
             error=state.completion_detail if is_error else None,
             iterations=state.iteration,
             token_usage=state.token_usage,
@@ -77,8 +103,8 @@ class PipelineResult:
     def error_result(cls, error: str, state: Optional[PipelineState] = None) -> PipelineResult:
         """Create an error result."""
         if state:
+            state.mark_failed(error)
             result = cls.from_state(state)
-            result.success = False
             result.error = error
             return result
         return cls(success=False, error=error)

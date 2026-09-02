@@ -72,9 +72,11 @@ class TestConfiguredChainRunsEvaluators:
 
         assert result.decision == "continue"
         # binary_classify ran for real: it stamps the classification and
-        # rewrites max_iterations from the forwarded not_easy_max_turns.
+        # records the forwarded not_easy_max_turns without rewriting the
+        # host's hard max_iterations cap.
         assert state.metadata["task_class"] == "not_easy"
-        assert state.max_iterations == 30
+        assert state.max_iterations == 50
+        assert state.metadata["evaluation_suggested_max_turns"] == 30
 
     @pytest.mark.asyncio
     async def test_easy_classification_uses_forwarded_easy_turns(self):
@@ -92,7 +94,8 @@ class TestConfiguredChainRunsEvaluators:
 
         assert result.decision == "complete"
         assert state.metadata["task_class"] == "easy"
-        assert state.max_iterations == 2
+        assert state.max_iterations == 50
+        assert state.metadata["evaluation_suggested_max_turns"] == 2
 
     @pytest.mark.asyncio
     async def test_reconfigure_replaces_the_chain(self):

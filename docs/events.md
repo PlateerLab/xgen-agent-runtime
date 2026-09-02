@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-08-06.
-> Catalogue version: **4** · events: **121**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-02.
+> Catalogue version: **5** · events: **128**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -40,6 +40,10 @@ Enum member: `EventTypes.PIPELINE_COMPLETE`
 | `iterations` | int — loop iterations this turn |
 | `result` | str? — full final text (run_stream only; never truncated) |
 | `total_cost_usd` | float? — this turn's cost (run_stream only) |
+| `status` | str — completed \| suspended \| blocked \| failed \| cancelled |
+| `termination_reason` | str\|None — stable reason the execution slice stopped |
+| `resumable` | bool — caller may schedule CONTINUE_RUN |
+| `checkpoint_id` | str\|None — durable continuation point when configured |
 
 ### `pipeline.error`
 
@@ -167,6 +171,48 @@ Enum member: `EventTypes.LOOP_ESCALATE`
 | `has_tool_results` | bool |
 | `upstream_decision` | str |
 
+### `loop.suspend`
+
+Enum member: `EventTypes.LOOP_SUSPEND`
+
+| Field | Description |
+|---|---|
+| `iteration` | int |
+| `signal` | str\|None |
+| `pending_tools` | int |
+| `has_tool_results` | bool |
+| `upstream_decision` | str |
+
+### `loop.suspended`
+
+Enum member: `EventTypes.LOOP_SUSPENDED`
+
+| Field | Description |
+|---|---|
+| `reason` | str — stable TerminationReason |
+| `iteration` | int |
+| `max_iterations` | int? — configured per-slice cap |
+| `resumable` | bool — always true |
+
+### `loop.blocked`
+
+Enum member: `EventTypes.LOOP_BLOCKED`
+
+| Field | Description |
+|---|---|
+| `reason` | str — stable TerminationReason |
+| `total_cost_usd` | float? — cost at the blocking boundary |
+| `budget_usd` | float? — configured cost ceiling |
+
+### `loop.budget_exceeded`
+
+Enum member: `EventTypes.LOOP_BUDGET_EXCEEDED`
+
+| Field | Description |
+|---|---|
+| `dimension` | str — iteration \| cost \| tokens \| wall_clock \| tool_calls |
+| `iteration` | int |
+
 ## Stage 1 — Input
 
 ### `input.normalized`
@@ -176,6 +222,14 @@ Enum member: `EventTypes.INPUT_NORMALIZED`
 | Field | Description |
 |---|---|
 | `text_length` | int — normalized text length |
+
+### `input.continuation`
+
+Enum member: `EventTypes.INPUT_CONTINUATION`
+
+| Field | Description |
+|---|---|
+| `message_count` | int — existing history continued without a new user message |
 
 ### `input.tool_calls_repaired`
 
@@ -205,7 +259,7 @@ Enum member: `EventTypes.CONTEXT_COMPACTED`
 | Field | Description |
 |---|---|
 | `strategy` | str — compactor name/class |
-| `trigger` | str? — 'proactive' (Stage 2) \| 'guard' (Stage 4) \| 'background' (applied next turn) |
+| `trigger` | str? — proactive \| requested \| guard \| internal_loop \| background |
 | `messages_before` | int? |
 | `messages_after` | int? |
 | `saved_tokens_estimate` | int? |
@@ -256,6 +310,27 @@ Enum member: `EventTypes.CONTEXT_COMPACTION_SCHEDULED`
 |---|---|
 | `compactor` | str — compactor name/class |
 | `snapshot_messages` | int — history length the background summary covers |
+
+### `context.compaction_requested`
+
+Enum member: `EventTypes.CONTEXT_COMPACTION_REQUESTED`
+
+| Field | Description |
+|---|---|
+| `source` | str — loop controller requesting request-boundary maintenance |
+| `used_tokens` | int — projected prompt estimate at request time |
+| `iteration` | int |
+
+### `context.compaction_target_missed`
+
+Enum member: `EventTypes.CONTEXT_COMPACTION_TARGET_MISSED`
+
+| Field | Description |
+|---|---|
+| `strategy` | str — compactor name/class |
+| `trigger` | str — proactive \| requested \| guard |
+| `tokens_after_estimate` | int |
+| `target_tokens` | int |
 
 ## Stage 18 — Memory (+ Stage 2 compaction)
 
@@ -440,6 +515,8 @@ Enum member: `EventTypes.TEXT_DELTA`
 | Field | Description |
 |---|---|
 | `text` | str — one streamed text chunk |
+| `source` | str? — api \| cli |
+| `granularity` | str? — token \| message \| none |
 
 ### `thinking.delta`
 

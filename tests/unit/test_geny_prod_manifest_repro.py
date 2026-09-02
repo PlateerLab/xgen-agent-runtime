@@ -119,7 +119,9 @@ class TestEvaluationChainRestored:
 
         assert result.decision == "continue"
         assert state.metadata["task_class"] == "not_easy"
-        assert state.max_iterations == 30  # not_easy_max_turns landed
+        # Evaluator suggestions no longer overwrite the host's hard cap.
+        assert state.max_iterations == 50
+        assert state.metadata["evaluation_suggested_max_turns"] == 30
 
 
 class TestBudgetControllerRestored:
@@ -149,7 +151,7 @@ class TestBudgetControllerRestored:
             return s
 
         assert controller.decide(state_at(29)) == LoopDecision.CONTINUE
-        assert controller.decide(state_at(30)) == LoopDecision.COMPLETE
+        assert controller.decide(state_at(30)) == LoopDecision.SUSPEND
         assert controller.last_exceeded_dimension == "iteration"
 
 

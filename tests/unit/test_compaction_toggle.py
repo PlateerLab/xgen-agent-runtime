@@ -53,6 +53,23 @@ def test_enabled_compacts_over_budget() -> None:
     assert _events(state, "context.compacted"), "context.compacted 이벤트가 없다"
 
 
+def test_loop_requested_compaction_is_synchronous_and_consumed() -> None:
+    stage = ContextStage(compactor=TruncateCompactor(keep_last=4))
+    state = _over_budget_state()
+    state.shared["context.compaction_requested"] = {
+        "source": "multi_dim_budget",
+        "iteration": 3,
+    }
+
+    asyncio.run(stage.execute(None, state))
+
+    assert len(state.messages) <= 4
+    assert "context.compaction_requested" not in state.shared
+    compacted = _events(state, "context.compacted")
+    assert compacted[-1]["data"]["trigger"] == "requested"
+    assert "target_met" in compacted[-1]["data"]
+
+
 def test_disabled_never_compacts() -> None:
     stage = ContextStage(
         compactor=TruncateCompactor(keep_last=4), compaction_enabled=False
@@ -183,6 +200,30 @@ def test_background_compaction_on_defers_in_band() -> None:
     before, after, scheduled, pending = asyncio.run(_run())
     assert after == before, "유예 구간인데 즉시 압축됐다"
     assert scheduled and pending is not None
+
+
+def test_background_compaction_rejects_changed_prefix_even_when_tail_matches() -> None:
+    """A length+tail check accepted stale summaries after an earlier message
+    was rewritten. The whole captured prefix identity is the CAS token."""
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+        LLMSummaryCompactor,
+    )
+
+    async def _run() -> bool:
+        stage = ContextStage(compactor=LLMSummaryCompactor(keep_recent=4))
+        state = _band_state()
+        stage._schedule_bg_compaction(state)
+        assert stage._bg_compaction is not None
+        await stage._bg_compaction["task"]
+        original_tail = state.messages[-1]
+        state.messages[0] = dict(state.messages[0])
+        assert state.messages[-1] is original_tail
+        before = list(state.messages)
+        applied = await stage._apply_bg_compaction(state)
+        assert state.messages == before
+        return applied
+
+    assert asyncio.run(_run()) is False
 
 
 def test_cancel_bg_compaction_reaps_pending_task() -> None:

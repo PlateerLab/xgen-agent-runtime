@@ -424,12 +424,15 @@ async def test_cost_budget_enforced_in_loop():
     pipeline.register_stage(YieldStage())
 
     result = await pipeline.run("Do something expensive")
-    assert result.success is True
-    # Budget should have caused early termination
+    assert result.success is False
+    assert result.status == "blocked"
+    assert result.termination_reason == "cost_budget"
+    # Budget should have caused a blocked terminal boundary, never a fake
+    # successful task completion.
     assert result.total_cost_usd > 0
     # If budget worked, the pipeline should have used fewer iterations than
     # the 3 responses we queued
-    events = [e for e in result.events if e.get("type") == "loop.force_complete"]
+    events = [e for e in result.events if e.get("type") == "loop.blocked"]
     if events:
         assert events[0]["data"]["reason"] == "cost_budget"
 
