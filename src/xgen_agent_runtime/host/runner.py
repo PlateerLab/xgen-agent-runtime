@@ -991,7 +991,9 @@ def stream_turn(
                 elif tool_events and event.type == "tool.call_start":
                     yield {
                         "type": "agent_event",
-                        "data": _tool_call_event(event.data.get("name", ""), event.data.get("input")),
+                        "data": _tool_call_event(
+                            event.data.get("name", ""), event.data.get("input")
+                        ),
                     }
                 elif tool_events and event.type == "tool.call_complete":
                     name = event.data.get("name", "")
@@ -999,8 +1001,7 @@ def stream_turn(
                         "type": "agent_event",
                         "data": _tool_end_event(
                             name,
-                            str(event.data.get("error") or "")
-                            or (result_sink or {}).get(name, ""),
+                            str(event.data.get("error") or "") or (result_sink or {}).get(name, ""),
                             is_error=bool(event.data.get("is_error")),
                             duration_ms=event.data.get("duration_ms"),
                         ),
@@ -1092,9 +1093,7 @@ def stream_turn(
             _close_rollout_recorder(rollout_recorder, rollout_path, loop)
             state.session_runtime = original_runtime
         turn_failed = (
-            bool(turn_error)
-            or not turn_completed
-            or task_status != RunStatus.COMPLETED.value
+            bool(turn_error) or not turn_completed or task_status != RunStatus.COMPLETED.value
         )
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
             _record_execution(

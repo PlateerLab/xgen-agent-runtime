@@ -165,7 +165,9 @@ class FileSessionPersistence:
         run_status = data.get("run_status")
         reason = str(data.get("termination_reason") or "")
         if run_status == "suspended":
-            state.mark_suspended(reason or "max_iterations_per_slice", detail=state.completion_detail)
+            state.mark_suspended(
+                reason or "max_iterations_per_slice", detail=state.completion_detail
+            )
         elif run_status == "blocked":
             state.mark_blocked(reason or "user_input_required", detail=state.completion_detail)
         elif run_status == "failed":

@@ -125,8 +125,7 @@ class StandardLoopController(LoopController):
             state.mark_suspended(
                 TerminationReason.MAX_ITERATIONS_PER_SLICE.value,
                 detail=(
-                    f"Execution slice reached max_turns={max_t}; "
-                    "continuation state is preserved."
+                    f"Execution slice reached max_turns={max_t}; continuation state is preserved."
                 ),
             )
             return LoopDecision.SUSPEND
