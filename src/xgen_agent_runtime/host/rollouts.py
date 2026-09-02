@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROLLOUT_KEEP_LAST = 100
+ROLLOUT_ENABLED_SETTING = "GENY_ROLLOUT_RECORDING_ENABLED"
 _ROLLOUT_PREFIX = "rollout-"
 _ROLLOUT_SUFFIX = ".jsonl"
 

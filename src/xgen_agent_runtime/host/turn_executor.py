@@ -909,6 +909,32 @@ class AgentTurnExecutor:
             user_text = f"{text}\n\n{rag_block}" if rag_block else text
             pipeline_input = turn_input.with_text(user_text).as_pipeline_input()
 
+            # Codex-style durable rollout은 관리자 opt-in이다. 대화/도구 결과를
+            # 포함할 수 있으므로 기본 활성화하거나 임시 디렉터리로 fallback하지
+            # 않는다. workflow storage가 있는 턴만 host가 파일 수명·보존을
+            # 소유하고, Pipeline의 공개 입력/출력에는 아무 필드도 추가하지 않는다.
+            rollout_path = None
+            from xgen_agent_runtime.host.rollouts import (
+                ROLLOUT_ENABLED_SETTING,
+                allocate_rollout_path,
+            )
+
+            if host.setting_truthy(ROLLOUT_ENABLED_SETTING):
+                rollout_workflow_id = str(kwargs.get("workflow_id") or "")
+                if not rollout_workflow_id:
+                    logger.warning(
+                        "agents/geny: rollout recording enabled but skipped — "
+                        "workflow_id is unavailable"
+                    )
+                else:
+                    rollout_storage_root = host.workspace_storage_root(rollout_workflow_id)
+                    if not str(rollout_storage_root).strip():
+                        raise ValueError("rollout recording requires a workspace storage root")
+                    rollout_path = allocate_rollout_path(
+                        rollout_storage_root,
+                        interaction_id,
+                    )
+
             pipeline = build_pipeline(
                 name=node_name,
                 provider=provider,
@@ -1008,6 +1034,7 @@ class AgentTurnExecutor:
                 output_schema=schema,
                 on_close=_teardown,
                 host=host,
+                rollout_path=rollout_path,
             )
             if clamped and schema is None:
                 # 입력이 잘렸음을 사용자에게 알린다 (agent_xgen 의 경고 관행과
@@ -1022,6 +1049,13 @@ class AgentTurnExecutor:
                 return _with_notice(turn_iter)
             return turn_iter
         try:
-            return run_turn(pipeline, pipeline_input, state, output_schema=schema, host=host)
+            return run_turn(
+                pipeline,
+                pipeline_input,
+                state,
+                output_schema=schema,
+                host=host,
+                rollout_path=rollout_path,
+            )
         finally:
             _teardown()
