@@ -924,6 +924,13 @@ class Pipeline:
         self._credentials: CredentialBundle = CredentialBundle()  # set by from_manifest_async
         self._subagent_registry: Any = None  # set by attach_runtime; populates state + agent stage
         self._attached_session_runtime: Any = None  # v0.30.0 plugin slot; propagated in _init_state
+        # Optional Codex-style durable rollout sink, discovered through the
+        # existing free-shape ``session_runtime.rollout_recorder`` slot.  The
+        # mapping is per-run so overlapping states may use different recorders
+        # without adding a kwarg or field to any public contract.
+        self._run_rollout_recorders: Dict[str, Any] = {}
+        self._run_rollout_failures: Dict[str, Exception] = {}
+        self._run_rollout_failure_logged: Set[str] = set()
         # S9c.1 Pipeline.resume: token → asyncio.Future[HITLDecision].
         # The HITL stage's PipelineResumeRequester registers a future
         # here when it issues a request and awaits it. ``resume(token,
@@ -1879,6 +1886,14 @@ class Pipeline:
                 not enforce a Protocol — schema collisions between
                 competing plugins are a host-policy concern.
 
+                When the object exposes ``rollout_recorder``, the pipeline
+                treats it as an optional durable event sink. It must provide
+                synchronous ``record_nowait(event)`` and asynchronous
+                ``flush()`` methods; all events for that run are recorded in
+                sequence and flushed at terminal/cancellation boundaries.
+                The host retains lifecycle ownership and must call the
+                recorder's ``shutdown()`` when the session itself ends.
+
         Raises:
             RuntimeError: If the pipeline has already started a run. State
                 from the prior run has already captured references to the
@@ -2539,7 +2554,7 @@ class Pipeline:
 
             result = PipelineResult.from_state(state)
             success = result.success
-            await self._emit(
+            await self._emit_rollout_terminal(
                 "pipeline.complete",
                 data={"iterations": state.iteration},
                 session_id=state.session_id,
@@ -2548,11 +2563,13 @@ class Pipeline:
             return result
 
         except Exception as e:
-            await self._emit(
+            success = False
+            await self._emit_rollout_terminal(
                 "pipeline.error",
                 data=_error_event_data(e),
                 session_id=state.session_id,
                 run_id=state._run_id,
+                suppress_rollout_failure=True,
             )
             return PipelineResult.error_result(str(e), state)
         finally:
@@ -2567,6 +2584,10 @@ class Pipeline:
                     state,
                     details={"success": success, "iterations": state.iteration},
                 )
+            # Also runs under task cancellation and captures any event a
+            # PIPELINE_END hook emitted after the first terminal barrier.
+            await self._flush_run_rollout(state._run_id, suppress=True)
+            self._release_run_rollout(state._run_id)
 
     async def run_stream(
         self,
@@ -2659,7 +2680,7 @@ class Pipeline:
                 await self._run_phases(input, state)
                 success = state.loop_decision != "error"
 
-                await self._emit(
+                await self._emit_rollout_terminal(
                     "pipeline.complete",
                     data={
                         # `result` is the canonical final text consumers
@@ -2674,7 +2695,8 @@ class Pipeline:
                     run_id=run_id,
                 )
             except Exception as e:
-                await self._emit(
+                success = False
+                await self._emit_rollout_terminal(
                     "pipeline.error",
                     data={
                         **_error_event_data(e),
@@ -2682,6 +2704,7 @@ class Pipeline:
                     },
                     session_id=state.session_id,
                     run_id=run_id,
+                    suppress_rollout_failure=True,
                 )
             finally:
                 self._runs_in_flight -= 1
@@ -2696,6 +2719,8 @@ class Pipeline:
                         state,
                         details={"success": success, "iterations": state.iteration},
                     )
+                await self._flush_run_rollout(run_id, suppress=True)
+                self._release_run_rollout(run_id)
                 queue.put_nowait(_SENTINEL)  # type: ignore[arg-type]
 
         try:
@@ -2747,6 +2772,8 @@ class Pipeline:
                 self._end_turn(state)
                 if stream_owner_task is not None:
                     self._active_run_tasks.discard(stream_owner_task)
+                await self._flush_run_rollout(run_id, suppress=True)
+                self._release_run_rollout(run_id)
             unsubscribe()
 
     # ── Events ──
@@ -2844,7 +2871,81 @@ class Pipeline:
         self._event_journal.append(event)
         for tap_queue in list(self._event_taps):
             tap_queue.put_nowait(event)
+        recorder = self._run_rollout_recorders.get(event.run_id)
+        if recorder is not None and event.run_id not in self._run_rollout_failures:
+            try:
+                recorder.record_nowait(event)
+            except Exception as exc:
+                # Stop admitting later records for this run: allowing a gap and
+                # then resuming would produce a plausible-looking but invalid
+                # audit trail. The caller receives the failure through the
+                # existing pipeline error path; the accepted prefix is still
+                # flushed during finalization.
+                self._run_rollout_failures[event.run_id] = exc
+                raise
         return event
+
+    def _attach_run_rollout(self, state: PipelineState) -> None:
+        """Discover an opt-in recorder without changing public runtime types."""
+        runtime = state.session_runtime
+        recorder = getattr(runtime, "rollout_recorder", None) if runtime is not None else None
+        if recorder is None:
+            return
+        if not callable(getattr(recorder, "record_nowait", None)) or not callable(
+            getattr(recorder, "flush", None)
+        ):
+            raise TypeError(
+                "session_runtime.rollout_recorder must provide "
+                "record_nowait(event) and async flush() methods"
+            )
+        self._run_rollout_recorders[state._run_id] = recorder
+
+    async def _flush_run_rollout(self, run_id: str, *, suppress: bool = False) -> None:
+        """Flush one run's accepted prefix and surface its first sink failure."""
+        recorder = self._run_rollout_recorders.get(run_id)
+        if recorder is None:
+            return
+        failure = self._run_rollout_failures.get(run_id)
+        try:
+            await recorder.flush()
+        except Exception as exc:
+            if failure is None:
+                failure = exc
+                self._run_rollout_failures[run_id] = exc
+        if failure is None:
+            return
+        if suppress:
+            if run_id not in self._run_rollout_failure_logged:
+                logger.error("rollout recording failed for run %s: %s", run_id, failure)
+                self._run_rollout_failure_logged.add(run_id)
+            return
+        raise failure
+
+    def _release_run_rollout(self, run_id: str) -> None:
+        self._run_rollout_recorders.pop(run_id, None)
+        self._run_rollout_failures.pop(run_id, None)
+        self._run_rollout_failure_logged.discard(run_id)
+
+    async def _emit_rollout_terminal(
+        self,
+        event_type: str,
+        *,
+        suppress_rollout_failure: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Record and durably flush a terminal event before bus publication.
+
+        ``pipeline.error`` uses suppression so a failed audit sink cannot hide
+        the very error event that reports it to the existing output channel.
+        """
+        event = PipelineEvent(type=event_type, **kwargs)
+        try:
+            self._record_event(event)
+        except Exception:
+            if not suppress_rollout_failure:
+                raise
+        await self._flush_run_rollout(event.run_id, suppress=suppress_rollout_failure)
+        await self._event_bus.emit(event)
 
     def _make_state_event_bridge(self, state: PipelineState, run_id: str) -> Callable:
         """Build the ``add_event`` → event-channel forwarder for one run.
@@ -3227,6 +3328,7 @@ class Pipeline:
                 guard_stage._budget_compactor = None
                 guard_stage._memory_provider = None
 
+        self._attach_run_rollout(state)
         self._has_started = True
         # Claim the concurrent-run guard now that all fallible setup is
         # done (audit R5) — a mid-setup failure above never leaves it set.

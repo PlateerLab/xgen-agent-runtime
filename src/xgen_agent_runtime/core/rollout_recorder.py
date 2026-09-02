@@ -131,7 +131,9 @@ class RolloutRecorder:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError as exc:
-            raise RuntimeError("RolloutRecorder must be created inside a running event loop") from exc
+            raise RuntimeError(
+                "RolloutRecorder must be created inside a running event loop"
+            ) from exc
 
         self._path = Path(path)
         self._queue: asyncio.Queue[_Command] = asyncio.Queue(maxsize=queue_size)
