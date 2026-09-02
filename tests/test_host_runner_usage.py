@@ -9,6 +9,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import pytest
@@ -258,6 +262,114 @@ def test_run_turn_fills_usage_sink() -> None:
     text = runner.run_turn(pipe, "hi", _state("cfg-model"), usage_sink=sink)
     assert text == "done"
     assert set(sink) == _USAGE_KEYS and sink["input_tokens"] == 11 and sink["output_tokens"] == 4
+
+
+# ── host-owned rollout recorder lifecycle ───────────────────────────
+
+
+def _rollout_types(path: Path) -> List[str]:
+    return [
+        json.loads(line)["type"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def test_stream_turn_writes_and_shuts_down_durable_rollout(tmp_path: Path) -> None:
+    path = tmp_path / "rollouts" / "stream.jsonl"
+    pipe = runner.build_pipeline(
+        name="t",
+        provider="openai",
+        model="cfg-model",
+        api_key="k",
+        llm_client=_UsageClient(api_key="k"),
+        stream=False,
+        enable_compaction=False,
+    )
+
+    out = list(runner.stream_turn(pipe, "hi", _state("cfg-model"), rollout_path=path))
+
+    assert "done" in "".join(chunk for chunk in out if isinstance(chunk, str))
+    types = _rollout_types(path)
+    assert types[0] == "pipeline.start"
+    assert types[-1] == "pipeline.complete"
+
+
+def test_run_turn_preserves_existing_session_runtime_around_rollout(tmp_path: Path) -> None:
+    path = tmp_path / "run.jsonl"
+    pipe = runner.build_pipeline(
+        name="t",
+        provider="openai",
+        model="cfg-model",
+        api_key="k",
+        llm_client=_UsageClient(api_key="k"),
+        stream=False,
+        enable_compaction=False,
+    )
+    state = _state("cfg-model")
+    existing_runtime = SimpleNamespace(marker="preserved")
+    state.session_runtime = existing_runtime
+
+    assert runner.run_turn(pipe, "hi", state, rollout_path=path) == "done"
+    assert state.session_runtime is existing_runtime
+    assert _rollout_types(path)[-1] == "pipeline.complete"
+
+
+def test_rollout_storage_failure_surfaces_through_existing_error_result(tmp_path: Path) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    pipe = runner.build_pipeline(
+        name="t",
+        provider="openai",
+        model="cfg-model",
+        api_key="k",
+        llm_client=_UsageClient(api_key="k"),
+        stream=False,
+        enable_compaction=False,
+    )
+
+    state = _state()
+    result = runner.run_turn(pipe, "hi", state, rollout_path=blocker / "run.jsonl")
+
+    assert result.startswith("[ERROR]")
+    assert state.session_runtime is None
+
+
+def test_closing_stream_early_drains_rollout_prefix_and_restores_runtime(
+    tmp_path: Path,
+) -> None:
+    class _BlockingPipeline:
+        def __init__(self) -> None:
+            self.runtime: Any = None
+            self.closed = False
+
+        def attach_runtime(self, *, session_runtime: Any) -> None:
+            self.runtime = session_runtime
+
+        async def run_stream(
+            self, text: str, state: PipelineState
+        ) -> AsyncIterator[PipelineEvent]:
+            self.runtime.rollout_recorder.record_nowait(
+                PipelineEvent(type="pipeline.start", session_id=state.session_id)
+            )
+            yield PipelineEvent(type="text.delta", data={"text": "partial"})
+            await asyncio.Event().wait()
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    path = tmp_path / "cancelled.jsonl"
+    pipeline = _BlockingPipeline()
+    state = _state()
+    original_runtime = SimpleNamespace(marker="original")
+    state.session_runtime = original_runtime
+    stream = runner.stream_turn(pipeline, "hi", state, rollout_path=path)
+
+    assert next(stream) == "partial"
+    stream.close()
+
+    assert pipeline.closed
+    assert state.session_runtime is original_runtime
+    assert _rollout_types(path) == ["pipeline.start"]
 
 
 # ── record_failed_starts 게이트 ──────────────────────────────────────
