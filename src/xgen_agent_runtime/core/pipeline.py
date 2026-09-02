@@ -965,6 +965,12 @@ class Pipeline:
         # unlock each other early). Exposed via .run_in_progress; the
         # mutator and refresh_runtime() consult it.
         self._runs_in_flight: int = 0
+        # Concrete asyncio tasks that own those runs. The counter answers
+        # "is mutation legal?"; this registry gives aclose() something it can
+        # cancel and await before tearing down the resources those runs use.
+        # It is deliberately private so the public run/run_stream surface and
+        # state schema stay unchanged.
+        self._active_run_tasks: Set[asyncio.Task[Any]] = set()
         # aclose() idempotency latch.
         self._closed: bool = False
         self._close_task: Optional[Any] = None  # keeps fire-and-forget close() task alive
@@ -1062,14 +1068,16 @@ class Pipeline:
           1. pending HITL futures — cancelled (``HITLDecision.CANCEL``)
              so any stage coroutine blocked on an approval unwinds
              instead of awaiting forever;
-          2. live :meth:`events` taps — each subscriber queue receives
+          2. active run tasks — cancelled and awaited before their MCP,
+             provider, or LLM-client resources are disconnected;
+          3. live :meth:`events` taps — each subscriber queue receives
              a close sentinel so tap generators return instead of
              awaiting an event that will never come (2.2.0 — a host
              ``async for`` over a closed pipeline's tap would otherwise
              hang its consumer task forever);
-          3. the owned :class:`MCPManager` — ``disconnect_all()``
+          4. the owned :class:`MCPManager` — ``disconnect_all()``
              (reaps stdio child processes);
-          4. started :class:`ToolProvider` bundles —
+          5. started :class:`ToolProvider` bundles —
              :meth:`shutdown_tool_providers`.
 
         Best-effort and idempotent: each step's failure is logged and
@@ -1094,7 +1102,23 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: cancelling HITL token %r failed", token, exc_info=True)
 
-        # 1.5. Cancel a pending background compaction summary (Stage 2) —
+        # 2. Cancel and reap active runs BEFORE disconnecting any runtime
+        # resource they may currently be awaiting. Exclude the current task:
+        # aclose() can be called from teardown code reached by a run itself,
+        # and self-cancellation here would prevent the remaining cleanup.
+        current_task = asyncio.current_task()
+        active_runs = [
+            task
+            for task in list(self._active_run_tasks)
+            if task is not current_task and not task.done()
+        ]
+        for task in active_runs:
+            task.cancel()
+        if active_runs:
+            await asyncio.gather(*active_runs, return_exceptions=True)
+        self._active_run_tasks.difference_update(active_runs)
+
+        # 2.5. Cancel a pending background compaction summary (Stage 2) —
         # a one-shot host closing its loop mid-flight otherwise leaves a
         # destroyed-but-pending task behind (3.3.1).
         context_stage = self._stages.get(2)
@@ -1104,7 +1128,7 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: cancelling background compaction failed", exc_info=True)
 
-        # 2. Wake every events() tap with the close sentinel; the tap
+        # 3. Wake every events() tap with the close sentinel; the tap
         # generators see it and return, detaching their queues.
         for tap_queue in list(self._event_taps):
             try:
@@ -1112,7 +1136,7 @@ class Pipeline:
             except Exception:  # noqa: BLE001 — teardown must not raise
                 logger.warning("aclose: closing an events() tap failed", exc_info=True)
 
-        # 3. MCP servers (stdio child processes — the §2.4 leak).
+        # 4. MCP servers (stdio child processes — the §2.4 leak).
         manager = self._mcp_manager
         if manager is not None and hasattr(manager, "disconnect_all"):
             try:
@@ -1120,13 +1144,13 @@ class Pipeline:
             except Exception:  # noqa: BLE001
                 logger.warning("aclose: MCPManager.disconnect_all failed", exc_info=True)
 
-        # 4. Tool provider bundles.
+        # 5. Tool provider bundles.
         try:
             await self.shutdown_tool_providers()
         except Exception:  # noqa: BLE001
             logger.warning("aclose: shutdown_tool_providers failed", exc_info=True)
 
-        # 5. LLM client teardown (audit L3): the claude_code CLI client
+        # 6. LLM client teardown (audit L3): the claude_code CLI client
         # holds a prewarmed hot-spare subprocess; its aclose() reaps it so
         # a session ending inside the 90s TTL doesn't linger the child.
         # Covers the attached/warmed/legacy-resolved instances.
@@ -2495,6 +2519,9 @@ class Pipeline:
         # window would bypass MutationLocked while the run is morally
         # already in flight.
         self._runs_in_flight += 1
+        run_task = asyncio.current_task()
+        if run_task is not None:
+            self._active_run_tasks.add(run_task)
         success = False
         try:
             await self._emit(
@@ -2531,6 +2558,8 @@ class Pipeline:
         finally:
             self._runs_in_flight -= 1
             self._end_turn(state)
+            if run_task is not None:
+                self._active_run_tasks.discard(run_task)
             if self._hook_runner is not None:
                 await self._flush_lifecycle_hooks()
                 await self._fire_lifecycle_hook(
@@ -2607,6 +2636,9 @@ class Pipeline:
         # covering consumers that abandon the stream mid-run.
         self._runs_in_flight += 1
         counter_owned_by_task = False
+        stream_owner_task = asyncio.current_task()
+        if stream_owner_task is not None:
+            self._active_run_tasks.add(stream_owner_task)
 
         async def _run_pipeline() -> None:
             """Execute pipeline phases, then push sentinel to signal completion.
@@ -2654,6 +2686,9 @@ class Pipeline:
             finally:
                 self._runs_in_flight -= 1
                 self._end_turn(state)
+                active_task = asyncio.current_task()
+                if active_task is not None:
+                    self._active_run_tasks.discard(active_task)
                 if self._hook_runner is not None:
                     await self._flush_lifecycle_hooks()
                     await self._fire_lifecycle_hook(
@@ -2676,6 +2711,9 @@ class Pipeline:
 
             # Run pipeline in background task so we can yield events as they arrive
             task = asyncio.create_task(_run_pipeline())
+            if stream_owner_task is not None:
+                self._active_run_tasks.discard(stream_owner_task)
+            self._active_run_tasks.add(task)
             counter_owned_by_task = True
 
             while True:
@@ -2706,6 +2744,9 @@ class Pipeline:
                 # The pre-emit increment was never handed to a task
                 # (emit / task creation failed) — balance it here.
                 self._runs_in_flight -= 1
+                self._end_turn(state)
+                if stream_owner_task is not None:
+                    self._active_run_tasks.discard(stream_owner_task)
             unsubscribe()
 
     # ── Events ──
