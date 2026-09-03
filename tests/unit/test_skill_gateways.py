@@ -112,8 +112,53 @@ def test_browser_guide_opens_its_family():
 
 
 def test_already_open_members_are_not_reported_as_newly_opened():
-    """flat 표면(전부 노출)이나 두 번째 호출에서는 아무것도 바뀌지 않는다."""
-    registry = _FakeRegistry([])  # 활성화할 것이 없다 = 이미 다 보인다
+    """등록되지 않은 이름은 열리지 않는다 — 지도만 나온다."""
+    registry = _FakeRegistry([])  # 활성화할 것이 없다
+    res = asyncio.run(DelegationGuideTool().execute({}, _Ctx(registry)))
+    assert res.metadata["opened"] == []
+    assert "Now callable:" not in res.content
+
+
+def _registry_with_delegation_family(*, core):
+    """실 ToolRegistry 에 위임 패밀리를 얹는다 (core=True → flat 표면)."""
+    from xgen_agent_runtime.tools.built_in.delegation_guide_tool import DELEGATION_FAMILY
+    from xgen_agent_runtime.tools.registry import ToolRegistry
+
+    class _Stub:
+        def __init__(self, name):
+            self.name = name
+            self.description = name
+            self.input_schema = {"type": "object", "properties": {}}
+
+        async def execute(self, input, context):  # noqa: A002
+            raise AssertionError("실행되지 않아야 한다")
+
+    registry = ToolRegistry()
+    for name in DELEGATION_FAMILY:
+        registry.register(_Stub(name), core=core)
+    return registry, DELEGATION_FAMILY
+
+
+def test_the_real_registry_reports_exactly_what_this_call_opened():
+    """실 ToolRegistry 는 이미 보이는 도구에도 activate() 가 True 를 준다
+    (성공한 no-op). 그래서 '열렸다' 의 근거는 반환값이 아니라 **호출 전 상태**
+    여야 한다 — 아니면 두 번째 호출이 첫 번째와 똑같이 전 패밀리를 읊는다."""
+    registry, family = _registry_with_delegation_family(core=False)
+    ctx = _Ctx(registry)
+
+    first = asyncio.run(DelegationGuideTool().execute({}, ctx))
+    assert set(first.metadata["opened"]) == set(family)
+    assert "Now callable:" in first.content
+
+    second = asyncio.run(DelegationGuideTool().execute({}, ctx))
+    assert second.metadata["opened"] == [], "이미 열린 방을 다시 열었다고 말한다"
+    assert "Now callable:" not in second.content
+    assert "DelegateTask" in second.content, "지도는 여전히 나온다"
+
+
+def test_flat_surface_gateway_says_nothing_about_opening():
+    """평면 표면에서는 처음부터 전부 보인다 — 열 것이 없다."""
+    registry, _ = _registry_with_delegation_family(core=True)
     res = asyncio.run(DelegationGuideTool().execute({}, _Ctx(registry)))
     assert res.metadata["opened"] == []
     assert "Now callable:" not in res.content

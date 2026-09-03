@@ -49,19 +49,26 @@ _OPENED_TEMPLATE = "\n\nNow callable: {names}."
 def open_family(context: Any, names: Iterable[str]) -> List[str]:
     """Activate this gateway's members on the turn's registry.
 
-    Returns the names that went from deferred to callable (already-visible
-    members are not listed — nothing changed for them). Never raises: a guide
-    that cannot reach the registry still has a map to hand back, and losing the
-    map because activation failed would be a worse trade.
+    Returns the names that went from deferred to callable. Already-visible
+    members are not listed — ``activate`` answers True for them (it is a no-op
+    that succeeded), so the *before* state is what separates "I just opened
+    this" from "this was never hidden". Without that check a flat surface would
+    make every guide call end in a "Now callable" recital of the whole family,
+    and the second call would read exactly like the first.
+
+    Never raises: a guide that cannot reach the registry still has a map to hand
+    back, and losing the map because activation failed would be a worse trade.
     """
     registry = getattr(context, "tool_registry", None)
     activate = getattr(registry, "activate", None)
     if not callable(activate):
         return []
+    is_exposed = getattr(registry, "is_exposed", None)
     opened: List[str] = []
     for name in names:
         try:
-            if activate(name):
+            already = bool(is_exposed(name)) if callable(is_exposed) else False
+            if activate(name) and not already:
                 opened.append(name)
         except Exception:  # noqa: BLE001 — one bad name never costs the rest
             logger.debug("skill gateway: activate(%r) failed", name, exc_info=True)
