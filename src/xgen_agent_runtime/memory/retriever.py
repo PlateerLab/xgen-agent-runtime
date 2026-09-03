@@ -8,7 +8,8 @@ into the retriever); the retriever itself never touches host code.
 
 Layer order (mirrors plan §EXEC-1):
 
-    L0  recent_turns      ← STMHandle.recent(n=hooks.recent_turns)
+    L0  recent_turns      ← STMHandle.recent(넉넉히) → 최근 hooks.recent_turns **논리 턴**
+                            (도구 호출은 한 줄 요약 — memory/transcript.py)
     L1  session_summary   ← STMHandle.read_summary()  (D1: written by stage 19 at session close)
     L1.5 pinned           ← NotesHandle.load_pinned(category=hooks.pin_category, max_chars=…)
     L1.7 vault_map        ← IndexHandle.render_vault_map(category_descriptions=hooks.vault_descriptions)
@@ -32,6 +33,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.memory.provider import MemoryHooks, MemoryProvider
+from xgen_agent_runtime.memory.transcript import group_logical_turns, render_recent_turns
 from xgen_agent_runtime.stages.s02_context.interface import MemoryRetriever
 from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
 
@@ -62,6 +64,17 @@ def _dedup_key(chunk: MemoryChunk) -> str:
     if "#" in k:
         k = k.rsplit("#", 1)[0]
     return k
+
+
+def _scan_rows(hooks: MemoryHooks) -> int:
+    """L0 를 만들려고 STM 에서 뒤로 훑을 **행** 수.
+
+    한 논리 턴이 몇 행인지는 그 턴이 도구를 몇 번 썼느냐에 달려 미리 알 수 없다.
+    그래서 넉넉히 훑고 :func:`group_logical_turns` 가 턴 단위로 자른다 — 행 수를
+    턴 수로 착각하던 것이 이 층의 원래 버그였다.
+    """
+    scan = int(getattr(hooks, "recent_scan_rows", 0) or 0)
+    return max(scan, max(0, int(hooks.recent_turns)) * 4)
 
 
 def _layer_cap(hooks: MemoryHooks, layer: str) -> int:
@@ -277,7 +290,7 @@ class MemoryAwareRetriever(MemoryRetriever):
             tasks.append(_safe())
 
         if hooks.recent_turns > 0:
-            _add("recent", lambda: self._provider.stm().recent(n=hooks.recent_turns))
+            _add("recent", lambda: self._provider.stm().recent(n=_scan_rows(hooks)))
 
         async def _fetch_summary() -> Any:
             reader = getattr(self._provider.stm(), "read_summary", None)
@@ -387,35 +400,26 @@ class MemoryAwareRetriever(MemoryRetriever):
         else:
             try:
                 stm = self._provider.stm()
-                turns = await stm.recent(n=hooks.recent_turns)
+                turns = await stm.recent(n=_scan_rows(hooks))
             except Exception:  # noqa: BLE001
                 logger.debug("memory_aware: stm.recent failed", exc_info=True)
                 return total
         if not turns:
             return total
 
-        lines: List[str] = []
-        for t in turns:
-            content = getattr(t, "content", "") or ""
-            if isinstance(content, list):
-                # text-only flatten
-                pieces = [
-                    str(b.get("text", ""))
-                    for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                ]
-                content = "\n".join(p for p in pieces if p)
-            if not content or not str(content).strip():
-                continue
-            role = getattr(t, "role", "user") or "user"
-            lines.append(f"[{role}] {str(content).strip()}")
-        if not lines:
-            return total
-
-        body = "\n".join(lines)
+        # 행이 아니라 **논리 턴** 으로 자르고, 그 사이의 도구 호출은 한 줄로 요약한다.
+        # 예전에는 여기서 텍스트 블록만 남기고 나머지를 버렸는데, 버려진 도구 행이
+        # 이미 recent(n) 의 자리를 차지한 뒤였다 — 카운트는 쓰고 모델에는 안 보였다.
         cap = _layer_cap(hooks, "recent_turns")
-        if cap and len(body) > cap:
-            body = body[-cap:]  # keep most-recent tail
+        body = render_recent_turns(
+            turns,
+            limit=hooks.recent_turns,
+            max_chars=cap,
+            message_chars=getattr(hooks, "turn_message_chars", 1200),
+            tool_line_chars=getattr(hooks, "tool_line_chars", 200),
+        )
+        if not body:
+            return total
         if total + len(body) > budget:
             return total
         chunks.append(
@@ -424,7 +428,11 @@ class MemoryAwareRetriever(MemoryRetriever):
                 content=body,
                 source="short_term",
                 relevance_score=1.0,
-                metadata={"layer": "recent_turns", "turns": len(lines)},
+                metadata={
+                    "layer": "recent_turns",
+                    "turns": len(group_logical_turns(turns, hooks.recent_turns)),
+                    "lines": body.count("\n") + 1,
+                },
             )
         )
         return total + len(body)
