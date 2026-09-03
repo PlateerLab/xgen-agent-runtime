@@ -55,7 +55,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
@@ -252,7 +252,7 @@ class DocGuideTool(_DocToolBase):
             res = guide_fn(input.get("topic"), names=_GUIDE_NAME_MAP)
         # 문 뒤의 방을 연다 — 가이드가 "DocAnalyze 를 먼저 실행하라" 고 말해 놓고
         # 그 이름이 안 보이면, 모델은 시킨 대로 부르다가 막힌다.
-        opened = open_family(context, [n for n in DOC_TOOL_CLASSES if n != "DocGuide"])
+        opened = open_family(context, DOC_FAMILY)
         return ToolResult(
             content=with_opened(res["guide"], opened),
             metadata={
@@ -931,3 +931,7 @@ DOC_TOOL_CLASSES: Dict[str, type] = {
     "DocGenerate": DocGenerateTool,
     "DocEdit": DocEditTool,
 }
+
+#: 이 문 뒤의 방 — DocGuide 를 부르면 열린다 (게이트웨이 자신은 제외). 키가 없어
+#: 등록되지 않은 멤버(DocGenerate/DocEdit)는 activate 가 조용히 무시한다.
+DOC_FAMILY: Tuple[str, ...] = tuple(n for n in DOC_TOOL_CLASSES if n != "DocGuide")
