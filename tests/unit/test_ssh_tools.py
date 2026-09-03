@@ -142,6 +142,73 @@ async def test_list_servers_populated_and_empty(tmp_path):
     assert empty.content["servers"] == []
 
 
+# ── 문은 방을 연다 ───────────────────────────────────────────────────
+#
+# SshRun/SshUpload/SshDownload 는 전부 서버 **이름**을 받는데, 그 이름의 유일한
+# 출처가 SshListServers 다. 그래서 목록이 곧 이 패밀리의 문이고, 목록을 부른 뒤
+# 곧바로 SshRun 을 부르는 것이 정상 경로다 — 예전에는 그 이름이 아직 deferred 라
+# CLI 백엔드에서 클라이언트가 로컬에서 "No such tool available" 로 거절했다.
+
+
+class _FakeRegistry:
+    def __init__(self, deferred):
+        self.deferred = set(deferred)
+        self.activated = []
+
+    def is_exposed(self, name):
+        return False
+
+    def activate(self, name):
+        if name in self.deferred:
+            self.deferred.discard(name)
+            self.activated.append(name)
+            return True
+        return False
+
+
+def _ctx_with_registry(tmp_path, servers, deferred):
+    ctx = _ctx(tmp_path, servers)
+    registry = _FakeRegistry(deferred)
+    ctx.tool_registry = registry
+    return ctx, registry
+
+
+@pytest.mark.asyncio
+async def test_listing_servers_opens_the_ssh_verbs(tmp_path):
+    from xgen_agent_runtime.tools.built_in.ssh_tools import SSH_FAMILY
+
+    ctx, registry = _ctx_with_registry(tmp_path, [_PW_SERVER], SSH_FAMILY)
+    res = await SshListServersTool().execute({}, ctx)
+
+    assert set(registry.activated) == set(SSH_FAMILY)
+    assert set(res.metadata["opened"]) == set(SSH_FAMILY)
+    assert "Now callable:" in res.display_text
+    assert "prod" in res.display_text, "지도(서버 목록)는 그대로다"
+
+
+@pytest.mark.asyncio
+async def test_no_servers_opens_nothing(tmp_path):
+    """등록된 서버가 없으면 SshRun 은 부를 수 있어도 쓸 수 없다 — 열지 않는다."""
+    from xgen_agent_runtime.tools.built_in.ssh_tools import SSH_FAMILY
+
+    ctx, registry = _ctx_with_registry(tmp_path / "e", [], SSH_FAMILY)
+    res = await SshListServersTool().execute({}, ctx)
+
+    assert registry.activated == []
+    assert "Now callable:" not in (res.display_text or "")
+
+
+@pytest.mark.asyncio
+async def test_the_description_names_the_verbs_it_opens(tmp_path):
+    """설명이 약속하는 이름과 실제로 여는 이름이 같아야 한다 — 이 둘이 갈라진
+    자리가 정확히 예전 버그였다."""
+    from xgen_agent_runtime.tools.built_in.ssh_tools import SSH_FAMILY
+
+    desc = SshListServersTool().description
+    for name in SSH_FAMILY:
+        assert name in desc, f"{name} 을 열면서 설명에는 없다"
+
+
 @pytest.mark.asyncio
 async def test_ssh_run_unknown_server_and_no_command(tmp_path):
     ctx = _ctx(tmp_path, [_PW_SERVER])

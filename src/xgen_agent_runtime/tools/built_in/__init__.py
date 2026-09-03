@@ -17,11 +17,14 @@ family (``filesystem`` / ``shell`` / ``web`` / ``workflow``). Use
 subset without hardcoding tool names.
 """
 
-from typing import Dict, Iterable, List, Optional, Type
+from typing import Dict, Iterable, List, Optional, Tuple, Type
 
 from xgen_agent_runtime.tools.base import Tool
 from xgen_agent_runtime.tools.built_in.agent_tool import AgentTool
-from xgen_agent_runtime.tools.built_in.delegation_guide_tool import DelegationGuideTool
+from xgen_agent_runtime.tools.built_in.delegation_guide_tool import (
+    DELEGATION_FAMILY,
+    DelegationGuideTool,
+)
 from xgen_agent_runtime.tools.built_in.subagent_tools import (
     SubAgentAssignTool,
     SubAgentInboxReadTool,
@@ -107,6 +110,7 @@ from xgen_agent_runtime.tools.built_in.atlassian_tools import ATLASSIAN_TOOL_CLA
 # per-session tabs, embedded V8; no Chromium). an-web itself imports lazily —
 # 'pip install xgen-agent-runtime[browser]' (Python >= 3.12).
 from xgen_agent_runtime.tools.built_in.browser_tools import (
+    BROWSER_FAMILY,
     BROWSER_TOOL_CLASSES,
     BrowserActTool,
     BrowserBackTool,
@@ -121,6 +125,7 @@ from xgen_agent_runtime.tools.built_in.browser_tools import (
 # outlines, deterministic edits, generation. Lazy import — 'pip install
 # xgen-agent-runtime[docs]'.
 from xgen_agent_runtime.tools.built_in.doc_tools import (
+    DOC_FAMILY,
     DOC_TOOL_CLASSES,
     DocAnalyzeTool,
     DocApplyEditsTool,
@@ -143,6 +148,7 @@ from xgen_agent_runtime.tools.built_in.sandbox_exec_tool import SandboxExecTool
 # optional ``asyncssh`` dependency is absent.
 from xgen_agent_runtime.tools.built_in.audio_tools import AUDIO_TOOL_CLASSES
 from xgen_agent_runtime.tools.built_in.ssh_tools import (
+    SSH_FAMILY,
     SSH_TOOL_CLASSES,
     SshDownloadTool,
     SshListServersTool,
@@ -228,6 +234,29 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
 # does this power?", not "which source directory does it live in?" Hosts
 # selecting by feature get a stable API even as we add, rename, or split
 # individual tools.
+#: 스킬 게이트웨이 — ``{문 이름: 그 문이 여는 방}``.
+#:
+#: 계층 표면의 규약은 두 줄이다: 기본 명령은 턴 1에 바로 서고, 나머지는 **문
+#: 하나**만 서서 부르면 그 방이 열린다. 그 두 번째 줄이 네 모듈에 흩어진 습관으로
+#: 남아 있는 동안, 문 하나(DelegationGuide)는 지도만 돌려주고 방을 잠가 둔 채였다
+#: — 가이드가 "DelegateTask 를 써라" 고 말해 놓고 그 이름은 부를 수 없었다.
+#:
+#: 여기 선언하면 규약이 검사 대상이 된다(tests/unit/test_skill_gateways.py):
+#: 표에 있는 문은 실제로 자기 방을 열어야 하고, 여는 이름은 자기 설명이 약속한
+#: 이름이어야 한다. 새 패밀리를 만들면서 문만 만들고 여는 것을 잊으면 테스트가
+#: 먼저 말한다.
+#:
+#: ``JobGuide`` 는 xgen-workflow 에 산다(서버 스케줄러에 묶여 있다) — 같은 규약을
+#: 그쪽 테스트가 고정한다.
+SKILL_GATEWAYS: Dict[str, Tuple[str, ...]] = {
+    "DelegationGuide": DELEGATION_FAMILY,
+    "BrowserGuide": BROWSER_FAMILY,
+    "DocGuide": DOC_FAMILY,
+    # 목록 도구가 곧 문이다 — SshRun 이 받는 서버 '이름' 의 유일한 출처다.
+    "SshListServers": SSH_FAMILY,
+}
+
+
 BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
     "filesystem": ["Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"],
     "shell": ["Bash"],
@@ -328,6 +357,7 @@ def get_builtin_tools(
 
 
 __all__ = [
+    "SKILL_GATEWAYS",
     "AgentTool",
     "ATLASSIAN_TOOL_CLASSES",
     "BROWSER_TOOL_CLASSES",

@@ -178,3 +178,62 @@ def test_activation_failure_never_costs_the_map():
 
     res = asyncio.run(DelegationGuideTool().execute({}, _Ctx(_Broken())))
     assert not res.is_error and "Delegation skill" in res.content
+
+
+# ── 규약을 표로 만들면, 규약이 검사 대상이 된다 ──────────────────────
+#
+# 문 넷이 각자의 모듈에서 각자의 습관으로 방을 열고 있으면, 다섯 번째 문을 만드는
+# 사람은 그 습관을 보지 못한다. SKILL_GATEWAYS 는 "무엇이 문이고 무엇이 그 방인가"
+# 를 한 곳에 적어 둔 표이고, 아래 두 테스트가 그 표를 실제 동작과 대조한다.
+
+
+def _gateway_instance(name):
+    """게이트웨이 도구 인스턴스 — 등록에 인자가 필요하면 건너뛴다."""
+    from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
+
+    return BUILT_IN_TOOL_CLASSES[name]()
+
+
+def _ssh_ctx(tmp_path, registry):
+    """SshListServers 는 서버가 있어야 문을 연다 — 열 것이 있는 맥락을 만든다."""
+    from xgen_agent_runtime.tools.base import ToolContext
+
+    ctx = ToolContext(
+        session_id="s1",
+        storage_path=str(tmp_path),
+        extras={"ssh": {"servers": [{"name": "prod", "host": "h", "user": "u", "password": "p"}]}},
+    )
+    ctx.tool_registry = registry
+    return ctx
+
+
+def test_every_declared_gateway_actually_opens_its_family(tmp_path):
+    from xgen_agent_runtime.tools.built_in import SKILL_GATEWAYS
+
+    for gateway, family in SKILL_GATEWAYS.items():
+        registry = _FakeRegistry(family)
+        ctx = _ssh_ctx(tmp_path, registry) if gateway == "SshListServers" else _Ctx(registry)
+        res = asyncio.run(_gateway_instance(gateway).execute({}, ctx))
+        assert not res.is_error, f"{gateway} 가 오류를 냈다: {res.content}"
+        assert set(registry.activated) == set(family), (
+            f"{gateway} 가 자기 방을 열지 않았다 — 열린 것: {registry.activated}"
+        )
+        assert gateway not in registry.activated, f"{gateway} 가 자기를 열 필요는 없다"
+
+
+#: 호스트(xgen-workflow)가 등록하는 패밀리 멤버 — 런타임 내장 목록에는 없다.
+#: 이 예외를 여기 적어 두는 이유는, 적어 두지 않으면 오타 검사를 통째로 못 하기
+#: 때문이다. 하나씩 이름을 대면 새 오타는 여전히 걸린다.
+_HOST_PROVIDED_MEMBERS = frozenset({"DelegateTask"})
+
+
+def test_no_gateway_opens_a_tool_that_does_not_exist():
+    """표가 가리키는 이름은 전부 실재해야 한다 — 오타는 조용히 안 열리는 문이 된다."""
+    from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, SKILL_GATEWAYS
+
+    for gateway, family in SKILL_GATEWAYS.items():
+        assert gateway in BUILT_IN_TOOL_CLASSES, f"{gateway} 라는 도구가 없다"
+        for member in family:
+            if member in _HOST_PROVIDED_MEMBERS:
+                continue
+            assert member in BUILT_IN_TOOL_CLASSES, f"{gateway} → {member} 가 실재하지 않는다"

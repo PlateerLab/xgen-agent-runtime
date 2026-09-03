@@ -651,3 +651,54 @@ def test_rollout_recording_runs_end_to_end_without_public_result_change(
     ]
     assert records[0]["type"] == "pipeline.start"
     assert records[-1]["type"] == "pipeline.complete"
+
+
+# ── CLI 표면 각주는 사본이 아니라 한 함수다 ──────────────────────────
+#
+# 같은 문장이 turn_executor 안에서만도 여러 번, 그리고 xgen-workflow 의 [기본정보]
+# 화면에서 한 번 더 쓰인다. 사본으로 두면 한 곳만 고쳐지고, 실제로 그렇게 됐다:
+# 위임 각주가 게이트웨이를 가리키도록 바뀐 뒤에도 관리자 화면은 옛 문장(아직
+# 열리지 않은 DelegateTask 를 직접 부르라는)을 계속 보여 줬다.
+
+
+def test_the_cli_notes_are_built_by_one_function_not_copied():
+    """turn_executor 소스에 각주 문장의 사본이 남아 있으면 안 된다."""
+    from pathlib import Path
+
+    from xgen_agent_runtime.host import turn_executor
+
+    body = Path(turn_executor.__file__).read_text(encoding="utf-8")
+    for sentence in (
+        "on this backend the memory tools appear as",
+        "on this backend the graph-editing tool appears as",
+        "Delegation/background work: start with",
+    ):
+        assert sentence not in body, (
+            f"각주 문장이 turn_executor 에 직접 적혀 있다: {sentence!r} — "
+            "_constants 의 cli_*_note() 를 쓰라"
+        )
+
+
+def test_the_delegation_note_points_at_the_gateway():
+    from xgen_agent_runtime.host._constants import cli_delegation_note
+
+    note = cli_delegation_note("connector")
+    assert "mcp__connector__DelegationGuide" in note
+    # 동사를 직접 가리키면 모델은 아직 열리지 않은 이름을 부른다.
+    assert "mcp__connector__DelegateTask" not in note
+    assert "opens the delegation tools" in note
+
+
+def test_the_notes_follow_the_server_name():
+    """브릿지 서버 이름이 바뀌면 각주도 따라간다 — 하드코딩된 'connector' 금지."""
+    from xgen_agent_runtime.host._constants import (
+        cli_delegation_note,
+        cli_memory_note,
+        cli_self_evolution_note,
+    )
+
+    assert "mcp__local__DelegationGuide" in cli_delegation_note("local")
+    assert "mcp__local__memory_write" in cli_memory_note("local", "claude_code")
+    assert "'local' MCP server" in cli_memory_note("local", "codex")
+    assert "mcp__local__WorkflowSelf" in cli_self_evolution_note("local", "claude_code")
+    assert "'local' MCP server" in cli_self_evolution_note("local", "codex")

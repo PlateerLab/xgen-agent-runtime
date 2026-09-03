@@ -28,6 +28,7 @@ from xgen_agent_runtime.tools._ssh import (
     sftp_put,
     ssh_exec,
 )
+from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
 from xgen_agent_runtime.tools.built_in._ssh_store import SSHServerStore
 
 _SSH_FEATURE_KEY = "feature:ssh_enabled"
@@ -93,8 +94,17 @@ class _SSHToolBase(Tool):
         return [_SSH_FEATURE_KEY]
 
 
+#: 이 문 뒤의 방 — SshListServers 를 부르면 열린다. 목록 도구가 곧 게이트웨이인
+#: 이유는 단순하다: SshRun/SshUpload/SshDownload 는 전부 서버 '이름' 을 받는데,
+#: 그 이름의 유일한 출처가 이 목록이다.
+SSH_FAMILY = ("SshRun", "SshUpload", "SshDownload")
+
+
 class SshListServersTool(_SSHToolBase):
-    """List the servers this session can SSH into (no secrets)."""
+    """List the servers this session can SSH into (no secrets).
+
+    Also the family's gateway — see :data:`SSH_FAMILY`.
+    """
 
     @property
     def name(self) -> str:
@@ -103,11 +113,12 @@ class SshListServersTool(_SSHToolBase):
     @property
     def description(self) -> str:
         return (
-            "List the SSH servers configured for this session — name, host, "
-            "port, user, description, and 'via' (the jump/bastion path used to "
-            "reach it, if any). Passwords/keys are never shown. Use a server's "
-            "'name' with SshRun / SshUpload / SshDownload; jump hosts are dialled "
-            "automatically, so you never connect to a bastion yourself."
+            "START HERE for SSH — lists the servers configured for this session "
+            "(name, host, port, user, description, and 'via', the jump/bastion "
+            "path used to reach it) and OPENS SshRun / SshUpload / SshDownload. "
+            "Passwords/keys are never shown; use a server's 'name'. Jump hosts "
+            "are dialled automatically, so you never connect to a bastion "
+            "yourself."
         )
 
     @property
@@ -120,10 +131,18 @@ class SshListServersTool(_SSHToolBase):
     async def execute(self, input: Dict[str, Any], context: Any) -> ToolResult:
         servers = _store(context).list_public()
         if not servers:
+            # 열 것이 없다. SshRun 은 등록된 서버 '이름' 으로만 도는 도구라,
+            # 서버가 하나도 없는 세션에서 문을 여는 것은 쓸 수 없는 동사를
+            # 표면에 올리는 일일 뿐이다.
             return ToolResult(
                 content={"servers": []},
                 display_text="No SSH servers are configured for this session.",
             )
+        # 이 도구가 이 패밀리의 문이다 — 목록이 이름을 알려 주고, 그 이름을 쓰는
+        # 동사를 같은 답에서 연다. 예전에는 "use SshRun" 이라고 말해 놓고 그
+        # 이름은 아직 deferred 라, CLI 백엔드에서 모델이 곧바로 부르면 클라이언트가
+        # 로컬에서 거절했다 (No such tool available).
+        opened = open_family(context, SSH_FAMILY)
         lines = []
         for s in servers:
             line = f"- {s['name']}: {s['user']}@{s['host']}:{s['port']} [{s['auth']}]"
@@ -135,7 +154,8 @@ class SshListServersTool(_SSHToolBase):
             lines.append(line)
         return ToolResult(
             content={"servers": servers},
-            display_text="Configured SSH servers:\n" + "\n".join(lines),
+            display_text=with_opened("Configured SSH servers:\n" + "\n".join(lines), opened),
+            metadata={"opened": opened},
         )
 
 
@@ -370,6 +390,7 @@ SSH_TOOL_CLASSES: Dict[str, type] = {
 }
 
 __all__ = [
+    "SSH_FAMILY",
     "SshListServersTool",
     "SshRunTool",
     "SshUploadTool",

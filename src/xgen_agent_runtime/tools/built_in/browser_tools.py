@@ -423,7 +423,7 @@ class BrowserGuideTool(Tool):
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         # 문 뒤의 방을 연다 — 지도만 주고 잠가 두면 시킨 대로 부르다 막힌다.
-        opened = open_family(context, [n for n in BROWSER_TOOL_CLASSES if n != "BrowserGuide"])
+        opened = open_family(context, BROWSER_FAMILY)
         topic = str((input or {}).get("topic") or "").strip()
         if topic and topic in _BROWSER_GUIDE_TOPICS:
             return ToolResult(
@@ -888,3 +888,6 @@ BROWSER_TOOL_CLASSES: Dict[str, type] = {
     "BrowserBack": BrowserBackTool,
     "BrowserClose": BrowserCloseTool,
 }
+
+#: 이 문 뒤의 방 — BrowserGuide 를 부르면 열린다 (게이트웨이 자신은 제외).
+BROWSER_FAMILY: Tuple[str, ...] = tuple(n for n in BROWSER_TOOL_CLASSES if n != "BrowserGuide")
