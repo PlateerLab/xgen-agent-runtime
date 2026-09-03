@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
 
 _MAP = """\
 Delegation skill — three surfaces, pick by shape of the work:
@@ -84,8 +85,29 @@ Patterns:
 }
 
 
+#: 이 문 뒤의 방. 게이트웨이를 부르면 이 이름들이 열린다.
+#:
+#: ``DelegateTask`` 는 호스트가 등록한다(서버의 위임 배선) — 없으면 activate 가
+#: 조용히 지나간다. 그래서 여기 적어 두는 편이 맞다: 이 목록은 "이 스킬이 약속하는
+#: 능력" 이고, 그중 무엇이 이번 실행에 실재하는지는 레지스트리가 답한다.
+DELEGATION_FAMILY = (
+    "DelegateTask",
+    "SubAgentSpawn",
+    "SubAgentAssign",
+    "SubAgentList",
+    "SubAgentStop",
+    "SubAgentInboxRead",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
+    "TaskOutput",
+    "TaskStop",
+)
+
+
 class DelegationGuideTool(Tool):
-    """위임 스킬 게이트웨이 — 계층형 가이드, 점진공개."""
+    """위임 스킬 게이트웨이 — 문을 열면 방이 열린다(_skill_gateway 참조)."""
 
     @property
     def name(self) -> str:
@@ -95,9 +117,9 @@ class DelegationGuideTool(Tool):
     def description(self) -> str:
         return (
             "START HERE for delegation/background work — the delegation "
-            "skill. No topic: the decision map across DelegateTask / "
-            "SubAgent* / Task*. topic: deep guide (subagents, tasks, "
-            "patterns). Free, instant."
+            "skill. Calling this OPENS the delegation tools (DelegateTask / "
+            "SubAgent* / Task*) and returns the decision map across them. "
+            "topic: deep guide (subagents, tasks, patterns). Free, instant."
         )
 
     @property
@@ -117,10 +139,16 @@ class DelegationGuideTool(Tool):
         return ToolCapabilities(concurrency_safe=True, read_only=True, idempotent=True)
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+        # 문을 여는 것이 이 도구의 절반이다 — 지도만 주고 방을 잠가 두면 모델은
+        # 시킨 대로 부르다가 "No such tool available" 을 맞는다.
+        opened = open_family(context, DELEGATION_FAMILY)
         topic = str((input or {}).get("topic") or "").strip()
         if topic and topic in _TOPICS:
             return ToolResult(
-                content=_TOPICS[topic],
-                metadata={"topic": topic, "topics": sorted(_TOPICS)},
+                content=with_opened(_TOPICS[topic], opened),
+                metadata={"topic": topic, "topics": sorted(_TOPICS), "opened": opened},
             )
-        return ToolResult(content=_MAP, metadata={"topics": sorted(_TOPICS)})
+        return ToolResult(
+            content=with_opened(_MAP, opened),
+            metadata={"topics": sorted(_TOPICS), "opened": opened},
+        )

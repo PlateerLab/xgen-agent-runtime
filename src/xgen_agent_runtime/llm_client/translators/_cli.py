@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Sequence, Set
 
 from xgen_agent_runtime.core.state import TokenUsage
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
@@ -794,6 +794,9 @@ class StreamJsonAccumulator:
         self._text_buf: List[str] = []
         self._thinking_buf: List[str] = []
         self._tool_uses: List[Dict[str, Any]] = []
+        #: 이미 이벤트로 내보낸 tool_use id — 같은 호출을 두 번 기록하지 않는다.
+        #: (CLI 2.1.x 는 stream_event 라인과 종단 assistant 봉투를 **둘 다** 보낸다.)
+        self._emitted_tool_ids: Set[str] = set()
         self._current_tool: Optional[Dict[str, Any]] = None
         self._final_obj: Optional[Dict[str, Any]] = None
         self._message_id = ""
@@ -1040,19 +1043,17 @@ class StreamJsonAccumulator:
             return [{"type": "input_json_delta", "delta": partial}]
         cb = line.get("content_block")
         if isinstance(cb, dict) and cb.get("type") == "tool_use":
+            # 시작 프레임의 ``input`` 은 비어 있다(인자는 input_json_delta 로
+            # 뒤따른다) — 방출은 인자가 모인 뒤로 미룬다. 이 폼에는 별도의
+            # content_block_stop 처리가 없으므로, **다음 블록이 시작될 때** 앞의
+            # 것을 닫아 내보내고 남은 하나는 finalize 가 닫는다.
+            events = self._flush_open_tool()
             self._current_tool = {
                 "id": cb.get("id"),
                 "name": cb.get("name"),
                 "input": cb.get("input") or {},
             }
-            return [
-                {
-                    "type": "tool_use",
-                    "id": cb.get("id"),
-                    "name": cb.get("name"),
-                    "input": cb.get("input") or {},
-                }
-            ]
+            return events
 
         # Form 2 — full message (default Claude Code 2.x output).
         message = line.get("message") or {}
@@ -1102,19 +1103,17 @@ class StreamJsonAccumulator:
         if etype == "content_block_start":
             cb = ev.get("content_block") or {}
             if isinstance(cb, dict) and cb.get("type") == "tool_use":
+                # 여기서는 **방출하지 않는다.** Anthropic 와이어에서 이 프레임의
+                # ``input`` 은 언제나 비어 있고(인자는 뒤이어 input_json_delta 로
+                # 흐른다), 그대로 내보내면 호스트의 도구 타임라인에 "인자 없는
+                # 호출" 이 한 줄 더 생긴다. 실제로 그랬다 — 모든 CLI 도구가
+                # ``{}`` 한 번, 진짜 인자로 한 번, 두 줄로 기록됐다.
+                # 방출은 인자가 조립되는 content_block_stop 에서 한 번만 한다.
                 self._current_tool = {
                     "id": cb.get("id"),
                     "name": cb.get("name"),
                     "input": cb.get("input") or {},
                 }
-                return [
-                    {
-                        "type": "tool_use",
-                        "id": cb.get("id"),
-                        "name": cb.get("name"),
-                        "input": cb.get("input") or {},
-                    }
-                ]
             return []
 
         if etype == "content_block_delta":
@@ -1146,8 +1145,8 @@ class StreamJsonAccumulator:
             return []
 
         if etype == "content_block_stop":
-            self._close_current_tool()
-            return [{"type": "content_block_stop"}]
+            # 인자 조립이 끝나는 자리 — tool_use 는 **여기서 한 번만** 나간다.
+            return self._flush_open_tool() + [{"type": "content_block_stop"}]
 
         if etype == "message_delta":
             delta = ev.get("delta") or {}
@@ -1226,12 +1225,18 @@ class StreamJsonAccumulator:
                     self._thinking_buf.append(text)
                     events.append({"type": "thinking_delta", "text": text})
             elif btype == "tool_use":
+                # stream_event 형태에서 이미 낸 블록이면 봉투는 중복이다 —
+                # text/thinking 을 already_streamed 로 거르는 것과 같은 이유이고,
+                # 예전엔 tool_use 만 이 가드가 없어 매 호출이 두 줄로 기록됐다.
                 tu = {
                     "id": block.get("id"),
                     "name": block.get("name"),
                     "input": block.get("input") or {},
                 }
+                if str(tu["id"] or "") in self._emitted_tool_ids:
+                    continue
                 self._tool_uses.append(tu)
+                self._emitted_tool_ids.add(str(tu["id"] or ""))
                 events.append(
                     {
                         "type": "tool_use",
@@ -1242,17 +1247,43 @@ class StreamJsonAccumulator:
                 )
         return events
 
-    def _close_current_tool(self) -> None:
+    def _flush_open_tool(self) -> List[Dict[str, Any]]:
+        """열려 있는 tool_use 가 있으면 닫아서 이벤트 한 건으로 돌려준다.
+
+        content_block_stop 이 오지 않는 와이어 폼(구 assistant delta)을 위한 것 —
+        다음 블록이 시작되거나 스트림이 끝날 때 여기로 닫힌다.
+        """
+        closed = self._close_current_tool()
+        if closed is None:
+            return []
+        return [
+            {
+                "type": "tool_use",
+                "id": closed.get("id"),
+                "name": closed.get("name"),
+                "input": closed.get("input") or {},
+            }
+        ]
+
+    def _close_current_tool(self) -> Optional[Dict[str, Any]]:
+        """열려 있던 tool_use 를 인자와 함께 닫고 **그 블록을** 돌려준다.
+
+        호출부가 이것으로 정확히 한 번 이벤트를 낸다 — 반환값이 없던 동안에는
+        시작 프레임에서 빈 인자로 한 번 내보내야 했고, 그게 중복 기록의 원인이었다.
+        """
         if self._current_tool is None:
-            return
+            return None
         partial = self._current_tool.pop("_partial_json", "")
         if partial and not self._current_tool.get("input"):
             try:
                 self._current_tool["input"] = json.loads(partial)
             except json.JSONDecodeError:
                 self._current_tool["input"] = {"_raw": partial}
-        self._tool_uses.append(self._current_tool)
+        closed = self._current_tool
+        self._tool_uses.append(closed)
+        self._emitted_tool_ids.add(str(closed.get("id") or ""))
         self._current_tool = None
+        return closed
 
 
 async def assemble_response_from_stream_json(

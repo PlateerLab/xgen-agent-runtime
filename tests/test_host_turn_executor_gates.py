@@ -340,7 +340,10 @@ def test_sdk_delegation_not_registered_when_host_returns_empty(capture, caplog) 
     assert "DelegateTask" not in names
     assert "위임 미배선 — host 미제공" in caplog.text
     # SDK 경로엔 애초 위임 노트가 없다 — CLI 노트 문구도 섞이지 않는다.
-    assert "mcp__connector__DelegateTask" not in seen["system_prompt"]
+    # (노트는 **게이트웨이**를 가리킨다: 계층 표면의 턴 1 에는 DelegationGuide 만
+    #  있고 DelegateTask 는 그 문 뒤라, 동사를 직접 가리키면 모델이 아직 열리지
+    #  않은 이름을 부른다.)
+    assert "mcp__connector__DelegationGuide" not in seen["system_prompt"]
 
 
 # ── [CLI_BRIDGE] ──────────────────────────────────────────────────────
@@ -361,7 +364,7 @@ def test_cli_legacy_host_without_probe_keeps_notes(capture) -> None:
     assert MEMORY_PROMPT_BLOCK in sp and "mcp__connector__memory_write" in sp
     assert MEMORY_AUTO_PROMPT_BLOCK not in sp
     assert SELF_EVOLUTION_PROMPT_BLOCK in sp and "mcp__connector__WorkflowSelf" in sp
-    assert "mcp__connector__DelegateTask" in sp
+    assert "mcp__connector__DelegationGuide" in sp
     assert host.cli_params is not None and "_delegation_extras" in host.cli_params
 
 
@@ -371,7 +374,7 @@ def test_cli_bridge_available_true_keeps_notes(capture) -> None:
     sp = seen["system_prompt"]
     assert "mcp__connector__memory_write" in sp
     assert SELF_EVOLUTION_PROMPT_BLOCK in sp
-    assert "mcp__connector__DelegateTask" in sp
+    assert "mcp__connector__DelegationGuide" in sp
     assert "_delegation_extras" in host.cli_params
 
 
@@ -386,7 +389,7 @@ def test_cli_bridge_unavailable_drops_tool_notes_and_memory_is_automatic(capture
     assert MEMORY_AUTO_PROMPT_BLOCK in sp
     # self-evolution / 위임: 블록·노트·스태시 전부 없음
     assert SELF_EVOLUTION_PROMPT_BLOCK not in sp and "WorkflowSelf" not in sp
-    assert "mcp__connector__DelegateTask" not in sp
+    assert "mcp__connector__DelegationGuide" not in sp
     assert "_delegation_extras" not in host.cli_params
     assert "build_turn_delegation" not in host.calls  # 쓸 데 없는 백엔드 생성도 없다
     assert "self-evolution 미배선 — CLI 브릿지 없음" in caplog.text
@@ -463,7 +466,7 @@ def test_run_ctx_는_자기진화만_꺼도_살아_있다(capture, caplog) -> No
         seen = _run(host, capture, provider="claude_code", enable_self_evolution=False)
     sp = seen["system_prompt"]
     assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
-    assert "mcp__connector__DelegateTask" in sp
+    assert "mcp__connector__DelegationGuide" in sp
     assert "_delegation_extras" in host.cli_params
     assert "mcp__connector__memory_write" in sp
 
@@ -474,7 +477,7 @@ def test_cli_legacy_host_also_keeps_self_evolution(capture) -> None:
     seen = _run(host, capture, provider="claude_code")
     sp = seen["system_prompt"]
     assert SELF_EVOLUTION_PROMPT_BLOCK in sp
-    assert "mcp__connector__DelegateTask" in sp
+    assert "mcp__connector__DelegationGuide" in sp
     assert "mcp__connector__memory_write" in sp
 
 

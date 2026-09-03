@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
 from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
 
 _INSTALL_HINT = (
@@ -179,7 +180,7 @@ _GUIDE_NAME_MAP = {
 
 
 class DocGuideTool(_DocToolBase):
-    """The skill entry point — hierarchical guide, progressive disclosure."""
+    """스킬 진입점 — 문을 열면 방이 열린다(_skill_gateway 참조)."""
 
     @property
     def name(self) -> str:
@@ -189,6 +190,7 @@ class DocGuideTool(_DocToolBase):
     def description(self) -> str:
         return (
             "START HERE for .docx/.xlsx/.pptx work — the document skill. "
+            "Calling this OPENS the document tools. "
             "No topic: the GENERATE|EDIT|INSPECT map. topic: deep guide "
             "(build, generate, edit, edit.text, edit.chart, edit.xml, "
             "render, recipes.slides, recipes.colors). Pass path to scope "
@@ -248,9 +250,16 @@ class DocGuideTool(_DocToolBase):
             # 조용히 예전 동작으로 돌아간다. 포맷 스코핑은 편의이지 계약이
             # 아니라서, 이것 때문에 문서 작업 전체가 막히면 안 된다.
             res = guide_fn(input.get("topic"), names=_GUIDE_NAME_MAP)
+        # 문 뒤의 방을 연다 — 가이드가 "DocAnalyze 를 먼저 실행하라" 고 말해 놓고
+        # 그 이름이 안 보이면, 모델은 시킨 대로 부르다가 막힌다.
+        opened = open_family(context, [n for n in DOC_TOOL_CLASSES if n != "DocGuide"])
         return ToolResult(
-            content=res["guide"],
-            metadata={"topic": res.get("topic", ""), "topics": res.get("topics", [])},
+            content=with_opened(res["guide"], opened),
+            metadata={
+                "topic": res.get("topic", ""),
+                "topics": res.get("topics", []),
+                "opened": opened,
+            },
         )
 
 
