@@ -4,6 +4,35 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.12.0] — 2026-09-03
+
+### Fixed — 최근 대화가 **논리 턴** 단위로 들어간다 (도구 호출은 한 줄 요약)
+
+L0(`recent_turns`)가 STM **행 수**를 세고 있었다. 도구를 한 번 쓰면 그 턴은 행 4개
+(사용자 지시 · assistant `tool_use` · user `tool_result` · 최종 답변)가 되므로 "최근
+6개"는 1.5턴이었고, 가져온 6개 중 도구 행은 렌더 단계에서 텍스트 블록이 아니라는
+이유로 버려졌다 — **자리는 차지하고 모델에는 보이지 않았다.** 3턴(각 도구 1회)이면
+STM 12행 중 살아남는 줄이 3개였고 첫 지시는 통째로 사라졌다(실측).
+
+증상은 "에이전트가 두 턴 전 자기 행동을 잊고 같은 조회를 반복한다"였다.
+
+- `recent_turns` 의미를 **행 → 논리 턴**으로 바꿨다. 한 턴은 "사용자의 새 지시"에서
+  다음 지시 직전까지이며, 그 사이 도구를 몇 번 쓰든 한 턴이다. 기본값 `3`.
+  `tool_result` 도 user 메시지이므로 턴 경계 판정에서 제외한다.
+- 새 `recent_scan_rows`(기본 80): 한 턴이 몇 행인지 미리 알 수 없어 넉넉히 훑고
+  턴 단위로 자른다.
+- **도구 호출을 버리지 않고 호출 기준 한 줄로 요약한다**:
+  `[tool] Shell(command=ls -al /work) → ok: a.txt b.txt`. 이름만 남기면 같은 인자로
+  또 불렀는지 알 수 없어 인자를 함께 남기고, 결과를 지우면 답을 잊고 다시 부르므로
+  앞부분을 남긴다. 실패는 `error:` 로 구분한다.
+- **같은 호출이 이어지면 `×N` 으로 묶는다.** 반복은 그 자체가 신호이고, 늘어놓으면
+  예산만 먹는다.
+- 예산이 모자라면 **줄을 짧게 만들지 턴을 버리지 않는다**. 오래된 턴의 도구 줄부터
+  희생한다(요약이라 복구 가능한 손실이다). 잘린 값에는 `…[+N]` 이 남는다.
+
+새 정본: `xgen_agent_runtime/memory/transcript.py`. 새 hooks:
+`recent_scan_rows` · `tool_line_chars` · `turn_message_chars`.
+
 ## [4.8.0] — 2026-09-02
 
 ### Added — 입력·출력 계약을 바꾸지 않는 durable rollout

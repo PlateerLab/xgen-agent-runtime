@@ -1287,8 +1287,21 @@ class MemoryHooks:
     # buffers like screen observations can dominate a vault (observed: 59%
     # of 6.2k notes) and drown real recall in noise.
     search_exclude_categories: Tuple[str, ...] = ()
-    # STM tail size injected as the L0 chunk regardless of query overlap.
-    recent_turns: int = 6
+    # L0 로 주입할 **논리 턴** 수. 한 턴 = 사용자의 새 지시부터 다음 지시 직전까지이며,
+    # 그 사이 도구를 몇 번 쓰든 한 턴이다.
+    #
+    # 예전에는 이 값이 STM **행 수** 였다. 도구를 한 번 쓰면 그 턴은 행 4개가 되므로
+    # 6행은 1.5턴밖에 안 됐고, 그중 도구 행은 렌더에서 버려져 자리만 차지했다 —
+    # 3번째 턴에서 첫 지시가 통째로 사라졌다(실측). 세는 단위를 턴으로 바꾼다.
+    recent_turns: int = 3
+    # L0 를 만들려고 뒤에서부터 훑을 STM 행 수의 상한. 한 턴이 몇 행인지는 도구를
+    # 몇 번 썼느냐에 달려 미리 알 수 없어서, 넉넉히 훑고 턴 단위로 자른다.
+    recent_scan_rows: int = 80
+    # 도구 호출 한 줄의 상한. 호출 인자와 결과를 합친 길이다 — 결과 전문을 넣으면
+    # 예산이 터지고, 지우면 같은 호출을 반복한다.
+    tool_line_chars: int = 200
+    # 사용자/어시스턴트 한 발화의 상한(예산이 모자라면 이보다 더 조인다).
+    turn_message_chars: int = 1200
     # When True, MemoryAwareRetriever returns only L0/L1/L1.5/L1.7 and
     # leaves heavy semantic / keyword layers to the host's progressive
     # disclosure tools (memory_search / memory_read).
