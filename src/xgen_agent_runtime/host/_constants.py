@@ -64,6 +64,63 @@ recorded at the end of the turn. There are NO memory tools available here —
 do not attempt to call memory_* tools; simply answer using the injected context.
 """
 
+# ── CLI 표면 각주 ────────────────────────────────────────────────────
+#
+# 같은 도구가 MCP 브릿지를 지나며 이름을 바꾼다(``memory_write`` →
+# ``mcp__connector__memory_write``). 그 사실은 어느 도구 설명도 소유할 수 없어서
+# 프롬프트가 각주로 말한다.
+#
+# 이 세 문장이 함수인 이유는 사본이 늘기 때문이다. turn_executor 안에서만도 메모리
+# 각주가 두 번, 자기진화 각주가 두 번 쓰이고, xgen-workflow 의 [기본정보] 화면은
+# "실제로 주입되는 원문" 이라며 같은 문장을 또 한 번 적어 두었다. 그 사본 하나가
+# 뒤처지자 관리자 화면이 옛 프롬프트를 보여 줬다 — 위임 각주가 게이트웨이 대신
+# 아직 열리지 않은 동사를 가리키던 시절의 문장이었다.
+
+
+def cli_memory_note(server: str, provider: str) -> str:
+    """CLI 백엔드에서 memory_* 가 어떤 이름으로 보이는지."""
+    if provider == "claude_code":
+        return (
+            f"\n(Note: on this backend the memory tools appear as"
+            f" mcp__{server}__memory_write,"
+            f" mcp__{server}__memory_read, etc.)"
+        )
+    return f"\n(Note: on this backend the memory tools are served by the '{server}' MCP server.)"
+
+
+def cli_self_evolution_note(server: str, provider: str) -> str:
+    """WorkflowSelf 의 CLI 이름 + 하네스 자체 'Workflow' 와의 교차 구분.
+
+    이름이 비슷해 그래프 편집 요청을 하네스 Workflow(서브에이전트 조율)로 오인하는
+    회귀가 있었다(프로드 실증).
+    """
+    if provider == "codex":
+        return (
+            f"\n(Note: on this backend the WorkflowSelf tool is served"
+            f" by the '{server}' MCP server.)"
+        )
+    return (
+        f"\n(Note: on this backend the graph-editing tool appears as"
+        f" mcp__{server}__WorkflowSelf. Your harness's own 'Workflow'"
+        " tool is subagent orchestration — NOT XGEN graph editing.)"
+    )
+
+
+def cli_delegation_note(server: str) -> str:
+    """위임의 입구는 게이트웨이다.
+
+    계층 표면의 턴 1에는 ``DelegationGuide`` 만 있고 동사는 그 문 뒤에 있다. 예전
+    문구가 동사(DelegateTask)를 직접 가리켜서, 모델은 아직 열리지 않은 이름을
+    부르다 CLI 의 "No such tool available" 을 맞았다 — 프롬프트와 실제 표면이
+    어긋나면 모델이 아니라 우리가 틀린 것이다.
+    """
+    return (
+        f"\n(Delegation/background work: start with mcp__{server}__DelegationGuide"
+        " — that call opens the delegation tools and returns the map. Your built-in"
+        " Task tool is disabled here.)"
+    )
+
+
 #: host.build_turn_delegation() 반환 dict 에서 **실제 위임 백엔드**를 뜻하는 키 —
 #: 하나라도 non-None 이면 위임이 배선된 것이다 (xgen-workflow delegation 모듈 계약:
 #: subagent_manager=상주 매니저 프록시, task_runner/task_registry=백그라운드 태스크).

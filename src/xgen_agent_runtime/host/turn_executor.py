@@ -20,6 +20,9 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
     _CLI_BACKENDS,
     _delegation_wired,
     _self_evolution_policy,
+    cli_delegation_note,
+    cli_memory_note,
+    cli_self_evolution_note,
     default_prompt,
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
@@ -359,14 +362,7 @@ class AgentTurnExecutor:
                     system_prompt = (
                         system_prompt
                         + MEMORY_PROMPT_BLOCK
-                        + (
-                            f"\n(Note: on this backend the memory tools appear as"
-                            f" mcp__{_cli_mcp_server}__memory_write,"
-                            f" mcp__{_cli_mcp_server}__memory_read, etc.)"
-                            if provider == "claude_code"
-                            else f"\n(Note: on this backend the memory tools are served by the"
-                            f" '{_cli_mcp_server}' MCP server.)"
-                        )
+                        + cli_memory_note(_cli_mcp_server, provider)
                     )
                 if memory_provider is not None and _sdk_tools:
                     try:
@@ -379,14 +375,7 @@ class AgentTurnExecutor:
                         system_prompt = system_prompt + MEMORY_PROMPT_BLOCK
                         if provider in _CLI_BACKENDS:
                             # 같은 registry 가 MCP 로 나가므로 도구 이름에 접두가 붙는다.
-                            system_prompt += (
-                                f"\n(Note: on this backend the memory tools appear as"
-                                f" mcp__{_cli_mcp_server}__memory_write,"
-                                f" mcp__{_cli_mcp_server}__memory_read, etc.)"
-                                if provider == "claude_code"
-                                else f"\n(Note: on this backend the memory tools are served"
-                                f" by the '{_cli_mcp_server}' MCP server.)"
-                            )
+                            system_prompt += cli_memory_note(_cli_mcp_server, provider)
                         logger.info("agents/geny: 내장 메모리 활성 (self-serve 도구 6개 등록)")
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
@@ -537,20 +526,8 @@ class AgentTurnExecutor:
                     # 있다"고 말해 놓고 도구가 없는 유령 안내가 된다.
                     if registry.get("WorkflowSelf") is not None:
                         system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK
-                        if provider == "claude_code":
-                            # 하네스 자체 'Workflow'(서브에이전트 조율)와 이름이 비슷해
-                            # 그래프 편집 요청을 그쪽으로 오인하는 회귀가 있었다(프로드 실증).
-                            system_prompt += (
-                                f"\n(Note: on this backend the graph-editing tool appears as"
-                                f" mcp__{_cli_mcp_server}__WorkflowSelf. Your harness's own"
-                                " 'Workflow' tool is subagent orchestration — NOT XGEN"
-                                " graph editing.)"
-                            )
-                        elif provider == "codex":
-                            system_prompt += (
-                                f"\n(Note: on this backend the WorkflowSelf tool is served"
-                                f" by the '{_cli_mcp_server}' MCP server.)"
-                            )
+                        if provider in _CLI_BACKENDS:
+                            system_prompt += cli_self_evolution_note(_cli_mcp_server, provider)
                     else:
                         logger.info(
                             "agents/geny: self-evolution 미배선 — host 가 WorkflowSelf 를 제공하지 않음"
@@ -577,11 +554,7 @@ class AgentTurnExecutor:
                 system_prompt = (
                     system_prompt
                     + SELF_EVOLUTION_PROMPT_BLOCK
-                    + (
-                        "\n(Note: on this backend the graph-editing tool appears as"
-                        " mcp__connector__WorkflowSelf. Your harness's own 'Workflow'"
-                        " tool is subagent orchestration — NOT XGEN graph editing.)"
-                    )
+                    + cli_self_evolution_note("connector", "claude_code")
                 )
             elif (
                 provider == "codex"
@@ -687,12 +660,7 @@ class AgentTurnExecutor:
                         # 모델은 아직 열리지 않은 이름을 부르다 CLI 의
                         # "No such tool available" 을 맞았다 — 프롬프트와 실제 표면이
                         # 어긋나면 모델이 아니라 우리가 틀린 것이다.
-                        system_prompt = system_prompt + (
-                            "\n(Delegation/background work: start with"
-                            " mcp__connector__DelegationGuide — that call opens the"
-                            " delegation tools and returns the map. Your built-in Task"
-                            " tool is disabled here.)"
-                        )
+                        system_prompt = system_prompt + cli_delegation_note("connector")
                     else:
                         from xgen_agent_runtime.tools import ToolRegistry as _TR
                         from xgen_agent_runtime.tools.built_in import get_builtin_tools as _gbt
