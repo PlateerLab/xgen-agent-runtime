@@ -209,3 +209,110 @@ async def test_fake_cli_stream_event_scenario_end_to_end_through_run_stream():
     assert any(e.type == "text.delta" for e in events)
     # Correlation rides along the whole way.
     assert len({e.run_id for e in events}) == 1
+
+
+# ── 도구 호출은 이벤트 한 건이다 ──────────────────────────────────────
+#
+# CLI 2.1.x 는 같은 내용을 두 형태로 함께 보낸다: 토큰 단위 ``stream_event`` 와
+# 종단 ``assistant`` 봉투. 텍스트·thinking 은 already_streamed 로 걸렀지만
+# ``tool_use`` 만 가드가 없어서, **모든 CLI 도구 호출이 두 번 기록**됐다 —
+# 그것도 첫 줄은 인자가 비어 있는 채로(시작 프레임의 input 은 언제나 ``{}`` 다).
+# 사용자 화면의 도구 타임라인에 "인자 없이 부른 이상한 호출" 이 늘 한 줄 더 있었다.
+
+def _events(acc, lines):
+    out = []
+    for line in lines:
+        out.extend(acc.feed(line))
+    return out
+
+
+def _tool_uses(events):
+    return [e for e in events if e.get("type") == "tool_use"]
+
+
+def test_stream_event_form_emits_one_tool_use_with_full_input():
+    acc = StreamJsonAccumulator(model="m")
+    events = _events(acc, [
+        {"type": "stream_event", "event": {
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+        }},
+        {"type": "stream_event", "event": {
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"cmd":'},
+        }},
+        {"type": "stream_event", "event": {
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '"ls"}'},
+        }},
+        {"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}},
+    ])
+    calls = _tool_uses(events)
+    assert len(calls) == 1, f"도구 호출 한 건에 이벤트 {len(calls)}건"
+    assert calls[0]["input"] == {"cmd": "ls"}, "인자가 조립된 뒤에 나가야 한다"
+    assert calls[0]["id"] == "t1" and calls[0]["name"] == "Bash"
+
+
+def test_terminal_envelope_does_not_repeat_the_same_call():
+    """스트림으로 이미 낸 호출을 봉투가 다시 내지 않는다 (같은 id)."""
+    acc = StreamJsonAccumulator(model="m")
+    stream = _events(acc, [
+        {"type": "stream_event", "event": {
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+        }},
+        {"type": "stream_event", "event": {
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"cmd":"ls"}'},
+        }},
+        {"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}},
+    ])
+    envelope = acc.feed({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}},
+    ]}})
+    assert len(_tool_uses(stream)) == 1
+    assert _tool_uses(envelope) == [], "봉투는 중복이다"
+
+
+def test_full_message_form_still_emits_the_call():
+    """봉투만 오는 형태(2.x 기본)에서는 봉투가 유일한 기록이다."""
+    acc = StreamJsonAccumulator(model="m")
+    events = acc.feed({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t9", "name": "Read", "input": {"path": "/x"}},
+    ]}})
+    calls = _tool_uses(events)
+    assert len(calls) == 1 and calls[0]["input"] == {"path": "/x"}
+
+
+def test_two_different_calls_are_two_events():
+    acc = StreamJsonAccumulator(model="m")
+    events = _events(acc, [
+        {"type": "stream_event", "event": {
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+        }},
+        {"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}},
+        {"type": "stream_event", "event": {
+            "type": "content_block_start", "index": 1,
+            "content_block": {"type": "tool_use", "id": "t2", "name": "Read", "input": {}},
+        }},
+        {"type": "stream_event", "event": {"type": "content_block_stop", "index": 1}},
+    ])
+    assert [c["id"] for c in _tool_uses(events)] == ["t1", "t2"]
+
+
+def test_legacy_delta_form_closes_on_the_next_block():
+    """content_block_stop 이 없는 구 형태 — 다음 블록이 앞의 것을 닫는다."""
+    acc = StreamJsonAccumulator(model="m")
+    events = _events(acc, [
+        {"type": "assistant", "content_block": {
+            "type": "tool_use", "id": "a1", "name": "Bash", "input": {},
+        }},
+        {"type": "assistant", "delta": {"type": "input_json_delta", "partial_json": '{"cmd":"ls"}'}},
+        {"type": "assistant", "content_block": {
+            "type": "tool_use", "id": "a2", "name": "Read", "input": {},
+        }},
+    ])
+    calls = _tool_uses(events)
+    assert [c["id"] for c in calls] == ["a1"]
+    assert calls[0]["input"] == {"cmd": "ls"}

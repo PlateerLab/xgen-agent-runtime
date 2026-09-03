@@ -679,11 +679,19 @@ class AgentTurnExecutor:
                         # (로컬 표면이면 아래 SDK 분기가 registry 에 직접 등록한다.)
                         kwargs["_delegation_extras"] = delegation_extras
                         # 도구 계약은 도구 설명이 담는다 (Geny 동형 — 위임 프롬프트
-                        # 블록 없음). CLI 에만 이름 매핑/내장 Task 비활성 사실을 한 줄로.
+                        # 블록 없음). CLI 에만 **이름 매핑**과 내장 Task 비활성을 한 줄로.
+                        #
+                        # ⚠ 여기서 DelegateTask 를 "부르면 된다" 고 말하면 안 된다.
+                        # 계층 표면의 턴 1 에는 게이트웨이(DelegationGuide)만 있고
+                        # 동사는 그 문 뒤에 있다. 예전 문구가 동사를 직접 가리켜서,
+                        # 모델은 아직 열리지 않은 이름을 부르다 CLI 의
+                        # "No such tool available" 을 맞았다 — 프롬프트와 실제 표면이
+                        # 어긋나면 모델이 아니라 우리가 틀린 것이다.
                         system_prompt = system_prompt + (
-                            "\n(Delegation/background-task tools appear as"
-                            " mcp__connector__DelegateTask etc.; your built-in Task tool"
-                            " is disabled here — delegate via mcp__connector__DelegateTask.)"
+                            "\n(Delegation/background work: start with"
+                            " mcp__connector__DelegationGuide — that call opens the"
+                            " delegation tools and returns the map. Your built-in Task"
+                            " tool is disabled here.)"
                         )
                     else:
                         from xgen_agent_runtime.tools import ToolRegistry as _TR

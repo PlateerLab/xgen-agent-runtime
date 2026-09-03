@@ -47,6 +47,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
 
 _INSTALL_HINT = (
     "The an-web engine is not installed. Install it with: "
@@ -389,7 +390,7 @@ Recipes:
 
 
 class BrowserGuideTool(Tool):
-    """브라우저 스킬 게이트웨이 — 계층형 가이드, 점진공개 (DocGuide 동형)."""
+    """브라우저 스킬 게이트웨이 — 문을 열면 방이 열린다(_skill_gateway 참조)."""
 
     @property
     def name(self) -> str:
@@ -398,9 +399,10 @@ class BrowserGuideTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "START HERE for web browsing — the browser skill. No topic: the "
-            "session model, tool flow and element-targeting syntax. topic: "
-            "deep guide (act, extract, flows). Free, instant, no page needed."
+            "START HERE for web browsing — the browser skill. Calling this "
+            "OPENS the browser tools and returns the session model, tool flow "
+            "and element-targeting syntax. topic: deep guide (act, extract, "
+            "flows). Free, instant, no page needed."
         )
 
     @property
@@ -420,15 +422,23 @@ class BrowserGuideTool(Tool):
         return ToolCapabilities(concurrency_safe=True, read_only=True, idempotent=True)
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+        # 문 뒤의 방을 연다 — 지도만 주고 잠가 두면 시킨 대로 부르다 막힌다.
+        opened = open_family(
+            context, [n for n in BROWSER_TOOL_CLASSES if n != "BrowserGuide"]
+        )
         topic = str((input or {}).get("topic") or "").strip()
         if topic and topic in _BROWSER_GUIDE_TOPICS:
             return ToolResult(
-                content=_BROWSER_GUIDE_TOPICS[topic],
-                metadata={"topic": topic, "topics": sorted(_BROWSER_GUIDE_TOPICS)},
+                content=with_opened(_BROWSER_GUIDE_TOPICS[topic], opened),
+                metadata={
+                    "topic": topic,
+                    "topics": sorted(_BROWSER_GUIDE_TOPICS),
+                    "opened": opened,
+                },
             )
         return ToolResult(
-            content=_BROWSER_GUIDE_MAP,
-            metadata={"topics": sorted(_BROWSER_GUIDE_TOPICS)},
+            content=with_opened(_BROWSER_GUIDE_MAP, opened),
+            metadata={"topics": sorted(_BROWSER_GUIDE_TOPICS), "opened": opened},
         )
 
 
