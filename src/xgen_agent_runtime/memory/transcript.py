@@ -191,7 +191,7 @@ def _render_turn(
 def _bump_repeat(line: str, sig: str) -> str:
     """``[tool] Sig → ok`` → ``[tool] Sig ×2 → ok``."""
     marker = f"[tool] {sig}"
-    rest = line[len(marker):]
+    rest = line[len(marker) :]
     if rest.startswith(" ×"):
         num, _, tail = rest[2:].partition(" ")
         try:
