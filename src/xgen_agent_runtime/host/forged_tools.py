@@ -126,6 +126,11 @@ class ForgedToolSpec:
     verified: bool = False
     #: 마지막 테스트 실패 사유 (통과하면 ''/None).
     last_test_error: Optional[str] = None
+    #: 등록 검증에 쓴 대표 입력. 저장하는 이유: 이 도구를 **다른 환경**(다른
+    #: 에이전트·다른 사용자의 세션)으로 옮길 때 "거기서도 도는가" 를 같은
+    #: 입력으로 다시 물을 수 있어야 한다. 사람이 누르는 [테스트] 의 기본값도
+    #: 이것이다 — 없으면 사용자가 입력을 손으로 지어내야 한다.
+    test_input: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -672,6 +677,9 @@ class ForgeTool:
             _fail_text = f"테스트 실행 중 예외: {exc}"
         spec.verified = bool(_test_ok)
         spec.last_test_error = "" if _test_ok else _fail_text[:2000]
+        # 통과·실패 무관하게 남긴다 — 실패한 초안을 사람이 [테스트] 로 구제할
+        # 때도 같은 입력이 기본값이어야 한다.
+        spec.test_input = dict(_test_input)
 
         try:
             await asyncio.to_thread(self._store.save, spec)

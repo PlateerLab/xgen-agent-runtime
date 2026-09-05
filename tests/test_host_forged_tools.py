@@ -124,6 +124,9 @@ def test_forge_then_restore_then_run(tmp_path) -> None:
     assert not res.is_error, res.content
     # 등록 게이트: 실행 테스트를 통과해야 verified 로 저장된다.
     assert store.specs["Greet"].verified is True
+    # 검증에 쓴 입력이 스펙에 남는다 — 이 도구를 다른 세션으로 옮길 때 같은
+    # 입력으로 다시 물을 수 있어야 하고, 사람의 [테스트] 기본값도 이것이다.
+    assert store.specs["Greet"].test_input == {"who": "xgen"}
 
     # 새 세션 — 저장소만으로 도구가 되살아난다.
     reg2 = ToolRegistry()
@@ -200,3 +203,25 @@ def test_failing_script_reports_stderr_and_records(tmp_path) -> None:
     out = asyncio.run(RegistryRouter(reg).route("Boom", {}, _ctx(ws)))
     assert out.is_error and "kaboom" in out.content
     assert store.calls and store.calls[-1][0] == "Boom" and store.calls[-1][1]
+
+
+def test_failed_forge_still_keeps_the_test_input(tmp_path) -> None:
+    """실패한 초안도 입력을 남긴다 — 사람이 [테스트] 로 구제할 때 같은 입력이 기본값."""
+    ws, store = _ws(tmp_path), _MemStore()
+    with open(os.path.join(ws, "bad.py"), "w", encoding="utf-8") as fh:
+        fh.write("import sys; sys.exit(3)\n")
+    reg = ToolRegistry()
+    register_forged_tools(reg, workflow_id="wf1", workspace_dir=ws, store=store, core=True)
+    res = asyncio.run(RegistryRouter(reg).route("ForgeTool", {
+        "name": "Bad", "description": "d", "entrypoint": "bad.py",
+        "test_input": {"x": 1},
+    }, _ctx(ws)))
+    assert res.is_error
+    assert store.specs["Bad"].verified is False
+    assert store.specs["Bad"].test_input == {"x": 1}
+
+
+def test_spec_without_test_input_still_loads() -> None:
+    """옛 저장소 행(컬럼 없음)도 그대로 읽힌다."""
+    spec = ForgedToolSpec.from_dict({"name": "Old", "description": "d", "entrypoint": "x.py"})
+    assert spec.test_input == {}
