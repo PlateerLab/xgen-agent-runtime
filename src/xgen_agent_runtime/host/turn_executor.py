@@ -284,6 +284,15 @@ class AgentTurnExecutor:
             kwargs["_job_tools"] = _job_tools
             if _job_tools:
                 system_prompt = system_prompt + "\n\n" + host.jobs_prompt_block()
+            # 호스트가 소유한 스킬 도구들(아티팩트 등). Jobs 처럼 스킬이 늘 때마다
+            # 프로토콜을 넓히지 않으려고 일반 훅 하나로 받는다 — 계층 판정은
+            # 여기서 이름으로만 한다(TURN_ONE_TOOLS).
+            _host_skill_tools: list = []
+            try:
+                _host_skill_tools = list(host.build_host_skill_tools(**kwargs) or [])
+            except Exception as _hexc:  # noqa: BLE001
+                logger.warning("agents/geny: 호스트 스킬 도구 실패 (스킵): %s", _hexc)
+            kwargs["_host_skill_tools"] = _host_skill_tools
             # 실행 환경 안내 — 도구가 어디서 도는지 host 가 설명한다(서버: 러너/
             # 커넥터 로컬 sandbox, 커넥터 사이드카: 이 PC). 안 알려 주면 에이전트는
             # 자기 코드가 어디서 도는지 모른 채 /tmp 에 쓰고 다음 턴에 잃는다.
@@ -414,9 +423,10 @@ class AgentTurnExecutor:
                         anthropic_api_key=host.resolve_api_key("anthropic", kwargs),
                         ssh_servers=host.load_ssh_servers(),
                     )
-                    for _jt in _job_tools:
+                    for _jt in list(_job_tools) + list(_host_skill_tools):
                         if registry.get(_jt.name) is None:
-                            # JobGuide 가 문이고 Schedule/List/Cancel 은 그 뒤다.
+                            # 게이트웨이만 첫 턴에 선다 — 멤버는 그 문 뒤다
+                            # (JobGuide→Job*, ArtifactGuide→Artifact*).
                             registry.register(_jt, core=_turn_one(_jt.name))
                     if bt_summary["tools"]:
                         # 영속 workspace (Drive형 동기화의 전제): workflow(에이전트)
