@@ -96,6 +96,10 @@ TURN_ONE_TOOLS = frozenset(
         "memory_categories",
         # 4. 영구 작업 — JobSchedule/JobList/JobCancel 은 이 문 뒤에.
         "JobGuide",
+        # 4-b. 아티팩트(사용자가 여는 화면) — ArtifactSave/List/Delete 는 이 문 뒤에.
+        #      만든 것을 대화에 찍는 대신 화면으로 내놓는 길이라, 문이 안 보이면
+        #      그런 길이 있다는 것 자체를 모른다.
+        "ArtifactGuide",
         # 5. 위임 — DelegateTask/SubAgent*/Task* 는 이 문 뒤에.
         "DelegationGuide",
         # 6. 도구 제작 — 이 넷은 문을 두지 않는다. 숨겼더니 에이전트가 자기

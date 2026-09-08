@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 4.14.0
+
+- 호스트가 소유한 스킬 도구를 얹는 일반 훅 `Host.build_host_skill_tools(**kwargs)`
+  (기본 구현은 빈 목록 — 옛 호스트와 함께 배포돼도 깨지지 않는다). Jobs 처럼
+  서버가 소유하는 스킬이 늘 때마다 프로토콜을 넓히지 않으려는 자리다. 등록은
+  작업 도구와 같은 규약이고, 계층 판정(`TURN_ONE_TOOLS`)은 런타임이 이름으로만 한다.
+- 첫 턴 표면에 `ArtifactGuide` — 사용자가 여는 화면(아티팩트)을 만드는 스킬의 문.
+  만든 것을 대화에 찍는 대신 화면으로 내놓는 길이라, 문이 안 보이면 그런 길이
+  있다는 것 자체를 모른다. 멤버(`ArtifactSave`/`ArtifactList`/`ArtifactDelete`)는
+  그 문 뒤에서 열린다.
+
 ## [4.12.0] — 2026-09-03
 
 ### Fixed — 최근 대화가 **논리 턴** 단위로 들어간다 (도구 호출은 한 줄 요약)

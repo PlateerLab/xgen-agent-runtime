@@ -25,6 +25,7 @@ def test_패밀리는_문_하나만_내놓는다():
         ("DelegationGuide", "SubAgentSpawn"),
         ("DelegationGuide", "TaskCreate"),
         ("BrowserGuide", "BrowserNavigate"),
+        ("ArtifactGuide", "ArtifactSave"),
     ):
         assert is_turn_one(gate), gate
         assert not is_turn_one(member), member
@@ -118,3 +119,11 @@ def test_MCP_를_지나온_이름도_같은_도구다():
     assert is_turn_one("mcp__connector__WorkflowSelf")
     assert is_turn_one("mcp_local_Shell")
     assert not is_turn_one("mcp_local_DocBuild")
+
+
+def test_아티팩트는_문이_첫_턴에_있다():
+    """만든 것을 대화에 찍는 대신 화면으로 내놓는 길 — 문이 안 보이면 그런 길이
+    있다는 것 자체를 모른다. 멤버는 문 뒤다."""
+    assert is_turn_one("ArtifactGuide")
+    for member in ("ArtifactSave", "ArtifactList", "ArtifactDelete"):
+        assert not is_turn_one(member), member

@@ -117,6 +117,19 @@ class HostServices(Protocol):
     # for the DB-backed ones (jobs/self-evolution/delegation) or no-ops when
     # unavailable locally, without ever changing the executor's call shape.
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]: ...
+
+    def build_host_skill_tools(self, **kwargs: Any) -> List[Any]:
+        """이 턴에 얹을 **호스트 소유 스킬 도구들**. 기본은 없음.
+
+        Jobs 처럼 서버가 소유하는 스킬이 늘 때마다 이 프로토콜을 넓히지 않으려고
+        일반 훅으로 둔다 — 호스트가 무엇을 얹든 런타임은 이름만 보고 계층을
+        판정한다(``TURN_ONE_TOOLS``). 계층 판정이 호스트로 새면 표면은 등록
+        지점마다 다른 모양이 된다.
+
+        구현하지 않은 호스트를 위해 기본 구현이 빈 목록을 돌려준다 — 런타임이
+        먼저 배포돼도 옛 호스트가 깨지지 않는다.
+        """
+        return []
     def build_job_tools(
         self,
         workflow_id: str,
