@@ -117,8 +117,25 @@ def test_MCP_를_지나온_이름도_같은_도구다():
     assert is_turn_one("mcp_local_BrowserGuide")
     assert not is_turn_one("mcp_local_BrowserNavigate")
     assert is_turn_one("mcp__connector__WorkflowSelf")
-    assert is_turn_one("mcp_local_Shell")
     assert not is_turn_one("mcp_local_DocBuild")
+
+
+def test_사용자_PC_는_문_뒤에_있다():
+    """장소가 다르면 문 뒤다.
+
+    예전에는 사용자 PC 셸(``Shell``)이 문 없이 첫 턴에 섰다 — 우리 ``Bash`` 옆에,
+    같은 층의 동사로. 모델은 둘을 바꿔 써도 되는 것으로 읽었고, 샌드박스 작업을
+    하던 턴이 사용자 PC 셸을 불러 42분을 타임아웃으로 태웠다(2026-09-08 실측).
+
+    이제 입구에는 문(``LocalControl``) 하나만 서고, 그 PC 의 셸·파일·브라우저·
+    앱·오피스는 전부 그 뒤에 있다.
+    """
+    assert is_turn_one("LocalControl")
+    assert is_turn_one("mcp__connector__LocalControl")
+    for member in ("Shell", "ShellJob", "Open", "ReadFile", "WriteFile",
+                   "ListDir", "Search", "Clipboard", "Notify"):
+        assert not is_turn_one(member), member
+        assert not is_turn_one(f"mcp_local_{member}"), member
 
 
 def test_아티팩트는_문이_첫_턴에_있다():
