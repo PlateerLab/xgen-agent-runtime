@@ -78,7 +78,15 @@ def test_flat_은_전부_선노출한다():
 def test_첫_턴_표면은_스물몇_개를_넘지_않는다():
     # 정확한 수를 박지 않는 이유: 추가는 있을 수 있다. 다만 "패밀리를 통째로
     # 올렸다"는 실수는 이 선을 반드시 넘는다.
-    assert len(TURN_ONE_TOOLS) <= 25, sorted(TURN_ONE_TOOLS)
+    #
+    # 26 (2026-09-08, 25 →): SystemPackages 하나. `command not found` 를 만난
+    # 에이전트가 고칠 길을 못 찾고 후퇴하거나, 셸 apt 로 깔았다가 다음 세션에
+    # 다시 잃는 것을 막는다 — PythonEnv 가 첫 턴에 있는 것과 같은 이유다.
+    # 같은 날 Shell 이 빠지고 LocalControl 이 들어와 순증은 +1 이다.
+    #
+    # 이 선을 다시 올리려면 **한 도구씩** 이유를 여기 적어야 한다. 이 주석이
+    # 길어지는 것이 곧 표면이 넓어졌다는 신호다.
+    assert len(TURN_ONE_TOOLS) <= 26, sorted(TURN_ONE_TOOLS)
 
 
 def test_한_묶음_안에서도_계층이_갈린다():
@@ -118,6 +126,19 @@ def test_MCP_를_지나온_이름도_같은_도구다():
     assert not is_turn_one("mcp_local_BrowserNavigate")
     assert is_turn_one("mcp__connector__WorkflowSelf")
     assert not is_turn_one("mcp_local_DocBuild")
+
+
+def test_자기_환경을_고치는_길은_문_뒤에_두지_않는다():
+    """``command not found`` / ``ModuleNotFoundError`` 앞에서 후퇴하지 않으려면,
+    고칠 길이 **그 자리에** 보여야 한다.
+
+    PythonEnv 를 숨겼더니 에이전트가 자기 환경에 패키지를 깔 수 있다는 걸 모른 채
+    마크다운으로 후퇴했다(2026-08-18). SystemPackages 도 같은 이유로 첫 턴에 둔다 —
+    숨기면 셸 apt 로 깔고 다음 세션에 다시 잃는다(2026-09-08: git 이 두 번 사라졌다).
+    """
+    assert is_turn_one("PythonEnv")
+    assert is_turn_one("SystemPackages")
+    assert is_turn_one("mcp__connector__SystemPackages")
 
 
 def test_사용자_PC_는_문_뒤에_있다():

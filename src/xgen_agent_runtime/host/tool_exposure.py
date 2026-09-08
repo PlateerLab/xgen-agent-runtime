@@ -109,6 +109,11 @@ TURN_ONE_TOOLS = frozenset(
         "ListForgedTools",
         "DeleteForgedTool",
         "PythonEnv",
+        #    같은 이유로 **시스템 패키지**도 여기 있다. 에이전트가
+        #    `command not found` 를 만났을 때 고칠 길이 문 뒤에 있으면, 그
+        #    사실을 모른 채 후퇴하거나 셸 apt 로 깔고 다음 세션에 다시 잃는다
+        #    (2026-09-08 실증: git 이 그렇게 두 번 사라졌다).
+        "SystemPackages",
         # 7. 자기 진화 — 한 도구가 action 으로 자기 안을 연다.
         "WorkflowSelf",
         # 웹 — 브라우저가 없는 표면(웹 대화)의 유일한 바깥 통로라 항상 둔다.
