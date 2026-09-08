@@ -130,6 +130,7 @@ class HostServices(Protocol):
         먼저 배포돼도 옛 호스트가 깨지지 않는다.
         """
         return []
+
     def build_job_tools(
         self,
         workflow_id: str,
