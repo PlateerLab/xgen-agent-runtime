@@ -111,17 +111,35 @@ _CLI_LOCAL_TOOLS = (
 #: 담당한다 — 같은 일을 하는 반쪽 도구가 곁에 있으면 모델은 반드시 그걸 집는다.
 _CLI_SESSION_SCHED_TOOLS = ("CronCreate", "CronDelete", "CronList", "ScheduleWakeup")
 
-#: Claude Code 네이티브 도구 **전체 카탈로그** — ``allow_local_tools=False`` 일 때
+#: Claude Code 네이티브 도구 **차단 상위집합** — ``allow_local_tools=False`` 일 때
 #: 통째로 ``--disallowedTools`` 로 나가는 집합이다.
 #:
-#: 예전엔 이 중 일부만 켜는 에이전트별 선택(cli_native_tools_disabled)이 있었지만
-#: 폐지했다. 네이티브를 하나라도 켜면 같은 능력을 하는 도구가 두 벌 광고되고
-#: (우리 런타임 Bash vs CLI 네이티브 Bash), 그중 한 벌만 우리 경로 가드·훅·결과
-#: 기록을 지난다 — 어느 쪽이 돌았는지는 사후에 구분되지도 않는다. 지금은 서버·
-#: 로컬 모두 전면 차단이고, 같은 능력은 런타임 레지스트리가 MCP 로 준다.
-#: (스케줄 도구는 별개로 항상 차단 — _CLI_SESSION_SCHED_TOOLS.)
-CLI_NATIVE_TOOL_CATALOG = (
+#: 왜 "카탈로그" 가 아니라 "상위집합" 인가
+#: ---------------------------------------
+#: 예전 이름은 CLI_NATIVE_TOOL_CATALOG 였고 12종이었다. 그 이름이 거짓말이었다 —
+#: CLI 의 카탈로그가 아니라 **우리가 그때 알던 목록**이었고, CLI 가 도구를 늘리는
+#: 동안 아무도 알아채지 못했다. 2026-09-09 실측(CLI 2.1.x): CLI 가 27종을 광고했고
+#: 그중 12종만 막고 있었다. 15종이 새고 있었고, 우리 목록의 6종은 이미 없는
+#: 이름이었다(죽은 항목).
+#:
+#: 그 15종 중 하나가 ``Skill`` 이다. 에이전트가 아티팩트를 만들다 CLI 번들 스킬
+#: (dataviz)을 열었고, 그 스킬이 가리킨 파일은 **워크플로우 파드의 /tmp** 에 있는데
+#: Read 는 러너 샌드박스로 가므로 닿을 수 없었다. 더 나쁜 것은 그 스킬이 **다른
+#: 제품**(Claude Code 의 Artifact)을 설명한다는 것이다 — HTML·window.claude.*·
+#: cdnjs 로드. 우리 아티팩트는 React + ArtifactSave + xgen.file() 이다.
+#:
+#: 그래서 규칙을 바꾼다: **지금 아는 것을 막는다** 가 아니라 **알던 것을 전부 막고,
+#: 새로 나타나면 알린다**(:func:`native_tool_leaks`). 모르는 이름을 넣는 것은
+#: 안전하다 — 실측으로 확인했다(exit 0, stderr 없음). 그러니 상위집합이 맞다.
+#:
+#: 고정점으로 구한 목록이다. CLI 의 init 이벤트가 알리는 ``tools`` 는 **카탈로그가
+#: 아니라 현재 활성 목록**이라, 26종을 막자 Glob·Grep 이 새로 나타났다. 그것까지
+#: 막아 0종이 될 때까지 반복해 얻은 것이 아래다.
+CLI_NATIVE_TOOLS_DENY = (
+    # ── 파일·셸 (같은 능력을 우리 런타임이 MCP 로 준다) ────────────────
     "Bash",
+    "BashOutput",
+    "KillShell",
     "Read",
     "Write",
     "Edit",
@@ -130,24 +148,91 @@ CLI_NATIVE_TOOL_CATALOG = (
     "Glob",
     "Grep",
     "LS",
-    "WebSearch",
+    # ── 바깥 (우리 WebFetch/WebSearch 가 대신한다) ──────────────────────
     "WebFetch",
+    "WebSearch",
+    # ── 세션 한정 스케줄 — 대화가 끝나면 큐도 죽는다. 영구 작업은 JobSchedule.
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    # ── CLI 내부 위임 — 우리 매니저·작업 내역·완료 트리거를 통째로 우회한다.
+    "Task",
+    "Agent",
+    "ListAgents",
+    "SendMessage",
+    "TaskOutput",
+    "TaskStop",
+    # ── 스킬·커맨드 표면. --disable-slash-commands 가 목록까지 비우지만,
+    #    도구 이름도 함께 막아 두 겹으로 닫는다.
+    "Skill",
+    "SlashCommand",
+    # ── 다른 제품의 표면 — 우리 것과 이름이 같거나 겹친다.
+    #    Artifact: claude.ai 게시. 우리 아티팩트는 ArtifactSave(React) 다.
+    #    ToolSearch: 우리 것과 **이름이 같다** — 어느 쪽이 돌았는지 사후에
+    #                구분되지 않는다.
+    "Artifact",
+    "ToolSearch",
+    "Workflow",
+    "DesignSync",
+    "ReportFindings",
+    # ── 하네스 운영 도구 — 서버 턴에는 주인이 없다.
+    "Monitor",
+    "PushNotification",
+    "RemoteTrigger",
     "TodoWrite",
+    "AskUserQuestion",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "EnterWorktree",
+    "ExitWorktree",
+    "SendUserFile",
 )
+
+#: 예전 이름 — 배포 순서가 계약이 되지 않게 남긴다. xgen-workflow 가 이 이름으로
+#: import 하므로, 두 레포가 어느 순서로 나가도 ImportError 가 나지 않는다.
+CLI_NATIVE_TOOL_CATALOG = CLI_NATIVE_TOOLS_DENY
+
+
+def native_tool_leaks(announced: Any) -> tuple:
+    """CLI 가 알린 도구 중 **우리가 막지 못한 것** — 드리프트 경보.
+
+    ``--disallowedTools`` 는 세션이 시작되기 **전에** 정해지므로, 그 세션의 init
+    으로 그 세션의 목록을 만들 수는 없다. 대신 닫아 둔 문을 세션마다 **검산**한다:
+    init 이 도구를 하나라도 알리면 상위집합이 뒤처졌다는 뜻이다.
+
+    이 검산이 없으면 드리프트는 아무 신호도 내지 않는다 — 도구는 조용히 살아
+    있고, 에이전트만 다르게 행동한다(2026-09-09 Skill 사고가 정확히 그랬다).
+
+    ``mcp__`` 로 시작하는 이름은 우리 브릿지다 — 그건 남아야 정상이다.
+    """
+    deny = set(CLI_NATIVE_TOOLS_DENY)
+    out = []
+    for name in announced or ():
+        text = str(name or "")
+        if not text or text.startswith("mcp__") or text in deny:
+            continue
+        out.append(text)
+    return tuple(out)
 
 
 def _log_native_tool_report(disallowed: Any) -> None:
     """빌드 시점에 **유지/제거된 네이티브 도구 리포트**를 로그로 남긴다.
 
     ``build_cli_client`` 는 최종 disallow 집합을 아는 유일한 지점이라(서버·커넥터
-    로컬 공통), 여기서 카탈로그를 갈라 출력한다. 정상 상태는 "유지 0개" 다 —
+    로컬 공통), 여기서 목록을 갈라 출력한다. 정상 상태는 "유지 0개" 다 —
     유지 목록에 뭔가 남아 있으면 그 도구는 우리 가드를 지나지 않는다는 뜻이므로
     로그에서 바로 보여야 한다. 리포트가 실행을 막으면 안 되므로 절대 raise 하지 않는다.
+
+    ⚠ **이 리포트는 우리 목록만 본다.** CLI 에 있는데 우리 목록엔 없는 도구는 여기
+    아무 흔적도 남기지 않는다 — 실제로 15종이 그렇게 조용히 살아 있었다(2026-09-09).
+    그쪽을 보는 것은 :func:`native_tool_leaks` 이고, 세션의 init 이벤트를 받는
+    자리에서 검산한다.
     """
     try:
         blocked = set(disallowed or ())
-        kept = [t for t in CLI_NATIVE_TOOL_CATALOG if t not in blocked]
-        removed = [t for t in CLI_NATIVE_TOOL_CATALOG if t in blocked]
+        kept = [t for t in CLI_NATIVE_TOOLS_DENY if t not in blocked]
+        removed = [t for t in CLI_NATIVE_TOOLS_DENY if t in blocked]
         logger.info(
             "claude_code 네이티브 도구 리포트 — 유지 %d개 [%s] · 제거 %d개 [%s]",
             len(kept),

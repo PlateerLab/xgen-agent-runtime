@@ -414,10 +414,25 @@ class ClaudeCodeCLIClient(BaseClient):
 
     # ─────────────────────────────────────────────────────── helpers ─
 
+    #: ``--bare`` 가 켜는 것과 같은 "맥락 없이 시작" 스위치. **env 로 준다.**
+    #:
+    #: ``--bare`` 로는 안 되는 이유: 그 플래그는 인증까지 바꾼다("Anthropic auth is
+    #: strictly ANTHROPIC_API_KEY or apiKeyHelper — OAuth and keychain are never
+    #: read"). 그래서 구독(OAuth) 에이전트에는 못 쓰고, 실제로 api_key 경로에만
+    #: 걸려 있었다 — 즉 OAuth 턴은 훅·LSP·플러그인 동기화·auto-memory·CLAUDE.md
+    #: 자동탐색을 그대로 켠 채 돌고 있었다.
+    #:
+    #: env 로 주면 그 맥락 제거만 얻고 인증은 건드리지 않는다. 실측(2026-09-09,
+    #: OAuth 머신): ``CLAUDE_CODE_SIMPLE=1`` 로 memory_paths 가 사라지고 호출은
+    #: ``is_error=False`` 로 성공했다.
+    _SIMPLE_ENV = "CLAUDE_CODE_SIMPLE"
+
     def _env_extras(self) -> Dict[str, str]:
         extras: Dict[str, str] = dict(self._extra_env)
         if self._api_key:
             extras["ANTHROPIC_API_KEY"] = self._api_key
+        # 호스트가 명시적으로 정한 값이 있으면 존중한다 (디버깅용 해제 여지).
+        extras.setdefault(self._SIMPLE_ENV, "1")
         return extras
 
     def _make_runner(self, *, timeout_s: Optional[float] = None) -> CLIProcessRunner:

@@ -175,6 +175,15 @@ def claude_code_argv(
         argv += ["--allowedTools", " ".join(allow_tools)]
     if disallow_tools:
         argv += ["--disallowedTools", " ".join(disallow_tools)]
+        # 스킬·슬래시커맨드 표면도 함께 닫는다. 도구를 막는 것만으로는 부족하다 —
+        # CLI 는 **자기 번들 스킬**을 세션에 광고하고(실측 20종), 그 스킬 본문은
+        # CLI 가 도는 파드의 /tmp 에 풀린 파일을 읽으라고 말한다. 우리 Read 는
+        # 러너 샌드박스로 가므로 그 파일에 닿을 수 없고, 더 나쁜 것은 그 스킬들이
+        # **다른 제품**(Claude Code 의 Artifact/HTML)을 설명한다는 것이다.
+        #
+        # 실측: 이 플래그 하나로 skills 20→0, slash_commands 51→0, 그리고 도구
+        # 목록에서 ``Skill`` 자체가 사라진다(27→26).
+        argv.append("--disable-slash-commands")
 
     # Permission mode (passthrough).
     if permission_mode and permission_mode != "default":
@@ -852,6 +861,14 @@ class StreamJsonAccumulator:
                 line.get("session_id") or line.get("message_id") or self._message_id
             )
             self._resolved_model = str(line.get("model") or self._resolved_model)
+            # 닫아 둔 문을 **세션마다 검산한다.** init 이 알리는 tools 는 이 세션에서
+            # 실제로 살아 있는 도구다 — 우리 브릿지(mcp__*) 말고 뭔가 남아 있으면
+            # 차단 상위집합이 CLI 보다 뒤처졌다는 뜻이다.
+            #
+            # 이 검산이 없으면 드리프트는 아무 신호도 내지 않는다: 도구는 조용히
+            # 살아 있고 에이전트만 다르게 행동한다. 2026-09-09 의 Skill 사고가
+            # 정확히 그랬고, 그때 15종이 새고 있었다.
+            self._report_native_leaks(line)
             return []
 
         if ltype == "rate_limit_event":
@@ -958,6 +975,34 @@ class StreamJsonAccumulator:
         )
 
     # ── Internals ─────────────────────────────────────────────
+
+    def _report_native_leaks(self, line: Dict[str, Any]) -> None:
+        """CLI 가 알린 도구 중 우리가 못 막은 것을 **한 번** 경고한다.
+
+        경보만 하고 실행은 막지 않는다. 여기서 세션을 죽이면 CLI 가 도구 하나를
+        추가한 날 모든 대화가 멈춘다 — 드리프트는 고쳐야 할 일이지 장애로 만들
+        일이 아니다. 대신 이름을 그대로 찍어, 상위집합에 무엇을 더해야 하는지가
+        로그 한 줄로 드러나게 한다.
+
+        절대 raise 하지 않는다: 검산이 스트림을 깨면 안 된다.
+        """
+        try:
+            from xgen_agent_runtime.host.runner import native_tool_leaks
+
+            leaks = native_tool_leaks(line.get("tools"))
+            if not leaks:
+                return
+            logger.warning(
+                "claude_code 네이티브 도구 누수 %d종 — CLI(%s)가 우리 차단 목록에 "
+                "없는 도구를 광고했다: %s. 같은 능력이 두 벌 광고되거나(우리 것과 "
+                "이름이 겹치면 어느 쪽이 돌았는지 사후에 구분되지 않는다), 다른 "
+                "제품의 표면이 열린다. CLI_NATIVE_TOOLS_DENY 에 추가할 것.",
+                len(leaks),
+                self._cli_version or "unknown",
+                ", ".join(leaks),
+            )
+        except Exception:  # noqa: BLE001 — 검산이 스트림을 깨지 않는다
+            pass
 
     def _record_unknown(self, *, kind: str, sample: str) -> None:
         """Bounded sample retention + once-per-instance warning.
