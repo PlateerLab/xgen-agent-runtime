@@ -37,6 +37,51 @@ def test_문서편집은_검색해야_나온다():
         assert not is_turn_one(name), name
 
 
+#: 입구에 서지 **않는** 문과 그 이유. 여기 없는 문은 전부 입구에 서야 한다.
+#:
+#: 이 표가 있는 이유: 문을 만들면서 입구에 세우는 것을 잊으면 아무 신호도 나지
+#: 않는다. 도구는 등록돼 있고 부르면 돌기 때문에 테스트도 로그도 조용하다.
+#: 에이전트만 그 능력이 없는 것처럼 행동한다 — 그게 SSH 에게 실제로 일어난 일이다.
+_DOORS_THAT_STAY_HIDDEN = {
+    # 사용자 지시. 위 테스트가 같은 사실을 못박는다.
+    "DocGuide": "Documents 편집은 검색해야 나온다 (사용자 지시)",
+}
+
+
+def test_선언된_문은_전부_입구에_선다():
+    """계층의 약속은 "숨긴다" 가 아니라 "문 하나만 보이고 방은 그 뒤" 다.
+
+    문까지 숨기면 그 능력은 **없는 것과 같다.** ToolSearch 로 정확한 단어를
+    맞혀야만 닿는데, 필요한 순간의 에이전트는 그 단어를 모른다.
+
+    2026-09-09 실증: SSH 서버를 두 대 등록해 둔 사용자의 턴이 배포 단계에서
+    "서버 SSH 인증 정보가 이 세션에 없습니다" 로 멈췄다. SshListServers 는
+    등록돼 있었고 부르면 돌았다 — 입구에 없었을 뿐이다.
+    """
+    from xgen_agent_runtime.tools.built_in import SKILL_GATEWAYS
+
+    for gateway in SKILL_GATEWAYS:
+        if gateway in _DOORS_THAT_STAY_HIDDEN:
+            assert not is_turn_one(gateway), (
+                f"{gateway} 는 숨기기로 한 문인데 입구에 섰다 — "
+                f"이유: {_DOORS_THAT_STAY_HIDDEN[gateway]}"
+            )
+            continue
+        assert is_turn_one(gateway), (
+            f"{gateway} 가 입구에 없다. 문을 숨기면 그 패밀리는 없는 것과 같다. "
+            f"의도한 것이라면 _DOORS_THAT_STAY_HIDDEN 에 이유와 함께 적어라."
+        )
+
+
+def test_문_뒤의_방은_계속_숨어_있다():
+    """문을 입구에 올렸다고 방까지 딸려 올라오면 계층이 사라진다."""
+    from xgen_agent_runtime.tools.built_in import SKILL_GATEWAYS
+
+    for gateway, family in SKILL_GATEWAYS.items():
+        for member in family:
+            assert not is_turn_one(member), f"{gateway} 의 방 {member} 이 입구에 섰다"
+
+
 def test_도구_제작은_문을_두지_않는다():
     """숨겼더니 에이전트가 패키지를 깔 수 있다는 걸 모른 채 후퇴했다(2026-08-18).
 
@@ -84,9 +129,15 @@ def test_첫_턴_표면은_스물몇_개를_넘지_않는다():
     # 다시 잃는 것을 막는다 — PythonEnv 가 첫 턴에 있는 것과 같은 이유다.
     # 같은 날 Shell 이 빠지고 LocalControl 이 들어와 순증은 +1 이다.
     #
+    # 27 (2026-09-09, 26 →): SshListServers 하나 — **빠져 있던 문을 채운 것**이지
+    # 새 능력을 올린 것이 아니다. 다른 문은 전부 입구에 서 있었고 SSH 만
+    # 방까지 숨어 있었다. 이 문은 다른 문보다 싸다: 호스트 게이트
+    # (feature:ssh_enabled)가 먼저 걸러서 **서버를 실제로 등록한 세션에만**
+    # 등록되므로, 나머지 세션의 입구는 26개 그대로다.
+    #
     # 이 선을 다시 올리려면 **한 도구씩** 이유를 여기 적어야 한다. 이 주석이
     # 길어지는 것이 곧 표면이 넓어졌다는 신호다.
-    assert len(TURN_ONE_TOOLS) <= 26, sorted(TURN_ONE_TOOLS)
+    assert len(TURN_ONE_TOOLS) <= 27, sorted(TURN_ONE_TOOLS)
 
 
 def test_한_묶음_안에서도_계층이_갈린다():

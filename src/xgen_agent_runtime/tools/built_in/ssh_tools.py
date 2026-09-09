@@ -113,12 +113,10 @@ class SshListServersTool(_SSHToolBase):
     @property
     def description(self) -> str:
         return (
-            "START HERE for SSH — lists the servers configured for this session "
-            "(name, host, port, user, description, and 'via', the jump/bastion "
-            "path used to reach it) and OPENS SshRun / SshUpload / SshDownload. "
-            "Passwords/keys are never shown; use a server's 'name'. Jump hosts "
-            "are dialled automatically, so you never connect to a bastion "
-            "yourself."
+            "START HERE to reach a REMOTE SERVER (deploy, restart a service, "
+            "read production logs) — lists this session's SSH hosts and OPENS "
+            "SshRun / SshUpload / SshDownload. Use a server's 'name'; "
+            "credentials stay server-side, jump hosts are dialled for you."
         )
 
     @property
@@ -169,11 +167,10 @@ class SshRunTool(_SSHToolBase):
     @property
     def description(self) -> str:
         return (
-            "Run a shell command on a configured SSH server and return its "
-            "stdout, stderr, and exit code. Pass 'server' (a name from "
-            "SshListServers) and 'command'. Optional: 'cwd' (remote working "
-            "dir), 'timeout' seconds, and 'sudo' (run under sudo using the "
-            "server's stored password — you never handle the password)."
+            "Run a shell command on a REMOTE server over SSH — deploy, restart "
+            "a service, tail logs. Pass 'server' (from SshListServers) and "
+            "'command'. Optional: 'cwd', 'timeout', 'sudo' (uses the stored "
+            "password). Returns stdout, stderr, exit code."
         )
 
     @property
@@ -269,9 +266,10 @@ class SshUploadTool(_SSHToolBase):
     @property
     def description(self) -> str:
         return (
-            "Upload a file from this session's storage to a configured SSH "
-            "server via SFTP. Pass 'server', 'local_path' (relative to session "
-            "storage), and 'remote_path' (absolute path on the server)."
+            "Copy a file from this session's storage to a REMOTE server via "
+            "SFTP — how you ship a build artifact or config to deploy it. Pass "
+            "'server', 'local_path' (relative to session storage), and "
+            "'remote_path' (absolute path on the server)."
         )
 
     @property
@@ -334,9 +332,10 @@ class SshDownloadTool(_SSHToolBase):
     @property
     def description(self) -> str:
         return (
-            "Download a file from a configured SSH server into this session's "
-            "storage via SFTP. Pass 'server', 'remote_path' (path on the "
-            "server), and 'local_path' (relative to session storage)."
+            "Copy a file from a REMOTE server into this session's storage via "
+            "SFTP — how you pull a production log or config back to inspect it. "
+            "Pass 'server', 'remote_path' (path on the server), and "
+            "'local_path' (relative to session storage)."
         )
 
     @property
