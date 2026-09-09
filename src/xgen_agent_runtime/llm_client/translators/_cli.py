@@ -65,6 +65,39 @@ def thinking_to_effort(thinking: Optional[Dict[str, Any]]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def resolve_auth_channel(auth_mode: str, has_api_key: bool) -> str:
+    """이 클라이언트가 실제로 쓰는 **자격증명 채널** — ``"api_key"`` 또는 구독.
+
+    ``--bare`` 와 ``CLAUDE_CODE_SIMPLE`` 은 **같은 스위치**다(``claude --help``:
+    "Minimal mode: … Sets CLAUDE_CODE_SIMPLE=1. Anthropic auth is strictly
+    ANTHROPIC_API_KEY or apiKeyHelper via --settings (OAuth and keychain are
+    never read)"). 그러니 둘의 발화 조건도 하나여야 한다 — 이 함수가 그 하나다.
+
+    이 함수가 없던 동안 무슨 일이 있었나 (2026-09-09, 런타임 4.18.0)
+    ---------------------------------------------------------------
+    argv 쪽은 규칙을 정확히 지키고 있었다(``bare_mode and api_key``). 그런데 맥락
+    자동주입을 끄려고 **env 로** ``CLAUDE_CODE_SIMPLE=1`` 을 모든 경로에 넣었다 —
+    "env 로 주면 인증은 안 건드린다" 는 가정이었고, 그 가정이 틀렸다. 같은 스위치를
+    다른 문으로 켠 것이라 구독(setup_token/oauth) 턴이 전부 죽었다:
+
+        CLAUDE_CODE_OAUTH_TOKEN 만           → 401 "OAuth access token is invalid"
+                                               (= 토큰을 **읽었다**)
+        CLAUDE_CODE_OAUTH_TOKEN + SIMPLE=1   → "Not logged in · Please run /login"
+                                               (= 토큰을 **아예 안 읽는다**)
+
+    그리고 이 장애는 **연결 테스트로는 잡히지 않았다.** 테스트 경로(workflow
+    ``claude_code_service._child_env``)는 이 env 를 넣지 않아서 초록불이 그대로
+    떴고, 실제 대화만 전부 실패했다. 그래서 판정을 여기 하나로 모은다 — 문이
+    둘이면 한쪽만 고쳐진다.
+    """
+    if auth_mode in ("api_key", "oauth", "setup_token"):
+        return auth_mode
+    # "auto"(기본) 및 미지의 값: 클라이언트가 **자기** 키를 들고 있을 때만 api_key.
+    # 호스트 프로세스의 env 는 보지 않는다 — 자식 env 는 스크럽되므로 부모의
+    # ANTHROPIC_API_KEY 는 자식의 자격증명 현실에 대해 아무것도 말해주지 않는다.
+    return "api_key" if has_api_key else "oauth"
+
+
 def claude_code_argv(
     request: APIRequest,
     *,
@@ -138,10 +171,7 @@ def claude_code_argv(
     #     the client itself holds a non-empty key (``has_api_key``).
     # ``bare_mode=False`` keeps its historical meaning: never emit
     # ``--bare``, even on the API-key path.
-    resolved_auth = auth_mode
-    if resolved_auth not in ("api_key", "oauth", "setup_token"):
-        resolved_auth = "api_key" if has_api_key else "oauth"
-    if bare_mode and resolved_auth == "api_key":
+    if bare_mode and resolve_auth_channel(auth_mode, has_api_key) == "api_key":
         argv.append("--bare")
 
     # Model: alias or pinned id.

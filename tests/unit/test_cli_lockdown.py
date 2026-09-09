@@ -120,27 +120,68 @@ def test_네이티브를_허용하면_스킬도_건드리지_않는다():
     assert "--disable-slash-commands" not in argv
 
 
-# ── 4. 맥락 자동주입 — 모든 인증 경로에서 꺼진다 ─────────────────────
-def test_맥락_자동주입은_인증_경로와_무관하게_꺼진다():
-    """``--bare`` 로는 안 되는 이유: 그 플래그는 인증까지 바꿔서(OAuth·keychain
-    을 안 읽는다) 구독 에이전트에 못 쓴다. 그래서 api_key 경로에만 걸려 있었고,
-    OAuth 턴은 훅·LSP·auto-memory·CLAUDE.md 자동탐색을 켠 채 돌고 있었다.
-
-    env 로 주면 맥락 제거만 얻고 인증은 그대로다 — 실측으로 확인했다
-    (OAuth 머신에서 memory_paths 가 사라지고 호출은 성공).
-    """
+# ── 4. 맥락 제거 스위치는 인증을 건드리지 않는다 ─────────────────────
+#
+# 여기 있던 테스트가 **버그를 고정하고 있었다.** 4.18.0 은 "env 로 주면 맥락 제거만
+# 얻고 인증은 그대로다" 라는 가정 위에 CLAUDE_CODE_SIMPLE=1 을 모든 인증 경로에
+# 넣었고, 테스트는 그 가정이 아니라 그 **구현**을 확인했다(세 경로 전부에서 값이
+# "1" 인가). 가정이 틀렸다는 것은 아무도 묻지 않았다.
+#
+# 실측(2026-09-09, CLI 2.1.236) — --bare 와 같은 스위치다:
+#
+#     CLAUDE_CODE_OAUTH_TOKEN 만           → 401 "OAuth access token is invalid"
+#                                            (= 토큰을 읽었다)
+#     CLAUDE_CODE_OAUTH_TOKEN + SIMPLE=1   → "Not logged in · Please run /login"
+#                                            (= 토큰을 아예 안 읽는다)
+#
+# 그래서 프로드의 모든 대화가 authentication_failed 로 죽었고, **연결 테스트는
+# 초록불이었다** — 테스트 경로(workflow _child_env)는 이 env 를 넣지 않는다.
+def _client(auth, **kw):
     from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
 
-    for auth in ("api_key", "oauth", "setup_token"):
-        client = ClaudeCodeCLIClient(binary_path="/bin/true", auth_mode=auth)
-        assert client._env_extras().get("CLAUDE_CODE_SIMPLE") == "1", auth
+    if auth == "api_key":
+        kw.setdefault("api_key", "sk-test")
+    return ClaudeCodeCLIClient(binary_path="/bin/true", auth_mode=auth, **kw)
 
 
-def test_호스트가_명시하면_그_값을_존중한다():
-    """디버깅으로 잠깐 켤 여지는 남긴다 — 끄는 길이 없는 스위치는 조사할 때 막힌다."""
-    from xgen_agent_runtime.llm_client.claude_code import ClaudeCodeCLIClient
+def test_구독_인증에는_맥락_스위치를_켜지_않는다():
+    """이 한 줄이 4.18.0 장애를 막는다."""
+    for auth in ("oauth", "setup_token"):
+        assert _client(auth)._env_extras().get("CLAUDE_CODE_SIMPLE") is None, auth
 
-    client = ClaudeCodeCLIClient(
-        binary_path="/bin/true", env_extras={"CLAUDE_CODE_SIMPLE": "0"}
-    )
-    assert client._env_extras()["CLAUDE_CODE_SIMPLE"] == "0"
+
+def test_호스트가_켜도_구독_인증에서는_걷어낸다():
+    """설정 하나가 조용히 전 사용자를 로그아웃시키는 문을 남기지 않는다.
+    그 문은 연결 테스트로 잡히지 않으므로, 여기서 닫는 수밖에 없다."""
+    for auth in ("oauth", "setup_token", "auto"):
+        client = _client(auth, env_extras={"CLAUDE_CODE_SIMPLE": "1"})
+        assert client._env_extras().get("CLAUDE_CODE_SIMPLE") is None, auth
+
+
+def test_api_key_경로는_bare_가_스위치를_소유한다():
+    """api_key 채널에서는 --bare 가 이미 CLAUDE_CODE_SIMPLE=1 을 세운다
+    (claude --help). 스위치는 하나고, 켜는 자리도 하나여야 한다."""
+    assert "--bare" in _argv(bare_mode=True, auth_mode="api_key", has_api_key=True)
+
+
+def test_argv_와_env_는_같은_판정을_쓴다():
+    """문이 둘이면 한쪽만 고쳐진다 — 4.18.0 이 정확히 그랬다(argv 는 규칙을
+    지켰고 env 만 어겼다)."""
+    from xgen_agent_runtime.llm_client.translators._cli import resolve_auth_channel
+
+    for auth, has_key in (("api_key", True), ("oauth", False), ("setup_token", False),
+                          ("auto", False), ("auto", True)):
+        channel = resolve_auth_channel(auth, has_key)
+        argv = _argv(bare_mode=True, auth_mode=auth, has_api_key=has_key)
+        client = _client(auth if auth != "auto" else "auto",
+                         **({"api_key": "sk-test"} if has_key else {}))
+        env_on = client._env_extras().get("CLAUDE_CODE_SIMPLE") == "1"
+        assert ("--bare" in argv) == (channel == "api_key"), (auth, has_key)
+        # env 가 argv 보다 넓으면 안 된다: --bare 가 안 붙는 턴에 스위치가 켜지면
+        # 그 턴은 자격증명을 못 읽는다.
+        assert not (env_on and "--bare" not in argv), (auth, has_key)
+
+
+def test_구독_인증은_절대_bare_를_붙이지_않는다():
+    for auth in ("oauth", "setup_token"):
+        assert "--bare" not in _argv(bare_mode=True, auth_mode=auth, has_api_key=False)
