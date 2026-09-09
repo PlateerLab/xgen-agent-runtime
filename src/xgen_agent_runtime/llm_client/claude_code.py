@@ -59,6 +59,7 @@ from xgen_agent_runtime.llm_client.translators._cli import (
     build_stream_json_stdin,
     messages_have_images,
     claude_code_argv,
+    resolve_auth_channel,
     parse_json_output_to_response,
 )
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse
@@ -138,6 +139,9 @@ class ClaudeCodeCLIClient(BaseClient):
     """Subprocess-backed Claude Code client."""
 
     provider = "claude_code_cli"
+    #: 구독 채널에서 CLAUDE_CODE_SIMPLE 을 걷어냈다는 경고는 **프로세스당 한 번**.
+    #: 턴마다 찍으면 로그가 잠기고, 그러면 아무도 안 읽는다.
+    _simple_env_warned = False
     capabilities = ClientCapabilities(
         supports_thinking=True,
         supports_tools=True,
@@ -414,26 +418,50 @@ class ClaudeCodeCLIClient(BaseClient):
 
     # ─────────────────────────────────────────────────────── helpers ─
 
-    #: ``--bare`` 가 켜는 것과 같은 "맥락 없이 시작" 스위치. **env 로 준다.**
+    #: "맥락 없이 시작" 스위치. **``--bare`` 와 같은 스위치다** — 별개의 우회로가
+    #: 아니다(``claude --help``: "Minimal mode: … Sets CLAUDE_CODE_SIMPLE=1.
+    #: Anthropic auth is strictly ANTHROPIC_API_KEY or apiKeyHelper via
+    #: --settings (OAuth and keychain are never read)").
     #:
-    #: ``--bare`` 로는 안 되는 이유: 그 플래그는 인증까지 바꾼다("Anthropic auth is
-    #: strictly ANTHROPIC_API_KEY or apiKeyHelper — OAuth and keychain are never
-    #: read"). 그래서 구독(OAuth) 에이전트에는 못 쓰고, 실제로 api_key 경로에만
-    #: 걸려 있었다 — 즉 OAuth 턴은 훅·LSP·플러그인 동기화·auto-memory·CLAUDE.md
-    #: 자동탐색을 그대로 켠 채 돌고 있었다.
+    #: 그러니 이 env 는 **api_key 채널에서만** 살아 있을 수 있다. 구독
+    #: (setup_token/oauth) 턴에 켜면 CLI 가 자격증명을 아예 읽지 않는다 —
+    #: 4.18.0 이 정확히 그렇게 프로드의 모든 대화를 죽였다. 실측(2026-09-09, CLI
+    #: 2.1.236):
     #:
-    #: env 로 주면 그 맥락 제거만 얻고 인증은 건드리지 않는다. 실측(2026-09-09,
-    #: OAuth 머신): ``CLAUDE_CODE_SIMPLE=1`` 로 memory_paths 가 사라지고 호출은
-    #: ``is_error=False`` 로 성공했다.
+    #:     CLAUDE_CODE_OAUTH_TOKEN 만          → 401 "OAuth access token is invalid"
+    #:     CLAUDE_CODE_OAUTH_TOKEN + SIMPLE=1  → "Not logged in · Please run /login"
+    #:
+    #: api_key 채널에서는 ``--bare`` 가 이미 같은 값을 세우므로 여기서 따로 넣지
+    #: 않는다. 스위치는 하나고, 그 하나를 켜는 자리도 하나다(argv).
     _SIMPLE_ENV = "CLAUDE_CODE_SIMPLE"
+
+    def _auth_channel(self) -> str:
+        """argv 의 ``--bare`` 판정과 **같은 함수**를 쓴다 (문이 둘이면 한쪽만 고쳐진다)."""
+        return resolve_auth_channel(self._auth_mode, bool(self._api_key))
 
     def _env_extras(self) -> Dict[str, str]:
         extras: Dict[str, str] = dict(self._extra_env)
         if self._api_key:
             extras["ANTHROPIC_API_KEY"] = self._api_key
-        # 호스트가 명시적으로 정한 값이 있으면 존중한다 (디버깅용 해제 여지).
-        extras.setdefault(self._SIMPLE_ENV, "1")
+        # 호스트가 넘긴 값이라도 구독 채널에서는 켜 둘 수 없다. 여기서 존중하면
+        # "설정 하나가 조용히 전 사용자를 로그아웃시키는" 문이 남는다 — 그리고 그
+        # 문은 연결 테스트로 잡히지 않는다(테스트 경로는 이 env 를 넣지 않는다).
+        if self._truthy(extras.get(self._SIMPLE_ENV)) and self._auth_channel() != "api_key":
+            extras.pop(self._SIMPLE_ENV, None)
+            if not ClaudeCodeCLIClient._simple_env_warned:
+                ClaudeCodeCLIClient._simple_env_warned = True
+                logger.warning(
+                    "CLAUDE_CODE_SIMPLE 을 구독 인증(auth_mode=%s) 에서 제거했다 — 그 "
+                    "스위치는 --bare 와 같은 것이라 OAuth·keychain 을 읽지 않게 만들고, "
+                    "모든 턴이 authentication_failed 로 죽는다. 맥락 자동주입을 끄려면 "
+                    "인증을 건드리지 않는 수단을 쓸 것(--disable-slash-commands 등).",
+                    self._auth_mode,
+                )
         return extras
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
     def _make_runner(self, *, timeout_s: Optional[float] = None) -> CLIProcessRunner:
         effective_timeout = self._timeout_s if timeout_s is None else timeout_s
