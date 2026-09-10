@@ -86,6 +86,10 @@ def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) 
 #: 실패 사유를 사건에 실을 때의 상한. 사람이 읽을 첫 화면 분량이면 충분하다.
 _ERROR_TEXT_CAP = 2000
 
+#: 성공 결과는 실패 사유보다 넉넉히 — 로그를 보는 사람이 "무엇이 나왔나" 를
+#: 판단할 수 있어야 한다. 호스트가 표시 직전에 한 번 더 줄인다.
+_RESULT_TEXT_CAP = 8000
+
 
 def _error_text(result_dict: Dict[str, Any]) -> str:
     """실패한 도구가 남긴 말. 없으면 빈 문자열."""
@@ -95,6 +99,21 @@ def _error_text(result_dict: Dict[str, Any]) -> str:
             return value.strip()[:_ERROR_TEXT_CAP]
         if value not in (None, "", [], {}):
             return str(value)[:_ERROR_TEXT_CAP]
+    return ""
+
+
+def _result_text(result_dict: Dict[str, Any]) -> str:
+    """성공한 도구가 낸 결과. 없으면 빈 문자열.
+
+    실패 사유와 **같은 자리**에서 꺼낸다 — 성공/실패로 모양이 갈리면 한쪽이
+    반드시 빠진다.
+    """
+    for key in ("content", "display_text", "result", "output"):
+        value = result_dict.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:_RESULT_TEXT_CAP]
+        if value not in (None, "", [], {}):
+            return str(value)[:_RESULT_TEXT_CAP]
     return ""
 
 
@@ -120,6 +139,19 @@ def _emit_call_complete(
         # [전체로그]에는 같은 줄만 여덟 번 쌓였다. 무엇을 고쳐야 하는지 아무도
         # 알 수 없었다 (프로드 실증).
         data["error"] = _error_text(result_dict)
+    else:
+        # **결과도 함께 싣는다.**
+        #
+        # 예전 판단은 "성공 결과는 크고 모델이 이미 받는다" 였다. 모델에게는
+        # 맞는 말이지만 **로그에게는 아니다.** 호스트는 이 사건에 결과가 없으니
+        # result_sink 로 떨어지는데, 그 sink 는 호스트가 감싼 LangChain 도구만
+        # 채운다 — 런타임 자체 도구·에이전트가 만든 도구·MCP 로 노출한 도구는
+        # 전부 빈 문자열이 됐다. [전체로그]에서 도구 줄을 펼치면 "결과" 칸이
+        # 아예 없었다(프로드 실증: Bash·Write·제작 도구 전부).
+        #
+        # 크기는 여기서 자른다 — 이벤트는 여러 소비자를 지나므로 잘라 보내는
+        # 편이 낫고, 호스트도 표시 직전에 한 번 더 줄인다.
+        data["result"] = _result_text(result_dict)
     on_event("tool.call_complete", data)
 
 
