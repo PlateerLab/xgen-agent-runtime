@@ -93,6 +93,13 @@ def load_session_env(session: Any) -> None:
         parsed = parse_env_file(base64.b64decode(data.get("content_b64") or ""))
         if parsed["env_id"]:
             session.env_id = parsed["env_id"]
+            # 핀 목록도 함께 들려 보낸다. 러너는 env_id 만으로는 환경을 **재건**할
+            # 수 없다 — 아티팩트가 사라지면 그 환경은 영영 복구되지 않는다.
+            # 핀이 있으면 재현 가능하다(그러라고 정확한 버전으로 확정해 둔 것이다).
+            try:
+                session.env_packages = list(parsed["packages"])
+            except Exception:  # noqa: BLE001 — 구버전 세션 객체
+                pass
             logger.info(
                 "python-env: 세션 환경 적용 %s (%d개 패키지)",
                 parsed["env_id"][:12],
@@ -299,6 +306,11 @@ class PythonEnvTool:
         await self._save(sandbox, final, env_id)
         # 이번 턴 안에서 즉시 적용 — 다음 Bash/python 부터 이 환경이다.
         sandbox.env_id = env_id
+        # 핀도 함께 — 러너가 아티팩트 없이도 이 환경을 재건할 수 있어야 한다.
+        try:
+            sandbox.env_packages = list(final)
+        except Exception:  # noqa: BLE001 — 구버전 세션 객체
+            pass
 
         # **적용됐는지 확인한다.** "설치 완료" 라고 답해 놓고 다음 명령에서
         # ModuleNotFoundError 가 나는 것이 이 도구의 유일한 실패 방식이었고,

@@ -452,9 +452,51 @@ async def _run_in_sandbox(sandbox: Any, spec: "ForgedToolSpec", payload: bytes) 
     # 폐기된 로컬 폴백이 남긴 "local:" env_id 는 러너가 모르는 이름이다 — 넘기면
     # 실패하므로 빼고 세션 기본 환경으로 돈다 (그 도구는 다시 등록하면 러너 환경을
     # 받는다). 새로 만들어지는 일은 없다.
-    if spec.env_id and not spec.env_id.startswith("local:"):
-        kwargs["env_id"] = spec.env_id
+    env_id = spec.env_id
+    if spec.dependencies and not env_id:
+        # 의존성은 선언돼 있는데 환경 id 가 없다 — 그대로 두면 이 도구는 **부르는
+        # 에이전트의 세션 환경**에서 돈다. 원본에서는 우연히 되고 다른 곳에서는
+        # ImportError 가 난다(승격 때 핀이 바뀌어 env_id 를 비운 경우가 그렇다).
+        # 여기서 확정한다 — 멱등이고 대개 캐시 히트라 공짜다.
+        try:
+            env_id, _pins = await _ensure_env(sandbox, list(spec.dependencies))
+            logger.info(
+                "forged tool '%s': 환경을 호출 시점에 확정했다 (%s) — "
+                "[테스트] 를 한 번 돌리면 스펙에 기록된다",
+                spec.name, env_id[:12],
+            )
+        except Exception as exc:  # noqa: BLE001 — 원인을 그대로 올린다
+            raise RuntimeError(
+                f"이 도구의 실행 환경을 세우지 못했습니다: {exc} — "
+                "의존성 이름과 버전을 확인하세요"
+            ) from exc
+    if env_id and not env_id.startswith("local:"):
+        kwargs["env_id"] = env_id
+        # 그 환경의 **핀 목록**도 함께 보낸다. env_id 만으로는 러너가 환경을
+        # 재건할 수 없다 — 아티팩트가 사라지면(저장소 정리·로컬 저장소 파드 이동)
+        # 그 도구는 영영 못 돈다. 핀이 있으면 어느 파드에서든 다시 세운다.
+        # 구버전 러너는 이 인자를 모르므로 시그니처를 보고 넘긴다.
+        if _exec_accepts_env_packages(sandbox) and spec.dependencies:
+            kwargs["env_packages"] = list(spec.dependencies)
     return await sandbox.exec([spec.runtime, spec.entrypoint, *spec.argv], **kwargs)
+
+
+def _exec_accepts_env_packages(sandbox: Any) -> bool:
+    """이 러너 클라이언트가 ``env_packages`` 를 받는가 (버전 스큐 방어).
+
+    ``**kwargs`` 를 받는 구현도 받는 것으로 본다 — 이름을 명시하지 않았을 뿐
+    넘기면 그대로 전달된다. 그것까지 거르면 래퍼를 한 겹 쓴 호출부가 조용히
+    핀 없이 돌아 재건 불가능한 환경을 만든다.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(sandbox.exec).parameters
+    except (TypeError, ValueError):  # noqa: BLE001 — 시그니처를 못 읽으면 안 넘긴다
+        return False
+    if "env_packages" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 # ── 제작/관리 도구 (에이전트가 쓰는 것) ───────────────────────────────
