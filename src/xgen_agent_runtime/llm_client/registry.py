@@ -91,6 +91,17 @@ def _vertex_factory() -> Type[BaseClient]:
     return VertexClient
 
 
+def _azure_openai_factory() -> Type[BaseClient]:
+    try:
+        from xgen_agent_runtime.llm_client.azure_openai import AzureOpenAIClient
+    except ImportError as e:
+        raise ImportError(
+            "Azure OpenAI client requires the 'openai' package. "
+            "Install with: pip install xgen-agent-runtime[openai]"
+        ) from e
+    return AzureOpenAIClient
+
+
 def _codex_cli_factory() -> Type[BaseClient]:
     from xgen_agent_runtime.llm_client.codex import CodexCLIClient
 
@@ -122,6 +133,10 @@ ClientRegistry.register("claude_code_cli", _claude_code_cli_factory)
 ClientRegistry.register("bedrock", _bedrock_factory)
 ClientRegistry.register("vertex", _vertex_factory)
 ClientRegistry.register("codex_cli", _codex_cli_factory)
+ClientRegistry.register("azure_openai", _azure_openai_factory)
+# 사람들이 부르는 다른 이름들 — 설정에 무엇을 적든 같은 곳으로 간다.
+ClientRegistry.register("azure", _azure_openai_factory)
+ClientRegistry.register("azure_foundry", _azure_openai_factory)
 
 
 # Branded local (OpenAI-compatible) providers, generated from profiles.
