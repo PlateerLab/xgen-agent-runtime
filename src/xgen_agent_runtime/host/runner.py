@@ -17,6 +17,7 @@ token/cost totals (:func:`turn_usage`).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -682,6 +683,50 @@ def _indicator(tool_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+class _CancelRequested(Exception):
+    """대기 중에 정지가 들어왔다."""
+
+
+#: 대기 중 정지를 확인하는 주기(초). 짧을수록 빨리 멈추고, 짧아도 비용은
+#: "아무 일도 없을 때 깨어나기" 뿐이다.
+_CANCEL_POLL_S = 0.2
+
+
+def _next_event(loop: Any, agen: Any, cancel_check: Optional[Callable[[], bool]]) -> Any:
+    """다음 이벤트를 **기다리면서도 정지를 듣는다.**
+
+    예전에는 ``loop.run_until_complete(agen.__anext__())`` 였다. 그러면 정지
+    확인은 **이벤트와 이벤트 사이에서만** 일어난다 — 긴 도구 실행이나 긴 모델
+    대기 중에는 아무도 듣지 않는다. 사용자가 [정지]를 눌러도 화면은 계속
+    흘렀고, 그 도구가 끝나야 비로소 멈췄다.
+
+    그래서 기다리는 동안에도 주기적으로 깨어나 확인한다. 정지면 대기 중인
+    작업을 **취소한다** — 그 취소가 파이프라인을 타고 내려가 CLI 프로세스
+    정리(_cli_runtime 의 finally)까지 즉시 닿는다.
+
+    ``cancel_check`` 이 없으면 예전과 똑같이 그냥 기다린다.
+    """
+    if cancel_check is None:
+        return loop.run_until_complete(agen.__anext__())
+
+    task = loop.create_task(agen.__anext__())
+    while True:
+        done, _pending = loop.run_until_complete(
+            asyncio.wait({task}, timeout=_CANCEL_POLL_S)
+        )
+        if done:
+            return task.result()  # StopAsyncIteration 은 그대로 올라간다
+        try:
+            wants_stop = bool(cancel_check())
+        except Exception:  # noqa: BLE001 — 확인 실패가 턴을 죽이면 안 된다
+            wants_stop = False
+        if wants_stop:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                loop.run_until_complete(task)
+            raise _CancelRequested()
+
+
 def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
@@ -1076,7 +1121,13 @@ def stream_turn(
                     cancelled = True
                     break
                 try:
-                    event = loop.run_until_complete(agen.__anext__())
+                    event = _next_event(loop, agen, cancel_check)
+                except _CancelRequested:
+                    logger.info(
+                        "geny_bridge: cancellation requested mid-wait — stopping stream"
+                    )
+                    cancelled = True
+                    break
                 except StopAsyncIteration:
                     break
                 if event.type == "text.delta":
