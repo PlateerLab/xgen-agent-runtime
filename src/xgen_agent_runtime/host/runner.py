@@ -1125,7 +1125,13 @@ def stream_turn(
                         "type": "agent_event",
                         "data": _tool_end_event(
                             name,
-                            str(event.data.get("error") or "") or (result_sink or {}).get(name, ""),
+                            # 결과는 **사건이 직접 싣고 온 것**을 먼저 쓴다.
+                            # result_sink 는 호스트가 감싼 LangChain 도구만
+                            # 채우므로, 그것만 믿으면 런타임 자체 도구·제작
+                            # 도구·MCP 도구의 결과가 전부 빈 칸이 된다.
+                            str(event.data.get("error") or "")
+                            or str(event.data.get("result") or "")
+                            or (result_sink or {}).get(name, ""),
                             is_error=bool(event.data.get("is_error")),
                             duration_ms=event.data.get("duration_ms"),
                         ),
