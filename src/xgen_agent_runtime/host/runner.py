@@ -741,10 +741,49 @@ def _tool_end_event(
 
 
 def _stringify_content(content: Any) -> str:
+    """도구 결과 content → **사람이 읽는 텍스트**.
+
+    CLI 백엔드의 tool_result 는 보통 블록 리스트로 온다::
+
+        [{"type": "text", "text": "(no output)"}]
+
+    이걸 그대로 ``json.dumps`` 하면 모델도 화면도 봉투를 읽는다 —
+    ``[{"type": "text", "text": "(no output)"}]``. 짧은 결과일수록 봉투가
+    내용보다 크고, 에러 한 줄은 그 안에 파묻힌다. CLI 백엔드로 도는 모든 턴의
+    **모든** 도구 결과가 이 모양이었다.
+
+    그래서 텍스트 블록은 꺼내서 잇는다. 텍스트가 아닌 블록(이미지 등)은 종류를
+    한 줄로 남긴다 — 조용히 버리면 "결과가 비었다" 로 보이기 때문이다.
+    """
     if content is None:
         return ""
     if isinstance(content, str):
         return content
+    if isinstance(content, dict):
+        return _stringify_content([content])
+    if isinstance(content, list):
+        parts: list = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                parts.append(str(block))
+                continue
+            btype = str(block.get("type") or "")
+            if btype == "text" or "text" in block:
+                parts.append(str(block.get("text") or ""))
+            elif btype:
+                parts.append(f"[{btype}]")
+            else:
+                try:
+                    parts.append(json.dumps(block, ensure_ascii=False, default=str))
+                except (TypeError, ValueError):
+                    parts.append(str(block))
+        joined = "\n".join(p for p in parts if p)
+        if joined:
+            return joined
+        # 블록은 있는데 뽑을 텍스트가 없다 — 원문을 주는 편이 침묵보다 낫다.
     try:
         return json.dumps(content, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
