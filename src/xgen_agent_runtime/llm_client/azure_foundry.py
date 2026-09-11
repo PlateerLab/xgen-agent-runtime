@@ -1,8 +1,22 @@
-"""Azure OpenAI (Microsoft Foundry) client.
+"""Azure AI Foundry client.
+
+왜 "Azure OpenAI" 가 아니라 "Foundry" 인가
+-----------------------------------------
+Foundry 가 **상위 개념**이다. 한 리소스가 **한 엔드포인트와 한 자격증명**으로
+여러 회사의 모델을 서빙한다 — OpenAI 뿐 아니라 DeepSeek·Grok·Llama·Mistral 등
+(Microsoft Learn: "access to a wide variety of models from many providers
+through a single endpoint and set of credentials").
+
+무엇을 부를 수 있는지는 **그 고객이 무엇을 배포했는가**에 달렸다. 그래서 모델
+목록은 우리가 적어 둘 수 있는 것이 아니고, 리소스에 물어봐야 한다
+(``GET {endpoint}/openai/v1/models``).
+
+우리가 말하는 **API 표면**은 Azure OpenAI v1 이 맞다 — 그건 프로토콜의 이름이지
+이 프로바이더의 이름이 아니다.
 
 무엇이 사실인가 (Microsoft Learn, 2026-09 확인)
 -----------------------------------------------
-Azure 는 **표면이 둘**이다. 둘 다 살아 있고, 어느 쪽을 쓰는지는 배포마다 다르다.
+표면은 **둘**이다. 둘 다 살아 있고, 어느 쪽을 쓰는지는 리소스마다 다르다.
 
 ``v1`` (2025-08 GA — 권장)
     ``https://<resource>.openai.azure.com/openai/v1/`` 를 base_url 로 주고
@@ -95,15 +109,15 @@ class AzureEndpoint:
         return f"{self.resource}/openai/v1/" if self.resource else ""
 
 
-class AzureOpenAIClient(OpenAIClient):
-    """Azure OpenAI — v1 기본, ``api_version`` 이 있으면 옛 deployment 경로.
+class AzureFoundryClient(OpenAIClient):
+    """Azure AI Foundry — v1 기본, ``api_version`` 이 있으면 옛 deployment 경로.
 
-    ``model`` 은 Azure 에서 **배포 이름**이다(모델 id 가 아니다). 배포를 따로
-    적지 않으면 요청의 모델명을 배포 이름으로 쓴다 — 대부분의 배포가 그렇게
-    이름 붙어 있고, 다르면 ``deployment`` 로 못을 박으면 된다.
+    ``model`` 자리는 **배포 이름**이다(모델 id 가 아니다). 배포를 따로 적지
+    않으면 요청의 모델명을 배포 이름으로 쓴다 — 대부분의 배포가 그렇게 이름
+    붙어 있고, 다르면 ``deployment`` 로 못을 박으면 된다.
     """
 
-    provider = "azure_openai"
+    provider = "azure_foundry"
     _sdk_module = "openai"
 
     def __init__(
@@ -158,14 +172,14 @@ class AzureOpenAIClient(OpenAIClient):
             return self._client
         if not self._azure_resource:
             raise ValueError(
-                "Azure OpenAI 는 리소스 엔드포인트가 필요합니다 — "
+                "Azure AI Foundry 는 리소스 엔드포인트가 필요합니다 — "
                 "예: https://<리소스이름>.openai.azure.com"
             )
         try:
             from openai import AsyncAzureOpenAI, AsyncOpenAI
         except ImportError as e:  # pragma: no cover — SDK 없는 환경
             raise ImportError(
-                "Azure OpenAI client requires the 'openai' package. "
+                "Azure AI Foundry client requires the 'openai' package. "
                 "Install with: pip install xgen-agent-runtime[openai]"
             ) from e
 
