@@ -12,8 +12,6 @@ LangChain tool 실행 시점에 UI 인디케이터(라벨·아이콘·예상 소
   하지만 1차에는 중앙 레지스트리만 둔다 (모든 도구를 한눈에 보기 좋음).
 
 본 모듈은 외부 의존성 0. 순수 Python dict + helper 함수.
-
-참고: SELF_ADAPTIVE_UI_PLAN.md §5.2.1
 """
 
 from __future__ import annotations
