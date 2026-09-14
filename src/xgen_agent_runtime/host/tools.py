@@ -1,8 +1,8 @@
 """TOOL port → geny-executor ``Tool`` adapter.
 
 At runtime the xgen ``TOOL`` port delivers LangChain tool objects
-(``BaseTool``/``StructuredTool``, e.g. from mcp_loader / api_tool_loader /
-a2ui_tool), possibly nested in lists (``multi: True`` ports; loader nodes
+(``BaseTool``/``StructuredTool``, e.g. from mcp_loader / api_tool_loader),
+possibly nested in lists (``multi: True`` ports; loader nodes
 return ``List[BaseTool]``). Skill payloads arrive as dicts carrying a
 ``dispatch_tool``, and a few legacy nodes emit plain
 ``{"name": ..., "func": ...}`` dicts.
