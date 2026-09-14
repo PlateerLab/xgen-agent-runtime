@@ -41,8 +41,6 @@ DEFAULT_INDICATOR: Dict[str, Any] = {
 #
 # 키: tool name (LangChain Tool.name 그대로)
 # 값: indicator dict (DEFAULT_INDICATOR 키와 동일)
-#
-# Phase 1 이후 차트·표·A2UI 도구가 추가되면 본 dict 에 항목 추가.
 # ---------------------------------------------------------------------------
 
 TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
@@ -92,43 +90,6 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
         "expected_duration_ms": 1200,
         "render_hint": "inline",
     },
-    # ── A2UI / Self-Adaptive UI 도구 (Phase 1 이후 활성화) ─────────────────
-    "a2ui_list_components": {
-        "display_label": "UI 부품 탐색",
-        "verb_running": "부품 목록 조회 중...",
-        "verb_done": "부품 목록",
-        "icon": "layout",
-        "category": "genui",
-        "expected_duration_ms": 200,
-        "render_hint": "hide",  # 빠르고 노이즈 — UI 표시 생략
-    },
-    "a2ui_inspect_component": {
-        "display_label": "UI 부품 상세",
-        "verb_running": "부품 명세 확인 중...",
-        "verb_done": "확인",
-        "icon": "layout",
-        "category": "genui",
-        "expected_duration_ms": 200,
-        "render_hint": "hide",
-    },
-    "a2ui_validate_messages": {
-        "display_label": "UI 메시지 검증",
-        "verb_running": "검증 중...",
-        "verb_done": "검증 완료",
-        "icon": "check",
-        "category": "genui",
-        "expected_duration_ms": 300,
-        "render_hint": "hide",
-    },
-    "a2ui_finalize_surface": {
-        "display_label": "화면 합성",
-        "verb_running": "화면을 만드는 중...",
-        "verb_done": "화면 준비됨",
-        "icon": "layout-grid",
-        "category": "genui",
-        "expected_duration_ms": 800,
-        "render_hint": "hide",  # surface 자체가 결과 → chip 으로 또 표시하면 중복
-    },
 }
 
 
@@ -169,7 +130,7 @@ def is_hidden(tool_name: str) -> bool:
     """
     인디케이터를 UI 에 노출하지 않을 도구인지 (render_hint == 'hide').
 
-    A2UI 내부 탐색 도구처럼 사용자가 알 필요 없는 노이즈 도구를
-    프론트에서 chip 으로 표시하지 않기 위한 편의 함수.
+    사용자가 알 필요 없는 노이즈 도구를 프론트에서 chip 으로 표시하지
+    않기 위한 편의 함수.
     """
     return get_indicator(tool_name).get("render_hint") == "hide"
