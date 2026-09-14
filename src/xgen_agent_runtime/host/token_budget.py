@@ -391,17 +391,33 @@ def truncate_text_to_token_budget(
 
     enc = _get_encoder()
     notice_tokens = count_text_tokens(omit_notice, provider, model)
-    keep = max(1, max_tokens - notice_tokens)
-    front_budget = max(1, int(keep * front_ratio))
-    back_budget = max(1, keep - front_budget)
+    # max_tokens 는 count_text_tokens(보정계수·안전마진 포함) 기준이다. raw 토큰으로 자를 때는
+    # 그 배율을 역산해야 결과를 다시 세었을 때 한도 안에 든다 — 역산하지 않으면 vLLM(×1.26)
+    # 에서 잘라 낸 결과가 늘 한도를 넘고, 호출부가 남은 초과분을 사용자 텍스트에서 깎는다.
+    scale = (
+        _PROVIDER_TOKEN_FACTOR.get((provider or "").lower(), _DEFAULT_PROVIDER_FACTOR)
+        * _SAFETY_MULTIPLIER
+    )
+    keep = max(1, int((max_tokens - notice_tokens) / scale) - 1)
 
+    for _ in range(4):
+        front_budget = max(1, int(keep * front_ratio))
+        back_budget = max(1, keep - front_budget)
+        truncated = _cut_middle(text, enc, front_budget, back_budget, omit_notice)
+        if count_text_tokens(truncated, provider, model) <= max_tokens or keep <= 1:
+            return truncated, True
+        keep = max(1, int(keep * 0.9))
+    return truncated, True
+
+
+def _cut_middle(text: str, enc: Any, front_budget: int, back_budget: int, omit_notice: str) -> str:
+    """앞 front_budget, 뒤 back_budget raw 토큰(또는 글자/4 근사)만 남기고 중간을 생략한다."""
     if enc is not None:
         try:
             ids = enc.encode(text)
-            # 보정계수를 역산하지 않고 raw 토큰 기준으로 자르되, 보수적으로 keep 사용.
             front_ids = ids[:front_budget]
             back_ids = ids[-back_budget:] if back_budget < len(ids) else []
-            return (enc.decode(front_ids) + omit_notice + enc.decode(back_ids)), True
+            return enc.decode(front_ids) + omit_notice + enc.decode(back_ids)
         except Exception:
             pass
 
@@ -409,8 +425,8 @@ def truncate_text_to_token_budget(
     approx_front_chars = front_budget * 4
     approx_back_chars = back_budget * 4
     if approx_front_chars + approx_back_chars >= len(text):
-        return text[: approx_front_chars + approx_back_chars], True
-    return (text[:approx_front_chars] + omit_notice + text[-approx_back_chars:]), True
+        return text[: approx_front_chars + approx_back_chars]
+    return text[:approx_front_chars] + omit_notice + text[-approx_back_chars:]
 
 
 # ─────────────────────────────────────────────────────────────────────────
