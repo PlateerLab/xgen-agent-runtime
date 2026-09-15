@@ -968,18 +968,10 @@ class AgentTurnExecutor:
             _extra_cancel = None
 
         def _cancelled() -> bool:
-            if _extra_cancel is not None:
-                try:
-                    if _extra_cancel():
-                        return True
-                except Exception:  # noqa: BLE001
-                    pass
-            if not interaction_id:
-                return False
             try:
                 from xgen_agent_runtime.host.cancel_context import is_cancelled
 
-                return is_cancelled(interaction_id, response_io_id)
+                return is_cancelled(interaction_id, response_io_id, cancel_check=_extra_cancel)
             except Exception:  # noqa: BLE001
                 return False
 
