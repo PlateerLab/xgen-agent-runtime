@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 _lock = threading.Lock()
 _cancelled_until: dict[str, float] = {}
@@ -51,11 +51,18 @@ def request_cancel(
         _cancelled_until[key] = until
 
 
-def is_cancelled(interaction_id: Optional[str], response_io_id: Optional[int] = None) -> bool:
+def is_cancelled(
+    interaction_id: Optional[str], response_io_id: Optional[int] = None,
+    *, cancel_check: Optional[Callable[[], bool]] = None,
+) -> bool:
     """
     Check if execution is cancelled.
-    If response_io_id is present, checks scoped key first, then falls back to interaction key.
+    A host's per-turn checker is authoritative: an older interaction-wide
+    cancellation must not poison the next turn before its execution row exists.
+    Legacy callers without a checker retain the scoped/interaction fallback.
     """
+    if cancel_check is not None:
+        return bool(cancel_check())
     now = time.monotonic()
     with _lock:
         _purge_expired(now)
