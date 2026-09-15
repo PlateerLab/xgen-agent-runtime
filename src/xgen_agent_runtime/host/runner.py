@@ -727,7 +727,31 @@ def _next_event(loop: Any, agen: Any, cancel_check: Optional[Callable[[], bool]]
             raise _CancelRequested()
 
 
-def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
+def _attach_tool_use_id(event: Dict[str, Any], tool_use_id: Any) -> None:
+    """도구 사건에 **어느 호출인지**를 싣는다 — ``tool_use_id`` 와 ``run_id`` (같은 값).
+
+    이름만으로는 짝을 맞출 수 없다: 같은 도구를 한 턴에 두 번 부르거나 동시에
+    부르면 시작과 끝이 엇갈린다. 호스트(xgen-workflow)는 ``run_id`` 로 도구
+    사건을 메시지에 모으는데 이 값이 늘 없어서 칩·로그가 전부 비었다.
+
+    id 가 없으면 키를 싣지 않는다 — 빈 문자열을 실으면 소비자가 "있음" 으로
+    읽고 이름 기반 폴백을 건너뛴다.
+    """
+    if tool_use_id is None:
+        return
+    value = tool_use_id if isinstance(tool_use_id, str) else str(tool_use_id)
+    if not value:
+        return
+    event["tool_use_id"] = value
+    event["run_id"] = value
+
+
+def _tool_call_event(
+    name: str,
+    tool_input: Any,
+    *,
+    tool_use_id: Any = None,
+) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
         "tool_name": name,
@@ -736,6 +760,7 @@ def _tool_call_event(name: str, tool_input: Any) -> Dict[str, Any]:
         else json.dumps(tool_input or {}, ensure_ascii=False, default=str),
         "timestamp": datetime.now().isoformat(),
     }
+    _attach_tool_use_id(event, tool_use_id)
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -761,6 +786,7 @@ def _tool_end_event(
     *,
     is_error: bool = False,
     duration_ms: Optional[int] = None,
+    tool_use_id: Any = None,
 ) -> Dict[str, Any]:
     if is_error:
         event: Dict[str, Any] = {
@@ -779,6 +805,7 @@ def _tool_end_event(
     event["timestamp"] = datetime.now().isoformat()
     if duration_ms is not None:
         event["duration_ms"] = duration_ms
+    _attach_tool_use_id(event, tool_use_id)
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -1095,6 +1122,9 @@ def stream_turn(
     rollout_recorder: Any = None
     original_runtime: Any = state.session_runtime
     cli_tool_names: Dict[str, str] = {}  # tool_use_id → name (CLI 내부 실행 짝맞춤)
+    # tool_use_id → 시작 시각(monotonic). CLI 백엔드는 걸린 시간을 주지 않으므로
+    # 여기서 잰다. 이름이 아니라 id 별이라 동시 호출에서도 섞이지 않는다.
+    cli_tool_started: Dict[str, float] = {}
     last_message_chunk = ""
     turn_started = time.monotonic()
     out_parts: List[str] = []
@@ -1167,7 +1197,9 @@ def stream_turn(
                     yield {
                         "type": "agent_event",
                         "data": _tool_call_event(
-                            event.data.get("name", ""), event.data.get("input")
+                            event.data.get("name", ""),
+                            event.data.get("input"),
+                            tool_use_id=event.data.get("tool_use_id"),
                         ),
                     }
                 elif tool_events and event.type == "tool.call_complete":
@@ -1185,6 +1217,7 @@ def stream_turn(
                             or (result_sink or {}).get(name, ""),
                             is_error=bool(event.data.get("is_error")),
                             duration_ms=event.data.get("duration_ms"),
+                            tool_use_id=event.data.get("tool_use_id"),
                         ),
                     }
                 elif event.type == "canvas_command":
@@ -1194,22 +1227,33 @@ def stream_turn(
                     tool_use_id = event.data.get("id") or ""
                     if tool_use_id:
                         cli_tool_names[tool_use_id] = name
+                        cli_tool_started[tool_use_id] = time.monotonic()
                     yield {
                         "type": "agent_event",
-                        "data": _tool_call_event(name, event.data.get("input")),
+                        "data": _tool_call_event(
+                            name, event.data.get("input"), tool_use_id=tool_use_id
+                        ),
                     }
                 elif (
                     tool_events
                     and event.type == "api.tool_result"
                     and event.data.get("source") == "cli"
                 ):
-                    name = cli_tool_names.pop(event.data.get("tool_use_id", ""), "") or "cli_tool"
+                    tool_use_id = event.data.get("tool_use_id") or ""
+                    name = cli_tool_names.pop(tool_use_id, "") or "cli_tool"
+                    started_at = cli_tool_started.pop(tool_use_id, None)
                     yield {
                         "type": "agent_event",
                         "data": _tool_end_event(
                             name,
                             _stringify_content(event.data.get("content")),
                             is_error=bool(event.data.get("is_error")),
+                            duration_ms=(
+                                int((time.monotonic() - started_at) * 1000)
+                                if started_at is not None
+                                else None
+                            ),
+                            tool_use_id=tool_use_id,
                         ),
                     }
             if cancelled:
