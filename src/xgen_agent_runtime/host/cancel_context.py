@@ -52,8 +52,10 @@ def request_cancel(
 
 
 def is_cancelled(
-    interaction_id: Optional[str], response_io_id: Optional[int] = None,
-    *, cancel_check: Optional[Callable[[], bool]] = None,
+    interaction_id: Optional[str],
+    response_io_id: Optional[int] = None,
+    *,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> bool:
     """
     Check if execution is cancelled.
