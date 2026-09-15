@@ -129,6 +129,16 @@ def codex_argv(
 
     argv += codex_mcp_overrides(mcp_config)
     argv += list(extra_args)
+    # Only images from the current user turn belong to this invocation.
+    current_user = next((m for m in reversed(request.messages) if m.get("role") == "user"), {})
+    content = current_user.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "image":
+                continue
+            source = block.get("source") or {}
+            if source.get("type") == "path" and source.get("path"):
+                argv += ["--image", str(source["path"])]
     # Prompt over stdin.
     argv += ["-"]
     return argv

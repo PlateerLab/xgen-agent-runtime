@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import base64
 import json
+import io
+import warnings
 import os
 from pathlib import Path
+from PIL import Image, ImageOps
+
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
@@ -180,7 +184,7 @@ def materialize_local_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
     if source.get("type") != "path":
         return block
     raw_path = str(source.get("path") or "")
-    path = Path(raw_path).resolve()
+    path = Path(raw_path)
     if not raw_path or not path.is_file() or path.is_symlink():
         raise ValueError(f"image attachment is unavailable: {raw_path or '<empty>'}")
     try:
@@ -190,16 +194,29 @@ def materialize_local_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
     if path.stat().st_size > max_bytes:
         raise ValueError(f"image exceeds {max_bytes // (1024 * 1024)} MiB: {path.name}")
     data = path.read_bytes()
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        mime = "image/png"
-    elif data.startswith(b"\xff\xd8\xff"):
-        mime = "image/jpeg"
-    elif len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        mime = "image/webp"
-    elif data.startswith((b"GIF87a", b"GIF89a")):
-        mime = "image/gif"
-    else:
-        raise ValueError(f"unsupported or invalid image: {path.name}")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as original:
+                mime = Image.MIME.get(original.format or "", "")
+                if mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                    raise ValueError("unsupported image format")
+                original.load()
+                # Keep the original in the workspace. Only the provider copy is
+                # bounded; Base64 adds another third to the request size.
+                if max(original.size) > 2048 or len(data) > 4 * 1024 * 1024:
+                    resized = ImageOps.exif_transpose(original).convert("RGB")
+                    resized.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+                    output = io.BytesIO()
+                    resized.save(output, format="JPEG", quality=85, optimize=True)
+                    data, mime = output.getvalue(), "image/jpeg"
+    except (
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
+        raise ValueError(f"unsupported or invalid image: {path.name}") from exc
     return {
         **block,
         "source": {

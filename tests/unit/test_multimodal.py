@@ -3,6 +3,7 @@
 import sys
 import os
 import base64
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -257,3 +258,39 @@ class TestDehydration:
     def test_string_content_unchanged(self):
         out = dehydrate_messages([{"role": "user", "content": "hi"}])
         assert out[0]["content"] == "hi"
+
+
+def test_workspace_files_reach_cli_single_and_multi_turn():
+    import json
+    from xgen_agent_runtime.llm_client.translators._cli import build_stream_json_stdin, flatten_messages_to_prompt
+    attachment = {"type": "file", "name": "config.json", "mime_type": "application/json", "workspace_path": "uploads/config.json"}
+    current = {"role": "user", "content": [attachment]}
+    wire = json.loads(build_stream_json_stdin([current]))
+    assert wire["message"]["content"][0]["type"] == "text"
+    assert "uploads/config.json" in wire["message"]["content"][0]["text"]
+    history = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}, current]
+    assert "uploads/config.json" in flatten_messages_to_prompt(history)
+    assert "uploads/config.json" in build_stream_json_stdin(history).decode()
+
+
+def test_provider_image_copy_is_resized_without_changing_original(tmp_path):
+    import io
+    from PIL import Image
+    from xgen_agent_runtime.llm_client.translators._canonical import materialize_local_image_block
+    path = tmp_path / "large.png"
+    Image.new("RGB", (4096, 1024), "white").save(path)
+    original = path.read_bytes()
+    block = {"type": "image", "source": {"type": "path", "path": str(path)}}
+    wire = materialize_local_image_block(block)
+    with Image.open(io.BytesIO(base64.b64decode(wire["source"]["data"]))) as resized:
+        assert resized.size == (2048, 512)
+    assert path.read_bytes() == original
+    assert block["source"]["type"] == "path"
+
+
+def test_truncated_provider_image_is_rejected(tmp_path):
+    from xgen_agent_runtime.llm_client.translators._canonical import materialize_local_image_block
+    path = tmp_path / "broken.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\ninvalid")
+    with pytest.raises(ValueError, match="invalid image"):
+        materialize_local_image_block({"type": "image", "source": {"type": "path", "path": str(path)}})

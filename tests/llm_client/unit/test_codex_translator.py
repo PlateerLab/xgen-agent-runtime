@@ -340,3 +340,11 @@ class TestToolItemsSurfaceAsCanonicalEvents:
         response = accum.finalize()
         assert [b.type for b in response.content] == ["text"]
         assert response.text == "done"
+
+
+def test_current_turn_workspace_image_is_attached_by_path():
+    old = {"role": "user", "content": [{"type": "image", "source": {"type": "path", "path": "/workspace/old.png"}}]}
+    current = {"role": "user", "content": [{"type": "image", "source": {"type": "path", "path": "/workspace/new.png"}}]}
+    argv = codex_argv(_request(messages=[old, {"role": "assistant", "content": "ok"}, current]))
+    assert argv[argv.index("--image") + 1] == "/workspace/new.png"
+    assert "/workspace/old.png" not in argv
