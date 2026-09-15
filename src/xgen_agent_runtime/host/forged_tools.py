@@ -463,12 +463,12 @@ async def _run_in_sandbox(sandbox: Any, spec: "ForgedToolSpec", payload: bytes) 
             logger.info(
                 "forged tool '%s': 환경을 호출 시점에 확정했다 (%s) — "
                 "[테스트] 를 한 번 돌리면 스펙에 기록된다",
-                spec.name, env_id[:12],
+                spec.name,
+                env_id[:12],
             )
         except Exception as exc:  # noqa: BLE001 — 원인을 그대로 올린다
             raise RuntimeError(
-                f"이 도구의 실행 환경을 세우지 못했습니다: {exc} — "
-                "의존성 이름과 버전을 확인하세요"
+                f"이 도구의 실행 환경을 세우지 못했습니다: {exc} — 의존성 이름과 버전을 확인하세요"
             ) from exc
     if env_id and not env_id.startswith("local:"):
         kwargs["env_id"] = env_id

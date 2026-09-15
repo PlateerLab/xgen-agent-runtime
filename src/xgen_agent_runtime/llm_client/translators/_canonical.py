@@ -12,7 +12,14 @@ The canonical format is used throughout the pipeline:
 
 from __future__ import annotations
 
+import base64
 import json
+import io
+import warnings
+import os
+from pathlib import Path
+from PIL import Image, ImageOps
+
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
@@ -165,6 +172,61 @@ def blocks_to_text(content: Any) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
+def materialize_local_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    """Materialize a trusted host image path for one provider request.
+
+    The returned copy may contain Base64; the canonical conversation state keeps
+    the small path reference. Magic bytes, not a client MIME hint, decide the
+    media type.
+    """
+
+    source = block.get("source") or {}
+    if source.get("type") != "path":
+        return block
+    raw_path = str(source.get("path") or "")
+    path = Path(raw_path)
+    if not raw_path or not path.is_file() or path.is_symlink():
+        raise ValueError(f"image attachment is unavailable: {raw_path or '<empty>'}")
+    try:
+        max_bytes = int(os.getenv("XGEN_RUNTIME_IMAGE_MAX_BYTES", str(20 * 1024 * 1024)))
+    except (TypeError, ValueError):
+        max_bytes = 20 * 1024 * 1024
+    if path.stat().st_size > max_bytes:
+        raise ValueError(f"image exceeds {max_bytes // (1024 * 1024)} MiB: {path.name}")
+    data = path.read_bytes()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as original:
+                mime = Image.MIME.get(original.format or "", "")
+                if mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                    raise ValueError("unsupported image format")
+                original.load()
+                # Keep the original in the workspace. Only the provider copy is
+                # bounded; Base64 adds another third to the request size.
+                if max(original.size) > 2048 or len(data) > 4 * 1024 * 1024:
+                    resized = ImageOps.exif_transpose(original).convert("RGB")
+                    resized.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+                    output = io.BytesIO()
+                    resized.save(output, format="JPEG", quality=85, optimize=True)
+                    data, mime = output.getvalue(), "image/jpeg"
+    except (
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
+        raise ValueError(f"unsupported or invalid image: {path.name}") from exc
+    return {
+        **block,
+        "source": {
+            "type": "base64",
+            "media_type": mime,
+            "data": base64.b64encode(data).decode("ascii"),
+        },
+    }
+
+
 def _image_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Canonical image content block → OpenAI ``image_url`` content part.
 
@@ -176,6 +238,7 @@ def _image_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,..." | "https://...",
                                             "detail": "auto"}}
     """
+    block = materialize_local_image_block(block)
     source = block.get("source") or {}
     src_type = source.get("type")
     url: Optional[str]
@@ -203,6 +266,7 @@ def _image_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
 
 def _image_block_to_google_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Canonical image content block → Google Gemini ``inlineData`` / ``fileData`` part."""
+    block = materialize_local_image_block(block)
     source = block.get("source") or {}
     src_type = source.get("type")
     if src_type == "base64":
@@ -223,10 +287,13 @@ def _image_block_to_google_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 def _file_block_to_text_fallback(block: Dict[str, Any]) -> str:
-    """Lossy fallback: render a file attachment as plain text metadata."""
+    """Tell the agent which current-turn workspace file it can read."""
     name = block.get("name") or "unnamed"
     mime = block.get("mime_type") or "application/octet-stream"
-    return f"[attached file: {name} ({mime})]"
+    path = block.get("workspace_path") or block.get("path")
+    if path:
+        return f"[Current-turn attachment: {name} ({mime}). Read it from workspace path: {path}]"
+    return f"[Current-turn attachment: {name} ({mime})]"
 
 
 def _user_content_to_openai_parts(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -298,9 +365,10 @@ def _sanitize_anthropic_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]
     if btype == "file":
         # TODO: Anthropic ``document`` block 으로 매핑 (PDF/text 직접 지원).
         # 지금은 metadata 텍스트로 fallback.
-        name = block.get("name") or "unnamed"
-        mime = block.get("mime_type") or "application/octet-stream"
-        return {"type": "text", "text": f"[attached file: {name} ({mime})]"}
+        return {"type": "text", "text": _file_block_to_text_fallback(block)}
+
+    if btype == "image":
+        block = materialize_local_image_block(block)
 
     sanitized = {k: v for k, v in block.items() if k not in _ANTHROPIC_INTERNAL_KEYS}
     return sanitized

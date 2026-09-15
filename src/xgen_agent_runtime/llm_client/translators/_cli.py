@@ -21,6 +21,10 @@ from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Sequence, 
 
 from xgen_agent_runtime.core.state import TokenUsage
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
+from xgen_agent_runtime.llm_client.translators._canonical import (
+    materialize_local_image_block,
+    _file_block_to_text_fallback,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -329,7 +333,11 @@ def _image_blocks_of(content: Any) -> List[Dict[str, Any]]:
     """Anthropic-style image blocks contained in one message's content."""
     if not isinstance(content, list):
         return []
-    return [b for b in content if isinstance(b, dict) and b.get("type") == "image"]
+    return [
+        materialize_local_image_block(b)
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "image"
+    ]
 
 
 def _render_block_for_history(block: Any) -> str:
@@ -371,6 +379,8 @@ def _render_block_for_history(block: Any) -> str:
         is_error = bool(block.get("is_error"))
         tag = "Tool error" if is_error else "Tool result"
         return f"[{tag}] {body}"
+    if btype == "file":
+        return _file_block_to_text_fallback(block)
     if btype == "image":
         return "[image attachment]"
     return ""
@@ -461,9 +471,19 @@ def build_stream_json_stdin(messages: List[Dict[str, Any]]) -> bytes:
 
     # Single-turn fast path — preserve the canonical envelope shape.
     if len(messages) == 1 and str(messages[0].get("role", "")) == "user":
+        single_content = messages[0].get("content", "")
+        if isinstance(single_content, list):
+            single_content = [
+                materialize_local_image_block(block)
+                if isinstance(block, dict) and block.get("type") == "image"
+                else {"type": "text", "text": _file_block_to_text_fallback(block)}
+                if isinstance(block, dict) and block.get("type") == "file"
+                else block
+                for block in single_content
+            ]
         envelope = {
             "type": "user",
-            "message": {"role": "user", "content": messages[0].get("content", "")},
+            "message": {"role": "user", "content": single_content},
         }
         return (json.dumps(envelope, ensure_ascii=False) + "\n").encode("utf-8")
 

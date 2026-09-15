@@ -77,8 +77,15 @@ class NormalizedInput:
         blocks: List[Dict[str, Any]] = []
         for img in self.images:
             blocks.append(img)
+            meta = img.get("_meta") or {}
+            if meta.get("workspace_path"):
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"[Image attachment: {meta.get('name', 'image')}. Original workspace path: {meta['workspace_path']}]",
+                    }
+                )
         for f in self.files:
-            name = f.get("name") or f.get("filename") or "unnamed"
             mime = f.get("mime_type") or f.get("media_type") or "application/octet-stream"
             data = f.get("data")
             if mime == "application/pdf" and data:
@@ -95,14 +102,8 @@ class NormalizedInput:
                     }
                 )
                 continue
-            # Other formats: metadata placeholder — hosts route the real bytes
-            # to the agent's file tools (e.g. a staged workspace copy).
-            blocks.append(
-                {
-                    "type": "text",
-                    "text": f"[attached file: {name} ({mime})]",
-                }
-            )
+            else:
+                blocks.append({**f, "type": "file"})
         # 텍스트 블록은 항상 마지막에 (빈 문자열도 허용 — provider 가 결정)
         blocks.append({"type": "text", "text": self.text or ""})
         return blocks

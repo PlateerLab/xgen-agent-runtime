@@ -711,9 +711,7 @@ def _next_event(loop: Any, agen: Any, cancel_check: Optional[Callable[[], bool]]
 
     task = loop.create_task(agen.__anext__())
     while True:
-        done, _pending = loop.run_until_complete(
-            asyncio.wait({task}, timeout=_CANCEL_POLL_S)
-        )
+        done, _pending = loop.run_until_complete(asyncio.wait({task}, timeout=_CANCEL_POLL_S))
         if done:
             return task.result()  # StopAsyncIteration 은 그대로 올라간다
         try:
@@ -1153,9 +1151,7 @@ def stream_turn(
                 try:
                     event = _next_event(loop, agen, cancel_check)
                 except _CancelRequested:
-                    logger.info(
-                        "geny_bridge: cancellation requested mid-wait — stopping stream"
-                    )
+                    logger.info("geny_bridge: cancellation requested mid-wait — stopping stream")
                     cancelled = True
                     break
                 except StopAsyncIteration:
