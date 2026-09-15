@@ -2,6 +2,7 @@
 
 import sys
 import os
+import base64
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -19,6 +20,7 @@ from xgen_agent_runtime.stages.s18_memory._dehydrate import (
     dehydrate_message,
     dehydrate_messages,
 )
+from xgen_agent_runtime.stages.s01_input.artifact.default.validators import DefaultValidator
 
 
 SAMPLE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="  # 1x1 PNG
@@ -92,6 +94,26 @@ class TestMultimodalNormalizer:
         n = MultimodalNormalizer().normalize({"text": "x", "images": [canonical]})
         assert n.images[0] is canonical or n.images[0] == canonical
 
+    def test_workspace_image_path_stays_lazy(self, tmp_path):
+        image = tmp_path / "a.png"
+        image.write_bytes(base64.b64decode(SAMPLE_B64))
+        n = MultimodalNormalizer().normalize({
+            "text": "see",
+            "attachments": [{"kind": "image", "mime_type": "image/png", "local_path": str(image)}],
+        })
+        assert n.images[0]["source"] == {"type": "path", "path": str(image), "media_type": "image/png"}
+
+
+def test_validator_counts_text_instead_of_base64_payload():
+    payload = {"text": "describe", "attachments": [{"kind": "image", "data": "A" * 2_000_000}]}
+    assert DefaultValidator().validate(payload) is None
+
+
+def test_validator_still_rejects_oversized_user_text():
+    assert DefaultValidator(max_length=10).validate({"text": "x" * 11, "attachments": [{}]}) == (
+        "Input too long (max 10 chars)"
+    )
+
 
 class TestDefaultNormalizerAutoDelegates:
     def test_attachments_dict_uses_multimodal_path(self):
@@ -140,6 +162,23 @@ class TestAnthropicSanitization:
         types = [b["type"] for b in out[0]["content"]]
         assert types == ["text", "text"]
         assert "x.pdf" in out[0]["content"][0]["text"]
+
+    def test_file_fallback_includes_workspace_path(self):
+        msg = {"role": "user", "content": [{
+            "type": "file", "name": "a.json", "mime_type": "application/json",
+            "workspace_path": "uploads/a.json",
+        }]}
+        out = canonical_messages_to_anthropic([msg])
+        assert "uploads/a.json" in out[0]["content"][0]["text"]
+
+    def test_local_image_materializes_only_in_translated_copy(self, tmp_path):
+        path = tmp_path / "a.png"
+        path.write_bytes(base64.b64decode(SAMPLE_B64))
+        source = {"type": "path", "path": str(path), "media_type": "image/png"}
+        msg = {"role": "user", "content": [{"type": "image", "source": source}]}
+        out = canonical_messages_to_anthropic([msg])
+        assert out[0]["content"][0]["source"]["type"] == "base64"
+        assert msg["content"][0]["source"] == source
 
 
 class TestOpenAIMultimodal:

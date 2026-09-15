@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from types import SimpleNamespace
 
 import pytest
@@ -117,10 +116,10 @@ def test_sandbox_fetch_dest_guard(tmp_path, fake_sandbox):
     assert res.is_error and res.content["error"] == "PATH_ESCAPE"
 
 
-# ── s01 PDF → Anthropic document block ──────────────────────────────
+# ── s01 files remain workspace references ───────────────────────────
 
 
-def test_pdf_file_becomes_document_block(tmp_path):
+def test_pdf_file_stays_workspace_reference(tmp_path):
     pdf = tmp_path / "doc.pdf"
     pdf_bytes = b"%PDF-1.4 fake"
     pdf.write_bytes(pdf_bytes)
@@ -129,24 +128,22 @@ def test_pdf_file_becomes_document_block(tmp_path):
         "text": "read this",
         "attachments": [{
             "kind": "file", "name": "doc.pdf",
-            "mime_type": "application/pdf", "url": f"file://{pdf}",
+            "mime_type": "application/pdf", "workspace_path": "uploads/doc.pdf",
         }],
     })
     blocks = norm.to_message_content()
-    doc = [b for b in blocks if b.get("type") == "document"]
-    assert len(doc) == 1
-    assert doc[0]["source"]["media_type"] == "application/pdf"
-    assert base64.b64decode(doc[0]["source"]["data"]) == pdf_bytes
-    # no placeholder text block for the PDF
-    assert not any("[attached file" in b.get("text", "") for b in blocks if b.get("type") == "text")
+    files = [b for b in blocks if b.get("type") == "file"]
+    assert len(files) == 1
+    assert files[0]["workspace_path"] == "uploads/doc.pdf"
+    assert files[0].get("data") is None
 
 
-def test_non_pdf_file_keeps_placeholder(tmp_path):
+def test_non_pdf_file_keeps_structured_reference(tmp_path):
     norm = MultimodalNormalizer().normalize({
         "text": "hi",
         "files": [{"name": "deck.pptx",
                    "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                   "url": "file:///nonexistent/deck.pptx"}],
+                   "workspace_path": "uploads/deck.pptx"}],
     })
     blocks = norm.to_message_content()
-    assert any("[attached file: deck.pptx" in b.get("text", "") for b in blocks if b.get("type") == "text")
+    assert any(b.get("type") == "file" and b.get("workspace_path") == "uploads/deck.pptx" for b in blocks)

@@ -174,6 +174,7 @@ class MultimodalNormalizer(InputNormalizer):
         )
         data = image.get("data") or image.get("base64") or image.get("b64")
         url = image.get("url")
+        local_path = image.get("local_path") or image.get("localPath")
 
         # Local-file source (``file://`` URI or absolute path) — inline as
         # base64 here so vendor translators never see a non-HTTPS URL
@@ -181,7 +182,7 @@ class MultimodalNormalizer(InputNormalizer):
         # ``Only HTTPS URLs are supported.``). This keeps the
         # ``llm_client.translators`` layer provider-agnostic and avoids
         # leaking host-specific filesystem assumptions outward.
-        if not data and isinstance(url, str):
+        if not data and not local_path and isinstance(url, str):
             local = _resolve_local_image_source(url)
             if local is not None:
                 raw_bytes, _ = local
@@ -194,6 +195,14 @@ class MultimodalNormalizer(InputNormalizer):
                 "type": "base64",
                 "media_type": media_type,
                 "data": data,
+            }
+        elif local_path:
+            # Keep large bytes out of raw input and conversation state. Provider
+            # translators materialize this trusted host path for the request only.
+            block["source"] = {
+                "type": "path",
+                "path": str(local_path),
+                "media_type": media_type,
             }
         elif url:
             block["source"] = {"type": "url", "url": url}
@@ -211,16 +220,11 @@ class MultimodalNormalizer(InputNormalizer):
         return block
 
     # Anthropic PDF limit is ~32MB request size; stay safely under it.
-    _PDF_MAX_BYTES = 24 * 1024 * 1024
-
     def _make_file_block(self, file: Dict[str, Any]) -> Dict[str, Any]:
         """Convert any accepted shape into a canonical file block.
 
-        PDFs referenced by a local ``file://`` URI (or absolute path) are
-        loaded and base64-attached here so ``to_blocks()`` can emit a native
-        Anthropic ``document`` block — the model reads the actual PDF instead
-        of a ``[attached file: …]`` placeholder. Other formats keep the
-        metadata-only shape (hosts hand those to the agent's file tools).
+        Files stay as workspace references. The current-turn prompt tells the
+        agent the exact path so it can choose the appropriate Read/document tool.
         """
         mime = (
             file.get("mime_type")
@@ -230,10 +234,6 @@ class MultimodalNormalizer(InputNormalizer):
         )
         data = file.get("data") or file.get("base64")
         url = file.get("url")
-        if mime == "application/pdf" and not data and url:
-            resolved = _resolve_local_image_source(url)  # generic local-file reader
-            if resolved is not None and len(resolved[0]) <= self._PDF_MAX_BYTES:
-                data = base64.b64encode(resolved[0]).decode("ascii")
         return {
             "type": "file",
             "name": file.get("name") or file.get("filename"),
@@ -243,4 +243,5 @@ class MultimodalNormalizer(InputNormalizer):
             "size": file.get("size"),
             "sha256": file.get("sha256"),
             "attachment_id": file.get("attachment_id"),
+            "workspace_path": file.get("workspace_path") or file.get("workspacePath"),
         }
