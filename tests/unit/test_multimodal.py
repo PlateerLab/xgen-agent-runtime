@@ -294,3 +294,13 @@ def test_truncated_provider_image_is_rejected(tmp_path):
     path.write_bytes(b"\x89PNG\r\n\x1a\ninvalid")
     with pytest.raises(ValueError, match="invalid image"):
         materialize_local_image_block({"type": "image", "source": {"type": "path", "path": str(path)}})
+
+
+def test_input_str_and_original_image_path_are_preserved(tmp_path):
+    path = tmp_path / "picture.png"
+    path.write_bytes(base64.b64decode(SAMPLE_B64))
+    normalized = DefaultNormalizer().normalize({"input_str": "describe this", "attachments": [
+        {"kind": "image", "local_path": str(path), "workspace_path": "uploads/picture.png", "name": "picture.png"}
+    ]})
+    assert normalized.text == "describe this"
+    assert any("uploads/picture.png" in block.get("text", "") for block in normalized.to_message_content())

@@ -77,6 +77,14 @@ class NormalizedInput:
         blocks: List[Dict[str, Any]] = []
         for img in self.images:
             blocks.append(img)
+            meta = img.get("_meta") or {}
+            if meta.get("workspace_path"):
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"[Image attachment: {meta.get('name', 'image')}. Original workspace path: {meta['workspace_path']}]",
+                    }
+                )
         for f in self.files:
             mime = f.get("mime_type") or f.get("media_type") or "application/octet-stream"
             data = f.get("data")

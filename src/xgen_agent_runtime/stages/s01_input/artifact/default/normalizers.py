@@ -80,7 +80,9 @@ class DefaultNormalizer(InputNormalizer):
                 normalized = MultimodalNormalizer().normalize(raw_input)
                 normalized.text = _normalize_text(normalized.text)
                 return normalized
-            text = _normalize_text(str(raw_input.get("text", raw_input.get("content", ""))))
+            text = _normalize_text(
+                str(raw_input.get("text", raw_input.get("content", raw_input.get("input_str", ""))))
+            )
             return NormalizedInput(
                 text=text,
                 metadata=raw_input.get("metadata", {}),
@@ -128,7 +130,9 @@ class MultimodalNormalizer(InputNormalizer):
             )
 
         if isinstance(raw_input, dict):
-            text = str(raw_input.get("text", raw_input.get("content", ""))).strip()
+            text = str(
+                raw_input.get("text", raw_input.get("content", raw_input.get("input_str", "")))
+            ).strip()
             images: List[Dict[str, Any]] = []
             files: List[Dict[str, Any]] = []
 
@@ -212,7 +216,7 @@ class MultimodalNormalizer(InputNormalizer):
 
         # Provenance metadata for downstream stages (memory dehydration etc.)
         meta: Dict[str, Any] = {}
-        for k in ("name", "size", "sha256", "attachment_id"):
+        for k in ("name", "size", "sha256", "attachment_id", "workspace_path"):
             if image.get(k) is not None:
                 meta[k] = image[k]
         if meta:
