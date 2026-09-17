@@ -151,6 +151,64 @@ def make_error_result(err: ToolError) -> "ToolResult":
     )
 
 
+_INT_RE = None
+_NUM_RE = None
+
+
+def coerce_input(schema: Dict[str, Any], payload: Any) -> Any:
+    """스키마가 숫자·불리언을 원하는데 모델이 **문자열로** 보낸 값을 바로잡는다.
+
+    실측 (2026-09-16/17 dev, claude-sonnet-4-6): ``max_results: "3"`` 하나로
+    ``'3' is not of type 'integer'`` 가 나 같은 호출이 6~15번 반복됐다. 뜻이 분명한
+    변환만 한다 — 정수 문자열 → integer, 숫자 문자열 → number, "true"/"false" →
+    boolean. 애매한 값은 건드리지 않고 검증기가 원래대로 거절하게 둔다.
+    원본은 바꾸지 않고, 바뀐 것이 없으면 같은 객체를 돌려준다.
+    """
+    import re
+
+    global _INT_RE, _NUM_RE
+    if _INT_RE is None:
+        _INT_RE = re.compile(r"^\s*-?\d+\s*$")
+        _NUM_RE = re.compile(r"^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$")
+
+    if not isinstance(schema, dict):
+        return payload
+    types = schema.get("type")
+    types = [types] if isinstance(types, str) else list(types or [])
+
+    if isinstance(payload, str) and "string" not in types:
+        if "integer" in types and _INT_RE.match(payload):
+            return int(payload.strip())
+        if "number" in types and _NUM_RE.match(payload):
+            text = payload.strip()
+            return int(text) if _INT_RE.match(text) else float(text)
+        if "boolean" in types and payload.strip().lower() in ("true", "false"):
+            return payload.strip().lower() == "true"
+        return payload
+
+    if isinstance(payload, dict):
+        props = schema.get("properties")
+        if not isinstance(props, dict):
+            return payload
+        out = None
+        for key, value in payload.items():
+            sub = props.get(key)
+            if not isinstance(sub, dict):
+                continue
+            fixed = coerce_input(sub, value)
+            if fixed is not value:
+                if out is None:
+                    out = dict(payload)
+                out[key] = fixed
+        return payload if out is None else out
+
+    if isinstance(payload, list) and isinstance(schema.get("items"), dict):
+        fixed_items = [coerce_input(schema["items"], v) for v in payload]
+        if any(a is not b for a, b in zip(fixed_items, payload)):
+            return fixed_items
+    return payload
+
+
 def validate_input(schema: Dict[str, Any], payload: Dict[str, Any]) -> None:
     """Validate *payload* against JSON Schema *schema*.
 

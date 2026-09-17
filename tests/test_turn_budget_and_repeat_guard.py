@@ -270,3 +270,87 @@ def test_repeat_counts_do_not_leak_into_the_next_turn() -> None:
         _round(stage, state, i)
     state.begin_turn()
     assert not _round(stage, state, 6)["content"].startswith("ERROR repeated_failure_blocked")
+
+
+# ── 4.27.0: 입력 타입 자동 변환 · 호출별 usage · 효율 원칙 프롬프트 ──────
+
+
+def test_coerce_input_fixes_obvious_string_numbers_and_booleans() -> None:
+    from xgen_agent_runtime.tools.errors import coerce_input
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "max_results": {"type": "integer"},
+            "ratio": {"type": "number"},
+            "exact": {"type": "boolean"},
+            "ids": {"type": "array", "items": {"type": "integer"}},
+            "nested": {"type": "object", "properties": {"n": {"type": "integer"}}},
+        },
+    }
+    raw = {"query": "3", "max_results": "3", "ratio": "0.5", "exact": "True", "ids": ["1", 2],
+           "nested": {"n": "7"}}
+    fixed = coerce_input(schema, raw)
+    assert fixed == {"query": "3", "max_results": 3, "ratio": 0.5, "exact": True, "ids": [1, 2],
+                     "nested": {"n": 7}}
+    assert raw["max_results"] == "3"  # 원본 불변
+
+
+def test_coerce_input_leaves_ambiguous_values_for_the_validator() -> None:
+    from xgen_agent_runtime.tools.errors import coerce_input
+
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}, "flag": {"type": "boolean"}}}
+    raw = {"n": "three", "flag": "yes"}
+    assert coerce_input(schema, raw) is raw
+    union = {"type": "object", "properties": {"v": {"type": ["string", "integer"]}}}
+    assert coerce_input(union, {"v": "3"}) == {"v": "3"}
+
+
+def test_router_accepts_string_integer_after_coercion() -> None:
+    tool = _BadArgTool()
+    tool_schema = {"type": "object", "properties": {"query": {"type": "string"},
+                                                    "max_results": {"type": "integer"}}}
+    type(tool).input_schema = property(lambda self: tool_schema)
+    try:
+        stage, state = _stage(tool), PipelineState(session_id="s")
+        result = _round(stage, state, 1, max_results="3")
+        assert result["content"] == "ok" and not result.get("is_error")
+    finally:
+        type(tool).input_schema = property(lambda self: {"type": "object"})
+
+
+class _Prov:
+    def __init__(self, provider: str) -> None:
+        self._p = provider
+
+    def _resolved_provider_name(self, state: PipelineState) -> str:
+        return self._p
+
+
+def _usage_state() -> PipelineState:
+    state = PipelineState(session_id="s")
+    for it, cr in ((1000, 0), (200, 9000), (300, 9500)):
+        state.turn_token_usage.append(
+            TokenUsage(input_tokens=it, output_tokens=10, cache_read_input_tokens=cr)
+        )
+    return state
+
+
+def test_usage_reports_calls_and_prompt_sizes_for_anthropic() -> None:
+    data = runner.turn_usage(_Prov("anthropic"), _usage_state())
+    assert data["calls"] == 3
+    assert data["first_call_prompt_tokens"] == 1000
+    assert data["max_call_prompt_tokens"] == 9800  # 캐시분을 따로 보고 → 더한다
+
+
+def test_usage_prompt_sizes_do_not_double_count_openai_cache() -> None:
+    data = runner.turn_usage(_Prov("openai"), _usage_state())
+    assert data["max_call_prompt_tokens"] == 1000  # prompt_tokens 에 이미 포함
+
+
+def test_efficiency_block_mentions_round_trips_and_batching() -> None:
+    from xgen_agent_runtime.host._constants import EFFICIENCY_PROMPT_BLOCK
+
+    text = EFFICIENCY_PROMPT_BLOCK.lower()
+    assert "round trip" in text and "parallel" in text and "one script" in text

@@ -304,6 +304,12 @@ class AgentTurnExecutor:
             _env_block = host.environment_prompt(_sandbox, provider)
             if _env_block:
                 system_prompt = system_prompt + "\n\n" + _env_block
+            if _sdk_tools and kwargs.get("system_prompt") != "":
+                # 왕복 수가 곧 비용이다 — 병렬 호출·일괄 스크립트·출력 최소화 원칙.
+                # 사용자가 시스템 프롬프트를 명시적으로 비운 턴에는 붙이지 않는다.
+                from xgen_agent_runtime.host._constants import EFFICIENCY_PROMPT_BLOCK
+
+                system_prompt = system_prompt + EFFICIENCY_PROMPT_BLOCK
             # ── 자기진화(self-evolution) 판정 — 배선보다 **먼저** ────────────
             # 여기서 정하는 이유: 호스트의 CLI 브릿지 가용성 판정이 이 결과를 본다
             # (내장 도구를 꺼도 WorkflowSelf 하나 때문에 run ctx 를 바인딩해야 한다).

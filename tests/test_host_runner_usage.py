@@ -32,6 +32,9 @@ _USAGE_KEYS = {
     "total_cost_usd",
     "model",
     "provider",
+    "calls",
+    "first_call_prompt_tokens",
+    "max_call_prompt_tokens",
 }
 
 

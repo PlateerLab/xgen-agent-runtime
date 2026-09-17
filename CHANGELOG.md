@@ -4,6 +4,32 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.27.0] — 2026-09-17
+
+목표: 비용 = (고정 앞부분) × (모델 왕복 수). 왕복 수를 줄이고, 줄었는지 실측한다.
+기준선 (dev, claude-sonnet-4-6, 위배상품 5개 점검 3회 평균): 입력 24.9만 토큰, 모델 왕복
+약 19회, 도구 23회, 176초, 약 $0.89. 같은 검색을 품목마다 따로 부르고(13회), 도구 인자
+`max_results: "3"`(문자열) 오류로 6~15회 재시도했다.
+
+### Added — 입력 타입 자동 변환 (`tools.errors.coerce_input`)
+
+- `RegistryRouter.route` 가 스키마 검증 전에 명백한 문자열 값을 바로잡는다:
+  정수 문자열 → integer, 숫자 문자열 → number, "true"/"false" → boolean (중첩 object·array
+  items 포함). 애매한 값·string 을 허용하는 union 은 건드리지 않는다. 원본 불변.
+
+### Added — 실행 효율 원칙 프롬프트 (`EFFICIENCY_PROMPT_BLOCK`)
+
+- SDK 도구 루프 턴의 시스템 프롬프트에 추가: 독립 작업은 한 응답의 병렬 호출로, 목록
+  반복 작업은 스크립트 한 번으로, 출력은 필요한 것만, 이미 가진 결과 재조회 금지, 입력
+  오류는 오류 문구대로 고쳐서 재시도. 사용자가 시스템 프롬프트를 명시적으로 비운(`""`)
+  턴에는 붙이지 않는다.
+
+### Added — usage 에 모델 왕복 수·호출별 프롬프트 크기
+
+- `turn_usage` 에 `calls`, `first_call_prompt_tokens`(= 고정 앞부분 크기),
+  `max_call_prompt_tokens`. 캐시분은 Anthropic/Bedrock 에서만 더한다(OpenAI 계열은
+  `prompt_tokens` 에 이미 포함).
+
 ## [4.26.0] — 2026-09-17
 
 실측 배경 (2026-09-16 dev, claude-sonnet-4-6): "이거해줘" 한 마디에 한 턴이 도구

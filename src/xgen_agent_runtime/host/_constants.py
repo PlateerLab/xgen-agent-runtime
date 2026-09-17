@@ -32,6 +32,30 @@ with any harness-provided "Workflow"/orchestration tool: only WorkflowSelf
 edits the XGEN graph."""
 
 
+#: 실행 효율 원칙 — SDK 도구 루프가 있는 모든 턴에 붙는다.
+#:
+#: 도구 결과 하나를 받을 때마다 모델은 시스템 프롬프트·도구 정의·지금까지의 대화
+#: 전체를 다시 읽는다. 비용 ≈ (고정 앞부분 크기) × (모델 왕복 수) 라서 왕복 수가
+#: 곧 비용이다. 실측 (2026-09-17 dev, claude-sonnet-4-6, 위배상품 5개 점검):
+#: 같은 검색을 품목마다 따로 불러 모델 왕복 26회·입력 30만 토큰이었고, 결국 한
+#: 스크립트로 다섯 개를 한 번에 검색하자 한 왕복에 끝났다.
+EFFICIENCY_PROMPT_BLOCK = """
+
+# Working efficiently
+Every tool call is a full model round trip that re-reads this whole conversation,
+so the number of round trips is the cost. Finish the task in as few as possible:
+- When several independent lookups or actions are needed, request them together in
+  ONE response (parallel tool calls) instead of one per turn.
+- For repetitive work over a list of items, write ONE script (e.g. Bash/Python) that
+  processes all items and prints a compact summary, instead of calling a tool per item.
+- Keep tool output small: print only what you need (counts, matched rows, file paths),
+  not whole documents or raw pages.
+- Do not re-read files, re-list directories, or re-run commands whose results you
+  already have. Use paths and facts already given in the conversation.
+- If a tool rejects your input, fix the argument exactly as the error says before
+  retrying; never repeat the same failing call."""
+
+
 #: 내장 메모리 시스템 프롬프트 블록 — 메모리 provider 가 붙은 턴에만 붙는다.
 #:
 #: 철학: **일반화된 지침만** — 도구 목록/시그니처/"MUST call" 드릴은 금지다.

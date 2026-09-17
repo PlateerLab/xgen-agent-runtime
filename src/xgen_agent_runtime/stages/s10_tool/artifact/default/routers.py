@@ -21,6 +21,7 @@ from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 from xgen_agent_runtime.tools.errors import (
     ToolError,
     ToolFailure,
+    coerce_input,
     make_error_result,
     validate_input,
 )
@@ -172,6 +173,9 @@ class RegistryRouter(ToolRouter):
                 ToolError.unknown_tool(tool_name, known=self._registry.list_names())
             )
 
+        # 모델이 숫자·불리언을 문자열로 보낸 명백한 경우는 검증 전에 바로잡는다 —
+        # 오류 한 번이 모델 왕복 한 번(=대화 전체 재전송)이다.
+        tool_input = coerce_input(tool.input_schema, tool_input)
         try:
             validate_input(tool.input_schema, tool_input)
         except jsonschema.ValidationError as exc:
