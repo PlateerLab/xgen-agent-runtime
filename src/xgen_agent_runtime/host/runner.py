@@ -450,6 +450,7 @@ def build_pipeline(
     context_window_budget: int = 0,
     enable_compaction: bool = True,
     credentials: Optional[Dict[str, Any]] = None,
+    enable_prompt_cache: bool = False,
 ) -> Pipeline:
     """Assemble a one-shot pipeline for a single node execution.
 
@@ -517,6 +518,13 @@ def build_pipeline(
         .with_system(prompt=system)
         .with_loop(max_turns=int(max_iterations))
     )
+    if enable_prompt_cache:
+        # Stage 5 — 도구 정의·시스템·안정 이력에 cache_control 표시. 표시는
+        # provider 가 anthropic/bedrock 일 때만 붙는다(_supports_cache_control);
+        # 나머지는 provider 자동 접두 캐시에 맡긴다. 기본 off: 켜면 보고되는
+        # input_tokens 가 캐시 읽기만큼 줄어드므로, 호스트가 cache_read/creation
+        # 토큰을 기록·과금에 반영한 뒤에 켠다.
+        builder.with_cache(strategy="aggressive")
     if registry is not None and len(registry):
         builder.with_tools(registry=registry)
 
@@ -1073,6 +1081,23 @@ def _close_rollout_recorder(
         logger.debug("geny_bridge: rollout retention failed", exc_info=True)
 
 
+#: 반복 한도(max_iterations)에 닿은 턴을 사용자 확인 없이 **자동으로 이어 가는** 최대 횟수.
+#:
+#: 20 이었다. 한 슬라이스가 max_iterations(기본 20, 노드 최대 100) 반복이므로 한 턴이
+#: 최대 21배까지 돌 수 있었고, 실제로 "이거해줘" 한 마디에 도구 120회 이상·입력
+#: 252만 토큰 턴이 나왔다(2026-09-16 dev). 매 반복마다 대화 전체가 모델에 다시
+#: 들어가므로 길이가 곧 비용이다. 2 = 최대 3 슬라이스. 더 필요하면 호스트가
+#: ``max_continuation_slices`` 로 명시한다.
+DEFAULT_MAX_CONTINUATION_SLICES = 2
+
+#: 자동 이어가기 한도에 닿아 멈춘 턴의 사용자 안내. ``task_suspended`` 이벤트를
+#: 모르는 클라이언트(구버전 웹·Dex)에서도 답이 왜 끊겼는지 보이게 한다.
+SUSPEND_NOTICE = (
+    "\n\n[안내: 작업 단계가 한도에 도달해 여기서 멈췄습니다. "
+    "이어서 진행하려면 '계속'이라고 보내 주세요.]"
+)
+
+
 def stream_turn(
     pipeline: Pipeline,
     text: Any,
@@ -1085,7 +1110,8 @@ def stream_turn(
     on_close: Optional[Callable[[], None]] = None,
     host: Optional[Any] = None,
     rollout_path: Optional[str | os.PathLike[str]] = None,
-    max_continuation_slices: int = 20,
+    max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
+    usage_sink: Optional[Dict[str, Any]] = None,
 ) -> Iterator[Union[str, Dict[str, Any]]]:
     """Drive ``run_stream`` from a sync generator.
 
@@ -1102,10 +1128,17 @@ def stream_turn(
     ``output_schema`` 는 스트리밍에서는 모델이 생성한 JSON 텍스트가 그대로
     흐른다 — 사후 검증·정규화는 non-stream(run_turn) 경로에서만 가능하다.
 
-    **usage 청크** — 파이프라인이 끝난 뒤(성공·오류 무관, 취소 제외) 사용량이
+    **usage 청크** — 파이프라인이 끝난 뒤(성공·오류·협조적 취소 무관) 사용량이
     기록돼 있으면 ``{"type": "usage", "data": turn_usage(...)}`` 를 **정확히
     한 번**, 제너레이터 종료 직전에 yield 한다. 소비자(사이드카·서버
-    agent_geny)가 토큰/비용을 집계하는 단일 출처.
+    agent_geny)가 토큰/비용을 집계하는 단일 출처. 취소된 턴은 그때까지 끝난
+    API 호출분이며 ``data["partial"] = True`` 가 붙는다(예전엔 아예 내지 않아
+    폭주 후 중지한 턴일수록 사용량이 사라졌다).
+
+    ``usage_sink`` — 선택. 소비자가 제너레이터를 ``.close()`` 로 닫으면 usage
+    청크를 yield 할 수 없다. dict 를 넘기면 종료 시(닫힘 포함) 같은 페이로드를
+    채워 둔다. 이미 usage 청크로 받은 턴에도 같은 값이 채워지므로 중복 집계하지
+    않도록 소비자가 둘 중 하나만 쓴다.
 
     ``host`` — 선택. ``host.record_failed_starts`` (기본 True) 가 False 이면
     "출력 0 + 실패/취소" 턴의 메모리 실행 기록을 건너뛴다
@@ -1270,6 +1303,9 @@ def stream_turn(
                 next_input = CONTINUE_RUN
                 continue
             if slice_resumable:
+                if output_schema is None:
+                    out_parts.append(SUSPEND_NOTICE)
+                    yield SUSPEND_NOTICE
                 yield {
                     "type": "agent_event",
                     "data": {
@@ -1294,13 +1330,24 @@ def stream_turn(
                 }
             turn_completed = True
             break
-        if turn_completed:
-            # 파이프라인 종료 후 정확히 1회 — 취소(break)로 나온 턴은 백그라운드
-            # 태스크가 아직 돌고 있어 집계가 확정되지 않았으므로 내지 않는다.
-            usage = turn_usage(pipeline, state)
-            if usage is not None:
-                yield {"type": "usage", "data": usage}
+        # 파이프라인 종료 후 정확히 1회. 협조적 취소(break)로 나온 턴도 그때까지
+        # 끝난 API 호출분을 낸다 — 백그라운드 태스크가 남아 있을 수 있어 partial 표시.
+        usage = turn_usage(pipeline, state)
+        if usage is not None:
+            if not turn_completed:
+                usage = {**usage, "partial": True}
+            if usage_sink is not None:
+                usage_sink.update(usage)
+            yield {"type": "usage", "data": usage}
     finally:
+        # 소비자가 .close() 로 닫아 usage 청크를 yield 하지 못한 경우에도 sink 는 채운다.
+        if usage_sink is not None and not usage_sink:
+            try:
+                _closed_usage = turn_usage(pipeline, state)
+                if _closed_usage is not None:
+                    usage_sink.update({**_closed_usage, "partial": True})
+            except Exception:  # noqa: BLE001 — 집계는 정리를 막지 않는다
+                logger.debug("geny_bridge: usage aggregation on close failed", exc_info=True)
         if agen is not None:
             try:
                 loop.run_until_complete(agen.aclose())
@@ -1355,7 +1402,7 @@ def run_turn(
     host: Optional[Any] = None,
     usage_sink: Optional[Dict[str, Any]] = None,
     rollout_path: Optional[str | os.PathLike[str]] = None,
-    max_continuation_slices: int = 20,
+    max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
 ) -> str:
     """Run one turn to completion and return the final text (non-streaming).
 

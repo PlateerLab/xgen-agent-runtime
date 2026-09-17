@@ -4,6 +4,49 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.26.0] — 2026-09-17
+
+실측 배경 (2026-09-16 dev, claude-sonnet-4-6): "이거해줘" 한 마디에 한 턴이 도구
+120회+·입력 252만 토큰까지 갔고, 도구 인자 타입 오류 하나로 같은 호출을 15번
+반복했으며, 사용자가 중지한 턴은 사용량이 기록되지 않았다.
+
+### Changed — 자동 이어가기 기본 상한 20 → 2
+
+- `DEFAULT_MAX_CONTINUATION_SLICES = 2` (`stream_turn`·`run_turn`·`AgentTurnExecutor`).
+  반복 한도(max_iterations)에 닿은 슬라이스를 사용자 확인 없이 이어 가는 횟수다.
+  예전 20 은 한 턴이 max_iterations × 21 번까지 돌 수 있었다. 호스트는
+  `max_continuation_slices` kwarg 로 계속 올릴 수 있다.
+- 한도에 닿아 멈춘 스트림 턴은 `task_suspended` 이벤트 앞에 사용자 안내 문구
+  (`SUSPEND_NOTICE`)를 텍스트로 낸다 — 이벤트를 모르는 클라이언트에서도 답이 왜
+  끊겼는지 보인다. 구조화 출력(`output_schema`) 스트림에는 섞지 않는다.
+
+### Added — 같은 도구·같은 오류 반복 차단 (`stages/s10_tool/repeat_guard.py`)
+
+- 키 = (도구 이름, 정규화한 오류 문구). 인자는 키에 넣지 않는다 — 검색어만 바꿔
+  같은 원인으로 실패하는 반복을 잡기 위해서다.
+- 3번째 같은 실패부터 결과에 "같은 방식으로 다시 부르지 말라" 안내를 덧붙이고,
+  5번째부터는 그 턴(연속 슬라이스 포함) 동안 해당 도구를 실행하지 않고
+  `ERROR repeated_failure_blocked` 결과를 돌려준다. 성공 한 번이면 카운트 초기화,
+  새 턴(`begin_turn`)에서도 초기화.
+- 이벤트 `tool.repeat_failure`, `tool.repeat_blocked` (카탈로그 v6).
+
+### Changed — 취소된 턴도 usage 를 낸다
+
+- `stream_turn` 은 협조적 취소로 끝난 턴에도 그때까지의 사용량을
+  `usage` 청크(`data.partial = True`)로 낸다. 예전엔 내지 않아 폭주 후 중지한
+  턴일수록 토큰이 집계에서 사라졌다.
+- `stream_turn(usage_sink=...)` — 소비자가 제너레이터를 `.close()` 해 청크를 받지
+  못해도 dict 에 같은 페이로드를 채운다. `AgentTurnExecutor` 는 kwargs
+  `usage_sink` 를 `stream_turn`/`run_turn` 에 넘긴다.
+
+### Added — 프롬프트 캐시 opt-in
+
+- `build_pipeline(enable_prompt_cache=False)` / 실행 kwargs `enable_prompt_cache`.
+  켜면 Stage 5 `aggressive_cache`(도구·시스템·안정 이력)를 등록한다
+  (cache_control 표시는 anthropic/bedrock 만). **기본 off** — 켜면 보고되는
+  input_tokens 가 캐시 읽기만큼 줄어드므로, 호스트가 cache_read/creation 토큰을
+  기록·과금에 반영한 뒤 켠다.
+
 ## 4.14.0
 
 - 호스트가 소유한 스킬 도구를 얹는 일반 훅 `Host.build_host_skill_tools(**kwargs)`

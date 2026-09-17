@@ -55,7 +55,12 @@ class AgentTurnExecutor:
         node_name = kwargs.get("node_name") or ""
         from xgen_agent_runtime.host.memory import history_messages
         from xgen_agent_runtime.host.rag import collect_rag
-        from xgen_agent_runtime.host.runner import build_pipeline, run_turn, stream_turn
+        from xgen_agent_runtime.host.runner import (
+            DEFAULT_MAX_CONTINUATION_SLICES,
+            build_pipeline,
+            run_turn,
+            stream_turn,
+        )
         from xgen_agent_runtime.host.tools import adapt_tools
         from xgen_agent_runtime import PipelineState
 
@@ -946,6 +951,8 @@ class AgentTurnExecutor:
                 # 되므로 CLI 백엔드에서는 항상 끈다 (파라미터 설명과 일치).
                 enable_compaction=(enable_compaction and provider not in _CLI_BACKENDS),
                 credentials=credentials,
+                # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
+                enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
             )
         except Exception as exc:  # noqa: BLE001 - surface build errors as output, never crash the graph
             logger.exception("agents/geny: failed to build pipeline")
@@ -1013,7 +1020,10 @@ class AgentTurnExecutor:
                 on_close=_teardown,
                 host=host,
                 rollout_path=rollout_path,
-                max_continuation_slices=int(kwargs.get("max_continuation_slices", 20)),
+                max_continuation_slices=int(
+                    kwargs.get("max_continuation_slices", DEFAULT_MAX_CONTINUATION_SLICES)
+                ),
+                usage_sink=kwargs.get("usage_sink"),
             )
             if clamped and schema is None:
                 # 입력이 잘렸음을 사용자에게 알린다 (agent_xgen 의 경고 관행과
@@ -1034,8 +1044,11 @@ class AgentTurnExecutor:
                 state,
                 output_schema=schema,
                 host=host,
+                usage_sink=kwargs.get("usage_sink"),
                 rollout_path=rollout_path,
-                max_continuation_slices=int(kwargs.get("max_continuation_slices", 20)),
+                max_continuation_slices=int(
+                    kwargs.get("max_continuation_slices", DEFAULT_MAX_CONTINUATION_SLICES)
+                ),
             )
         finally:
             _teardown()

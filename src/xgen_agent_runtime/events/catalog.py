@@ -51,7 +51,8 @@ from typing import Any, Dict, List
 #: loop hit its turn/budget cap and degraded to the pipeline path).
 #: v4: + ``subagent.*`` (2.7.0 persistent sub-agent lifecycle).
 #: v5: + resumable slice lifecycle (``loop.suspended`` / ``loop.blocked``).
-EVENT_CATALOG_VERSION = 5
+#: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
+EVENT_CATALOG_VERSION = 6
 
 
 class EventTypes(str, Enum):
@@ -186,6 +187,9 @@ class EventTypes(str, Enum):
     # blind spot the catalogue's own docstring warns about.
     TOOL_CALL_START = "tool.call_start"
     TOOL_CALL_COMPLETE = "tool.call_complete"
+    # 같은 도구가 같은 오류로 되풀이 실패할 때 (stages/s10_tool/repeat_guard.py).
+    TOOL_REPEAT_FAILURE = "tool.repeat_failure"
+    TOOL_REPEAT_BLOCKED = "tool.repeat_blocked"
 
     # ── Stage 11: Tool review ──
     TOOL_REVIEW_FLAG = "tool_review.flag"
@@ -583,6 +587,12 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     EventTypes.TOOL_EXECUTE_COMPLETE: {
         "count": "int",
         "errors": "int — results flagged is_error",
+    },
+    EventTypes.TOOL_REPEAT_FAILURE: {
+        "tools": "list[{name: str, count: int}] — same error repeated ≥ WARN_AT (3) times",
+    },
+    EventTypes.TOOL_REPEAT_BLOCKED: {
+        "tools": "list[str] — calls not executed because the tool failed the same way ≥ BLOCK_AT (5) times",
     },
     EventTypes.TOOL_CALL_START: {
         "tool_use_id": "str",
