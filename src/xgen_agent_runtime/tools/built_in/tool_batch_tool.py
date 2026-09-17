@@ -185,7 +185,11 @@ class ToolBatchTool(Tool):
 
         batch_id = uuid.uuid4().hex[:8]
         calls = [
-            {"tool_use_id": f"{TOOL_BATCH_NAME}-{batch_id}-{i}", "tool_name": tool_name, "tool_input": dict(a)}
+            {
+                "tool_use_id": f"{TOOL_BATCH_NAME}-{batch_id}-{i}",
+                "tool_name": tool_name,
+                "tool_input": dict(a),
+            }
             for i, a in enumerate(inputs)
         ]
 
@@ -220,7 +224,9 @@ class ToolBatchTool(Tool):
                 observed.append(r)
             flagged = repeat_guard.observe(calls, observed, shared, count_across_inputs=False)
             if flagged and emit is not None:
-                emit("tool.repeat_failure", {"tools": [{"name": n, "count": c} for n, c in flagged]})
+                emit(
+                    "tool.repeat_failure", {"tools": [{"name": n, "count": c} for n, c in flagged]}
+                )
 
         per_item = max(200, min(PER_ITEM_CHARS, TOTAL_CHARS // len(results)))
         rows: List[Dict[str, Any]] = []
