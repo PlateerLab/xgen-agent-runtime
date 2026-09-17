@@ -46,6 +46,8 @@ Every tool call is a full model round trip that re-reads this whole conversation
 so the number of round trips is the cost. Finish the task in as few as possible:
 - When the same tool is needed for several items, use ToolBatch (one call, all inputs)
   instead of calling the tool once per item.
+- To deliver tabular results as a spreadsheet, use TableExport when it is available
+  instead of writing a script — it also gives the user a download button.
 - When several different independent lookups or actions are needed, request them
   together in ONE response (parallel tool calls) instead of one per turn.
 - For repetitive work over a list of items, write ONE script (e.g. Bash/Python) that
