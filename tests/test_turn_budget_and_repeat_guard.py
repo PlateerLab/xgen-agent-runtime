@@ -392,3 +392,55 @@ def test_runtime_error_across_inputs_is_not_counted_when_disabled() -> None:
         tc, res = _fail(i, "ERROR not_found: product not found", {"id": f"p{i}"})
         repeat_guard.observe([tc], [res], shared, count_across_inputs=False)
     assert not repeat_guard.blocked_result(tc, shared)
+
+
+# ── 코딩 루프: 고치고 → 다시 빌드 ────────────────────────────────────
+
+_BUILD_HEAD = "> app@0.1.0 build\n> next build\n\n  ▲ Next.js 14.2.3\n\n   Creating an optimized production build ...\n"
+
+
+def _bash_fail(i: int, tail: str):
+    tc = {"tool_use_id": f"b{i}", "tool_name": "Bash", "tool_input": {"command": "npm run build"}}
+    res = {"type": "tool_result", "tool_use_id": f"b{i}", "is_error": True,
+           "content": _BUILD_HEAD + ("x" * 400) + f"\nFailed to compile.\n./app/page.tsx\n{tail}\nExit code: 1"}
+    return tc, res
+
+
+def _edit_ok(i: int):
+    tc = {"tool_use_id": f"e{i}", "tool_name": "Edit", "tool_input": {"file_path": "app/page.tsx"}}
+    return tc, {"type": "tool_result", "tool_use_id": f"e{i}", "content": "ok"}
+
+
+def test_build_errors_with_same_banner_but_different_cause_are_different_keys() -> None:
+    a = repeat_guard.normalize_error(_bash_fail(1, "Type error: 'foo' is not defined")[1]["content"])
+    b = repeat_guard.normalize_error(_bash_fail(2, "Module not found: Can't resolve 'bar'")[1]["content"])
+    assert a != b
+
+
+def test_fix_and_rebuild_loop_is_never_blocked_even_with_the_same_error() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, 15):
+        tc, res = _bash_fail(i, "Type error: 'foo' is not defined")  # 매번 같은 오류
+        repeat_guard.observe([tc], [res], shared)
+        assert "[반복 실패" not in res["content"]
+        repeat_guard.observe(*map(lambda x: [x], _edit_ok(i)), shared)
+    assert not repeat_guard.blocked_result(tc, shared)
+
+
+def test_same_failing_command_without_any_change_is_still_blocked() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, repeat_guard.BLOCK_AT + 1):
+        tc, res = _bash_fail(i, "Type error: 'foo' is not defined")
+        repeat_guard.observe([tc], [res], shared)
+    assert repeat_guard.blocked_result(tc, shared)
+
+
+def test_other_tool_success_does_not_clear_input_errors() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, repeat_guard.BLOCK_AT + 1):
+        tc = {"tool_use_id": f"s{i}", "tool_name": "shop_search", "tool_input": {"q": f"{i}"}}
+        res = {"type": "tool_result", "tool_use_id": f"s{i}", "is_error": True,
+               "content": "ERROR invalid_input: '3' is not of type 'integer'"}
+        repeat_guard.observe([tc], [res], shared)
+        repeat_guard.observe(*map(lambda x: [x], _edit_ok(i)), shared)
+    assert repeat_guard.blocked_result(tc, shared)

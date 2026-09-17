@@ -15,6 +15,8 @@
   **같은 인자**로 같은 오류면 입력 오류와 같은 문턱(``WARN_AT``/``BLOCK_AT``),
   **인자가 매번 달라도** 같은 오류면 더 넓은 문턱(``ANY_INPUT_WARN_AT``/
   ``ANY_INPUT_BLOCK_AT``) — 인증 실패처럼 무엇을 넣어도 안 되는 루프는 결국 끊는다.
+  실행 오류 카운트는 **다른 도구가 성공하면** 비운다. 코딩의 "고치고 → 다시 빌드" 는
+  같은 명령이 여러 번 실패하는 게 정상이다.
 
 * 경고 문턱 — 결과에 "같은 방식으로 다시 부르지 말라" 는 안내를 덧붙인다.
   모델에게 고칠 기회를 준다.
@@ -43,12 +45,16 @@ _BLOCKED_KEY = "tool.repeat_error_blocked"
 
 #: 오류 문구에서 호출마다 달라지는 조각 — 이것 때문에 같은 원인이 다른 키가 되면 안 된다.
 _VOLATILE = [
-    (re.compile(r"\{.*", re.S), ""),  # 구조화 오류의 JSON 본문(요청 id·경로 등)
     (re.compile(r"\b[0-9a-f]{8,}\b", re.I), "#"),  # id·해시
     (re.compile(r"\b\d{2,}\b"), "#"),  # 시각·포트·길이 같은 긴 숫자
     (re.compile(r"\s+"), " "),
 ]
-_KEY_TEXT_CAP = 240
+#: 구조화 오류(``ERROR <code>: <message>`` 헤더)의 JSON 본문 — 요청 id·경로 등. 헤더가 있을 때만 뗀다.
+#: 빌드 로그·스택 트레이스 같은 일반 출력의 중괄호까지 잘라 내면 실제 오류가 사라진다.
+_STRUCTURED_BODY = re.compile(r"\{.*", re.S)
+_KEY_HEAD = 80
+_KEY_TAIL = 200
+_KEY_TEXT_CAP = _KEY_HEAD + _KEY_TAIL
 
 
 def _error_text(result: Dict[str, Any]) -> Optional[str]:
@@ -65,10 +71,21 @@ def _error_text(result: Dict[str, Any]) -> Optional[str]:
 
 
 def normalize_error(text: str) -> str:
+    """판정 키용 오류 문구.
+
+    **앞과 끝을 함께 본다.** 명령 출력은 앞부분(빌드 배너·명령 에코)이 매번 같고 실제
+    오류는 끝에 나온다 — 앞 240자만 보면 ``npm run build`` 가 서로 다른 오류로 실패해도
+    같은 실패로 세어, 고치고 다시 빌드하는 정상 루프가 차단됐다.
+    """
     out = str(text or "").strip()
+    if out.startswith("ERROR "):
+        out = _STRUCTURED_BODY.sub("", out)
     for pattern, repl in _VOLATILE:
         out = pattern.sub(repl, out)
-    return out.strip()[:_KEY_TEXT_CAP]
+    out = out.strip()
+    if len(out) > _KEY_TEXT_CAP:
+        out = f"{out[:_KEY_HEAD]}…{out[-_KEY_TAIL:]}"
+    return out
 
 
 def is_input_error(text: str) -> bool:
@@ -136,8 +153,10 @@ def observe(
         if not name:
             continue
         if not result.get("is_error"):
-            # 성공하면 그 도구의 실패 이력은 끝난 일이다.
-            for key in [k for k in counts if k.startswith(f"{name}␟")]:
+            # 성공하면 그 도구의 실패 이력은 끝난 일이다. 실행 오류는 **다른 도구의 성공**
+            # 으로도 비운다 — 파일을 고치고(Edit/Write) 다시 빌드하는 루프는 원인을 안 고친
+            # 반복이 아니다. 입력 오류는 그대로 둔다: 다른 일을 해도 인자는 여전히 틀렸다.
+            for key in [k for k in counts if k.startswith(f"{name}␟") or "␟R␟" in k]:
                 counts.pop(key, None)
             continue
         text = _error_text(result)
@@ -145,12 +164,12 @@ def observe(
             continue
         err = normalize_error(text)
         if is_input_error(text):
-            n = _bump(f"{name}␟{err}")
+            n = _bump(f"{name}␟I␟{err}")
             warn, block = n >= WARN_AT, n >= BLOCK_AT
             block_at = BLOCK_AT
         else:
-            same = _bump(f"{name}␟{_input_sig(tc.get('tool_input'))}␟{err}")
-            any_ = _bump(f"{name}␟*␟{err}") if count_across_inputs else 0
+            same = _bump(f"{name}␟R␟{_input_sig(tc.get('tool_input'))}␟{err}")
+            any_ = _bump(f"{name}␟R␟*␟{err}") if count_across_inputs else 0
             warn = same >= WARN_AT or any_ >= ANY_INPUT_WARN_AT
             block = same >= BLOCK_AT or any_ >= ANY_INPUT_BLOCK_AT
             n = max(same, any_)
