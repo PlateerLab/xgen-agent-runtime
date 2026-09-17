@@ -424,6 +424,10 @@ class PipelineState:
             "turn_context_text",
             "system_parts",
             "executor.tool_calls_total",
+            # 반복 실패 차단(stages/s10_tool/repeat_guard.py)은 턴 단위다 —
+            # 연속 슬라이스에는 이어지고 새 턴에서는 비운다.
+            "tool.repeat_error_counts",
+            "tool.repeat_error_blocked",
         ):
             self.shared.pop(_k, None)
 

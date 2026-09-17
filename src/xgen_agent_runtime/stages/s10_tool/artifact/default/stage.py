@@ -19,6 +19,7 @@ from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
 )
 from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
 from xgen_agent_runtime.stages.s10_tool.streaming import StreamingToolExecutor
+from xgen_agent_runtime.stages.s10_tool import repeat_guard
 
 
 # Default parallel budget when a host doesn't specify one. Matches the
@@ -305,9 +306,48 @@ class ToolStage(Stage[Any, Any]):
         # otherwise default to its class-level budget.
         self._apply_max_concurrency(executor_strategy)
 
-        results = await executor_strategy.execute_all(
-            tool_calls, router, ctx, on_event=state.add_event
+        # 같은 오류로 반복 실패해 차단된 도구는 실행하지 않고 차단 결과를 돌려준다.
+        precomputed: Dict[str, Dict[str, Any]] = {}
+        runnable = []
+        for tc in tool_calls:
+            blocked = repeat_guard.blocked_result(tc, state.shared)
+            if blocked is not None:
+                precomputed[str(tc.get("tool_use_id") or "")] = blocked
+            else:
+                runnable.append(tc)
+        executed = (
+            await executor_strategy.execute_all(runnable, router, ctx, on_event=state.add_event)
+            if runnable
+            else []
         )
+        if precomputed:
+            by_id = {str(r.get("tool_use_id") or ""): r for r in executed}
+            results = [
+                precomputed.get(str(tc.get("tool_use_id") or ""))
+                or by_id.get(str(tc.get("tool_use_id") or ""))
+                for tc in tool_calls
+            ]
+            results = [r for r in results if r is not None]
+            state.add_event(
+                "tool.repeat_blocked",
+                {
+                    "tools": sorted(
+                        {
+                            str(tc.get("tool_name") or "")
+                            for tc in tool_calls
+                            if str(tc.get("tool_use_id") or "") in precomputed
+                        }
+                    )
+                },
+            )
+        else:
+            results = executed
+        flagged = repeat_guard.observe(tool_calls, results, state.shared)
+        if flagged:
+            state.add_event(
+                "tool.repeat_failure",
+                {"tools": [{"name": n, "count": c} for n, c in flagged]},
+            )
 
         state.add_message("user", results)
         state.tool_results = results

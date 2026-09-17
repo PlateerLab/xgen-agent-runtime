@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-02.
-> Catalogue version: **5** · events: **128**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-17.
+> Catalogue version: **6** · events: **130**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -672,6 +672,22 @@ Enum member: `EventTypes.TOOL_CALL_COMPLETE`
 | `name` | str |
 | `is_error` | bool |
 | `duration_ms` | int |
+
+### `tool.repeat_failure`
+
+Enum member: `EventTypes.TOOL_REPEAT_FAILURE`
+
+| Field | Description |
+|---|---|
+| `tools` | list[{name: str, count: int}] — same error repeated ≥ WARN_AT (3) times |
+
+### `tool.repeat_blocked`
+
+Enum member: `EventTypes.TOOL_REPEAT_BLOCKED`
+
+| Field | Description |
+|---|---|
+| `tools` | list[str] — calls not executed because the tool failed the same way ≥ BLOCK_AT (5) times |
 
 ## Stage 11 — Tool review
 

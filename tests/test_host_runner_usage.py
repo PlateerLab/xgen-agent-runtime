@@ -202,7 +202,7 @@ def test_stream_turn_no_usage_when_nothing_tracked() -> None:
     assert not any(isinstance(c, dict) and c.get("type") == "usage" for c in out)
 
 
-def test_stream_turn_no_usage_when_cancelled() -> None:
+def test_stream_turn_partial_usage_when_cancelled() -> None:
     flag = {"v": False}
 
     def _flip(state: PipelineState) -> None:
@@ -217,7 +217,11 @@ def test_stream_turn_no_usage_when_cancelled() -> None:
     ])
     out = list(runner.stream_turn(pipe, "hi", _state(), cancel_check=lambda: flag["v"]))
     # cancel_check 는 이벤트 경계마다 — flip 직후 나온 "b" 까지는 흐르고 거기서 멈춘다.
-    assert out == ["a", "b"]  # 취소 → 이후 텍스트도 usage 도 없다
+    # 취소된 턴도 그때까지 끝난 API 호출분을 partial usage 로 낸다 (4.26.0 계약 변경:
+    # 예전엔 내지 않아 폭주 후 중지한 턴의 토큰이 집계에서 사라졌다).
+    assert out[:2] == ["a", "b"]
+    assert len(out) == 3 and out[2]["type"] == "usage"
+    assert out[2]["data"]["partial"] is True and out[2]["data"]["input_tokens"] == 5
 
 
 def test_turn_usage_provider_from_client_when_pipeline_lacks_resolver() -> None:
