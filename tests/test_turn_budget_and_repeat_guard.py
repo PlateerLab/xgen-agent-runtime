@@ -354,3 +354,41 @@ def test_efficiency_block_mentions_round_trips_and_batching() -> None:
 
     text = EFFICIENCY_PROMPT_BLOCK.lower()
     assert "round trip" in text and "parallel" in text and "one script" in text
+
+
+# ── 실행 오류는 인자별로 센다 (항목마다 정당한 같은 문구 실패) ─────────────
+
+
+def _fail(i: int, text: str, tool_input: Dict[str, Any]):
+    tc = {"tool_use_id": f"f{i}", "tool_name": "shop_lookup", "tool_input": tool_input}
+    res = {"type": "tool_result", "tool_use_id": f"f{i}", "is_error": True, "content": text}
+    return tc, res
+
+
+def test_runtime_error_with_different_inputs_uses_wider_threshold() -> None:
+    shared: Dict[str, Any] = {}
+    seen = []
+    for i in range(1, 9):
+        tc, res = _fail(i, "ERROR not_found: product not found", {"id": f"p{i}"})
+        repeat_guard.observe([tc], [res], shared)
+        seen.append(res["content"])
+        blocked = bool(repeat_guard.blocked_result(tc, shared))
+        assert blocked == (i >= repeat_guard.ANY_INPUT_BLOCK_AT)
+    assert "[반복 실패" not in seen[repeat_guard.WARN_AT - 1]
+    assert "[반복 실패 5회]" in seen[repeat_guard.ANY_INPUT_WARN_AT - 1]
+
+
+def test_runtime_error_with_same_input_blocks_at_normal_threshold() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, repeat_guard.BLOCK_AT + 1):
+        tc, res = _fail(i, "ERROR upstream: 500", {"id": "same"})
+        repeat_guard.observe([tc], [res], shared)
+    assert repeat_guard.blocked_result(tc, shared)
+
+
+def test_runtime_error_across_inputs_is_not_counted_when_disabled() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, 20):
+        tc, res = _fail(i, "ERROR not_found: product not found", {"id": f"p{i}"})
+        repeat_guard.observe([tc], [res], shared, count_across_inputs=False)
+    assert not repeat_guard.blocked_result(tc, shared)

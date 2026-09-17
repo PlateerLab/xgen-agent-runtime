@@ -589,10 +589,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "errors": "int — results flagged is_error",
     },
     EventTypes.TOOL_REPEAT_FAILURE: {
-        "tools": "list[{name: str, count: int}] — same error repeated ≥ WARN_AT (3) times",
+        "tools": "list[{name: str, count: int}] — same error repeated past the warn threshold (repeat_guard)",
     },
     EventTypes.TOOL_REPEAT_BLOCKED: {
-        "tools": "list[str] — calls not executed because the tool failed the same way ≥ BLOCK_AT (5) times",
+        "tools": "list[str] — calls not executed because the tool hit the repeat_guard block threshold",
     },
     EventTypes.TOOL_CALL_START: {
         "tool_use_id": "str",

@@ -18,8 +18,22 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   같은 `RegistryRouter.route` 를 지나므로 입력 변환·검증·권한·훅이 그대로다.
   `concurrency_safe` 도구만 병렬, 나머지는 순차. 숨겨진 도구도 이름으로 호출(활성화).
   중첩 금지, 전부 실패면 `is_error`.
+- **스테이지 검사를 우회하지 않는다**: 안쪽 호출에도 스테이지 도구 허용 목록
+  (`ToolContext.tool_allowed`)과 반복 실패 차단을 적용한다. 항목마다 `tool.call_start`/
+  `tool.call_complete`(id `ToolBatch-<batch>-<i>`)를 내 UI·트레이스·도구 실행 수 집계에
+  실제 실행이 보인다. 항목의 `state_mutations` 도 일반 호출처럼 반영한다.
+- 한 배치에서 같은 오류가 여러 항목에 나면 반복 실패 카운트는 1회로 센다(첫 배치에서
+  곧바로 차단되지 않게).
 - `workflow` 패밀리·첫 턴 표면(28)에 추가, 효율 원칙 프롬프트에 사용 안내.
 - 실측 배경: 검색 도구를 품목마다 따로 불러 8회 측정에서 88회, 턴당 왕복 약 19회.
+
+### Changed — 반복 실패 차단: 실행 오류는 인자별로 센다
+
+- 4.26.0 은 (도구, 오류 문구)만으로 세어, 서로 다른 상품 5개가 각자 정당하게
+  "not found" 를 내도 그 도구가 턴 전체에서 막혔다.
+- 입력 오류(`ERROR invalid_input`)는 그대로 인자 무관 3회 경고·5회 차단.
+  그 밖의 실행 오류는 **같은 인자** 3회 경고·5회 차단, **인자가 달라도 같은 오류**는
+  5회 경고·8회 차단(인증 실패처럼 무엇을 넣어도 안 되는 루프는 결국 끊는다).
 
 ### Added — 입력 타입 자동 변환 (`tools.errors.coerce_input`)
 

@@ -111,3 +111,66 @@ def test_registered_as_workflow_builtin_and_turn_one() -> None:
     assert BUILT_IN_TOOL_CLASSES["ToolBatch"] is ToolBatchTool
     assert "ToolBatch" in BUILT_IN_TOOL_FEATURES["workflow"]
     assert is_turn_one("ToolBatch")
+
+
+# ── 스테이지 검사 우회 금지 (허용 목록·반복 차단·이벤트) ─────────────────
+
+
+def _stage_run(reg: ToolRegistry, args: Dict[str, Any], *, state: Any = None, binding: Any = None):
+    from xgen_agent_runtime.core.state import PipelineState
+    from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
+
+    stage = ToolStage(registry=reg)
+    if binding is not None:
+        stage.tool_binding = binding
+    state = state or PipelineState(session_id="s")
+    state.pending_tool_calls = [{"tool_use_id": "outer", "tool_name": "ToolBatch", "tool_input": args}]
+    asyncio.run(stage.execute(None, state))
+    return state.tool_results[-1], state
+
+
+def test_batch_cannot_reach_a_tool_the_stage_binding_disallows() -> None:
+    from xgen_agent_runtime.tools.stage_binding import StageToolBinding
+
+    tool = _Search()
+    binding = StageToolBinding(stage_order=10, blocked={"shop_search"})
+    result, _ = _stage_run(_reg(tool), {"tool": "shop_search", "inputs": [{"query": "x"}]}, binding=binding)
+    assert result["is_error"] and "access_denied" in result["content"]
+    assert tool.peak == 0
+
+
+def test_batch_cannot_run_a_tool_blocked_by_repeat_guard() -> None:
+    from xgen_agent_runtime.core.state import PipelineState
+    from xgen_agent_runtime.stages.s10_tool import repeat_guard
+
+    tool = _Search()
+    state = PipelineState(session_id="s")
+    state.shared["tool.repeat_error_blocked"] = {"shop_search": "ERROR upstream: 500"}
+    result, _ = _stage_run(_reg(tool), {"tool": "shop_search", "inputs": [{"query": "x"}]}, state=state)
+    assert result["is_error"] and result["content"].startswith("ERROR repeated_failure_blocked")
+    assert tool.peak == 0
+    assert repeat_guard.blocked_result({"tool_name": "shop_search"}, state.shared)
+
+
+def test_each_item_emits_call_events_so_real_executions_are_visible() -> None:
+    result, state = _stage_run(_reg(_Search()), {"tool": "shop_search", "inputs": [{"query": "a"}, {"query": "b"}]})
+    assert not result.get("is_error")
+    starts = [e["data"] for e in state.events if e["type"] == "tool.call_start"]
+    names = [d["name"] for d in starts]
+    assert names.count("ToolBatch") == 1 and names.count("shop_search") == 2
+    inner_ids = [d["tool_use_id"] for d in starts if d["name"] == "shop_search"]
+    assert all(i.startswith("ToolBatch-") for i in inner_ids) and len(set(inner_ids)) == 2
+    completes = [e["data"] for e in state.events if e["type"] == "tool.call_complete" and e["data"]["name"] == "shop_search"]
+    assert len(completes) == 2 and all("result" in d for d in completes)
+
+
+def test_same_error_on_every_item_counts_once_per_batch() -> None:
+    reg = _reg(_Search())
+    bad = {"tool": "shop_search", "inputs": [{"limit": 1} for _ in range(10)]}  # query 누락 = 입력 오류
+    result, state = _stage_run(reg, bad)
+    body = json.loads(result["content"].split("\n")[0]) if result["content"].startswith("{") else None
+    assert body is not None and body["failed"] == 10
+    # 한 번의 시도로 센다 — 첫 배치에서 곧바로 차단되지 않는다.
+    counts = state.shared["tool.repeat_error_counts"]
+    assert max(counts.values()) == 1
+    assert not state.shared.get("tool.repeat_error_blocked")

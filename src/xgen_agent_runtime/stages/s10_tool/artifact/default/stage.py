@@ -264,6 +264,10 @@ class ToolStage(Stage[Any, Any]):
             if _val is not None:
                 setattr(ctx, _runtime_attr, _val)
 
+        # 한 호출 안에서 다른 도구를 부르는 도구(ToolBatch)가 스테이지와 같은 허용 목록을
+        # 지키게 한다 — 모델이 직접 부를 수 없는 도구를 배치로 우회하면 안 된다.
+        ctx.tool_allowed = self.tool_binding.is_allowed  # type: ignore[attr-defined]
+
         return ctx
 
     async def execute(self, input: Any, state: PipelineState) -> Any:

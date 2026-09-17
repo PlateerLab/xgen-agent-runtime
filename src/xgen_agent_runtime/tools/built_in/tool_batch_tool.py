@@ -15,6 +15,10 @@
 ----
 * 실행은 일반 호출과 같은 경로(``RegistryRouter.route``)를 지난다 — 입력 변환·스키마
   검증·권한·훅이 그대로 적용된다. 이 도구가 권한을 넓히지 않는다.
+* 스테이지에서만 하던 검사도 그대로 한다 — 도구 허용 목록(``tool_allowed``)과 반복 실패
+  차단(``repeat_guard``). 막힌 도구를 배치로 우회할 수 없다.
+* 항목마다 ``tool.call_start``/``tool.call_complete`` 를 낸다 — UI·트레이스·도구 실행
+  수 집계에 실제 실행이 그대로 보인다(항목 id 는 ``ToolBatch-<batch>-<i>``).
 * ``concurrency_safe`` 인 도구만 병렬로, 나머지는 순서대로 실행한다.
 * 결과는 항목별로 압축해 한 번에 돌려준다(항목당·전체 글자 상한).
 * ToolBatch 안에서 ToolBatch 는 부를 수 없다.
@@ -24,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import uuid
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
@@ -108,6 +114,12 @@ class ToolBatchTool(Tool):
         return ToolCapabilities(concurrency_safe=False, read_only=False, max_result_chars=0)
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+        from xgen_agent_runtime.stages.s10_tool import repeat_guard
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
+            _apply_state_mutations_via_ctx,
+            _emit_call_complete,
+            _emit_call_start,
+        )
         from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
 
         tool_name = str((input or {}).get("tool") or "").strip()
@@ -138,6 +150,22 @@ class ToolBatchTool(Tool):
             )
         inputs = inputs[:MAX_ITEMS]
 
+        allowed = getattr(context, "tool_allowed", None)
+        if callable(allowed) and not allowed(tool_name):
+            return ToolResult(
+                content=f"ERROR access_denied: '{tool_name}' is not allowed in this stage.",
+                is_error=True,
+            )
+        state = getattr(context, "state_view", None)
+        shared = getattr(state, "shared", None)
+        shared = shared if isinstance(shared, dict) else None
+        emit = getattr(state, "add_event", None)
+        emit = emit if callable(emit) else None
+        if shared is not None:
+            blocked = repeat_guard.blocked_result({"tool_name": tool_name}, shared)
+            if blocked is not None:
+                return ToolResult(content=blocked["content"], is_error=True)
+
         # 호출 대상이 숨겨진(deferred) 도구여도 이름을 알면 부를 수 있게 활성화한다 — ToolSearch 와 같은 규칙.
         activate = getattr(registry, "activate", None)
         if callable(activate) and not getattr(registry, "is_exposed", lambda _n: True)(tool_name):
@@ -155,23 +183,54 @@ class ToolBatchTool(Tool):
         limit = max(1, min(MAX_CONCURRENCY, limit)) if safe else 1
         sem = asyncio.Semaphore(limit)
 
-        async def _one(args: Dict[str, Any]) -> ToolResult:
-            async with sem:
-                try:
-                    return await router.route(tool_name, args, context)
-                except Exception as exc:  # noqa: BLE001 — 항목 하나의 실패가 배치를 죽이지 않는다
-                    return ToolResult(content=f"ERROR {type(exc).__name__}: {exc}", is_error=True)
+        batch_id = uuid.uuid4().hex[:8]
+        calls = [
+            {"tool_use_id": f"{TOOL_BATCH_NAME}-{batch_id}-{i}", "tool_name": tool_name, "tool_input": dict(a)}
+            for i, a in enumerate(inputs)
+        ]
 
-        results = await asyncio.gather(*(_one(dict(a)) for a in inputs))
+        async def _one(tc: Dict[str, Any]) -> Dict[str, Any]:
+            async with sem:
+                _emit_call_start(emit, tc)
+                t0 = time.monotonic()
+                try:
+                    res = await router.route(tool_name, tc["tool_input"], context)
+                except Exception as exc:  # noqa: BLE001 — 항목 하나의 실패가 배치를 죽이지 않는다
+                    res = ToolResult(content=f"ERROR {type(exc).__name__}: {exc}", is_error=True)
+                _apply_state_mutations_via_ctx(res, tc, context)
+                result = res.to_api_format(tc["tool_use_id"])
+                if not isinstance(result.get("content"), str):
+                    result["content"] = _text_of(res)
+                _emit_call_complete(emit, tc, result, int((time.monotonic() - t0) * 1000))
+                return result
+
+        results = await asyncio.gather(*(_one(tc) for tc in calls))
+        if shared is not None:
+            # 한 배치는 모델의 한 번 시도다 — 같은 오류가 항목 N개에서 났다고 N번으로 세면
+            # 모델이 고쳐 볼 기회도 없이 첫 배치에서 차단된다. 오류 문구마다 한 번만 센다.
+            # 항목마다 입력이 다른 게 정상이므로 실행 오류는 같은 인자 반복만 센다.
+            seen: set = set()
+            observed = []
+            for r in results:
+                if r.get("is_error"):
+                    err = repeat_guard.normalize_error(str(r.get("content") or ""))
+                    if err in seen:
+                        continue
+                    seen.add(err)
+                observed.append(r)
+            flagged = repeat_guard.observe(calls, observed, shared, count_across_inputs=False)
+            if flagged and emit is not None:
+                emit("tool.repeat_failure", {"tools": [{"name": n, "count": c} for n, c in flagged]})
 
         per_item = max(200, min(PER_ITEM_CHARS, TOTAL_CHARS // len(results)))
         rows: List[Dict[str, Any]] = []
         ok = 0
-        for i, (args, res) in enumerate(zip(inputs, results)):
-            text = _clip(_text_of(res).strip(), per_item)
-            row: Dict[str, Any] = {"i": i, "input": args, "ok": not res.is_error}
-            row["error" if res.is_error else "result"] = text
-            ok += 0 if res.is_error else 1
+        for i, (tc, res) in enumerate(zip(calls, results)):
+            is_error = bool(res.get("is_error"))
+            text = _clip(str(res.get("content") or "").strip(), per_item)
+            row: Dict[str, Any] = {"i": i, "input": tc["tool_input"], "ok": not is_error}
+            row["error" if is_error else "result"] = text
+            ok += 0 if is_error else 1
             rows.append(row)
         body = {
             "tool": tool_name,

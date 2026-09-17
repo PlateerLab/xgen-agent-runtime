@@ -190,7 +190,7 @@ name = "appscript"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "lxml" },
+    { name = "lxml", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ca/52/2fa70edfd98f0058219ecc2e365a3ba7aabd42db14ff9d7f44bbdcc5400d/appscript-1.4.0.tar.gz", hash = "sha256:b2c6fc770bf822ea45529c7084bc0ee340e67ab260016b01d28e0449ec8723be", size = 295279, upload-time = "2025-10-08T07:56:39.126Z" }
 wheels = [
@@ -4022,8 +4022,8 @@ name = "uvicorn"
 version = "0.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click" },
-    { name = "h11" },
+    { name = "click", marker = "sys_platform != 'emscripten'" },
+    { name = "h11", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5e/da/6eee1ff8b6cbeed47eeb5229749168e81eb4b7b999a1a15a7176e51410c9/uvicorn-0.44.0.tar.gz", hash = "sha256:6c942071b68f07e178264b9152f1f16dfac5da85880c4ce06366a96d70d4f31e", size = 86947, upload-time = "2026-04-06T09:23:22.826Z" }
 wheels = [
@@ -4086,7 +4086,7 @@ wheels = [
 
 [[package]]
 name = "xgen-agent-runtime"
-version = "4.3.0"
+version = "4.27.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic", extra = ["bedrock"] },
@@ -4101,6 +4101,7 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pgvector" },
+    { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -4136,6 +4137,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24" },
     { name = "openai", specifier = ">=1.50.0" },
     { name = "pgvector", specifier = ">=0.3.0" },
+    { name = "pillow", specifier = "==12.3.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -4146,7 +4148,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "websockets", specifier = ">=12.0" },
     { name = "xgen-an-web", url = "https://github.com/PlateerLab/xgen-an-web/releases/download/v0.11.0/xgen_an_web-0.11.0-py3-none-any.whl" },
-    { name = "xgen-edit2docs", url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.21.1/xgen_edit2docs-0.21.1-py3-none-any.whl" },
+    { name = "xgen-edit2docs", url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.23.0/xgen_edit2docs-0.23.0-py3-none-any.whl" },
 ]
 provides-extras = ["dev"]
 
@@ -4277,8 +4279,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "xgen-edit2docs"
-version = "0.21.1"
-source = { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.21.1/xgen_edit2docs-0.21.1-py3-none-any.whl" }
+version = "0.23.0"
+source = { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.23.0/xgen_edit2docs-0.23.0-py3-none-any.whl" }
 dependencies = [
     { name = "anthropic" },
     { name = "beautifulsoup4" },
@@ -4308,7 +4310,7 @@ dependencies = [
     { name = "xlsxwriter" },
 ]
 wheels = [
-    { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.21.1/xgen_edit2docs-0.21.1-py3-none-any.whl", hash = "sha256:90dc739c019b83f199cd0a754901064e36755ab1b417005be3f4c1e6ee1f43be" },
+    { url = "https://github.com/PlateerLab/xgen-edit2docs/releases/download/v0.23.0/xgen_edit2docs-0.23.0-py3-none-any.whl", hash = "sha256:30fab2690c07ab98d635754353237b90b6aecbf7334bd787580bd6e8aa77e561" },
 ]
 
 [package.metadata]

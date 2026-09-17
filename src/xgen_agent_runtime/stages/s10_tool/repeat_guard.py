@@ -5,13 +5,20 @@
 인자를 고치지 않고 검색어만 바꿔 **15번** 같은 호출을 반복했다. 매 호출마다
 대화 전체가 모델에 다시 들어가므로 실패 하나가 수십만 토큰이 됐다.
 
-판정 키는 **(도구 이름, 정규화한 오류 문구)** 다. 인자까지 키에 넣으면 위 사고처럼
-검색어만 바뀌는 반복을 놓친다. 오류 문구가 같다는 것은 모델이 원인을 고치지
-않았다는 뜻이다.
+판정은 오류 종류에 따라 다르다.
 
-* ``WARN_AT`` 번째 같은 실패 — 결과에 "같은 방식으로 다시 부르지 말라" 는 안내를
-  덧붙인다. 모델에게 고칠 기회를 준다.
-* ``BLOCK_AT`` 번째부터 — 이번 턴(연속 슬라이스 포함) 동안 그 도구를 실행하지 않고
+* **입력 오류** (``ERROR invalid_input``) — 키는 **(도구, 정규화한 오류 문구)**.
+  인자까지 키에 넣으면 위 사고처럼 검색어만 바뀌는 반복을 놓친다. 입력 오류 문구가
+  같다는 것은 모델이 원인을 고치지 않았다는 뜻이다.
+* **그 밖의 실행 오류** ("not found", 업스트림 5xx 등) — 서로 다른 항목이 각자 정당하게
+  같은 문구로 실패할 수 있다(상품 5개가 각각 없음). 그래서 두 가지로 센다.
+  **같은 인자**로 같은 오류면 입력 오류와 같은 문턱(``WARN_AT``/``BLOCK_AT``),
+  **인자가 매번 달라도** 같은 오류면 더 넓은 문턱(``ANY_INPUT_WARN_AT``/
+  ``ANY_INPUT_BLOCK_AT``) — 인증 실패처럼 무엇을 넣어도 안 되는 루프는 결국 끊는다.
+
+* 경고 문턱 — 결과에 "같은 방식으로 다시 부르지 말라" 는 안내를 덧붙인다.
+  모델에게 고칠 기회를 준다.
+* 차단 문턱부터 — 이번 턴(연속 슬라이스 포함) 동안 그 도구를 실행하지 않고
   차단 결과를 돌려준다. 다른 도구는 계속 쓸 수 있고, 성공이 한 번 나오면 그 도구의
   카운트는 비워진다.
 
@@ -21,11 +28,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 WARN_AT = 3
 BLOCK_AT = 5
+ANY_INPUT_WARN_AT = 5
+ANY_INPUT_BLOCK_AT = 8
 
 _COUNTS_KEY = "tool.repeat_error_counts"
 _BLOCKED_KEY = "tool.repeat_error_blocked"
@@ -60,8 +71,16 @@ def normalize_error(text: str) -> str:
     return out.strip()[:_KEY_TEXT_CAP]
 
 
-def _key(tool_name: str, error: str) -> str:
-    return f"{tool_name}␟{normalize_error(error)}"
+def is_input_error(text: str) -> bool:
+    return str(text or "").lstrip().startswith("ERROR invalid_input")
+
+
+def _input_sig(tool_input: Any) -> str:
+    try:
+        raw = json.dumps(tool_input, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        raw = str(tool_input)
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
 
 
 def blocked_result(
@@ -91,19 +110,29 @@ def observe(
     tool_calls: List[Dict[str, Any]],
     results: List[Dict[str, Any]],
     state_shared: Dict[str, Any],
+    *,
+    count_across_inputs: bool = True,
 ) -> List[Tuple[str, int]]:
     """실행 결과를 보고 카운트를 갱신하고, 필요하면 결과에 안내를 덧붙인다.
 
     ``results`` 는 제자리에서 고친다. 반환값은 (도구, 누적 횟수) 중 안내를
     붙이거나 차단으로 넘어간 것 — 이벤트 기록용.
+
+    ``count_across_inputs=False`` 는 한 번에 여러 항목을 도는 호출(ToolBatch)용이다 —
+    항목마다 입력이 다른 게 정상이라, 실행 오류는 같은 인자 반복만 센다.
     """
     counts: Dict[str, int] = state_shared.setdefault(_COUNTS_KEY, {})
     blocked: Dict[str, str] = state_shared.setdefault(_BLOCKED_KEY, {})
-    names = {str(tc.get("tool_use_id") or ""): str(tc.get("tool_name") or "") for tc in tool_calls}
+    calls = {str(tc.get("tool_use_id") or ""): tc for tc in tool_calls}
     flagged: List[Tuple[str, int]] = []
 
+    def _bump(key: str) -> int:
+        counts[key] = counts.get(key, 0) + 1
+        return counts[key]
+
     for result in results:
-        name = names.get(str(result.get("tool_use_id") or ""), "")
+        tc = calls.get(str(result.get("tool_use_id") or "")) or {}
+        name = str(tc.get("tool_name") or "")
         if not name:
             continue
         if not result.get("is_error"):
@@ -114,18 +143,26 @@ def observe(
         text = _error_text(result)
         if not text or text.startswith("ERROR repeated_failure_blocked"):
             continue
-        key = _key(name, text)
-        counts[key] = counts.get(key, 0) + 1
-        n = counts[key]
-        if n >= BLOCK_AT:
-            blocked[name] = normalize_error(text)
+        err = normalize_error(text)
+        if is_input_error(text):
+            n = _bump(f"{name}␟{err}")
+            warn, block = n >= WARN_AT, n >= BLOCK_AT
+            block_at = BLOCK_AT
+        else:
+            same = _bump(f"{name}␟{_input_sig(tc.get('tool_input'))}␟{err}")
+            any_ = _bump(f"{name}␟*␟{err}") if count_across_inputs else 0
+            warn = same >= WARN_AT or any_ >= ANY_INPUT_WARN_AT
+            block = same >= BLOCK_AT or any_ >= ANY_INPUT_BLOCK_AT
+            n = max(same, any_)
+            block_at = BLOCK_AT if same >= WARN_AT else ANY_INPUT_BLOCK_AT
+        if block:
+            blocked[name] = err
+        if warn:
             flagged.append((name, n))
-        elif n >= WARN_AT:
-            flagged.append((name, n))
-        if n >= WARN_AT and isinstance(result.get("content"), str):
-            result["content"] = (
-                f"{result['content']}\n\n[반복 실패 {n}회] '{name}' 가 같은 오류로 {n}번 실패했다. "
-                "같은 방식으로 다시 부르지 마라 — 오류 문구대로 인자를 고치거나, 고칠 수 없으면 "
-                f"사용자에게 알려라. {BLOCK_AT}번째부터는 이 요청에서 이 도구가 차단된다."
-            )
+            if isinstance(result.get("content"), str):
+                result["content"] = (
+                    f"{result['content']}\n\n[반복 실패 {n}회] '{name}' 가 같은 오류로 {n}번 실패했다. "
+                    "같은 방식으로 다시 부르지 마라 — 오류 문구대로 인자를 고치거나, 고칠 수 없으면 "
+                    f"사용자에게 알려라. {block_at}번째부터는 이 요청에서 이 도구가 차단된다."
+                )
     return flagged
