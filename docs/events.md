@@ -679,7 +679,7 @@ Enum member: `EventTypes.TOOL_REPEAT_FAILURE`
 
 | Field | Description |
 |---|---|
-| `tools` | list[{name: str, count: int}] — same error repeated ≥ WARN_AT (3) times |
+| `tools` | list[{name: str, count: int}] — same error repeated past the warn threshold (repeat_guard) |
 
 ### `tool.repeat_blocked`
 
@@ -687,7 +687,7 @@ Enum member: `EventTypes.TOOL_REPEAT_BLOCKED`
 
 | Field | Description |
 |---|---|
-| `tools` | list[str] — calls not executed because the tool failed the same way ≥ BLOCK_AT (5) times |
+| `tools` | list[str] — calls not executed because the tool hit the repeat_guard block threshold |
 
 ## Stage 11 — Tool review
 

@@ -916,6 +916,21 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
         provider = ""
     if not provider:
         provider = str(getattr(getattr(state, "llm_client", None), "provider", "") or "")
+    # Anthropic/Bedrock 은 캐시분을 input_tokens 밖에서 따로 보고하고, OpenAI 계열은
+    # prompt_tokens 안에 이미 포함한다 — 더하면 이중 집계다.
+    _cache_separate = provider in ("anthropic", "bedrock") or (
+        not provider and str(model).startswith("claude")
+    )
+    per_call_prompt = [
+        int(u.input_tokens)
+        + (
+            int(u.cache_read_input_tokens) + int(u.cache_creation_input_tokens)
+            if _cache_separate
+            else 0
+        )
+        for u in calls
+        if isinstance(u, TokenUsage)
+    ]
     return {
         "input_tokens": int(total.input_tokens),
         "output_tokens": int(total.output_tokens),
@@ -924,6 +939,11 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
         "total_cost_usd": float(cost) if cost is not None else None,
         "model": model or None,
         "provider": provider or None,
+        # 모델 왕복 수와 호출별 프롬프트 크기(캐시 포함) — 비용 = 앞부분 × 왕복 수를
+        # 추정이 아니라 실측으로 보기 위한 값. 첫 값이 고정 앞부분의 크기다.
+        "calls": len(per_call_prompt),
+        "first_call_prompt_tokens": per_call_prompt[0] if per_call_prompt else 0,
+        "max_call_prompt_tokens": max(per_call_prompt) if per_call_prompt else 0,
     }
 
 

@@ -270,3 +270,177 @@ def test_repeat_counts_do_not_leak_into_the_next_turn() -> None:
         _round(stage, state, i)
     state.begin_turn()
     assert not _round(stage, state, 6)["content"].startswith("ERROR repeated_failure_blocked")
+
+
+# ── 4.27.0: 입력 타입 자동 변환 · 호출별 usage · 효율 원칙 프롬프트 ──────
+
+
+def test_coerce_input_fixes_obvious_string_numbers_and_booleans() -> None:
+    from xgen_agent_runtime.tools.errors import coerce_input
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "max_results": {"type": "integer"},
+            "ratio": {"type": "number"},
+            "exact": {"type": "boolean"},
+            "ids": {"type": "array", "items": {"type": "integer"}},
+            "nested": {"type": "object", "properties": {"n": {"type": "integer"}}},
+        },
+    }
+    raw = {"query": "3", "max_results": "3", "ratio": "0.5", "exact": "True", "ids": ["1", 2],
+           "nested": {"n": "7"}}
+    fixed = coerce_input(schema, raw)
+    assert fixed == {"query": "3", "max_results": 3, "ratio": 0.5, "exact": True, "ids": [1, 2],
+                     "nested": {"n": 7}}
+    assert raw["max_results"] == "3"  # 원본 불변
+
+
+def test_coerce_input_leaves_ambiguous_values_for_the_validator() -> None:
+    from xgen_agent_runtime.tools.errors import coerce_input
+
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}, "flag": {"type": "boolean"}}}
+    raw = {"n": "three", "flag": "yes"}
+    assert coerce_input(schema, raw) is raw
+    union = {"type": "object", "properties": {"v": {"type": ["string", "integer"]}}}
+    assert coerce_input(union, {"v": "3"}) == {"v": "3"}
+
+
+def test_router_accepts_string_integer_after_coercion() -> None:
+    tool = _BadArgTool()
+    tool_schema = {"type": "object", "properties": {"query": {"type": "string"},
+                                                    "max_results": {"type": "integer"}}}
+    type(tool).input_schema = property(lambda self: tool_schema)
+    try:
+        stage, state = _stage(tool), PipelineState(session_id="s")
+        result = _round(stage, state, 1, max_results="3")
+        assert result["content"] == "ok" and not result.get("is_error")
+    finally:
+        type(tool).input_schema = property(lambda self: {"type": "object"})
+
+
+class _Prov:
+    def __init__(self, provider: str) -> None:
+        self._p = provider
+
+    def _resolved_provider_name(self, state: PipelineState) -> str:
+        return self._p
+
+
+def _usage_state() -> PipelineState:
+    state = PipelineState(session_id="s")
+    for it, cr in ((1000, 0), (200, 9000), (300, 9500)):
+        state.turn_token_usage.append(
+            TokenUsage(input_tokens=it, output_tokens=10, cache_read_input_tokens=cr)
+        )
+    return state
+
+
+def test_usage_reports_calls_and_prompt_sizes_for_anthropic() -> None:
+    data = runner.turn_usage(_Prov("anthropic"), _usage_state())
+    assert data["calls"] == 3
+    assert data["first_call_prompt_tokens"] == 1000
+    assert data["max_call_prompt_tokens"] == 9800  # 캐시분을 따로 보고 → 더한다
+
+
+def test_usage_prompt_sizes_do_not_double_count_openai_cache() -> None:
+    data = runner.turn_usage(_Prov("openai"), _usage_state())
+    assert data["max_call_prompt_tokens"] == 1000  # prompt_tokens 에 이미 포함
+
+
+def test_efficiency_block_mentions_round_trips_and_batching() -> None:
+    from xgen_agent_runtime.host._constants import EFFICIENCY_PROMPT_BLOCK
+
+    text = EFFICIENCY_PROMPT_BLOCK.lower()
+    assert "round trip" in text and "parallel" in text and "one script" in text
+
+
+# ── 실행 오류는 인자별로 센다 (항목마다 정당한 같은 문구 실패) ─────────────
+
+
+def _fail(i: int, text: str, tool_input: Dict[str, Any]):
+    tc = {"tool_use_id": f"f{i}", "tool_name": "shop_lookup", "tool_input": tool_input}
+    res = {"type": "tool_result", "tool_use_id": f"f{i}", "is_error": True, "content": text}
+    return tc, res
+
+
+def test_runtime_error_with_different_inputs_uses_wider_threshold() -> None:
+    shared: Dict[str, Any] = {}
+    seen = []
+    for i in range(1, 9):
+        tc, res = _fail(i, "ERROR not_found: product not found", {"id": f"p{i}"})
+        repeat_guard.observe([tc], [res], shared)
+        seen.append(res["content"])
+        blocked = bool(repeat_guard.blocked_result(tc, shared))
+        assert blocked == (i >= repeat_guard.ANY_INPUT_BLOCK_AT)
+    assert "[반복 실패" not in seen[repeat_guard.WARN_AT - 1]
+    assert "[반복 실패 5회]" in seen[repeat_guard.ANY_INPUT_WARN_AT - 1]
+
+
+def test_runtime_error_with_same_input_blocks_at_normal_threshold() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, repeat_guard.BLOCK_AT + 1):
+        tc, res = _fail(i, "ERROR upstream: 500", {"id": "same"})
+        repeat_guard.observe([tc], [res], shared)
+    assert repeat_guard.blocked_result(tc, shared)
+
+
+def test_runtime_error_across_inputs_is_not_counted_when_disabled() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, 20):
+        tc, res = _fail(i, "ERROR not_found: product not found", {"id": f"p{i}"})
+        repeat_guard.observe([tc], [res], shared, count_across_inputs=False)
+    assert not repeat_guard.blocked_result(tc, shared)
+
+
+# ── 코딩 루프: 고치고 → 다시 빌드 ────────────────────────────────────
+
+_BUILD_HEAD = "> app@0.1.0 build\n> next build\n\n  ▲ Next.js 14.2.3\n\n   Creating an optimized production build ...\n"
+
+
+def _bash_fail(i: int, tail: str):
+    tc = {"tool_use_id": f"b{i}", "tool_name": "Bash", "tool_input": {"command": "npm run build"}}
+    res = {"type": "tool_result", "tool_use_id": f"b{i}", "is_error": True,
+           "content": _BUILD_HEAD + ("x" * 400) + f"\nFailed to compile.\n./app/page.tsx\n{tail}\nExit code: 1"}
+    return tc, res
+
+
+def _edit_ok(i: int):
+    tc = {"tool_use_id": f"e{i}", "tool_name": "Edit", "tool_input": {"file_path": "app/page.tsx"}}
+    return tc, {"type": "tool_result", "tool_use_id": f"e{i}", "content": "ok"}
+
+
+def test_build_errors_with_same_banner_but_different_cause_are_different_keys() -> None:
+    a = repeat_guard.normalize_error(_bash_fail(1, "Type error: 'foo' is not defined")[1]["content"])
+    b = repeat_guard.normalize_error(_bash_fail(2, "Module not found: Can't resolve 'bar'")[1]["content"])
+    assert a != b
+
+
+def test_fix_and_rebuild_loop_is_never_blocked_even_with_the_same_error() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, 15):
+        tc, res = _bash_fail(i, "Type error: 'foo' is not defined")  # 매번 같은 오류
+        repeat_guard.observe([tc], [res], shared)
+        assert "[반복 실패" not in res["content"]
+        repeat_guard.observe(*map(lambda x: [x], _edit_ok(i)), shared)
+    assert not repeat_guard.blocked_result(tc, shared)
+
+
+def test_same_failing_command_without_any_change_is_still_blocked() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, repeat_guard.BLOCK_AT + 1):
+        tc, res = _bash_fail(i, "Type error: 'foo' is not defined")
+        repeat_guard.observe([tc], [res], shared)
+    assert repeat_guard.blocked_result(tc, shared)
+
+
+def test_other_tool_success_does_not_clear_input_errors() -> None:
+    shared: Dict[str, Any] = {}
+    for i in range(1, repeat_guard.BLOCK_AT + 1):
+        tc = {"tool_use_id": f"s{i}", "tool_name": "shop_search", "tool_input": {"q": f"{i}"}}
+        res = {"type": "tool_result", "tool_use_id": f"s{i}", "is_error": True,
+               "content": "ERROR invalid_input: '3' is not of type 'integer'"}
+        repeat_guard.observe([tc], [res], shared)
+        repeat_guard.observe(*map(lambda x: [x], _edit_ok(i)), shared)
+    assert repeat_guard.blocked_result(tc, shared)

@@ -207,4 +207,5 @@ class TestRegistry:
         assert BUILT_IN_TOOL_CLASSES["TodoWrite"] is TodoWriteTool
         assert "TodoWrite" in BUILT_IN_TOOL_FEATURES["workflow"]
         tools = get_builtin_tools(features=["workflow"])
-        assert set(tools.keys()) == {"TodoWrite"}
+        # 4.27.0: ToolBatch 도 workflow 패밀리 — 목록 작업을 한 왕복에 (tool_batch_tool.py).
+        assert set(tools.keys()) == {"TodoWrite", "ToolBatch"}
