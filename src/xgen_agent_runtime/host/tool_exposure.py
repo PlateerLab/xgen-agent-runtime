@@ -87,6 +87,9 @@ TURN_ONE_TOOLS = frozenset(
         "Grep",
         # 2. 도구 발견 — 아래 계층 전부로 가는 문.
         "ToolSearch",
+        # 2-b. 목록 작업 — 같은 도구를 여러 입력으로 한 왕복에. 첫 턴에 보여야
+        #      항목마다 따로 부르는 습관(왕복 N회)이 처음부터 생기지 않는다.
+        "ToolBatch",
         # 3. 기억 — 도구가 곧 능력이라 게이트웨이를 둘 것이 없다.
         "memory_write",
         "memory_read",

@@ -88,6 +88,7 @@ from xgen_agent_runtime.tools.built_in.grep_tool import GrepTool
 from xgen_agent_runtime.tools.built_in.web_fetch_tool import WebFetchTool
 from xgen_agent_runtime.tools.built_in.web_search_tool import WebSearchTool
 from xgen_agent_runtime.tools.built_in.todo_write_tool import TodoWriteTool
+from xgen_agent_runtime.tools.built_in.tool_batch_tool import ToolBatchTool
 from xgen_agent_runtime.tools.built_in.notebook_edit_tool import NotebookEditTool
 from xgen_agent_runtime.tools.built_in.tool_search_tool import ToolSearchTool
 from xgen_agent_runtime.tools.built_in.plan_mode_tools import (
@@ -167,6 +168,7 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     "WebFetch": WebFetchTool,
     "WebSearch": WebSearchTool,
     "TodoWrite": TodoWriteTool,
+    "ToolBatch": ToolBatchTool,
     "NotebookEdit": NotebookEditTool,
     "ToolSearch": ToolSearchTool,
     "EnterPlanMode": EnterPlanModeTool,
@@ -267,7 +269,8 @@ BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
     "browser": list(BROWSER_TOOL_CLASSES.keys()),
     # Office documents (edit2docs engine) — outline/edit/preview/generate.
     "documents": list(DOC_TOOL_CLASSES.keys()),
-    "workflow": ["TodoWrite"],
+    # ToolBatch — 같은 도구를 입력 목록으로 한 왕복에 실행 (목록 작업의 왕복 수를 N → 1).
+    "workflow": ["TodoWrite", "ToolBatch"],
     "meta": ["ToolSearch", "EnterPlanMode", "ExitPlanMode"],
     "agent": ["Agent"],
     "subagent": [
@@ -424,6 +427,7 @@ __all__ = [
     "WebFetchTool",
     "WebSearchTool",
     "TodoWriteTool",
+    "ToolBatchTool",
     "NotebookEditTool",
     "ToolSearchTool",
     "EnterPlanModeTool",

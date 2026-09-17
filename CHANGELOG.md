@@ -11,6 +11,16 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 약 19회, 도구 23회, 176초, 약 $0.89. 같은 검색을 품목마다 따로 부르고(13회), 도구 인자
 `max_results: "3"`(문자열) 오류로 6~15회 재시도했다.
 
+### Added — `ToolBatch`: 같은 도구를 입력 목록으로 한 왕복에
+
+- 어떤 등록 도구든(직접 만든 도구·MCP·API 노드 포함) `{"tool", "inputs": [...]}` 로
+  최대 50건을 한 번에 실행하고 결과를 입력 순서대로 압축해 돌려준다. 실행은 일반 호출과
+  같은 `RegistryRouter.route` 를 지나므로 입력 변환·검증·권한·훅이 그대로다.
+  `concurrency_safe` 도구만 병렬, 나머지는 순차. 숨겨진 도구도 이름으로 호출(활성화).
+  중첩 금지, 전부 실패면 `is_error`.
+- `workflow` 패밀리·첫 턴 표면(28)에 추가, 효율 원칙 프롬프트에 사용 안내.
+- 실측 배경: 검색 도구를 품목마다 따로 불러 8회 측정에서 88회, 턴당 왕복 약 19회.
+
 ### Added — 입력 타입 자동 변환 (`tools.errors.coerce_input`)
 
 - `RegistryRouter.route` 가 스키마 검증 전에 명백한 문자열 값을 바로잡는다:

@@ -44,8 +44,10 @@ EFFICIENCY_PROMPT_BLOCK = """
 # Working efficiently
 Every tool call is a full model round trip that re-reads this whole conversation,
 so the number of round trips is the cost. Finish the task in as few as possible:
-- When several independent lookups or actions are needed, request them together in
-  ONE response (parallel tool calls) instead of one per turn.
+- When the same tool is needed for several items, use ToolBatch (one call, all inputs)
+  instead of calling the tool once per item.
+- When several different independent lookups or actions are needed, request them
+  together in ONE response (parallel tool calls) instead of one per turn.
 - For repetitive work over a list of items, write ONE script (e.g. Bash/Python) that
   processes all items and prints a compact summary, instead of calling a tool per item.
 - Keep tool output small: print only what you need (counts, matched rows, file paths),
