@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.28.0] — 2026-09-18
+
+도구 표면이 모델을 오도한 두 자리(실증: "아티팩트로 배포" 요청이 그래프 자기편집과
+워크벤치 노드 부착, 실패한 서버 기동으로 흘러간 대화).
+
+### Changed — `ToolSearch`: OR 폴백 제거
+AND 매칭이 0건이면 토큰 하나라도 걸리는 도구를 "(fuzzy: matched any keyword)" 로
+돌려주고 **활성화까지** 했다. "artifact deploy react app" 이 DocApplyEdits("app" 이
+"Apply" 안에 매칭), NotebookEdit, 사용자 PC 셸을 돌려줬고 에이전트는 그 위에 계획을
+세웠다. 이제 0건은 0건이다 — "이 능력은 지금 도구로 없다, 아무것도 활성화하지 않았다,
+카탈로그를 훑거나 더 일반적인 한 단어로" 를 답한다.
+
+### Added — `Bash`(sandbox 경로): 프로세스를 떼어 놓는 명령을 거절
+`nohup` / `setsid` / `disown` / 끝의 단독 `&` 는 sandbox 에서 절대 살아남지 못한다
+(exec 은 요청-응답, 프로세스 네임스페이스는 명령이 끝나면 거둬진다). 전에는 타임아웃을
+다 태우고 빈 실패만 돌려줬다. 실행 전에 거절하며 바른 문을 말한다 — 서버는
+ArtifactCreate/ArtifactPublish(러너가 프로세스를 든다), 긴 작업은 포그라운드 + 큰
+`timeout` 또는 JobGuide. `&&`·`|&`·따옴표 안 문자열은 건드리지 않는다. 호스트 경로 무관.
+
 ## [4.27.0] — 2026-09-17
 
 목표: 비용 = (고정 앞부분) × (모델 왕복 수). 왕복 수를 줄이고, 줄었는지 실측한다.
