@@ -221,15 +221,16 @@ class ToolSearchTool(Tool):
             if score > 0:
                 ranked.append((score, desc))
 
+        # No OR fallback. It used to retry with any single token when AND
+        # found nothing, and label the result "(fuzzy: matched any keyword)".
+        # The model read those as real matches: "artifact deploy react app"
+        # came back with DocApplyEdits (matched "app" inside "Apply"), a
+        # notebook editor and the user's local PC shell — all activated —
+        # and the agent built its plan on them (2026-09-18). A miss has to
+        # be a miss: that is what sends the model to the right next step
+        # (browse the catalog, or gain the capability through its own
+        # workflow) instead of a wrong tool.
         fuzzy = False
-        if not ranked and len(query.split()) > 1:
-            # AND matching found nothing — fall back to any-token (OR)
-            # matching so a single off token doesn't zero the search.
-            for desc in descriptors:
-                score = max(_rank(desc, tok) for tok in query.split())
-                if score > 0:
-                    ranked.append((score, desc))
-            fuzzy = bool(ranked)
 
         ranked.sort(key=lambda pair: (-pair[0], str(pair[1].get("name", ""))))
         top = ranked[:limit]
@@ -238,8 +239,10 @@ class ToolSearchTool(Tool):
             return ToolResult(
                 content=(
                     f"No matching tools for {query!r} (searched "
-                    f"{len(descriptors)} tools). Call ToolSearch with no "
-                    "query to browse the full catalog."
+                    f"{len(descriptors)} tools) — this capability is not "
+                    "available as a tool right now. Call ToolSearch with no "
+                    "query to browse the full catalog by group, or try a "
+                    "single, more general keyword. Nothing was activated."
                 ),
                 metadata={
                     "query": query,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sys
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
@@ -159,6 +160,40 @@ def _which_windows(name: str) -> Optional[str]:
 
 
 _DEFAULT_TIMEOUT_MS = 120_000  # 2 minutes
+
+# Commands that try to leave a process running after the command returns.
+# In the sandbox that never works: exec is request/response, and the
+# session's shell isolation reaps the whole process namespace when the
+# command exits. Before this guard the agent would run
+# ``nohup npx serve … &``, wait out the timeout, and get a bare failure
+# (2026-09-18). The right door for a long-running server is the artifact
+# skill (ArtifactCreate/ArtifactPublish — the runner supervises the
+# process); for long batch work, run it in the foreground with a larger
+# timeout or use the job skill.
+_DETACH_RE = re.compile(
+    r"(?:^|[;&|(]\s*)(?:nohup|setsid|disown)\b"  # explicit detach verbs
+    r"|(?<![&|])&\s*(?:$|[;)]|\n)"  # a single trailing '&' (not '&&', '|&')
+)
+
+
+def _detached_process_reason(command: str) -> Optional[str]:
+    """Why a command that detaches a process cannot do what it intends here."""
+    if not _DETACH_RE.search(command):
+        return None
+    return (
+        "This command tries to leave a process running in the background "
+        "(nohup / setsid / trailing &). In the sandbox that never survives the "
+        "command: exec is request/response and the process namespace is reaped "
+        "when the command exits, so the server or job would die immediately "
+        "while this call waits out its timeout.\n"
+        "- To serve an application: use the artifact skill — ArtifactGuide, then "
+        "ArtifactCreate / ArtifactPublish. The runner supervises that process and "
+        "gives it an address.\n"
+        "- To run long work: run it in the foreground with a larger `timeout`, or "
+        "use the job skill (JobGuide) for work that must outlive this turn."
+    )
+
+
 _MAX_TIMEOUT_MS = 600_000  # 10 minutes
 _MAX_OUTPUT = 100_000  # characters
 
@@ -226,6 +261,11 @@ class BashTool(Tool):
         # of on the host. Same output shaping as the host path below.
         if context.sandbox is not None:
             from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
+
+            detached = _detached_process_reason(command)
+            if detached:
+                # Don't spend the timeout to learn what we already know.
+                return ToolResult(content=detached, is_error=True)
 
             try:
                 exit_code, stdout, stderr = await sb_run(

@@ -255,21 +255,22 @@ class TestBrowseMode:
         assert result.metadata["hidden_count"] == 0
 
 
-class TestFuzzyFallback:
+class TestNoFuzzyFallback:
     @pytest.mark.asyncio
-    async def test_and_miss_falls_back_to_or(self):
+    async def test_an_and_miss_is_a_miss_and_activates_nothing(self):
+        """A single off token used to turn into OR matching labelled "fuzzy";
+        the model read those as real matches and planned on them."""
         ctx = _ctx_with_tools(
             [
                 _desc("knowledge_read", "Read a knowledge-repo document."),
                 _desc("Bash", "Run a shell command."),
             ]
         )
-        # 'zzzz' matches nothing, 'knowledge' matches — AND would return 0.
         result = await ToolSearchTool().execute({"query": "zzzz knowledge"}, ctx)
         assert not result.is_error
-        assert result.metadata["results_count"] == 1
-        assert result.metadata["fuzzy"] is True
-        assert "fuzzy" in result.content
+        assert result.metadata["results_count"] == 0
+        assert "fuzzy" not in result.content
+        assert "not available" in result.content and "Nothing was activated" in result.content
 
     @pytest.mark.asyncio
     async def test_search_still_activates_deferred(self):
