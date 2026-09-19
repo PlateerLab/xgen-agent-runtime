@@ -225,3 +225,32 @@ def test_spec_without_test_input_still_loads() -> None:
     """옛 저장소 행(컬럼 없음)도 그대로 읽힌다."""
     spec = ForgedToolSpec.from_dict({"name": "Old", "description": "d", "entrypoint": "x.py"})
     assert spec.test_input == {}
+
+
+def test_authoring_tools_sit_behind_the_self_extend_gate_on_a_hierarchical_surface(tmp_path):
+    """4.32.0: 제작·환경 도구 넷은 flat 이 아니면 core 가 아니다 — SelfExtendGuide 가 연다.
+
+    근거(2026-09-20): 여섯 스키마 2,854토큰 = 고정 프리픽스의 33% 가 모든 호출에 실렸고
+    쓰인 턴은 0~2.4%. 문의 설명이 능력을 말하니 인식은 남는다.
+    """
+    from xgen_agent_runtime.host.forged_tools import register_forged_tools
+    from xgen_agent_runtime.tools.built_in import SKILL_GATEWAYS, get_builtin_tools
+    from xgen_agent_runtime.tools.registry import ToolRegistry
+
+    class _Store:
+        def list(self):
+            return []
+
+    for flat, expect_core in ((False, False), (True, True)):
+        reg = ToolRegistry()
+        register_forged_tools(reg, workflow_id="w", workspace_dir=str(tmp_path), store=_Store(), core=flat)
+        for name in ("ForgeTool", "ListForgedTools", "DeleteForgedTool", "PythonEnv"):
+            assert reg.get(name) is not None, name
+            assert reg.is_core(name) is expect_core, (name, flat)
+
+    # 문은 턴 1에 서고, 부르면 그 넷을 연다.
+    from xgen_agent_runtime.host.tool_exposure import is_turn_one
+
+    assert is_turn_one("SelfExtendGuide") and not is_turn_one("ForgeTool")
+    assert set(SKILL_GATEWAYS["SelfExtendGuide"]) >= {"ForgeTool", "PythonEnv", "WorkflowSelf", "SystemPackages"}
+    assert "SelfExtendGuide" in get_builtin_tools(features=["meta"])
