@@ -428,6 +428,9 @@ class PipelineState:
             # 연속 슬라이스에는 이어지고 새 턴에서는 비운다.
             "tool.repeat_error_counts",
             "tool.repeat_error_blocked",
+            "tool.same_result_counts",
+            # 완료 직전 산출물 대조(stages/s16_loop/completion_review.py)도 턴당 한 번.
+            "loop.completion_review",
         ):
             self.shared.pop(_k, None)
 

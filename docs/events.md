@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-09-19.
-> Catalogue version: **7** · events: **131**
+> Catalogue version: **8** · events: **132**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -212,6 +212,19 @@ Enum member: `EventTypes.LOOP_BUDGET_EXCEEDED`
 |---|---|
 | `dimension` | str — iteration \| cost \| tokens \| wall_clock \| tool_calls |
 | `iteration` | int |
+
+### `loop.completion_review`
+
+Enum member: `EventTypes.LOOP_COMPLETION_REVIEW`
+
+| Field | Description |
+|---|---|
+| `reviewer` | str — reviewer name ('deliverable') |
+| `mode` | str — 'problems' (only deterministic problems trigger) \| 'always' |
+| `files` | int — claimed files inspected |
+| `missing` | int — claimed files that do not exist |
+| `problems` | int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV) |
+| `paths` | list[str] — paths shown to the model, in order |
 
 ## Stage 1 — Input
 
