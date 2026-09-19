@@ -195,6 +195,10 @@ class ToolBatchTool(Tool):
 
         async def _one(tc: Dict[str, Any]) -> Dict[str, Any]:
             async with sem:
+                if shared is not None:
+                    cached = repeat_guard.skip_identical(tc, shared)
+                    if cached is not None:
+                        return cached
                 _emit_call_start(emit, tc)
                 t0 = time.monotonic()
                 try:
@@ -223,6 +227,7 @@ class ToolBatchTool(Tool):
                     seen.add(err)
                 observed.append(r)
             flagged = repeat_guard.observe(calls, observed, shared, count_across_inputs=False)
+            repeat_guard.observe_same(calls, results, shared)
             if flagged and emit is not None:
                 emit(
                     "tool.repeat_failure", {"tools": [{"name": n, "count": c} for n, c in flagged]}

@@ -99,9 +99,21 @@ async def _invoke_langchain(lc_tool: Any, tool_input: Dict[str, Any]) -> Any:
     raise RuntimeError(f"tool {getattr(lc_tool, 'name', lc_tool)!r} has no invoke method")
 
 
+#: Adapted tools may declare a family they open, like the built-in guides do
+#: (``_skill_gateway``): ``lc_tool.metadata[OPENS_FAMILY_KEY] = [names]``.
+OPENS_FAMILY_KEY = "opens_family"
+
+
+def _opens_family(lc_tool: Any) -> List[str]:
+    meta = getattr(lc_tool, "metadata", None)
+    names = meta.get(OPENS_FAMILY_KEY) if isinstance(meta, dict) else None
+    return [str(n) for n in names] if isinstance(names, (list, tuple)) else []
+
+
 def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool:
     name = _sanitize_name(getattr(lc_tool, "name", type(lc_tool).__name__))
     description = str(getattr(lc_tool, "description", "") or "")
+    family = _opens_family(lc_tool)
 
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         try:
@@ -113,6 +125,13 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
                 result_sink[name] = text
             return ToolResult(content=text, is_error=True)
         text = _stringify(output)
+        if family:
+            # 안내 도구가 가리킨 도구들을 이 턴에 실제로 연다 — 내장 안내 도구와 같은 규약.
+            # 안내만 하고 열지 않으면 모델은 부를 수 없는 이름을 받고, 약한 모델은 안내
+            # 도구만 되풀이한다(2026-09-09 dev: gpt-4.1 이 커넥터 브라우저 안내를 100회).
+            from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
+
+            text = with_opened(text, open_family(ctx, family))
         if result_sink is not None:
             result_sink[name] = text
         return ToolResult(content=text)

@@ -174,3 +174,27 @@ def test_same_error_on_every_item_counts_once_per_batch() -> None:
     counts = state.shared["tool.repeat_error_counts"]
     assert max(counts.values()) == 1
     assert not state.shared.get("tool.repeat_error_blocked")
+
+
+def test_adapted_tool_can_open_the_family_it_points_to() -> None:
+    """커넥터 안내 도구처럼 LangChain 으로 들어온 문도 가리킨 도구를 실제로 연다."""
+    from pydantic import create_model
+    from langchain_core.tools import StructuredTool
+
+    from xgen_agent_runtime.host.tools import OPENS_FAMILY_KEY, adapt_tools
+
+    guide = StructuredTool.from_function(
+        func=lambda: "Tools: mcp_local_BrowserTabs", name="mcp_local_BrowserGuide",
+        description="guide", args_schema=create_model("G"),
+    )
+    guide.metadata = {OPENS_FAMILY_KEY: ["mcp_local_BrowserTabs"]}
+    member = StructuredTool.from_function(
+        func=lambda: "tabs", name="mcp_local_BrowserTabs", description="tabs", args_schema=create_model("T"),
+    )
+    reg = adapt_tools([guide, member], core=lambda n: n.endswith("Guide"))
+    assert not reg.is_exposed("mcp_local_BrowserTabs")
+    ctx = ToolContext(session_id="s")
+    ctx.tool_registry = reg  # type: ignore[attr-defined]
+    res = asyncio.run(reg.get("mcp_local_BrowserGuide").execute({}, ctx))
+    assert reg.is_exposed("mcp_local_BrowserTabs")
+    assert "Now callable: mcp_local_BrowserTabs" in res.content

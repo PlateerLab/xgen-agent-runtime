@@ -444,3 +444,59 @@ def test_other_tool_success_does_not_clear_input_errors() -> None:
         repeat_guard.observe([tc], [res], shared)
         repeat_guard.observe(*map(lambda x: [x], _edit_ok(i)), shared)
     assert repeat_guard.blocked_result(tc, shared)
+
+
+# ── 같은 호출·같은 결과 (성공 포함) ─────────────────────────────────────
+
+
+class _Echo(Tool):
+    def __init__(self) -> None:
+        self.executions = 0
+
+    @property
+    def name(self) -> str:
+        return "shell"
+
+    @property
+    def description(self) -> str:
+        return "shell"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {"type": "object"}
+
+    async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+        self.executions += 1
+        if input.get("command") == "date":
+            return ToolResult(content=f"t={self.executions}")  # 매번 다른 결과
+        return ToolResult(content="/workspace")
+
+
+def _call(stage: ToolStage, state: PipelineState, i: int, command: str) -> Dict[str, Any]:
+    state.pending_tool_calls = [{"tool_use_id": f"s{i}", "tool_name": "shell", "tool_input": {"command": command}}]
+    asyncio.run(stage.execute(None, state))
+    return state.tool_results[0]
+
+
+def test_identical_call_with_identical_result_warns_then_skips() -> None:
+    tool = _Echo()
+    stage, state = _stage(tool), PipelineState(session_id="s")
+    results = [_call(stage, state, i, "pwd") for i in range(1, 11)]
+    assert "[같은 호출·같은 결과" not in results[2]["content"]
+    assert "[같은 호출·같은 결과 4회]" in results[3]["content"]
+    # 8번째부터는 실행하지 않고 직전 결과를 돌려준다 — 모델이 받는 정보는 같다.
+    assert tool.executions == repeat_guard.SAME_RESULT_SKIP_AT - 1
+    for r in results[repeat_guard.SAME_RESULT_SKIP_AT - 1:]:
+        assert r["content"].startswith("/workspace") and "실행하지 않음" in r["content"]
+        assert not r.get("is_error")
+    assert any(e["type"] == "tool.same_result" for e in state.events)
+
+
+def test_changing_result_or_input_is_never_counted() -> None:
+    tool = _Echo()
+    stage, state = _stage(tool), PipelineState(session_id="s")
+    for i in range(1, 12):
+        assert "[같은 호출" not in _call(stage, state, i, "date")["content"]  # 결과가 매번 다름
+    for i in range(1, 12):
+        assert "[같은 호출" not in _call(stage, state, 100 + i, f"ls {i}")["content"]  # 입력이 매번 다름
+    assert tool.executions == 22
