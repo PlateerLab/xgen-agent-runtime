@@ -94,7 +94,11 @@ class ParseStage(Stage[Any, ParsedResponse]):
 
         parsed = self._parser.parse(api_response)
 
-        # Detect completion signals
+        # Detect completion signals — **이 응답의** 신호다. 지난 반복의 신호가 남아 있으면
+        # 모델이 로그를 인용하며 "[ERROR] …" 라고 한 번 쓴 것이 다음 반복까지 따라와
+        # 정상 답을 "Pipeline loop failed" 로 끝냈다(2026-09-17 실측).
+        state.completion_signal = None
+        state.completion_detail = None
         if parsed.text:
             signal, detail = self._signal_detector.detect(parsed.text)
             if signal != CompletionSignal.NONE:

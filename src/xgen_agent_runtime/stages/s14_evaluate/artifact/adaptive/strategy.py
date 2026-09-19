@@ -144,7 +144,8 @@ class BinaryClassifyEvaluation(EvaluationStrategy):
 
     def _classify_first_turn(self, state: PipelineState) -> EvaluationResult:
         """Classify on first turn based on response pattern."""
-        has_tool_calls = bool(state.pending_tool_calls)
+        # Stage 10 은 실행 뒤 pending 을 비운다 — 이번 반복에 도구를 썼는지는 결과로 본다.
+        has_tool_calls = bool(state.pending_tool_calls) or state.has_fresh_tool_results
         signal = state.completion_signal
 
         if has_tool_calls:
@@ -193,8 +194,8 @@ class BinaryClassifyEvaluation(EvaluationStrategy):
         """Signal-based evaluation for subsequent turns."""
         signal = state.completion_signal
 
-        # Tool calls always continue
-        if state.pending_tool_calls:
+        # Tool calls always continue — pending 이든 이번 반복에 이미 실행된 결과든.
+        if state.pending_tool_calls or state.has_fresh_tool_results:
             return EvaluationResult(
                 passed=True,
                 decision="continue",

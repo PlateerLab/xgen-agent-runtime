@@ -509,6 +509,18 @@ class PipelineState:
             self._event_listener(event_dict)
 
     @property
+    def has_fresh_tool_results(self) -> bool:
+        """이번 반복에서 도구가 돌았고 그 결과를 모델이 **아직 보지 못했다**.
+
+        Stage 10 이 ``tool_results`` 를 채우고 ``pending_tool_calls`` 를 비운다.
+        그 뒤 단계(14 evaluate·16 loop)가 "이번에 도구 썼나?" 를 빈 pending 으로 물으면
+        늘 "아니오" 다 — 도구는 돌았는데 모델은 결과를 못 본 채 호출 직전에 써 둔
+        추측이 답이 됐다(2026-09-17 실측). 결과가 있으면 무조건 한 번 더 모델에 가야
+        한다. Stage 16 이 결정을 낸 뒤 ``tool_results`` 를 비운다.
+        """
+        return bool(self.tool_results)
+
+    @property
     def run_status(self) -> str:
         """Status of this execution slice (``completed`` is task completion)."""
         return self._run_status
