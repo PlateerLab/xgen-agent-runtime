@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-17.
-> Catalogue version: **6** · events: **130**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-19.
+> Catalogue version: **7** · events: **131**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -688,6 +688,15 @@ Enum member: `EventTypes.TOOL_REPEAT_BLOCKED`
 | Field | Description |
 |---|---|
 | `tools` | list[str] — calls not executed because the tool hit the repeat_guard block threshold |
+
+### `tool.same_result`
+
+Enum member: `EventTypes.TOOL_SAME_RESULT`
+
+| Field | Description |
+|---|---|
+| `tools` | list[{name: str, count: int}] — identical call returned an identical result past the warn threshold |
+| `skipped` | list[str] — identical calls answered from the previous result without executing |
 
 ## Stage 11 — Tool review
 

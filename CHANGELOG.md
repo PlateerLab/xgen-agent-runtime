@@ -4,6 +4,34 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.29.0] — 2026-09-19
+
+근거: dev 실제 사용 기록 오프라인 평가(모델 호출 없음). 도구 12회+ 턴 73건(에이전트 약 30개)을 사람이
+라벨링 — 낭비 루프 14건, 정상 55건. 설계에 쓰지 않은 기간(7/28~9/4) 41건으로 검증.
+
+### Added — 같은 호출·같은 결과 반복 차단 (`repeat_guard.observe_same` / `skip_identical`)
+
+- 같은 도구·같은 입력이 **같은 결과**를 낸 횟수를 성공까지 센다. 4번째에 결과에 안내를 붙이고,
+  8번째부터는 실행하지 않고 직전 결과 + 안내를 돌려준다(같은 저장·전송 부작용 반복도 막는다).
+  결과가 매번 다르거나 입력이 다르면 세지 않는다. 실패의 반복은 기존 반복 실패 차단 몫.
+- 오프라인 평가: 설계 14건 중 13건 적중·정상 55건 중 오탐 1건(게임 버튼 4회 클릭 — 최대 4회라
+  건너뛰기에는 안 닿음). 홀드아웃 3/3 적중·오탐 0. 낭비 턴 입력 약 1,090만 토큰(14일 전체의 약 8%).
+- 반복은 전부 gpt-4.1·qwen 계열에서 나왔다(pwd 21회, 안내 도구 100회, 같은 메모리 저장 62회) —
+  폐쇄망(로컬 모델) 경로의 안전장치. ToolBatch 안쪽 호출에도 같은 규칙.
+- 이벤트 `tool.same_result` (catalog v7).
+
+### Added — 어댑터로 들어온 도구도 "안내 도구를 부르면 그 묶음이 열린다"
+
+- LangChain 등으로 들어온 도구가 `metadata["opens_family"] = [이름…]` 을 선언하면, 호출될 때
+  그 도구들을 이 턴에 활성화하고 "Now callable: …" 을 붙인다 — 내장 안내 도구(`_skill_gateway`)와
+  같은 규약. 커넥터(Dex) 브라우저 안내 도구가 "ToolSearch 로 켜라" 고만 답해 gpt-4.1 이 안내만
+  100회·100회·19회 반복한 것(입력 약 750만 토큰)을 호스트가 선언 하나로 고칠 수 있게 한다.
+
+### Verified — 도구 결과 전달
+
+- 반복 루프의 원인으로 의심한 "모델이 도구 결과를 못 본다" 는 기각: openai·vllm(스트리밍/비)·
+  anthropic(캐시 on/off)·LangChain 어댑터 경로 모두 다음 요청에 도구 결과와 앞 단계 텍스트가 실림.
+
 ## [4.28.1] — 2026-09-19
 
 ### Fixed — 도구를 쓴 턴이 도구 결과를 모델이 보기 전에 끝나던 것

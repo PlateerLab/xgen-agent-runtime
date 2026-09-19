@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
@@ -313,8 +313,13 @@ class ToolStage(Stage[Any, Any]):
         # 같은 오류로 반복 실패해 차단된 도구는 실행하지 않고 차단 결과를 돌려준다.
         precomputed: Dict[str, Dict[str, Any]] = {}
         runnable = []
+        skipped_same: List[str] = []
         for tc in tool_calls:
             blocked = repeat_guard.blocked_result(tc, state.shared)
+            if blocked is None:
+                blocked = repeat_guard.skip_identical(tc, state.shared)
+                if blocked is not None:
+                    skipped_same.append(str(tc.get("tool_name") or ""))
             if blocked is not None:
                 precomputed[str(tc.get("tool_use_id") or "")] = blocked
             else:
@@ -351,6 +356,15 @@ class ToolStage(Stage[Any, Any]):
             state.add_event(
                 "tool.repeat_failure",
                 {"tools": [{"name": n, "count": c} for n, c in flagged]},
+            )
+        same = repeat_guard.observe_same(tool_calls, results, state.shared)
+        if same or skipped_same:
+            state.add_event(
+                "tool.same_result",
+                {
+                    "tools": [{"name": n, "count": c} for n, c in same],
+                    "skipped": sorted(set(skipped_same)),
+                },
             )
 
         state.add_message("user", results)

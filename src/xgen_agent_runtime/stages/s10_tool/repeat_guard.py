@@ -40,8 +40,19 @@ BLOCK_AT = 5
 ANY_INPUT_WARN_AT = 5
 ANY_INPUT_BLOCK_AT = 8
 
+#: 같은 도구·같은 입력이 **같은 결과**를 낸 횟수 — 성공도 센다. 같은 입력에 같은 결과면
+#: 새 정보가 없다는 것이 정의상 확실하다. 실측 (2026-08~09 dev 기록, 오프라인 평가):
+#: 도구 12회+ 턴 73건 중 낭비 루프 14건에서 13건 적중·정상 55건 중 오탐 1건(게임 버튼 4회
+#: 클릭 — 최대 4회), 설계에 안 쓴 기간 41건에서 3/3 적중·오탐 0. 반복은 gpt-4.1·qwen 에
+#: 몰려 있었다(pwd 21회, 안내 도구 100회, 같은 메모리 저장 62회).
+SAME_RESULT_WARN_AT = 4
+#: 이 횟수째 같은 호출은 실행하지 않고 직전 결과를 돌려준다 — 같은 부작용(저장·전송)의
+#: 반복도 막는다. 결과가 같았으니 모델이 받는 정보는 실행했을 때와 같다.
+SAME_RESULT_SKIP_AT = 8
+
 _COUNTS_KEY = "tool.repeat_error_counts"
 _BLOCKED_KEY = "tool.repeat_error_blocked"
+_SAME_KEY = "tool.same_result_counts"
 
 #: 오류 문구에서 호출마다 달라지는 조각 — 이것 때문에 같은 원인이 다른 키가 되면 안 된다.
 _VOLATILE = [
@@ -183,5 +194,82 @@ def observe(
                     f"{result['content']}\n\n[반복 실패 {n}회] '{name}' 가 같은 오류로 {n}번 실패했다. "
                     "같은 방식으로 다시 부르지 마라 — 오류 문구대로 인자를 고치거나, 고칠 수 없으면 "
                     f"사용자에게 알려라. {block_at}번째부터는 이 요청에서 이 도구가 차단된다."
+                )
+    return flagged
+
+
+# ── 같은 호출·같은 결과 (성공 포함) ─────────────────────────────────────
+
+
+def _result_sig(result: Dict[str, Any]) -> Optional[str]:
+    text = _error_text(result)
+    if text is None:
+        return None
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _call_key(tool_call: Dict[str, Any]) -> str:
+    return f"{tool_call.get('tool_name') or ''}␟{_input_sig(tool_call.get('tool_input'))}"
+
+
+def skip_identical(
+    tool_call: Dict[str, Any], state_shared: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """같은 호출이 같은 결과를 ``SAME_RESULT_SKIP_AT - 1`` 번 냈다면 실행 대신 돌려줄 결과."""
+    entry = (state_shared.get(_SAME_KEY) or {}).get(_call_key(tool_call))
+    if not entry or entry.get("n", 0) < SAME_RESULT_SKIP_AT - 1:
+        return None
+    name = str(tool_call.get("tool_name") or "")
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_call.get("tool_use_id", ""),
+        "content": (
+            f"{entry.get('last', '')}\n\n[같은 호출 {entry['n'] + 1}회째 — 실행하지 않음] "
+            f"'{name}' 를 같은 입력으로 {entry['n']}번 불러 매번 위와 같은 결과를 받았다. "
+            "다시 불러도 새 정보는 없다. 이 결과로 다음 단계를 진행하거나, 막혔다면 무엇이 "
+            "막혔는지 사용자에게 알려라."
+        ),
+    }
+
+
+def observe_same(
+    tool_calls: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+    state_shared: Dict[str, Any],
+) -> List[Tuple[str, int]]:
+    """같은 호출·같은 결과 횟수를 갱신하고, 경고 문턱부터 결과에 안내를 붙인다."""
+    same: Dict[str, Dict[str, Any]] = state_shared.setdefault(_SAME_KEY, {})
+    calls = {str(tc.get("tool_use_id") or ""): tc for tc in tool_calls}
+    flagged: List[Tuple[str, int]] = []
+    for result in results:
+        tc = calls.get(str(result.get("tool_use_id") or ""))
+        if not tc:
+            continue
+        if result.get("is_error"):
+            continue  # 실패의 반복은 위의 반복 실패 차단 몫이다
+        content = result.get("content")
+        if isinstance(content, str) and "실행하지 않음]" in content:
+            continue  # 이미 건너뛴 호출 — 다시 세지 않는다
+        sig = _result_sig(result)
+        if sig is None:
+            continue
+        key = _call_key(tc)
+        entry = same.get(key)
+        if entry and entry.get("sig") == sig:
+            entry["n"] += 1
+        else:
+            entry = same[key] = {"sig": sig, "n": 1, "last": ""}
+        if isinstance(content, str):
+            entry["last"] = content[:4000]
+        n = entry["n"]
+        if n >= SAME_RESULT_WARN_AT:
+            name = str(tc.get("tool_name") or "")
+            flagged.append((name, n))
+            if isinstance(content, str):
+                result["content"] = (
+                    f"{content}\n\n[같은 호출·같은 결과 {n}회] '{name}' 를 같은 입력으로 "
+                    f"{n}번 불러 매번 같은 결과를 받았다. 새 정보가 없으니 같은 호출을 반복하지 "
+                    "말고 접근을 바꾸거나, 막혔다면 사용자에게 알려라. "
+                    f"{SAME_RESULT_SKIP_AT}번째부터는 실행하지 않고 이 결과를 그대로 돌려준다."
                 )
     return flagged

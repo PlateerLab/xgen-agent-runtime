@@ -52,7 +52,8 @@ from typing import Any, Dict, List
 #: v4: + ``subagent.*`` (2.7.0 persistent sub-agent lifecycle).
 #: v5: + resumable slice lifecycle (``loop.suspended`` / ``loop.blocked``).
 #: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
-EVENT_CATALOG_VERSION = 6
+#: v7: + ``tool.same_result`` (4.29.0 identical call → identical result breaker).
+EVENT_CATALOG_VERSION = 7
 
 
 class EventTypes(str, Enum):
@@ -190,6 +191,8 @@ class EventTypes(str, Enum):
     # 같은 도구가 같은 오류로 되풀이 실패할 때 (stages/s10_tool/repeat_guard.py).
     TOOL_REPEAT_FAILURE = "tool.repeat_failure"
     TOOL_REPEAT_BLOCKED = "tool.repeat_blocked"
+    # 같은 도구·같은 입력이 같은 결과를 되풀이할 때 (성공 포함, repeat_guard.observe_same).
+    TOOL_SAME_RESULT = "tool.same_result"
 
     # ── Stage 11: Tool review ──
     TOOL_REVIEW_FLAG = "tool_review.flag"
@@ -593,6 +596,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     },
     EventTypes.TOOL_REPEAT_BLOCKED: {
         "tools": "list[str] — calls not executed because the tool hit the repeat_guard block threshold",
+    },
+    EventTypes.TOOL_SAME_RESULT: {
+        "tools": "list[{name: str, count: int}] — identical call returned an identical result past the warn threshold",
+        "skipped": "list[str] — identical calls answered from the previous result without executing",
     },
     EventTypes.TOOL_CALL_START: {
         "tool_use_id": "str",
