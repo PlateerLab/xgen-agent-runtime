@@ -91,27 +91,56 @@ def _local_reviewer(tmp: Path) -> DeliverableReviewer:
     return DeliverableReviewer(lambda: ctx)
 
 
-def test_reviewer_summarises_claimed_files_once_per_turn(tmp_path: Path) -> None:
+def _state_with(files_note: str, *tool_uses: Dict[str, Any]) -> PipelineState:
+    state = PipelineState(session_id="s", model="m")
+    state.messages = [{"role": "user", "content": "감사해"}]
+    for tu in tool_uses:
+        state.messages += [_assistant(tu), _tool_result()]
+    state.messages.append(_assistant({"type": "text", "text": files_note}))
+    state.final_text = files_note
+    return state
+
+
+def test_reviewer_flags_only_problem_files_once_per_turn(tmp_path: Path) -> None:
     (tmp_path / "out").mkdir()
     (tmp_path / "out" / "audit.csv").write_text("a,b\n1,2\n3,4\n")
-    state = PipelineState(session_id="s", model="m")
-    state.messages = [
-        {"role": "user", "content": "감사해"},
-        _assistant(_tool_use("Write", file_path="out/audit.csv", content="a,b\n1,2\n3,4\n")),
-        _tool_result(),
-        _assistant({"type": "text", "text": "out/audit.csv 와 out/report.md 를 만들었습니다."}),
-    ]
-    state.final_text = "out/audit.csv 와 out/report.md 를 만들었습니다."
+    state = _state_with(
+        "out/audit.csv 와 out/report.md 를 만들었습니다.",
+        _tool_use("Write", file_path="out/audit.csv", content="a,b\n1,2\n3,4\n"),
+    )
     rv = _local_reviewer(tmp_path)
 
     note = asyncio.run(rv.review(state))
     assert note and note.startswith("[Deliverable check")
-    assert "- out/audit.csv — 3 lines: header \"a,b\" (2 cols), 2 data rows" in note
     assert "- out/report.md — MISSING" in note
-    assert state.shared[REVIEW_KEY] == {"done": True, "files": 2, "missing": 1}
+    assert "out/audit.csv" not in note and "(1 other claimed file exist" in note  # 멀쩡한 건 개수만
+    assert state.shared[REVIEW_KEY] == {"done": True, "files": 2, "missing": 1, "problems": 1}
     assert state.events[-1]["type"] == "loop.completion_review"
+    assert state.events[-1]["data"]["paths"] == ["out/report.md"]
 
     assert asyncio.run(rv.review(state)) is None  # 턴당 한 번
+
+
+def test_reviewer_is_silent_when_every_claimed_file_is_sound(tmp_path: Path) -> None:
+    """카나리 근거: 항상 보여 주면 멀쩡한 산출물을 다시 읽어 왕복 +23% — 문제 없으면 0."""
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "audit.csv").write_text("a,b\n1,2\n")
+    (tmp_path / "out" / "s.json").write_text('{"n": 1}')
+    state = _state_with("out/audit.csv, out/s.json 완료", _tool_use("Write", file_path="out/audit.csv", content="x"))
+    assert asyncio.run(_local_reviewer(tmp_path).review(state)) is None
+    assert REVIEW_KEY not in state.shared  # 다음 완료 시점에 다시 볼 수 있다
+
+    always = DeliverableReviewer(lambda: ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)]), mode="always")
+    note = asyncio.run(always.review(state))
+    assert note and "- out/audit.csv — 2 lines" in note and "- out/s.json — valid JSON object" in note
+
+
+def test_bare_filename_mentioned_for_a_file_written_elsewhere_is_not_missing(tmp_path: Path) -> None:
+    """카나리 010: 답변에 `summary.json` 이라고만 적었는데 루트에 없다고 하자 모델이 복사본을 만들었다."""
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "summary.json").write_text("{}")
+    state = _state_with("`summary.json` 을 out/ 에 썼습니다.", _tool_use("Write", file_path="out/summary.json", content="{}"))
+    assert asyncio.run(_local_reviewer(tmp_path).review(state)) is None
 
 
 def test_reviewer_skips_paths_outside_the_allowed_tree_and_turns_without_files(tmp_path: Path) -> None:
@@ -162,12 +191,10 @@ def test_reviewer_reads_through_the_sandbox() -> None:
     sb = _FakeSandbox()
     sb.files[f"{sb.workdir}/out/summary.json"] = b'{"n": 1}'
     ctx = ToolContext(working_dir=sb.workdir, sandbox=sb)
-    state = PipelineState(session_id="s", model="m")
-    state.messages = [{"role": "user", "content": "q"},
-                      _assistant({"type": "text", "text": "out/summary.json 완료"})]
-    state.final_text = "out/summary.json 완료"
+    state = _state_with("out/summary.json 과 out/rows.csv 완료")
     note = asyncio.run(DeliverableReviewer(lambda: ctx).review(state))
-    assert note and "- out/summary.json — valid JSON object, 1 keys: n" in note
+    assert note and "- out/rows.csv — MISSING" in note and "(1 other claimed file exist" in note
+    assert "summary.json —" not in note
 
 
 # ── 파이프라인 끝까지: 완료를 한 번 미루고, 고친 뒤 끝난다 ──────────────
@@ -200,7 +227,7 @@ class _Write(Tool):
 
 
 class _Client(BaseClient):
-    """1: 5행 CSV 를 쓴다. 2: 완료 선언. (검토 뒤) 3: 3행으로 고친다. 4: 완료."""
+    """1: 열 수가 들쭉날쭉한 CSV 를 쓴다. 2: 완료 선언. (검토 뒤) 3: 고친다. 4: 완료."""
 
     provider = "fake"
     capabilities = ClientCapabilities()
@@ -215,7 +242,7 @@ class _Client(BaseClient):
         n = len(self.requests)
         if n == 1:
             blocks = [ContentBlock(type="tool_use", tool_use_id="t1", tool_name="Write",
-                                   tool_input={"file_path": "out/audit.csv", "content": "id,issue\n" + "".join(f"{i},x\n" for i in range(5))})]
+                                   tool_input={"file_path": "out/audit.csv", "content": "id,issue\n1,x\n2,x,extra\n3,x\n4,x\n5,x\n"})]
             return APIResponse(content=blocks, stop_reason="tool_use", usage=usage, model="fake")
         if n == 2:
             return APIResponse(content=[ContentBlock(type="text", text="out/audit.csv 에 감사 결과를 썼습니다. [COMPLETE]")],
@@ -249,9 +276,31 @@ def test_pipeline_defers_completion_once_and_shows_the_digest(tmp_path: Path) ->
 
     assert len(client.requests) == 4, "완료를 한 번 미루고(검토) 고친 뒤 끝나야 한다"
     digest = _last_user_text(client.requests[2])
-    assert digest and digest.startswith("[Deliverable check") and "5 data rows" in digest
+    assert digest and digest.startswith("[Deliverable check") and "ragged rows" in digest
     assert "3행으로 고쳤습니다" in text
     assert (tmp_path / "out" / "audit.csv").read_text().count("\n") == 4
+
+
+def test_pipeline_does_not_add_a_round_trip_when_the_written_file_is_sound(tmp_path: Path) -> None:
+    class _Sound(_Client):
+        async def _send(self, request: Any, *, purpose: str = "") -> APIResponse:
+            self.requests.append(request)
+            usage = TokenUsage(input_tokens=10, output_tokens=5)
+            if len(self.requests) == 1:
+                return APIResponse(content=[ContentBlock(type="tool_use", tool_use_id="t1", tool_name="Write",
+                                                         tool_input={"file_path": "out/audit.csv", "content": "id,issue\n1,x\n2,x\n3,x\n"})],
+                                   stop_reason="tool_use", usage=usage, model="fake")
+            return APIResponse(content=[ContentBlock(type="text", text="out/audit.csv 완료. [COMPLETE]")],
+                               stop_reason="end_turn", usage=usage, model="fake")
+
+    reg = ToolRegistry()
+    reg.register(_Write(tmp_path), core=True)
+    client = _Sound(api_key="k")
+    ctx = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    pipe = runner.build_pipeline(name="t", provider="openai", model="m", api_key="k", llm_client=client,
+                                 stream=False, enable_compaction=False, registry=reg, tool_context=ctx)
+    runner.run_turn(pipe, "3행짜리 out/audit.csv 를 내라", PipelineState(session_id="s", model="m"))
+    assert len(client.requests) == 2
 
 
 def test_pipeline_without_claimed_files_or_with_review_off_does_not_add_a_round_trip(tmp_path: Path) -> None:

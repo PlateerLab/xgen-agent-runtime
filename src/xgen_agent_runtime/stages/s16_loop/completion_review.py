@@ -6,12 +6,17 @@
 남은 건 이 마지막 대조다.
 
 방식: 모델이 완료하려는 순간(마커 또는 도구 호출 없는 응답), 이 턴에서 **모델이
-주장한 파일**(Write/Edit 로 쓴 경로 + 마지막 답변에 언급한 경로)을 실제로 읽어 짧은
-요약(존재 여부·행 수·헤더·JSON 유효성)을 한 번 보여 주고 "요청의 명시 조건과
-대조하라" 고만 한다. 어떤 조건이 맞는지는 모델이 요청문을 보고 판단한다 — 하네스는
-도메인 규칙을 모른다. 턴당 한 번. 주장한 파일이 없으면 아무것도 하지 않는다.
+주장한 파일**(Write/Edit 로 쓴 경로 + 마지막 답변에 언급한 경로)을 실제로 읽는다.
+**결정론적으로 틀린 것**이 있을 때만 — 없는 파일, 빈 파일, 깨진 JSON, 열 수가 들쭉날쭉한
+CSV — 그 파일들의 요약을 보여 주고 "요청의 명시 조건과 대조해 고쳐라" 고 한다. 어떤
+조건이 맞는지는 모델이 요청문을 보고 판단한다 — 하네스는 도메인 규칙을 모른다.
+턴당 한 번. 문제가 없으면 아무것도 하지 않는다(왕복 0).
 
-비용: 파일을 만든 턴에 모델 왕복 1회. 판정은 벤치(설계용 → 홀드아웃)로.
+왜 문제가 있을 때만인가 (카나리 13과제, 2026-09-19): 항상 보여 주면 모델이 멀쩡한
+산출물을 다시 읽고 재검증해 왕복 +23%(77→95)·입력 +23% 가 들었고, 점수가 오른 4과제 중
+실제로 검토가 고친 것은 **ragged CSV 를 잡은 094(0.74→1.00)와 027(CSV 인용 수정)** 뿐 —
+나머지는 실행 간 편차였다. 결정론 신호가 있을 때만 끼어들면 그 효과는 남고 비용은 0 이다.
+``mode="always"`` 로 예전 동작을 켤 수 있다.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ __all__ = [
     "build_digest",
     "claimed_paths",
     "describe_file",
+    "is_problem",
+    "written_paths",
 ]
 
 #: ``state.shared`` 키 — 턴 단위(연속 슬라이스에 이어지고 새 턴에서 비운다).
@@ -123,11 +130,8 @@ def _paths_from_text(text: str) -> List[str]:
     return out
 
 
-def claimed_paths(messages: List[Dict[str, Any]], final_text: str) -> List[str]:
-    """이 턴에서 모델이 만들었다고 볼 수 있는 경로 — 쓴 것 + 마지막 답변에 언급한 것.
-
-    쓴 경로가 먼저(확실), 언급 경로가 뒤(주장). 순서 유지·중복 제거.
-    """
+def written_paths(messages: List[Dict[str, Any]]) -> List[str]:
+    """이 턴에서 Write/Edit/ToolBatch 로 쓴 경로 (확실한 것). 순서 유지·중복 제거."""
     seen: Dict[str, None] = {}
     for m in _turn_messages(messages):
         if not isinstance(m, dict) or m.get("role") != "assistant":
@@ -135,6 +139,15 @@ def claimed_paths(messages: List[Dict[str, Any]], final_text: str) -> List[str]:
         for b in _tool_use_blocks(m):
             for p in _paths_from_tool_input(str(b.get("name") or ""), b.get("input")):
                 seen.setdefault(p, None)
+    return list(seen)
+
+
+def claimed_paths(messages: List[Dict[str, Any]], final_text: str) -> List[str]:
+    """이 턴에서 모델이 만들었다고 볼 수 있는 경로 — 쓴 것 + 마지막 답변에 언급한 것.
+
+    쓴 경로가 먼저(확실), 언급 경로가 뒤(주장). 순서 유지·중복 제거.
+    """
+    seen: Dict[str, None] = {p: None for p in written_paths(messages)}
     for p in _paths_from_text(final_text):
         seen.setdefault(p, None)
     return list(seen)
@@ -206,8 +219,16 @@ def _describe_jsonl(text: str) -> str:
     return f"{len(lines)} JSON lines, all valid"
 
 
+#: 요약 문구 중 "결정론적으로 틀렸다" 를 뜻하는 표식 — 이것이 있을 때만 끼어든다.
+_PROBLEM_MARKS = ("MISSING", "EMPTY", "INVALID JSON", "ragged rows")
+
+
+def is_problem(desc: str) -> bool:
+    return any(mark in desc for mark in _PROBLEM_MARKS)
+
+
 def describe_file(path: str, data: Optional[bytes]) -> str:
-    """파일 하나의 한 줄 요약. ``data`` 가 None 이면 없는 파일."""
+    """파일 하나의 한 줄 요약. ``data`` 가 None 이면 없는 파일. 문제는 :func:`is_problem`."""
     if data is None:
         return "MISSING"
     if len(data) == 0:
@@ -242,12 +263,25 @@ _REVIEW_TAIL = (
 )
 
 
-def build_digest(entries: List[Tuple[str, str]]) -> str:
-    lines = [
-        _REVIEW_HEADER,
-        "These are the files this turn claims to have produced, as they exist right now:",
-    ]
-    lines += [f"- {path} — {desc}" for path, desc in entries]
+def build_digest(entries: List[Tuple[str, str]], *, problems_only: bool = True) -> str:
+    """검토 메시지. ``problems_only`` 면 문제 파일만 나열하고 나머지는 개수만 — 멀쩡한
+    파일을 다시 읽게 만들지 않기 위해서다."""
+    flagged = [(p, d) for p, d in entries if is_problem(d)]
+    if problems_only and flagged:
+        lines = [
+            _REVIEW_HEADER,
+            "These files this turn claims to have produced have problems as they exist right now:",
+        ]
+        lines += [f"- {path} — {desc}" for path, desc in flagged]
+        rest = len(entries) - len(flagged)
+        if rest:
+            lines.append(f"({rest} other claimed file{'s' if rest > 1 else ''} exist and parse.)")
+    else:
+        lines = [
+            _REVIEW_HEADER,
+            "These are the files this turn claims to have produced, as they exist right now:",
+        ]
+        lines += [f"- {path} — {desc}" for path, desc in entries]
     lines.append(_REVIEW_TAIL)
     return "\n".join(lines)
 
@@ -269,10 +303,16 @@ class DeliverableReviewer:
         self,
         context_getter: Callable[[], Any],
         *,
+        mode: str = "problems",
         max_files: int = MAX_FILES,
         max_read_bytes: int = MAX_READ_BYTES,
     ) -> None:
+        if mode not in ("problems", "always"):
+            raise ValueError(
+                f"DeliverableReviewer mode must be 'problems' or 'always', got {mode!r}"
+            )
         self._ctx = context_getter
+        self._mode = mode
         self._max_files = int(max_files)
         self._max_read_bytes = int(max_read_bytes)
 
@@ -303,32 +343,51 @@ class DeliverableReviewer:
         ctx = self._ctx()
         if ctx is None:
             return None
+        written = written_paths(state.messages)
         paths = claimed_paths(state.messages, state.final_text or "")[: self._max_files]
         if not paths:
             return None
 
         entries: List[Tuple[str, str]] = []
         missing = 0
+        written_names = {posixpath.basename(w) for w in written}
         for p in paths:
             try:
                 data = await self._read(ctx, p)
             except Exception as exc:  # noqa: BLE001 — 허용 밖·권한·세션 오류는 요약에서 뺀다
                 logger.debug("deliverable review: skip %r (%s)", p, exc)
                 continue
+            if data is None and p not in written and "/" not in p and p in written_names:
+                # 답변에 파일 이름만 적은 것(`summary.json`)이 다른 폴더에 쓴 파일을
+                # 가리키는 경우 — 루트에 없다고 "MISSING" 이라 하면 모델이 복사본을
+                # 만든다(카나리 010). 이름만 언급된 것은 쓴 파일과 같은 것으로 본다.
+                continue
             desc = describe_file(p, data)
             missing += data is None
             entries.append((p, desc))
         if not entries:
             return None
+        problems = sum(is_problem(d) for _, d in entries)
+        if self._mode == "problems" and not problems:
+            return None
 
-        state.shared[REVIEW_KEY] = {"done": True, "files": len(entries), "missing": missing}
+        state.shared[REVIEW_KEY] = {
+            "done": True,
+            "files": len(entries),
+            "missing": missing,
+            "problems": problems,
+        }
         state.add_event(
             "loop.completion_review",
             {
                 "reviewer": self.name,
+                "mode": self._mode,
                 "files": len(entries),
                 "missing": missing,
-                "paths": [p for p, _ in entries],
+                "problems": problems,
+                "paths": [p for p, _ in entries if is_problem(_)]
+                if self._mode == "problems"
+                else [p for p, _ in entries],
             },
         )
-        return build_digest(entries)
+        return build_digest(entries, problems_only=self._mode == "problems")

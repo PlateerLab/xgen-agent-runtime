@@ -15,18 +15,22 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added — 완료 직전 산출물 대조 (`stages/s16_loop/completion_review.py`)
 
 - 모델이 완료하려는 순간(마커 또는 도구 호출 없는 응답), 이 턴에서 **모델이 주장한 파일**
-  (Write/Edit/ToolBatch 로 쓴 경로 + 마지막 답변에 언급한 경로, 최대 12개)을 실제로 읽어
-  한 줄씩 요약해 보여 준다 — 존재 여부(MISSING/EMPTY), CSV 헤더·열 수·데이터 행 수·ragged,
-  JSON/JSONL 유효성과 키, 텍스트 줄 수와 첫 줄. 그리고 "요청의 명시 조건(파일명·형식·헤더·
-  행 수·정렬·필수/금지 내용)과 대조해 틀린 것만 고치고 끝내라" 고 한다. **어떤 조건인지는
-  하네스가 모른다** — 모델이 요청문을 보고 판단한다. 턴당 한 번, 주장한 파일이 없으면 무음.
+  (Write/Edit/ToolBatch 로 쓴 경로 + 마지막 답변에 언급한 경로, 최대 12개)을 실제로 읽는다.
+  **결정론적으로 틀린 것이 있을 때만** — 없는 파일(MISSING)·빈 파일·깨진 JSON/JSONL·열 수가
+  들쭉날쭉한 CSV(ragged) — 그 파일들을 한 줄씩 보여 주고(멀쩡한 파일은 개수만) "요청의 명시
+  조건(파일명·형식·헤더·행 수·정렬·필수/금지 내용)과 대조해 틀린 것만 고쳐라" 고 한다. **어떤
+  조건인지는 하네스가 모른다** — 모델이 요청문을 보고 판단한다. 턴당 한 번, 문제 없으면 무음(왕복 0).
+- 왜 "문제가 있을 때만" 인가 — 카나리(설계용 13과제, Qwen, 1회): 항상 보여 주는 판은 점수
+  0.757→0.813 이었지만 왕복 77→95(+23%)·입력 897k→1,106k(+23%). 검토가 실제로 고친 것은 ragged
+  CSV 를 잡은 **094(0.74→1.00)** 와 **027(CSV 인용 수정)** 뿐이고, 024·033·052 의 상승은 실행 간
+  편차(검토는 "이상 없음" 만 확인). 멀쩡한 산출물을 다시 읽는 비용(010·050 +3~4회)과 답변에 파일
+  이름만 적은 것을 MISSING 으로 오인해 복사본을 만든 오탐(010)을 없애기 위해 결정론 신호가 있을
+  때만 끼어들고, 이름만 언급된 파일은 쓴 파일과 같은 것으로 본다. `mode="always"` 로 예전 판 유지.
 - `LoopStage(completion_reviewers=[…])` / `add_completion_reviewer()` — 완료(`complete`)만 한 번
   미룬다. suspend/error/escalate 는 그대로. 호스트 `build_pipeline(enable_deliverable_review=True)`
   가 `tool_context` 가 있을 때 배선한다 (sandbox 가 있으면 그 안에서, 없으면 working_dir 기준
   로컬 파일 — Read 도구와 같은 경로·같은 허용 검사).
-- 비용: 파일을 만든 턴에 왕복 1회 추가. 판정은 벤치로 — 형식·계약 실패 과제(031·077·092·028·
-  024·027·029·052)를 먼저, 그다음 홀드아웃 31개.
-- 이벤트 `loop.completion_review` {reviewer, files, missing, paths} (catalog v8).
+- 이벤트 `loop.completion_review` {reviewer, mode, files, missing, problems, paths} (catalog v8).
 
 ### Fixed
 

@@ -386,9 +386,11 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     },
     EventTypes.LOOP_COMPLETION_REVIEW: {
         "reviewer": "str — reviewer name ('deliverable')",
-        "files": "int — claimed files summarised for the model",
+        "mode": "str — 'problems' (only deterministic problems trigger) | 'always'",
+        "files": "int — claimed files inspected",
         "missing": "int — claimed files that do not exist",
-        "paths": "list[str] — the claimed paths, in order",
+        "problems": "int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV)",
+        "paths": "list[str] — paths shown to the model, in order",
     },
     EventTypes.INPUT_NORMALIZED: {
         "text_length": "int — normalized text length",
