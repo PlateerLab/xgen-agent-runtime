@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.28.1] — 2026-09-19
+
+### Fixed — 도구를 쓴 턴이 도구 결과를 모델이 보기 전에 끝나던 것
+
+실측 (2026-09-17): 모델이 한 응답에 텍스트와 도구 호출을 함께 내면서 텍스트에
+`[COMPLETE]`/`[ERROR …]`/`[BLOCKED]` 마커가 섞이면(빌드 로그 "[ERROR] …" 인용 등)
+Stage 9 가 completion_signal 을 세우고, Stage 10 이 도구를 실행한 뒤 `pending_tool_calls`
+를 비우고, Stage 14 는 그 빈 목록만 보고 "도구 안 썼음 → complete", Stage 16 은 upstream
+결정을 따라 턴을 끝냈다. 도구는 돌았는데 모델은 결과를 못 본 채 호출 직전 추측이 답이 됐다.
+`build_pipeline`(evaluate 없음) 경로에서는 같은 원인이 다르게 나타났다 — 지난 반복의
+`[ERROR]` 신호가 다음 반복까지 남아 정상 답을 `Pipeline loop failed` 로 끝냈다.
+
+- `PipelineState.has_fresh_tool_results` — 이번 반복에 도구가 돌았고 결과를 모델이 아직
+  못 봤다. Stage 14 의 signal_based·binary_classify 전략이 이것을 먼저 보고 무조건
+  `continue`. binary_classify 첫 턴 분류도 pending 대신 이것으로 "도구 썼음" 을 판정
+  (전에는 도구를 쓴 첫 턴이 "easy → complete" 로 끝났다).
+- Stage 9 parse 가 `completion_signal`/`completion_detail` 을 응답마다 새로 세운다 —
+  지난 반복의 신호가 남지 않는다.
+- 테스트 4건: 실제 파이프라인에서 마커 3종 + 도구 호출 → 모델이 결과를 보고 답함,
+  Stage 14 두 전략 × 신호 4종 → continue, parse 가 stale 신호를 지움.
+
 ## [4.28.0] — 2026-09-18
 
 도구 표면이 모델을 오도한 두 자리(실증: "아티팩트로 배포" 요청이 그래프 자기편집과

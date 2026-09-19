@@ -24,6 +24,12 @@ class SignalBasedEvaluation(EvaluationStrategy):
     async def evaluate(self, state: PipelineState) -> EvaluationResult:
         signal = state.completion_signal
 
+        # 도구 결과가 있으면 모델이 그것을 봐야 한다 — 텍스트에 섞인 마커보다 우선.
+        if state.has_fresh_tool_results:
+            return EvaluationResult(
+                passed=True, decision="continue", feedback="Tool results must reach the model."
+            )
+
         if signal is None or signal == "continue":
             if state.pending_tool_calls:
                 return EvaluationResult(
