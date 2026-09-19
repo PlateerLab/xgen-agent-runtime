@@ -24,7 +24,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from xgen_agent_runtime import (
     CONTINUE_RUN,
@@ -33,6 +33,11 @@ from xgen_agent_runtime import (
     PipelineBuilder,
     PipelineState,
     RunStatus,
+)
+from xgen_agent_runtime.stages.s16_loop.turn_budget import (
+    DEFAULT_HARD_TOKENS as DEFAULT_TURN_HARD_TOKENS,
+    DEFAULT_SOFT_TOKENS as DEFAULT_TURN_SOFT_TOKENS,
+    budget_stopped,
 )
 from xgen_agent_runtime.tools import ToolRegistry
 
@@ -452,6 +457,10 @@ def build_pipeline(
     credentials: Optional[Dict[str, Any]] = None,
     enable_prompt_cache: bool = False,
     enable_deliverable_review: bool = True,
+    turn_input_budget_tokens: Optional[Tuple[int, int]] = (
+        DEFAULT_TURN_SOFT_TOKENS,
+        DEFAULT_TURN_HARD_TOKENS,
+    ),
 ) -> Pipeline:
     """Assemble a one-shot pipeline for a single node execution.
 
@@ -492,6 +501,12 @@ def build_pipeline(
     배선된다(파일을 읽을 곳이 있어야 한다). 모델이 이 턴에 쓴/언급한 파일을
     읽어 존재·행 수·헤더·JSON 유효성을 한 번 보여 주고 요청 조건과 대조하게
     한다 — 파일을 만든 턴에 왕복 1회 추가.
+
+    ``turn_input_budget_tokens`` — (soft, hard) 턴 누적 입력 토큰 예산 (4.30.0,
+    stages/s16_loop/turn_budget.py). soft 를 넘으면 "마무리하라", hard 를 넘으면
+    "도구 없이 보고하라" 를 붙이고 그다음 응답으로 턴을 끝낸다(정상 완료, 자동
+    이어가기 없음). ``None`` 또는 (0, 0) 이면 예산 없음. 기본 50만/100만 —
+    dev 28일 분포에서 p99(24.8만)의 2배/4배; 100만 초과 턴 0.15% 가 입력의 24%.
     """
     if registry is not None and registry.list_deferred():
         from xgen_agent_runtime.tools.built_in import ToolSearchTool
@@ -617,6 +632,16 @@ def build_pipeline(
                 loop_stage.add_completion_reviewer(  # type: ignore[union-attr]
                     DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
                 )
+
+    soft, hard = turn_input_budget_tokens or (0, 0)
+    if int(soft) > 0 and int(hard) > 0:
+        from xgen_agent_runtime.stages.s16_loop.turn_budget import TurnInputBudget
+
+        loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+        if hasattr(loop_stage, "set_turn_input_budget"):
+            loop_stage.set_turn_input_budget(  # type: ignore[union-attr]
+                TurnInputBudget(soft_tokens=int(soft), hard_tokens=int(hard))
+            )
 
     if memory_provider is not None:
         # executor 의 from_manifest memory attach 경로 미러 (pipeline.py L1394~):
@@ -1137,6 +1162,13 @@ SUSPEND_NOTICE = (
     "이어서 진행하려면 '계속'이라고 보내 주세요.]"
 )
 
+#: 턴 입력 토큰 예산(stages/s16_loop/turn_budget.py)으로 끝난 턴의 안내. 모델이 마지막
+#: 응답으로 진행 상황을 보고한 뒤에 붙는다.
+BUDGET_NOTICE = (
+    "\n\n[안내: 이 턴의 토큰 예산({used:,} 토큰)에 도달해 여기서 마무리했습니다. "
+    "이어서 진행하려면 '계속'이라고 보내 주세요.]"
+)
+
 
 def stream_turn(
     pipeline: Pipeline,
@@ -1368,6 +1400,11 @@ def stream_turn(
                         "timestamp": datetime.now().isoformat(),
                     },
                 }
+            elif output_schema is None and (stopped := budget_stopped(state)) is not None:
+                # 턴 입력 토큰 예산으로 마무리된 턴 — 모델의 보고 뒤에 안내를 붙인다.
+                notice = BUDGET_NOTICE.format(used=int(stopped.get("used") or 0))
+                out_parts.append(notice)
+                yield notice
             turn_completed = True
             break
         # 파이프라인 종료 후 정확히 1회. 협조적 취소(break)로 나온 턴도 그때까지
@@ -1494,6 +1531,8 @@ def run_turn(
         final = result.text or ""
         if output_schema:
             final = settle_structured(final, output_schema)
+        elif (stopped := budget_stopped(state)) is not None:
+            final += BUDGET_NOTICE.format(used=int(stopped.get("used") or 0))
         turn_output = final
         turn_success = True
         return final

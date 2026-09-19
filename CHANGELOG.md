@@ -4,6 +4,29 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.31.0] — 2026-09-19
+
+근거: dev 실제 사용 28일(벤치 제외 7,159턴 · 입력 2.36억 토큰). 턴당 입력 p50 1만 · p95 8.7만 · p99 24.8만인데
+**50만 초과 33턴(0.46%)이 전체 입력의 30%, 100만 초과 11턴(0.15%)이 24%**. 50만 초과 턴의 3분의 2(22/33)는
+답도 못 낸 채 멈춘(running) 턴. 최대 3,712만(도구 442회). 벤치 086 도 82회·330만까지 가서 외부 20분
+제한에 걸렸다(산출물 없음). 반복 차단(4.26/4.29)은 "같은 것을 되풀이" 만 잡는다 — 매번 다른 일을 하며
+끝없이 가는 턴의 두 번째 안전망이 필요했다.
+
+### Added — 턴 입력 토큰 예산 (`stages/s16_loop/turn_budget.py`)
+
+- 턴 누적 프롬프트 토큰(입력 + 캐시 읽기 + 캐시 생성, 연속 슬라이스 합산)이 **soft** 를 넘으면 마지막
+  도구 결과에 "마무리하라 — 가장 가치 있는 한 단계만 끝내고 한 것·남은 것을 보고하라" 를 한 번 붙인다.
+  **hard** 를 넘으면 "도구를 더 쓰지 말고 한 것·남은 것·이어가는 법을 보고하라" 를 붙이고 **그다음
+  응답으로 턴을 끝낸다** — 도구를 또 부르면 그 한 번만 실행하고 끝. 정상 완료(complete)라 자동
+  이어가기는 타지 않고, 호스트가 `[안내: 이 턴의 토큰 예산(N 토큰)에 도달해 여기서 마무리했습니다 …]`
+  를 붙인다. 사용자는 새 메시지로 이어간다.
+- 기본 soft 50만 / hard 100만 (p99 의 2배 / 4배). `build_pipeline(turn_input_budget_tokens=(soft, hard))`,
+  노드 파라미터 `turn_input_budget_tokens` ((soft, hard) · {"soft","hard"} · hard 하나) 로 조정, `None`/0 이면
+  없음. 도메인 규칙 없음 — 토큰 수만 본다.
+- 예상 효과(28일 기준): 100만 초과분 4,620만 토큰(전체의 19.6%) 상한, 50만~100만 구간은 마무리 유도.
+  대가: 성공적으로 끝난 긴 코딩 세션(20~38회 왕복, 월 5건)도 100만에서 한 번 끊기고 "계속" 이 필요하다.
+- 이벤트 `loop.turn_budget` {phase: soft|final|stop, used, soft, hard, calls, iteration} (catalog v8).
+
 ## [4.30.0] — 2026-09-19
 
 근거: Harness-Bench(Qihoo360, 106과제 중 우리가 돌릴 수 있는 68개) 기준선 — dev 4.29.0 + Qwen3.8-27B,
