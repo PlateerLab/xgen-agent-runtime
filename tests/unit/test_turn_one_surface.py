@@ -82,21 +82,31 @@ def test_문_뒤의_방은_계속_숨어_있다():
             assert not is_turn_one(member), f"{gateway} 의 방 {member} 이 입구에 섰다"
 
 
-def test_도구_제작은_문을_두지_않는다():
-    """숨겼더니 에이전트가 패키지를 깔 수 있다는 걸 모른 채 후퇴했다(2026-08-18).
+def test_자기확장은_문_하나_뒤에_있다():
+    """4.32.0: 제작·환경·자기진화 여섯은 SelfExtendGuide 문 뒤에 선다.
 
-    이 넷은 표면을 무너뜨린 쪽이 아니다 — 무너뜨린 것은 위임 12종·작업 3종·
-    문서 8종처럼 **패밀리를 통째로** 올린 쪽이었다.
+    예전 이 자리의 테스트는 "이 넷은 문을 두지 않는다 — 숨겼더니 패키지를 깔 수
+    있다는 걸 모른 채 후퇴했다(2026-08-18)" 였다. 그 회귀의 원인은 숨긴 것이 아니라
+    **문이 없던 것**이다. 실측(2026-09-20, Qwen 토크나이저): 여섯 스키마 2,854토큰 =
+    고정 프리픽스의 33% 가 모든 호출에 실렸고 쓰인 턴은 0~2.4%. 문(96토큰)의 설명이
+    능력을 말하고, 부르면 여섯이 열린다(SKILL_GATEWAYS 검사).
     """
-    for name in ("ForgeTool", "ListForgedTools", "DeleteForgedTool", "PythonEnv"):
-        assert is_turn_one(name), name
+    from xgen_agent_runtime.tools.built_in import SKILL_GATEWAYS
+
+    assert is_turn_one("SelfExtendGuide")
+    for name in ("ForgeTool", "ListForgedTools", "DeleteForgedTool", "PythonEnv",
+                 "SystemPackages", "WorkflowSelf", "TableExport"):
+        assert not is_turn_one(name), name
+    assert set(SKILL_GATEWAYS["SelfExtendGuide"]) == {
+        "ForgeTool", "ListForgedTools", "DeleteForgedTool", "PythonEnv", "SystemPackages", "WorkflowSelf",
+    }
 
 
-def test_기억과_자기확장은_첫_턴에_있다():
+def test_기억과_도구_발견은_첫_턴에_있다():
     for name in (
         "memory_write", "memory_read", "memory_list",
         "memory_search", "memory_pin", "memory_categories",
-        "WorkflowSelf", "ForgeTool", "ToolSearch",
+        "ToolSearch", "SelfExtendGuide",
     ):
         assert is_turn_one(name), name
 
@@ -186,21 +196,9 @@ def test_MCP_를_지나온_이름도_같은_도구다():
     """
     assert is_turn_one("mcp_local_BrowserGuide")
     assert not is_turn_one("mcp_local_BrowserNavigate")
-    assert is_turn_one("mcp__connector__WorkflowSelf")
+    assert is_turn_one("mcp__connector__SelfExtendGuide")
+    assert not is_turn_one("mcp__connector__WorkflowSelf")
     assert not is_turn_one("mcp_local_DocBuild")
-
-
-def test_자기_환경을_고치는_길은_문_뒤에_두지_않는다():
-    """``command not found`` / ``ModuleNotFoundError`` 앞에서 후퇴하지 않으려면,
-    고칠 길이 **그 자리에** 보여야 한다.
-
-    PythonEnv 를 숨겼더니 에이전트가 자기 환경에 패키지를 깔 수 있다는 걸 모른 채
-    마크다운으로 후퇴했다(2026-08-18). SystemPackages 도 같은 이유로 첫 턴에 둔다 —
-    숨기면 셸 apt 로 깔고 다음 세션에 다시 잃는다(2026-09-08: git 이 두 번 사라졌다).
-    """
-    assert is_turn_one("PythonEnv")
-    assert is_turn_one("SystemPackages")
-    assert is_turn_one("mcp__connector__SystemPackages")
 
 
 def test_사용자_PC_는_문_뒤에_있다():

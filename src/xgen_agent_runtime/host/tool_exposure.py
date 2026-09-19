@@ -90,9 +90,8 @@ TURN_ONE_TOOLS = frozenset(
         # 2-b. 목록 작업 — 같은 도구를 여러 입력으로 한 왕복에. 첫 턴에 보여야
         #      항목마다 따로 부르는 습관(왕복 N회)이 처음부터 생기지 않는다.
         "ToolBatch",
-        # 2-c. 표 내보내기 — "엑셀로 정리해 줘" 는 업무 에이전트의 가장 흔한 마무리다.
-        #      호스트가 등록한다(xgen-workflow TableExport). 없으면 매번 스크립트를 쓴다.
-        "TableExport",
+        # 2-c. 표 내보내기(TableExport) 는 여기 있었다 — 28일 실측 5회(턴의 0.1%)에
+        #      318토큰이 매 호출에 실렸다. 카탈로그로 내린다(ToolSearch 로 열림).
         # 3. 기억 — 도구가 곧 능력이라 게이트웨이를 둘 것이 없다.
         "memory_write",
         "memory_read",
@@ -108,20 +107,17 @@ TURN_ONE_TOOLS = frozenset(
         "ArtifactGuide",
         # 5. 위임 — DelegateTask/SubAgent*/Task* 는 이 문 뒤에.
         "DelegationGuide",
-        # 6. 도구 제작 — 이 넷은 문을 두지 않는다. 숨겼더니 에이전트가 자기
-        #    환경에 패키지를 깔 수 있다는 걸 모른 채 ModuleNotFoundError 앞에서
-        #    후퇴했다(2026-08-18 실증). 스키마 넷은 표면을 무너뜨린 쪽이 아니다.
-        "ForgeTool",
-        "ListForgedTools",
-        "DeleteForgedTool",
-        "PythonEnv",
-        #    같은 이유로 **시스템 패키지**도 여기 있다. 에이전트가
-        #    `command not found` 를 만났을 때 고칠 길이 문 뒤에 있으면, 그
-        #    사실을 모른 채 후퇴하거나 셸 apt 로 깔고 다음 세션에 다시 잃는다
-        #    (2026-09-08 실증: git 이 그렇게 두 번 사라졌다).
-        "SystemPackages",
-        # 7. 자기 진화 — 한 도구가 action 으로 자기 안을 연다.
-        "WorkflowSelf",
+        # 6. 자기확장 — 제작(ForgeTool·ListForgedTools·DeleteForgedTool)·환경
+        #    (PythonEnv·SystemPackages)·자기진화(WorkflowSelf)는 **문 하나** 뒤에.
+        #
+        #    예전 주석: "이 넷은 문을 두지 않는다. 숨겼더니 에이전트가 자기 환경에
+        #    패키지를 깔 수 있다는 걸 모른 채 후퇴했다(2026-08-18)". 그 회귀의 원인은
+        #    숨긴 것이 아니라 **문이 없던 것**이었다 — 위임·브라우저·작업이 문으로
+        #    해결한 것과 같다. 2026-09-20 실측(Qwen 토크나이저): 여섯 스키마가
+        #    2,854토큰 = 고정 프리픽스 8.6k 의 33% 를 **모든 호출**에 실었고, 쓰인
+        #    턴은 각각 0~2.4% 였다. 문의 설명이 능력을 말해 인식은 남고, 쓰는 턴에만
+        #    왕복 하나가 는다.
+        "SelfExtendGuide",
         # 웹 — 브라우저가 없는 표면(웹 대화)의 유일한 바깥 통로라 항상 둔다.
         "WebFetch",
         "WebSearch",

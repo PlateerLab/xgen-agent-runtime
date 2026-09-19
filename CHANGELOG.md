@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.32.0] — 2026-09-20
+
+근거: 고정 프리픽스 실측(dev 벤치 에이전트, Qwen 토크나이저 `/tokenize`). 모델 호출 1회의 고정분
+≈ 8,600토큰(실측 first_call_prompt_tokens p50 8,584) 중 **도구 스키마 21개가 6,226토큰(72%)**, 시스템
+프롬프트는 1,761. 그중 자기확장 도구 여섯(WorkflowSelf 1,552 · ForgeTool 769 · PythonEnv 243 ·
+SystemPackages 150 · DeleteForgedTool 83 · ListForgedTools 57 = 2,854, 33%)과 TableExport(318)가 **모든
+호출**에 실렸는데, dev 28일(도구 턴 2,026 · 호출 8,190)에서 쓰인 턴은 각각 0.7% · 1.4% · 2.4% · 0% ·
+0% · 0.5% · 0.1%. 짧은 턴은 입력의 대부분이 이 고정분이다.
+
+### Changed — 자기확장 도구는 문(`SelfExtendGuide`) 뒤로, 설명은 짧게
+
+- 새 게이트웨이 `SelfExtendGuide`(96토큰, `tools/built_in/self_extend_guide_tool.py`): 설명이 "패키지 설치·
+  도구 제작·자기 그래프 편집" 능력을 말하고, 부르면 ForgeTool·ListForgedTools·DeleteForgedTool·PythonEnv·
+  SystemPackages·WorkflowSelf 를 이 턴에 연다 — 위임·브라우저·작업 문과 같은 규약(`SKILL_GATEWAYS`).
+- `tool_exposure.TURN_ONE_TOOLS`: 위 여섯과 TableExport 를 내리고 SelfExtendGuide 를 올림.
+  `register_forged_tools` 의 제작 도구도 "항상 core" 대신 같은 정책을 따른다(flat 이면 전부 선노출).
+  2026-08-18 회귀("숨겼더니 패키지를 깔 수 있는 줄 모름")의 원인은 숨긴 것이 아니라 문이 없던 것이었다.
+- ForgeTool 설명·파라미터 문구 축약 769→540 (계약과 검증 규칙은 유지; 실패 시 결과가 상세를 준다).
+- 실측(같은 프롬프트·도구로 렌더): 호출당 **7,987 → 5,007 토큰 (−2,980, −37%)**. 쓰는 턴(≤3%)에는
+  문을 여는 왕복 1회가 는다. 호스트(xgen-workflow)의 WorkflowSelf 도 같은 정책을 따르도록 함께 바뀐다.
+
 ## [4.31.0] — 2026-09-19
 
 근거: dev 실제 사용 28일(벤치 제외 7,159턴 · 입력 2.36억 토큰). 턴당 입력 p50 1만 · p95 8.7만 · p99 24.8만인데

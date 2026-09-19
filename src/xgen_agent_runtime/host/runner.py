@@ -516,6 +516,15 @@ def build_pipeline(
 
         if registry.get("ToolSearch") is None:
             registry.register(ToolSearchTool(), core=True)
+    if registry is not None and registry.get("SelfExtendGuide") is None:
+        # 방이 있으면 문도 있어야 한다 — 자기확장 도구(ForgeTool/PythonEnv/WorkflowSelf…)가
+        # 하나라도 등록돼 있고 문이 없으면 여기서 세운다. 호스트가 어떤 내장 패밀리를
+        # 켰든(``meta`` 를 안 켜도) 문은 선다. 문이 없으면 그 도구들은 카탈로그에만
+        # 있어 모델이 능력 자체를 모른다(2026-08-18 회귀의 원인).
+        from xgen_agent_runtime.tools.built_in import SELF_EXTEND_FAMILY, SelfExtendGuideTool
+
+        if any(registry.get(n) is not None for n in SELF_EXTEND_FAMILY):
+            registry.register(SelfExtendGuideTool(), core=True)
 
     system = system_prompt or ""
     if output_schema:

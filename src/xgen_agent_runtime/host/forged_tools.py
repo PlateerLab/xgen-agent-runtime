@@ -524,21 +524,16 @@ class ForgeTool:
 
     @property
     def description(self) -> str:
+        # 짧게 — 턴1 도구라 **모든 모델 호출**에 실린다. 검증 실패 시 이 도구가 실패
+        # 출력과 고칠 점을 그대로 돌려주므로, 긴 설명은 여기가 아니라 그 결과가 맡는다.
+        # (2026-09-20 실측: 769토큰, 28일간 턴의 1.4% 에서 사용.)
         return (
-            "Turn a script you wrote in your workspace into a REUSABLE TOOL that "
-            "persists across sessions — this is how you permanently extend yourself. "
-            "Write the script first (Write), then register it here. Contract: your "
-            "script receives the tool input as JSON on stdin and must print its result "
-            'as JSON on stdout (print {"error": "..."} for a handled failure). '
-            "VERIFY-BEFORE-REGISTER: when you register, the tool is RUN ONCE with your "
-            "`test_input` on the exact same path a real call takes (input is validated "
-            "against `input_schema`, then executed). It is registered and made callable "
-            "ONLY if that test run succeeds. If the test fails, the tool is NOT exposed "
-            "and this call returns the failure output — read it, fix your script (or the "
-            "input_schema / test_input), and register again. So provide a representative "
-            "`test_input` that actually exercises the script. The tool is callable from "
-            "your NEXT turn and restored automatically in every future session. "
-            "Re-registering the same name updates it (and re-runs the verification)."
+            "Register a script from your workspace as a REUSABLE TOOL that persists across "
+            "sessions. Write the script first. Contract: input arrives as JSON on stdin; print "
+            'the result as JSON on stdout ({"error": "..."} for a handled failure). '
+            "The tool is verified by running it ONCE with `test_input` and is registered only if "
+            "that run succeeds — otherwise this call returns the failure output to fix. Callable "
+            "from your next turn; re-registering the same name updates it."
         )
 
     @property
@@ -584,26 +579,17 @@ class ForgeTool:
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Python packages the script imports, as pip requirements "
-                        "(e.g. ['pandas', 'httpx>=0.27', 'tabulate==0.9.0']). You do NOT need "
-                        "to know exact versions — they are resolved and pinned for you, and the "
-                        "pinned set is what gets installed from then on, so the tool cannot "
-                        "drift later. They are installed ONCE into an isolated environment that "
-                        "is reused on every later call, so declare them here instead of "
-                        "pip-installing at run time. Leave empty if the script only uses the "
-                        "standard library."
+                        "pip requirements the script imports (e.g. ['pandas', 'httpx>=0.27']). "
+                        "Resolved, pinned and installed once into an isolated env — declare here "
+                        "instead of pip-installing at run time. Empty for stdlib-only."
                     ),
                 },
                 "test_input": {
                     "type": "object",
                     "description": (
-                        "A representative sample input the tool is TESTED with before it is "
-                        "registered. The tool is run once with this exact value (validated "
-                        "against input_schema, then executed) and is registered ONLY if that "
-                        "run succeeds. Use realistic values that exercise the script's real "
-                        "path — not a placeholder. If input_schema declares required fields, "
-                        "test_input MUST provide them. Omit only for a genuinely no-argument "
-                        "tool (it is then tested with {})."
+                        "Realistic sample input the tool is tested with before registration "
+                        "(validated against input_schema, then executed). Must provide "
+                        "input_schema's required fields. Omit only for a no-argument tool."
                     ),
                 },
             },
@@ -982,9 +968,12 @@ def register_forged_tools(
 ) -> Dict[str, Any]:
     """저장된 도구를 복원하고, 제작/관리 도구를 배선한다.
 
-    ``core`` 는 점진공개 정책 (내장 도구와 동일하게 전달). 단 **제작 도구
-    3종은 항상 core** 다 — ToolSearch 뒤에 숨기면 모델이 자기확장 능력이
-    있다는 걸 모른 채 지나간다 (Geny 위임 도구에서 실증된 회귀와 같은 함정).
+    ``core`` 는 점진공개 정책 (내장 도구와 동일하게 전달 — flat 이면 전부 선노출,
+    아니면 ``tool_exposure`` 의 턴1 표면만). 제작 도구는 4.32.0 부터 **SelfExtendGuide
+    문 뒤**에 선다 — 예전엔 "항상 core" 였는데(숨기면 모델이 자기확장 능력을 모른 채
+    지나간 2026-08-18 회귀), 그 회귀의 원인은 숨긴 것이 아니라 문이 없던 것이었다.
+    문의 설명이 능력을 말하고 부르면 방이 열린다. 여섯 스키마(2,854토큰, 프리픽스의
+    33%)를 매 호출에 싣는 대신 문 하나만 싣는다.
 
     반환 ``{"restored": [...], "authoring": [...]}``.
 
@@ -1012,10 +1001,9 @@ def register_forged_tools(
             restored.append(spec.name)
 
     # PythonEnv — 세션 파이썬 환경 관리. 제작 도구와 같은 자기확장 축이라
-    # 같은 자리에서, 같은 core 정책으로 등록한다 (숨기면 에이전트는 자기
-    # 환경에 패키지를 깔 수 있다는 걸 모른 채 ModuleNotFoundError 앞에서
-    # 후퇴한다 — 2026-08-18 실증).
+    # 같은 자리에서, 같은 정책으로 등록한다. 넷 다 SelfExtendGuide 가 연다.
     from xgen_agent_runtime.host.python_env import PythonEnvTool
+    from xgen_agent_runtime.host.tool_exposure import registers_core
 
     authoring: List[str] = []
     for tool in (
@@ -1030,7 +1018,11 @@ def register_forged_tools(
         PythonEnvTool(workflow_id=workflow_id, workspace_dir=workspace_dir),
     ):
         try:
-            _do_register(registry, _bind_tool_base(tool), None if core is None else True)
+            _do_register(
+                registry,
+                _bind_tool_base(tool),
+                None if core is None else registers_core(tool.name, flat=bool(core)),
+            )
             authoring.append(tool.name)
         except Exception:  # noqa: BLE001
             logger.warning("forged tool 제작 도구 등록 실패: %s", tool.name, exc_info=True)
