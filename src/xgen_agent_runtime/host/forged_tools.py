@@ -971,6 +971,10 @@ def _test_failure_text(result: Any) -> str:
         return str(content)[:2000]
 
 
+#: 자기 도구가 이 수 이하면 첫 턴 표면에 그대로 둔다(ToolSearch 뒤로 숨기지 않는다).
+OWN_TOOLS_VISIBLE_MAX = 8
+
+
 def register_forged_tools(
     registry: Any,
     *,
@@ -995,7 +999,16 @@ def register_forged_tools(
     if not workflow_id:
         return {"restored": [], "authoring": []}
     restored: List[str] = []
-    for spec in store.list():
+    specs = list(store.list())
+    # 자기 도구는 **보이게** 둔다. 에이전트가 직접 만든 도구는 보통 한두 개고, 그 에이전트의
+    # 존재 이유에 가깝다(예: "롯데아이몰 검색"). 그것을 연결 노드 수백 개와 같은 규칙으로
+    # ToolSearch 뒤에 숨기면 턴마다 검색 왕복이 하나 붙고, 찾지 못한 턴은 도구가 없는 줄
+    # 알고 웹을 뒤진다 (2026-09-17 실측: 도구 없는 복사본이 사이트를 60번 긁음). 개수 규칙이다
+    # — 이름이 아니라 "적으면 다 보여 준다". 많으면 원래대로 검색.
+    live = [sp for sp in specs if sp.enabled and sp.verified]
+    if core is not True and len(live) <= OWN_TOOLS_VISIBLE_MAX:
+        core = True
+    for spec in specs:
         # 미검증(등록 전 실행 테스트 미통과) 도구는 에이전트에게 노출하지
         # 않는다 — 깨진 도구가 호출되어 실패하는 것을 원천 차단한다. 사람이
         # [도구] 화면에서 테스트로 통과시키거나, 에이전트가 고쳐 다시 등록하면

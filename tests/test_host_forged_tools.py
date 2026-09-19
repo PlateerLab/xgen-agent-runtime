@@ -225,3 +225,24 @@ def test_spec_without_test_input_still_loads() -> None:
     """옛 저장소 행(컬럼 없음)도 그대로 읽힌다."""
     spec = ForgedToolSpec.from_dict({"name": "Old", "description": "d", "entrypoint": "x.py"})
     assert spec.test_input == {}
+
+
+def test_a_few_own_tools_stay_visible_under_the_hierarchy(tmp_path) -> None:
+    """자기 도구가 적으면 ToolSearch 뒤에 숨기지 않는다 — 검색 왕복 하나가 매 턴 사라진다."""
+    from xgen_agent_runtime.host.forged_tools import OWN_TOOLS_VISIBLE_MAX
+
+    ws, store = _ws(tmp_path), _MemStore()
+    entry = _write_script(ws)
+    for i in range(OWN_TOOLS_VISIBLE_MAX):
+        store.save(ForgedToolSpec(name=f"own{i}", description="d", entrypoint=entry,
+                                  input_schema={"type": "object"}, verified=True))
+    reg = ToolRegistry()
+    register_forged_tools(reg, workflow_id="wf1", workspace_dir=ws, store=store, core=False)
+    assert all(reg.is_exposed(f"own{i}") for i in range(OWN_TOOLS_VISIBLE_MAX))
+
+    # 상한을 넘으면 원래 규칙(hierarchy → deferred).
+    store.save(ForgedToolSpec(name="one_more", description="d", entrypoint=entry,
+                              input_schema={"type": "object"}, verified=True))
+    reg2 = ToolRegistry()
+    register_forged_tools(reg2, workflow_id="wf1", workspace_dir=ws, store=store, core=False)
+    assert not reg2.is_exposed("own0") and not reg2.is_exposed("one_more")

@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.30.0] — 미정 (perf/own-tools-visible)
+
+### Changed — 에이전트가 만든 도구는 적으면 처음부터 보인다
+
+- `register_forged_tools`: 활성·검증된 자작 도구가 `OWN_TOOLS_VISIBLE_MAX`(8) 이하면
+  hierarchy 표면에서도 core 로 등록한다. 개수 규칙이지 이름 규칙이 아니다 — 많으면 원래대로
+  ToolSearch 로 찾는다.
+- 실측 (2026-09-17~19 dev): 자기 도구가 ToolSearch 뒤에 있어 턴마다 검색 왕복이 하나
+  붙었고, 도구를 못 찾은 복사본 에이전트는 사이트를 WebFetch 로 60번 넘게 긁었다.
+- ⚠ 채택 판정 전: Harness-Bench holdout 에서 효과가 확인돼야 머지한다.
+
 ## [4.29.0] — 2026-09-19
 
 근거: dev 실제 사용 기록 오프라인 평가(모델 호출 없음). 도구 12회+ 턴 73건(에이전트 약 30개)을 사람이
