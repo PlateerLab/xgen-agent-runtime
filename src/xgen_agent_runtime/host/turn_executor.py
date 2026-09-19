@@ -973,7 +973,7 @@ class AgentTurnExecutor:
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
                 enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
-                # 노드가 (soft, hard) 를 주면 그대로, 없으면 런타임 기본(50만/100만).
+                # 노드가 (soft, hard) 를 주면 그대로, 없으면 런타임 기본(100만/300만).
                 **(
                     {"turn_input_budget_tokens": _budget_pair(kwargs["turn_input_budget_tokens"])}
                     if "turn_input_budget_tokens" in kwargs

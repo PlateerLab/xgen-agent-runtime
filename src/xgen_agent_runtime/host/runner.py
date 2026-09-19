@@ -505,8 +505,11 @@ def build_pipeline(
     ``turn_input_budget_tokens`` — (soft, hard) 턴 누적 입력 토큰 예산 (4.30.0,
     stages/s16_loop/turn_budget.py). soft 를 넘으면 "마무리하라", hard 를 넘으면
     "도구 없이 보고하라" 를 붙이고 그다음 응답으로 턴을 끝낸다(정상 완료, 자동
-    이어가기 없음). ``None`` 또는 (0, 0) 이면 예산 없음. 기본 50만/100만 —
-    dev 28일 분포에서 p99(24.8만)의 2배/4배; 100만 초과 턴 0.15% 가 입력의 24%.
+    이어가기 없음). ``None`` 또는 (0, 0) 이면 예산 없음. 기본 100만/300만 —
+    dev 28일 분포에서 p99(24.8만)의 4배/12배. 300만 초과 턴 3개(0.04%)가 입력의
+    19%(그중 하나가 3,712만·도구 442회로 답 없이 끝남). 100만~300만 구간은 대부분
+    정상적으로 끝난 긴 작업이라 기본값으로 자르지 않는다 — 비용에 민감한
+    에이전트는 노드 파라미터로 낮춘다.
     """
     if registry is not None and registry.list_deferred():
         from xgen_agent_runtime.tools.built_in import ToolSearchTool
