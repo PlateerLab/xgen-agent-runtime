@@ -21,6 +21,7 @@ from xgen_agent_runtime.stages.s16_loop.completion_review import (
     DeliverableReviewer,
     claimed_paths,
     describe_file,
+    is_problem,
 )
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.registry import ToolRegistry
@@ -72,6 +73,7 @@ def test_claimed_paths_ignores_versions_and_bare_domains() -> None:
 def test_describe_file_states_missing_csv_json_and_text() -> None:
     assert describe_file("out/x.csv", None) == "MISSING"
     assert describe_file("out/x.csv", b"") == "EMPTY (0 bytes)"
+    assert not is_problem(describe_file("a/b/c.txt", b""))  # 빈 텍스트 파일은 흔히 의도된 것 (002-exec)
     csv_desc = describe_file("out/x.csv", b"id,issue,fix\n1,a,b\n2,c,d\n3,e,f\n4,g,h\n5,i,j\n")
     assert '"id,issue,fix" (3 cols)' in csv_desc and "5 data rows" in csv_desc and "ragged" not in csv_desc
     assert "ragged rows" in describe_file("r.csv", b"a,b\n1\n2,3,4\n")

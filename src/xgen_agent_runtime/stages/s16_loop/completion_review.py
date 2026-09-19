@@ -229,12 +229,18 @@ def is_problem(desc: str) -> bool:
     return any(mark in desc for mark in _PROBLEM_MARKS)
 
 
+#: 비어 있으면 문제로 보는 확장자 — 데이터 파일. 빈 .txt/.gitkeep 은 흔히 의도된 것이다
+#: (기준선 002-exec 가 빈 파일을 만들라는 과제였다).
+_DATA_EXTS = (".csv", ".tsv", ".json", ".jsonl", ".ndjson")
+
+
 def describe_file(path: str, data: Optional[bytes]) -> str:
     """파일 하나의 한 줄 요약. ``data`` 가 None 이면 없는 파일. 문제는 :func:`is_problem`."""
     if data is None:
         return "MISSING"
     if len(data) == 0:
-        return "EMPTY (0 bytes)"
+        ext = posixpath.splitext(path)[1].lower()
+        return "EMPTY (0 bytes)" if ext in _DATA_EXTS else "empty file (0 bytes)"
     if _is_binary(data):
         return f"binary, {len(data):,} bytes"
     text = _decode(data)
