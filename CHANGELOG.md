@@ -4,6 +4,35 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.30.0] — 2026-09-19
+
+근거: Harness-Bench(Qihoo360, 106과제 중 우리가 돌릴 수 있는 68개) 기준선 — dev 4.29.0 + Qwen3.8-27B,
+완료율 0.826. 잃은 점수를 원인별로 가중하면 내용 정확성 75% / 근거·금지 13% / **형식·계약 10%**,
+도구·복구 실패 0건. 형식·계약 실패는 전부 "요구 조건을 다시 대조하지 않고 완료 선언" 이었다
+(정확히 3행이어야 하는 CSV 에 5행, 헤더·정렬·초과 항목, 없는 파일을 있다고 보고). 논문에서도
+1위 실패 증상(계약·형식 위반 36%).
+
+### Added — 완료 직전 산출물 대조 (`stages/s16_loop/completion_review.py`)
+
+- 모델이 완료하려는 순간(마커 또는 도구 호출 없는 응답), 이 턴에서 **모델이 주장한 파일**
+  (Write/Edit/ToolBatch 로 쓴 경로 + 마지막 답변에 언급한 경로, 최대 12개)을 실제로 읽어
+  한 줄씩 요약해 보여 준다 — 존재 여부(MISSING/EMPTY), CSV 헤더·열 수·데이터 행 수·ragged,
+  JSON/JSONL 유효성과 키, 텍스트 줄 수와 첫 줄. 그리고 "요청의 명시 조건(파일명·형식·헤더·
+  행 수·정렬·필수/금지 내용)과 대조해 틀린 것만 고치고 끝내라" 고 한다. **어떤 조건인지는
+  하네스가 모른다** — 모델이 요청문을 보고 판단한다. 턴당 한 번, 주장한 파일이 없으면 무음.
+- `LoopStage(completion_reviewers=[…])` / `add_completion_reviewer()` — 완료(`complete`)만 한 번
+  미룬다. suspend/error/escalate 는 그대로. 호스트 `build_pipeline(enable_deliverable_review=True)`
+  가 `tool_context` 가 있을 때 배선한다 (sandbox 가 있으면 그 안에서, 없으면 working_dir 기준
+  로컬 파일 — Read 도구와 같은 경로·같은 허용 검사).
+- 비용: 파일을 만든 턴에 왕복 1회 추가. 판정은 벤치로 — 형식·계약 실패 과제(031·077·092·028·
+  024·027·029·052)를 먼저, 그다음 홀드아웃 31개.
+- 이벤트 `loop.completion_review` {reviewer, files, missing, paths} (catalog v8).
+
+### Fixed
+
+- `PipelineState.begin_turn` 이 `tool.same_result_counts`(4.29.0) 를 비우지 않아 재사용 상태에서
+  같은 호출·같은 결과 횟수가 다음 턴으로 넘어갔다. 턴 단위 키 목록에 추가.
+
 ## [4.29.0] — 2026-09-19
 
 근거: dev 실제 사용 기록 오프라인 평가(모델 호출 없음). 도구 12회+ 턴 73건(에이전트 약 30개)을 사람이

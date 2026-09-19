@@ -53,7 +53,8 @@ from typing import Any, Dict, List
 #: v5: + resumable slice lifecycle (``loop.suspended`` / ``loop.blocked``).
 #: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
 #: v7: + ``tool.same_result`` (4.29.0 identical call → identical result breaker).
-EVENT_CATALOG_VERSION = 7
+#: v8: + ``loop.completion_review`` (4.30.0 deliverable check before completion).
+EVENT_CATALOG_VERSION = 8
 
 
 class EventTypes(str, Enum):
@@ -94,6 +95,7 @@ class EventTypes(str, Enum):
     LOOP_SUSPENDED = "loop.suspended"
     LOOP_BLOCKED = "loop.blocked"
     LOOP_BUDGET_EXCEEDED = "loop.budget_exceeded"
+    LOOP_COMPLETION_REVIEW = "loop.completion_review"
 
     # ── Stage 1: Input ──
     INPUT_NORMALIZED = "input.normalized"
@@ -381,6 +383,12 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     EventTypes.LOOP_BUDGET_EXCEEDED: {
         "dimension": "str — iteration | cost | tokens | wall_clock | tool_calls",
         "iteration": "int",
+    },
+    EventTypes.LOOP_COMPLETION_REVIEW: {
+        "reviewer": "str — reviewer name ('deliverable')",
+        "files": "int — claimed files summarised for the model",
+        "missing": "int — claimed files that do not exist",
+        "paths": "list[str] — the claimed paths, in order",
     },
     EventTypes.INPUT_NORMALIZED: {
         "text_length": "int — normalized text length",

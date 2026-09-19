@@ -8,6 +8,7 @@ from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
 from xgen_agent_runtime.core.state import PipelineState
+from xgen_agent_runtime.stages.s16_loop.completion_review import CompletionReviewer
 from xgen_agent_runtime.stages.s16_loop.interface import LoopController
 from xgen_agent_runtime.stages.s16_loop.artifact.default.controllers import (
     BudgetAwareLoopController,
@@ -30,6 +31,7 @@ class LoopStage(Stage[Any, Any]):
         *,
         max_turns: Optional[int] = None,
         early_stop_on: Optional[List[str]] = None,
+        completion_reviewers: Optional[List[CompletionReviewer]] = None,
     ):
         self._slots: Dict[str, StrategySlot] = {
             "controller": StrategySlot(
@@ -50,6 +52,13 @@ class LoopStage(Stage[Any, Any]):
         }
         self._max_turns = max_turns
         self._early_stop_on: List[str] = list(early_stop_on or [])
+        # 완료 직전 검토자들 (stages/s16_loop/completion_review.py). 하나라도
+        # 메시지를 돌려주면 그걸 모델에게 보내고 한 바퀴 더 돈다. 검토자가
+        # 스스로 "턴당 한 번" 을 지킨다 — 여기서는 순서대로 물어볼 뿐.
+        self._completion_reviewers: List[CompletionReviewer] = list(completion_reviewers or [])
+
+    def add_completion_reviewer(self, reviewer: CompletionReviewer) -> None:
+        self._completion_reviewers.append(reviewer)
 
     @property
     def _controller(self) -> LoopController:
@@ -138,6 +147,18 @@ class LoopStage(Stage[Any, Any]):
             decision = "complete"
         else:
             decision = self._controller.decide(state)
+
+        if decision == "complete" and self._completion_reviewers:
+            # 산출물 대조 등 — 완료를 한 번 미루고 검토 내용을 모델에게 보낸다.
+            # suspend/error/escalate 는 건드리지 않는다 (마무리할 것이 없다).
+            for reviewer in self._completion_reviewers:
+                note = await reviewer.review(state)
+                if note:
+                    state.add_message("user", note)
+                    state.completion_signal = None
+                    state.completion_detail = None
+                    decision = "continue"
+                    break
 
         state.loop_decision = decision
 

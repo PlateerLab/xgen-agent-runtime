@@ -451,6 +451,7 @@ def build_pipeline(
     enable_compaction: bool = True,
     credentials: Optional[Dict[str, Any]] = None,
     enable_prompt_cache: bool = False,
+    enable_deliverable_review: bool = True,
 ) -> Pipeline:
     """Assemble a one-shot pipeline for a single node execution.
 
@@ -485,6 +486,12 @@ def build_pipeline(
     (auto-wire 는 Pipeline._init_state). False: 압축 전면 꺼짐 — Stage 2 는
     메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·요약·
     guard 회복까지 전부 스킵, executor 3.3.0 계약), guard 미등록.
+
+    ``enable_deliverable_review`` — 완료 직전 산출물 대조(4.30.0,
+    stages/s16_loop/completion_review.py). ``tool_context`` 가 있을 때만
+    배선된다(파일을 읽을 곳이 있어야 한다). 모델이 이 턴에 쓴/언급한 파일을
+    읽어 존재·행 수·헤더·JSON 유효성을 한 번 보여 주고 요청 조건과 대조하게
+    한다 — 파일을 만든 턴에 왕복 1회 추가.
     """
     if registry is not None and registry.list_deferred():
         from xgen_agent_runtime.tools.built_in import ToolSearchTool
@@ -597,6 +604,19 @@ def build_pipeline(
         # Stage 10(Tool) 의 ToolContext — working_dir/allowed_paths/extras(ssh·docs)
         # 를 built-in 도구들에 전달한다 (executor 공식 주입점: attach_runtime).
         pipeline.attach_runtime(tool_context=tool_context)
+
+        if enable_deliverable_review:
+            # Stage 16 완료 직전 산출물 대조 — Stage 10 이 보는 것과 같은
+            # ToolContext 를 매번 읽는다 (sandbox 는 attach_runtime(sandbox=)
+            # 로 나중에 붙을 수 있다).
+            from xgen_agent_runtime.stages.s16_loop.completion_review import DeliverableReviewer
+
+            tool_stage = pipeline.get_stage(10)
+            loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+            if tool_stage is not None and hasattr(loop_stage, "add_completion_reviewer"):
+                loop_stage.add_completion_reviewer(  # type: ignore[union-attr]
+                    DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
+                )
 
     if memory_provider is not None:
         # executor 의 from_manifest memory attach 경로 미러 (pipeline.py L1394~):
