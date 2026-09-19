@@ -104,21 +104,36 @@ def _state_with(files_note: str, *tool_uses: Dict[str, Any]) -> PipelineState:
 def test_reviewer_flags_only_problem_files_once_per_turn(tmp_path: Path) -> None:
     (tmp_path / "out").mkdir()
     (tmp_path / "out" / "audit.csv").write_text("a,b\n1,2\n3,4\n")
+    (tmp_path / "out" / "rows.csv").write_text("a,b\n1\n2,3,4\n")  # ragged
     state = _state_with(
-        "out/audit.csv 와 out/report.md 를 만들었습니다.",
+        "out/audit.csv 와 out/rows.csv 를 만들었습니다.",
         _tool_use("Write", file_path="out/audit.csv", content="a,b\n1,2\n3,4\n"),
     )
     rv = _local_reviewer(tmp_path)
 
     note = asyncio.run(rv.review(state))
     assert note and note.startswith("[Deliverable check")
-    assert "- out/report.md — MISSING" in note
+    assert "- out/rows.csv — " in note and "ragged rows" in note
     assert "out/audit.csv" not in note and "(1 other claimed file exist" in note  # 멀쩡한 건 개수만
-    assert state.shared[REVIEW_KEY] == {"done": True, "files": 2, "missing": 1, "problems": 1}
+    assert state.shared[REVIEW_KEY] == {"done": True, "files": 2, "missing": 0, "problems": 1}
     assert state.events[-1]["type"] == "loop.completion_review"
-    assert state.events[-1]["data"]["paths"] == ["out/report.md"]
+    assert state.events[-1]["data"]["paths"] == ["out/rows.csv"]
 
     assert asyncio.run(rv.review(state)) is None  # 턴당 한 번
+
+
+def test_mentioned_paths_that_do_not_exist_are_not_a_signal(tmp_path: Path) -> None:
+    """카나리 073·100: 입력 파일·감사 결과("in/scripts 가 없다")를 MISSING 이라 하자 모델이
+    "오탐" 이라 반박하느라 왕복 +6~7. 언급만 된 경로는 있을 때만 내용을 본다."""
+    state = _state_with("in/scripts/analyze_main.py 가 없고 kyc_requirements.md 는 읽었다. out/report.md 작성.")
+    assert asyncio.run(_local_reviewer(tmp_path).review(state)) is None
+    assert REVIEW_KEY not in state.shared
+
+
+def test_written_path_that_vanished_is_missing(tmp_path: Path) -> None:
+    state = _state_with("out/a.csv 완료", _tool_use("Write", file_path="out/a.csv", content="x"))
+    note = asyncio.run(_local_reviewer(tmp_path).review(state))
+    assert note and "- out/a.csv — MISSING" in note
 
 
 def test_reviewer_is_silent_when_every_claimed_file_is_sound(tmp_path: Path) -> None:
@@ -191,10 +206,11 @@ def test_reviewer_reads_through_the_sandbox() -> None:
     sb = _FakeSandbox()
     sb.files[f"{sb.workdir}/out/summary.json"] = b'{"n": 1}'
     ctx = ToolContext(working_dir=sb.workdir, sandbox=sb)
+    sb.files[f"{sb.workdir}/out/rows.csv"] = b"a,b\n1\n2,3,4\n"
     state = _state_with("out/summary.json 과 out/rows.csv 완료")
     note = asyncio.run(DeliverableReviewer(lambda: ctx).review(state))
-    assert note and "- out/rows.csv — MISSING" in note and "(1 other claimed file exist" in note
-    assert "summary.json —" not in note
+    assert note and "- out/rows.csv — " in note and "ragged rows" in note
+    assert "(1 other claimed file exist" in note and "summary.json —" not in note
 
 
 # ── 파이프라인 끝까지: 완료를 한 번 미루고, 고친 뒤 끝난다 ──────────────

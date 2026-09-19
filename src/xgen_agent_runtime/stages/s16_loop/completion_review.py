@@ -7,8 +7,8 @@
 
 방식: 모델이 완료하려는 순간(마커 또는 도구 호출 없는 응답), 이 턴에서 **모델이
 주장한 파일**(Write/Edit 로 쓴 경로 + 마지막 답변에 언급한 경로)을 실제로 읽는다.
-**결정론적으로 틀린 것**이 있을 때만 — 없는 파일, 빈 파일, 깨진 JSON, 열 수가 들쭉날쭉한
-CSV — 그 파일들의 요약을 보여 주고 "요청의 명시 조건과 대조해 고쳐라" 고 한다. 어떤
+**결정론적으로 틀린 것**이 있을 때만 — 빈 파일, 깨진 JSON, 열 수가 들쭉날쭉한 CSV,
+쓴 파일이 사라진 경우 — 그 파일들의 요약을 보여 주고 "요청의 명시 조건과 대조해 고쳐라" 고 한다. 어떤
 조건이 맞는지는 모델이 요청문을 보고 판단한다 — 하네스는 도메인 규칙을 모른다.
 턴당 한 번. 문제가 없으면 아무것도 하지 않는다(왕복 0).
 
@@ -16,7 +16,9 @@ CSV — 그 파일들의 요약을 보여 주고 "요청의 명시 조건과 대
 산출물을 다시 읽고 재검증해 왕복 +23%(77→95)·입력 +23% 가 들었고, 점수가 오른 4과제 중
 실제로 검토가 고친 것은 **ragged CSV 를 잡은 094(0.74→1.00)와 027(CSV 인용 수정)** 뿐 —
 나머지는 실행 간 편차였다. 결정론 신호가 있을 때만 끼어들면 그 효과는 남고 비용은 0 이다.
-``mode="always"`` 로 예전 동작을 켤 수 있다.
+답변에 언급만 된 경로가 없는 것은 신호로 쓰지 않는다 — 입력 파일·감사 결과·파일 이름만
+적은 것을 MISSING 이라 하면 모델이 반박하거나 복사본을 만든다(010·073·100, 왕복 +4~7).
+``mode="always"`` 로 전부 보여 주는 동작을 켤 수 있다.
 """
 
 from __future__ import annotations
@@ -350,17 +352,18 @@ class DeliverableReviewer:
 
         entries: List[Tuple[str, str]] = []
         missing = 0
-        written_names = {posixpath.basename(w) for w in written}
         for p in paths:
             try:
                 data = await self._read(ctx, p)
             except Exception as exc:  # noqa: BLE001 — 허용 밖·권한·세션 오류는 요약에서 뺀다
                 logger.debug("deliverable review: skip %r (%s)", p, exc)
                 continue
-            if data is None and p not in written and "/" not in p and p in written_names:
-                # 답변에 파일 이름만 적은 것(`summary.json`)이 다른 폴더에 쓴 파일을
-                # 가리키는 경우 — 루트에 없다고 "MISSING" 이라 하면 모델이 복사본을
-                # 만든다(카나리 010). 이름만 언급된 것은 쓴 파일과 같은 것으로 본다.
+            if data is None and p not in written:
+                # 답변에 언급만 된 경로가 없는 것은 신호가 아니다. 모델은 입력 파일,
+                # 감사 결과("in/scripts 가 없다"), 파일 이름만(`summary.json`) 을 적는데
+                # 이를 MISSING 이라 하면 복사본을 만들거나 "오탐" 이라 반박하느라
+                # 왕복이 는다(카나리 010·073·100, +4~7회). 언급 경로는 **있을 때만**
+                # 내용을 본다. 없는 산출물은 쓴 경로(Write/Edit)에서만 잡는다.
                 continue
             desc = describe_file(p, data)
             missing += data is None
