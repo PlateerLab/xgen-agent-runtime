@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # 본체가 쓰는 모듈-수준 상수/헬퍼(항상 실행) — 서버에서 resolve. lazy 트리거라
 # 순환 없음(execute 가 turn_executor 를 지연 import). Phase 2 에서 패키지로 이전.
@@ -30,6 +30,20 @@ from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_sc
 from xgen_agent_runtime.host.turn_input import TurnInput
 
 logger = logging.getLogger("editor.nodes.xgen.agent.agent_geny")
+
+
+def _budget_pair(value: Any) -> Optional[Tuple[int, int]]:
+    """노드 파라미터 → (soft, hard). None/0/빈 값이면 예산 없음."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        soft, hard = int(value[0] or 0), int(value[1] or 0)
+    elif isinstance(value, dict):
+        soft, hard = int(value.get("soft") or 0), int(value.get("hard") or 0)
+    else:
+        hard = int(value or 0)
+        soft = hard // 2
+    return (soft, hard) if soft > 0 and hard > soft else None
 
 
 def _coerce_schema(schema: Any) -> Optional[Dict[str, Any]]:
@@ -959,6 +973,12 @@ class AgentTurnExecutor:
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
                 enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
+                # 노드가 (soft, hard) 를 주면 그대로, 없으면 런타임 기본(100만/300만).
+                **(
+                    {"turn_input_budget_tokens": _budget_pair(kwargs["turn_input_budget_tokens"])}
+                    if "turn_input_budget_tokens" in kwargs
+                    else {}
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - surface build errors as output, never crash the graph
             logger.exception("agents/geny: failed to build pipeline")
