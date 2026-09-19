@@ -53,7 +53,7 @@ from typing import Any, Dict, List
 #: v5: + resumable slice lifecycle (``loop.suspended`` / ``loop.blocked``).
 #: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
 #: v7: + ``tool.same_result`` (4.29.0 identical call → identical result breaker).
-#: v8: + ``loop.completion_review`` (4.30.0 deliverable check before completion).
+#: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
 EVENT_CATALOG_VERSION = 8
 
 
@@ -96,6 +96,7 @@ class EventTypes(str, Enum):
     LOOP_BLOCKED = "loop.blocked"
     LOOP_BUDGET_EXCEEDED = "loop.budget_exceeded"
     LOOP_COMPLETION_REVIEW = "loop.completion_review"
+    LOOP_TURN_BUDGET = "loop.turn_budget"
 
     # ── Stage 1: Input ──
     INPUT_NORMALIZED = "input.normalized"
@@ -391,6 +392,14 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "missing": "int — claimed files that do not exist",
         "problems": "int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV)",
         "paths": "list[str] — paths shown to the model, in order",
+    },
+    EventTypes.LOOP_TURN_BUDGET: {
+        "phase": "str — 'soft' (wrap-up note added) | 'final' (report-now note added) | 'stop' (turn ended)",
+        "used": "int — prompt tokens this turn so far (input + cache read + cache creation)",
+        "soft": "int — soft threshold",
+        "hard": "int — hard threshold",
+        "calls": "int — API calls this turn so far",
+        "iteration": "int",
     },
     EventTypes.INPUT_NORMALIZED: {
         "text_length": "int — normalized text length",

@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-09-19.
-> Catalogue version: **8** · events: **132**
+> Catalogue version: **8** · events: **133**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -225,6 +225,19 @@ Enum member: `EventTypes.LOOP_COMPLETION_REVIEW`
 | `missing` | int — claimed files that do not exist |
 | `problems` | int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV) |
 | `paths` | list[str] — paths shown to the model, in order |
+
+### `loop.turn_budget`
+
+Enum member: `EventTypes.LOOP_TURN_BUDGET`
+
+| Field | Description |
+|---|---|
+| `phase` | str — 'soft' (wrap-up note added) \| 'final' (report-now note added) \| 'stop' (turn ended) |
+| `used` | int — prompt tokens this turn so far (input + cache read + cache creation) |
+| `soft` | int — soft threshold |
+| `hard` | int — hard threshold |
+| `calls` | int — API calls this turn so far |
+| `iteration` | int |
 
 ## Stage 1 — Input
 

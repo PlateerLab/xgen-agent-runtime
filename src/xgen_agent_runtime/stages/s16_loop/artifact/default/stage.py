@@ -10,6 +10,7 @@ from xgen_agent_runtime.core.stage import Stage
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.stages.s16_loop.completion_review import CompletionReviewer
 from xgen_agent_runtime.stages.s16_loop.interface import LoopController
+from xgen_agent_runtime.stages.s16_loop.turn_budget import TurnInputBudget
 from xgen_agent_runtime.stages.s16_loop.artifact.default.controllers import (
     BudgetAwareLoopController,
     MultiDimensionalBudgetController,
@@ -32,6 +33,7 @@ class LoopStage(Stage[Any, Any]):
         max_turns: Optional[int] = None,
         early_stop_on: Optional[List[str]] = None,
         completion_reviewers: Optional[List[CompletionReviewer]] = None,
+        turn_input_budget: Optional[TurnInputBudget] = None,
     ):
         self._slots: Dict[str, StrategySlot] = {
             "controller": StrategySlot(
@@ -57,8 +59,14 @@ class LoopStage(Stage[Any, Any]):
         # 스스로 "턴당 한 번" 을 지킨다 — 여기서는 순서대로 물어볼 뿐.
         self._completion_reviewers: List[CompletionReviewer] = list(completion_reviewers or [])
 
+        # 턴 입력 토큰 예산 (stages/s16_loop/turn_budget.py). None 이면 없음.
+        self._turn_input_budget: Optional[TurnInputBudget] = turn_input_budget
+
     def add_completion_reviewer(self, reviewer: CompletionReviewer) -> None:
         self._completion_reviewers.append(reviewer)
+
+    def set_turn_input_budget(self, budget: Optional[TurnInputBudget]) -> None:
+        self._turn_input_budget = budget
 
     @property
     def _controller(self) -> LoopController:
@@ -159,6 +167,10 @@ class LoopStage(Stage[Any, Any]):
                     state.completion_detail = None
                     decision = "continue"
                     break
+
+        if self._turn_input_budget is not None:
+            # 예산은 검토자 뒤에 — 마무리 응답이 온 뒤에는 검토자가 미뤄도 끝낸다.
+            decision = self._turn_input_budget.apply(state, decision)
 
         state.loop_decision = decision
 

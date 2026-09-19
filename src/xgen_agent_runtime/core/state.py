@@ -431,6 +431,8 @@ class PipelineState:
             "tool.same_result_counts",
             # 완료 직전 산출물 대조(stages/s16_loop/completion_review.py)도 턴당 한 번.
             "loop.completion_review",
+            # 턴 입력 토큰 예산(stages/s16_loop/turn_budget.py) — 턴마다 새로 센다.
+            "loop.turn_budget",
         ):
             self.shared.pop(_k, None)
 
