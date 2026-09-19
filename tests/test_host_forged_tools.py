@@ -254,3 +254,26 @@ def test_authoring_tools_sit_behind_the_self_extend_gate_on_a_hierarchical_surfa
     assert is_turn_one("SelfExtendGuide") and not is_turn_one("ForgeTool")
     assert set(SKILL_GATEWAYS["SelfExtendGuide"]) >= {"ForgeTool", "PythonEnv", "WorkflowSelf", "SystemPackages"}
     assert "SelfExtendGuide" in get_builtin_tools(features=["meta"])
+
+
+def test_build_pipeline_raises_the_self_extend_gate_when_the_room_exists(tmp_path):
+    """호스트가 meta 패밀리를 안 켜도, 자기확장 도구가 등록돼 있으면 문이 선다."""
+    from xgen_agent_runtime.host import runner
+    from xgen_agent_runtime.host.forged_tools import register_forged_tools
+    from xgen_agent_runtime.tools.registry import ToolRegistry
+
+    class _Store:
+        def list(self):
+            return []
+
+    reg = ToolRegistry()
+    register_forged_tools(reg, workflow_id="w", workspace_dir=str(tmp_path), store=_Store(), core=False)
+    assert reg.get("SelfExtendGuide") is None
+    runner.build_pipeline(name="t", provider="openai", model="m", api_key="k", registry=reg, stream=False,
+                          enable_compaction=False)
+    assert reg.get("SelfExtendGuide") is not None and reg.is_core("SelfExtendGuide")
+
+    empty = ToolRegistry()
+    runner.build_pipeline(name="t", provider="openai", model="m", api_key="k", registry=empty, stream=False,
+                          enable_compaction=False)
+    assert empty.get("SelfExtendGuide") is None  # 방이 없으면 문도 없다
