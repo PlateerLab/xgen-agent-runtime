@@ -60,6 +60,23 @@ def _coerce_schema(schema: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _memory_block_for(host: Any, workflow_id: str, *, write_available: Optional[bool]) -> str:
+    """이 턴의 메모리 지침 — 쓰기 도구가 있으면 원래 블록, 없으면 읽기 전용 블록.
+
+    ``write_available`` 이 None(CLI 브릿지처럼 registry 를 여기서 못 보는 경로)이면 호스트의
+    선택 훅 ``memory_write_available(workflow_id)`` 에 묻는다. 훅이 없으면 예전대로 쓰기 블록.
+    """
+    from xgen_agent_runtime.host._constants import MEMORY_PROMPT_BLOCK, MEMORY_READONLY_PROMPT_BLOCK
+
+    if write_available is None:
+        probe = getattr(host, "memory_write_available", None)
+        try:
+            write_available = bool(probe(workflow_id)) if callable(probe) else True
+        except Exception:  # noqa: BLE001 — 훅 실패는 예전 동작(쓰기 블록)
+            write_available = True
+    return MEMORY_PROMPT_BLOCK if write_available else MEMORY_READONLY_PROMPT_BLOCK
+
+
 class AgentTurnExecutor:
     """execute() 의 host-무관 판. 서버·커넥터가 같은 run() 을 돈다."""
 
@@ -366,10 +383,10 @@ class AgentTurnExecutor:
             # memory_* 는 run ctx 와 무관하게(memory eager) 광고되므로 _cli_bridge_ok 만 본다.
             _cli_tools_bridge_ok = _cli_bridge_ok
             _cli_tools_bridge_reason = _cli_bridge_reason
+            _memory_block_pending = False
             if bool(kwargs.get("enable_memory", True)):
                 from xgen_agent_runtime.host._constants import (
                     MEMORY_AUTO_PROMPT_BLOCK,
-                    MEMORY_PROMPT_BLOCK,
                 )
                 from xgen_agent_runtime.host.memory_tools import build_memory_tools
 
@@ -395,7 +412,9 @@ class AgentTurnExecutor:
                     # 별개로 에이전트가 도구를 인지하도록 정책 블록 + 이름 규약 노트.
                     system_prompt = (
                         system_prompt
-                        + MEMORY_PROMPT_BLOCK
+                        + _memory_block_for(
+                            host, str(kwargs.get("workflow_id") or ""), write_available=None
+                        )
                         + cli_memory_note(_cli_mcp_server, provider)
                     )
                 if memory_provider is not None and _sdk_tools:
@@ -406,10 +425,10 @@ class AgentTurnExecutor:
                             registry = ToolRegistry()
                         for mem_tool in build_memory_tools(memory_provider):
                             registry.register(mem_tool, core=_turn_one(mem_tool.name))
-                        system_prompt = system_prompt + MEMORY_PROMPT_BLOCK
-                        if provider in _CLI_BACKENDS:
-                            # 같은 registry 가 MCP 로 나가므로 도구 이름에 접두가 붙는다.
-                            system_prompt += cli_memory_note(_cli_mcp_server, provider)
+                        # 지침 블록은 **여기서 붙이지 않는다** — 호스트 정책(register_builtin_tools /
+                        # register_forged_tools)이 게스트·동결 턴에서 memory_write/pin 을 뺀 뒤,
+                        # 남은 도구를 보고 문구를 고른다(아래 _memory_block_pending).
+                        _memory_block_pending = True
                         logger.info("agents/geny: 내장 메모리 활성 (self-serve 도구 6개 등록)")
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
@@ -534,6 +553,20 @@ class AgentTurnExecutor:
 
                 except Exception as exc:  # noqa: BLE001 — 내장 도구는 실행을 깨지 않는다
                     logger.warning("agents/geny: built-in 도구 등록 실패 (스킵): %s", exc)
+
+            if _memory_block_pending:
+                # 호스트 정책이 끝난 뒤의 registry 가 진실이다 — 쓰기 도구가 남아 있으면 "저장하라",
+                # 없으면 "여기서는 저장할 수 없다". 약속과 표면이 어긋나면 모델이 우회한다.
+                _has_write = registry is not None and registry.get("memory_write") is not None
+                system_prompt = system_prompt + _memory_block_for(
+                    host,
+                    str(kwargs.get("workflow_id") or ""),
+                    write_available=_has_write,
+                )
+                if provider in _CLI_BACKENDS:
+                    # 같은 registry 가 MCP 로 나가므로 도구 이름에 접두가 붙는다.
+                    system_prompt += cli_memory_note(_cli_mcp_server, provider)
+                _memory_block_pending = False
 
             # ── 자기진화(self-evolution) 등록 — built-in tools 와 독립 ──────────
             # WorkflowSelf 는 registry + workflow_id 만 있으면 되고(편집은 DB, workspace
