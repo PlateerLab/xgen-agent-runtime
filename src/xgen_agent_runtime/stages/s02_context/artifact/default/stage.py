@@ -11,6 +11,10 @@ from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
+from xgen_agent_runtime.core.context_prune import (
+    DEFAULT_PRUNE_OVER_TOKENS,
+    prune_messages,
+)
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
 from xgen_agent_runtime.memory.provider import (
@@ -90,6 +94,7 @@ class ContextStage(Stage[Any, Any]):
         retrieval_timeout_s: float = 10.0,
         compaction_enabled: bool = True,
         background_compaction: bool = True,
+        prune_over_tokens: Optional[int] = DEFAULT_PRUNE_OVER_TOKENS,
     ):
         self._slots: Dict[str, StrategySlot] = {
             "strategy": StrategySlot(
@@ -143,6 +148,12 @@ class ContextStage(Stage[Any, Any]):
         # loop teardown. False → the 80% trigger always compacts
         # synchronously.
         self._background_compaction = bool(background_compaction)
+        # 비용 트리거 (4.35.0). 용량 트리거(윈도우×0.8)는 윈도우가 크면 영영
+        # 오지 않는다 — dev 28일 최대 프롬프트 135k 대 문턱 160k/419k 로 결정적
+        # prune 이 한 번도 돌지 않았다. 여기서는 윈도우와 무관하게 절대 토큰 수로
+        # 본다: 넘으면 매 반복 앞에서 중복·오래된 거대 결과를 정리한다(LLM 없음).
+        # None 또는 0 이면 끔 — 용량 경로만 남는다.
+        self._prune_over_tokens = int(prune_over_tokens or 0)
         # In-flight background compaction (TTFT program, finding B3):
         # {"task", "len", "message_ids"}. The full prefix identity tuple
         # is the compare-and-swap token used before installing a result.
@@ -223,6 +234,20 @@ class ContextStage(Stage[Any, Any]):
                     ui_widget="toggle",
                 ),
                 ConfigField(
+                    name="prune_over_tokens",
+                    type="number",
+                    label="Prune over tokens",
+                    description=(
+                        "Run the deterministic prune (duplicate tool results, "
+                        "stale oversized outputs, stale images) whenever the "
+                        "projected prompt exceeds this many tokens — regardless "
+                        "of the context window. The window-based trigger alone "
+                        "never fires on large-window models. 0 disables it."
+                    ),
+                    default=DEFAULT_PRUNE_OVER_TOKENS,
+                    min_value=0,
+                ),
+                ConfigField(
                     name="background_compaction",
                     type="boolean",
                     label="Background compaction",
@@ -245,6 +270,7 @@ class ContextStage(Stage[Any, Any]):
             "retrieval_timeout_s": self._retrieval_timeout_s,
             "compaction_enabled": self._compaction_enabled,
             "background_compaction": self._background_compaction,
+            "prune_over_tokens": self._prune_over_tokens,
         }
 
     def update_config(self, config: Dict[str, Any]) -> None:
@@ -259,6 +285,11 @@ class ContextStage(Stage[Any, Any]):
             self._compaction_enabled = bool(config["compaction_enabled"])
         if "background_compaction" in config:
             self._background_compaction = bool(config["background_compaction"])
+        if "prune_over_tokens" in config:
+            try:
+                self._prune_over_tokens = max(0, int(config["prune_over_tokens"]))
+            except (TypeError, ValueError):
+                pass
 
     def should_bypass(self, state: PipelineState) -> bool:
         return self._stateless
@@ -398,6 +429,36 @@ class ContextStage(Stage[Any, Any]):
         # compactors — compaction stays synchronous as the safety net.
         estimated_tokens = estimate_prompt_tokens(state)
         forced_request = state.shared.pop(SharedKeys.CONTEXT_COMPACTION_REQUEST, None)
+
+        # Cost trigger (4.35.0), ahead of the capacity trigger below. The
+        # deterministic prune is cheap (pure function) and lossless for the
+        # recent tail, so what gates it is not "are we about to overflow" but
+        # "are we paying to resend a stale dump on every call". Runs on every
+        # iteration past the threshold; it is idempotent — a trimmed result is
+        # already under trim_over_chars and a de-duplicated one under
+        # min_dup_chars, so a second pass finds nothing left to do.
+        if self._compaction_enabled and self._prune_over_tokens:
+            if estimated_tokens > self._prune_over_tokens:
+                try:
+                    metrics = prune_messages(state.messages or [])
+                except Exception:  # noqa: BLE001 — relief, never a gate
+                    logger.debug("cost-triggered prune failed", exc_info=True)
+                else:
+                    if any(metrics.get(k) for k in ("deduped", "images_stripped", "trimmed")):
+                        state.shared.pop("_prompt_tokens_memo", None)
+                        before = estimated_tokens
+                        estimated_tokens = estimate_prompt_tokens(state)
+                        state.add_event(
+                            "context.pruned",
+                            dict(
+                                metrics,
+                                trigger="cost",
+                                threshold_tokens=self._prune_over_tokens,
+                                tokens_before=before,
+                                tokens_after=estimated_tokens,
+                            ),
+                        )
+
         if self._compaction_enabled:
             if await self._apply_bg_compaction(state):
                 state.shared.pop("_prompt_tokens_memo", None)

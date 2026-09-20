@@ -54,7 +54,7 @@ from typing import Any, Dict, List
 #: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
 #: v7: + ``tool.same_result`` (4.29.0 identical call → identical result breaker).
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
-EVENT_CATALOG_VERSION = 8
+EVENT_CATALOG_VERSION = 9
 
 
 class EventTypes(str, Enum):
@@ -428,6 +428,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "images_stripped": "int — stale base64 images replaced with a marker",
         "trimmed": "int — oversized stale tool results shortened",
         "chars_saved": "int — text chars removed (images excluded)",
+        "trigger": "str? — cost (Stage 2 token threshold) | absent when run inside compaction",
+        "threshold_tokens": "int? — the prune_over_tokens threshold that fired (cost trigger)",
+        "tokens_before": "int? — projected prompt tokens before the pass (cost trigger)",
+        "tokens_after": "int? — projected prompt tokens after the pass (cost trigger)",
     },
     EventTypes.CONTEXT_RETRIEVAL_TIMEOUT: {
         "timeout_s": "float — the retrieval_timeout_s bound that fired; the turn proceeds without memory",
