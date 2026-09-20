@@ -25,6 +25,34 @@ Invariants (why this is safe to run on any history):
   exactly what the model is working from.
 
 Everything here is pure function + stdlib; no model, no network.
+
+When this runs (4.35.0 — the cost trigger)
+------------------------------------------
+
+Until 4.35.0 this pass only ran *inside* compaction, and compaction only fires
+at 80% of the model's context window. Measured on dev over 28 days: the window
+is 200,000 (claude-sonnet-4-6) or 524,288 (qwen3.8-27b `max_model_len`), so the
+thresholds were 160k / 419k — while the largest prompt any real turn ever built
+was 135,487 tokens. **The prune therefore never ran once.**
+
+That is a trigger bug, not a tuning one: the only trigger was *capacity* (don't
+overflow the window), and there was none for *cost* (don't pay to resend the
+same stale dump on every call). The bigger the window, the less it ever runs.
+
+So Stage 2 also runs this pass on an absolute token threshold
+(:data:`DEFAULT_PRUNE_OVER_TOKENS`), independent of the window. Evidence for the
+default, same 28 days (turns with usage records, bench excluded):
+
+* Turn input splits into prefix (per-call system+tools) and *history resent on
+  every call*. History is 22% of input at 2–5 calls, 45% at 6–15, and **71–72%
+  at 16+** — 66% overall. History grows ~2,000 tokens per call.
+* At a 30,000-token threshold, **no turn with 5 or fewer calls is touched at
+  all**, while 13 of the 14 turns with 8+ calls are. The number separates short
+  turns from long ones without encoding anything about what the turns *did*.
+
+The pass stays conservative by construction — only results older than the last
+``protect_last`` messages, only ones over ``trim_over_chars``, head kept plus an
+explicit marker — so a model that still needs the detail can re-read the source.
 """
 
 from __future__ import annotations
@@ -33,8 +61,11 @@ import hashlib
 import json
 from typing import Any, Dict, List
 
-__all__ = ["prune_messages", "PruneMetrics"]
+__all__ = ["DEFAULT_PRUNE_OVER_TOKENS", "prune_messages", "PruneMetrics"]
 
+#: Stage 2 runs the prune when the projected prompt exceeds this many tokens,
+#: regardless of the context window. See the module docstring for the evidence.
+DEFAULT_PRUNE_OVER_TOKENS = 30_000
 #: Messages within this tail window are never modified.
 DEFAULT_PROTECT_LAST = 6
 #: Tool-result text shorter than this is never considered for dedup — tiny

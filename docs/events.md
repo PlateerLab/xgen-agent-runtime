@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-19.
-> Catalogue version: **8** · events: **133**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-20.
+> Catalogue version: **9** · events: **133**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -300,6 +300,10 @@ Enum member: `EventTypes.CONTEXT_PRUNED`
 | `images_stripped` | int — stale base64 images replaced with a marker |
 | `trimmed` | int — oversized stale tool results shortened |
 | `chars_saved` | int — text chars removed (images excluded) |
+| `trigger` | str? — cost (Stage 2 token threshold) \| absent when run inside compaction |
+| `threshold_tokens` | int? — the prune_over_tokens threshold that fired (cost trigger) |
+| `tokens_before` | int? — projected prompt tokens before the pass (cost trigger) |
+| `tokens_after` | int? — projected prompt tokens after the pass (cost trigger) |
 
 ### `context.compaction_failed`
 

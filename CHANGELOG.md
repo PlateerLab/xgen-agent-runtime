@@ -4,6 +4,31 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.35.0] — 2026-09-20
+
+### Added
+
+- **결정적 prune 의 비용 트리거** (`ContextStage(prune_over_tokens=30_000)`, `build_pipeline`/노드
+  파라미터로 조정, 0 이면 끔). 예상 프롬프트가 임계를 넘으면 매 반복 앞에서
+  `core/context_prune.py` 를 돌린다 — 중복 도구 결과를 한 줄 back-reference 로, 4,000자 넘는
+  오래된 결과를 head 600자 + 마커로, stale base64 이미지를 마커로. LLM 없음, 메시지 수·순서·
+  `tool_use_id` 보존, 최근 6메시지 불변, 멱등.
+
+  **왜 지금** — 이 패스는 2.x 부터 있었지만 compaction 경로 안에서만 불렸고, compaction 은
+  윈도우×0.8 에서만 트리거된다. dev 실사용 28일 측정: 윈도우가 200,000(claude-sonnet-4-6)·
+  **524,288**(qwen3.8-27b `max_model_len`) 이라 문턱이 160k·419k 인데 실제 최대 프롬프트는
+  135,487 — **한 번도 실행되지 않았다.** 용량(문맥 초과 방지) 트리거만 있고 비용(같은 덤프를
+  매 호출 다시 보내지 않기) 트리거가 없었던 것이고, 윈도우가 커질수록 더 안 돈다.
+
+  **무엇이 걸리나** — 같은 28일에서 턴 입력은 프리픽스 34% / 이력 재전송 66% 로 갈리고, 이력
+  비중은 호출수에 따라 22%(2–5회) → 45%(6–15회) → **71~72%(16회+)** 로 오른다. 기본값 30,000 은
+  **5회 이하 턴을 하나도 건드리지 않으면서** 8회 이상 턴 14개 중 13개를 덮는다 — 턴이 무엇을
+  했는지가 아니라 길이만 보고 가른다. span 기반 회수 추정(하한): 오래된 거대 결과 절단만으로
+  도구 결과 재전송의 46%.
+
+- `context.pruned` 이벤트에 `trigger` / `threshold_tokens` / `tokens_before` / `tokens_after`
+  (비용 트리거일 때). 이벤트 카탈로그 v9.
+
 ## [4.34.0] — 2026-09-20
 
 근거: XGEN 고정본(Agent Freeze) 대화에서 관측. 호스트 정책이 게스트·동결 턴에서 `memory_write`/`memory_pin` 을
@@ -20,6 +45,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   에 묻는다. 훅이 없는 호스트는 예전 문구 그대로 — 하위호환. `_memory_block_for()` 한 함수가 두 경로를 소유한다.
 - 테스트 4건: 쓰기 도구 제거 → 읽기 전용 블록 / 남아 있음 → 원래 블록 / CLI 훅 / 훅 없는 호스트는 옛 문구.
 
+||||||| parent of d7f5fd9 (perf(context): 결정적 prune 을 비용 트리거로 — 윈도우가 커서 28일간 0회 실행되던 패스 (4.34.0))
 ## [4.33.0] — 2026-09-20
 
 ### Changed

@@ -46,6 +46,18 @@ def _budget_pair(value: Any) -> Optional[Tuple[int, int]]:
     return (soft, hard) if soft > 0 and hard > soft else None
 
 
+def _prune_threshold(value: Any) -> Optional[int]:
+    """노드 파라미터 → 비용 트리거 임계(토큰). None/음수/해석 불가는 런타임 기본,
+    0 은 '끔' 을 뜻하므로 그대로 넘긴다."""
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
 def _coerce_schema(schema: Any) -> Optional[Dict[str, Any]]:
     """raw dict 또는 pydantic model class(Schema Provider 출력)를 스키마 dict 로."""
     if isinstance(schema, dict):
@@ -1006,6 +1018,13 @@ class AgentTurnExecutor:
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
                 enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
+                # 노드가 주면 그대로, 없으면 런타임 기본(30,000). 0 이면 비용 트리거 끔.
+                **(
+                    {"prune_over_tokens": _prune_threshold(kwargs["prune_over_tokens"])}
+                    if "prune_over_tokens" in kwargs
+                    and _prune_threshold(kwargs["prune_over_tokens"]) is not None
+                    else {}
+                ),
                 # 노드가 (soft, hard) 를 주면 그대로, 없으면 런타임 기본(100만/300만).
                 **(
                     {"turn_input_budget_tokens": _budget_pair(kwargs["turn_input_budget_tokens"])}

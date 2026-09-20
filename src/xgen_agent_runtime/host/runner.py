@@ -34,6 +34,7 @@ from xgen_agent_runtime import (
     PipelineState,
     RunStatus,
 )
+from xgen_agent_runtime.core.context_prune import DEFAULT_PRUNE_OVER_TOKENS
 from xgen_agent_runtime.stages.s16_loop.turn_budget import (
     DEFAULT_HARD_TOKENS as DEFAULT_TURN_HARD_TOKENS,
     DEFAULT_SOFT_TOKENS as DEFAULT_TURN_SOFT_TOKENS,
@@ -457,6 +458,7 @@ def build_pipeline(
     credentials: Optional[Dict[str, Any]] = None,
     enable_prompt_cache: bool = False,
     enable_deliverable_review: bool = True,
+    prune_over_tokens: Optional[int] = DEFAULT_PRUNE_OVER_TOKENS,
     turn_input_budget_tokens: Optional[Tuple[int, int]] = (
         DEFAULT_TURN_SOFT_TOKENS,
         DEFAULT_TURN_HARD_TOKENS,
@@ -495,6 +497,16 @@ def build_pipeline(
     (auto-wire 는 Pipeline._init_state). False: 압축 전면 꺼짐 — Stage 2 는
     메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·요약·
     guard 회복까지 전부 스킵, executor 3.3.0 계약), guard 미등록.
+
+    ``prune_over_tokens`` — 결정적 prune 의 **비용 트리거** (4.35.0,
+    core/context_prune.py). 예상 프롬프트가 이 토큰 수를 넘으면 매 반복 앞에서
+    중복 도구 결과·오래된 거대 결과·stale 이미지를 정리한다(LLM 없음, 메시지
+    수·순서·tool_use_id 보존, 최근 6메시지는 손대지 않음). 윈도우와 무관하다 —
+    기존 용량 트리거(윈도우×0.8)는 윈도우가 크면 오지 않아서 dev 28일 동안 이
+    패스가 한 번도 돌지 않았다(최대 프롬프트 135k 대 문턱 160k/419k). 기본
+    30,000 은 dev 실사용에서 **5회 이하 턴을 하나도 건드리지 않으면서** 8회 이상
+    턴 14개 중 13개를 덮는 값이다. None/0 이면 끔. ``enable_compaction=False``
+    면 이것도 돌지 않는다(같은 스위치 아래).
 
     ``enable_deliverable_review`` — 완료 직전 산출물 대조(4.30.0,
     stages/s16_loop/completion_review.py). ``tool_context`` 가 있을 때만
@@ -575,6 +587,7 @@ def build_pipeline(
     builder.with_context(
         compactor=LLMSummaryCompactor(),
         compaction_enabled=bool(enable_compaction),
+        prune_over_tokens=prune_over_tokens,
         # 원샷 호스트 계약 (executor 3.3.1): 이 파이프라인은 턴마다 새로
         # 만들어져 "다음 턴" 이 없다 — 80~90% 구간의 백그라운드 요약 유예는
         # 결과가 항상 버려지고(낭비 LLM 콜) 태스크가 teardown 에 샌다.
