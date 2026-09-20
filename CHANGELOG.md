@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.34.0] — 2026-09-20
+
+근거: XGEN 고정본(Agent Freeze) 대화에서 관측. 호스트 정책이 게스트·동결 턴에서 `memory_write`/`memory_pin` 을
+뺐는데도 시스템 프롬프트에는 "When the user asks you to remember something, persist it in memory" 가 그대로
+붙어 있었다 — 블록을 **도구 등록 시점**에 붙였기 때문이다. 모델은 없는 도구 대신 파일 쓰기로 그 약속을 메웠다
+(`memory_read` 3회 실패 → `Write workspace/사용자-이름.md` "메모리를 수정하겠습니다").
+
+### Fixed — 메모리 지침은 남은 도구를 보고 고른다
+
+- SDK 경로: 등록 시점에는 표식만 두고, 호스트의 `register_builtin_tools`/`register_forged_tools` 가 끝난 뒤
+  registry 에 `memory_write` 가 남아 있으면 `MEMORY_PROMPT_BLOCK`, 없으면 새 `MEMORY_READONLY_PROMPT_BLOCK`
+  (읽기·검색은 되고 저장은 안 된다 · 기억 요청엔 그렇게 말하고 이 대화 안에서만 반영 · 파일로 흉내 내지 말 것).
+- CLI 브릿지 경로(registry 를 여기서 못 본다): 호스트의 **선택** 훅 `memory_write_available(workflow_id) -> bool`
+  에 묻는다. 훅이 없는 호스트는 예전 문구 그대로 — 하위호환. `_memory_block_for()` 한 함수가 두 경로를 소유한다.
+- 테스트 4건: 쓰기 도구 제거 → 읽기 전용 블록 / 남아 있음 → 원래 블록 / CLI 훅 / 훅 없는 호스트는 옛 문구.
+
 ## [4.33.0] — 2026-09-20
 
 ### Changed

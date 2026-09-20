@@ -412,7 +412,9 @@ class AgentTurnExecutor:
                     # 별개로 에이전트가 도구를 인지하도록 정책 블록 + 이름 규약 노트.
                     system_prompt = (
                         system_prompt
-                        + _memory_block_for(host, str(kwargs.get("workflow_id") or ""), write_available=None)
+                        + _memory_block_for(
+                            host, str(kwargs.get("workflow_id") or ""), write_available=None
+                        )
                         + cli_memory_note(_cli_mcp_server, provider)
                     )
                 if memory_provider is not None and _sdk_tools:
@@ -557,7 +559,9 @@ class AgentTurnExecutor:
                 # 없으면 "여기서는 저장할 수 없다". 약속과 표면이 어긋나면 모델이 우회한다.
                 _has_write = registry is not None and registry.get("memory_write") is not None
                 system_prompt = system_prompt + _memory_block_for(
-                    host, str(kwargs.get("workflow_id") or ""), write_available=_has_write,
+                    host,
+                    str(kwargs.get("workflow_id") or ""),
+                    write_available=_has_write,
                 )
                 if provider in _CLI_BACKENDS:
                     # 같은 registry 가 MCP 로 나가므로 도구 이름에 접두가 붙는다.
