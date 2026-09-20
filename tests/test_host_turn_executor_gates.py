@@ -702,3 +702,55 @@ def test_the_notes_follow_the_server_name():
     assert "'local' MCP server" in cli_memory_note("local", "codex")
     assert "mcp__local__WorkflowSelf" in cli_self_evolution_note("local", "claude_code")
     assert "'local' MCP server" in cli_self_evolution_note("local", "codex")
+
+
+# ── 메모리 지침은 남은 도구를 보고 고른다 (2026-09-21) ──────────────────────────
+# 호스트 정책(게스트·동결본)이 memory_write/memory_pin 을 뺀 턴에 "기억하라면 저장하라" 는
+# 블록이 그대로 붙어 있었다 — 모델은 그 약속을 파일 쓰기로 메웠다. 문구와 표면은 같은 판정.
+from xgen_agent_runtime.host._constants import MEMORY_READONLY_PROMPT_BLOCK  # noqa: E402
+
+
+class _ReadOnlyMemoryHost(_FakeHost):
+    """서버 호스트처럼 내장 도구 등록 뒤 기억 쓰기 도구를 뺀다."""
+
+    def register_builtin_tools(self, registry, **k):
+        for name in ("memory_write", "memory_pin"):
+            if registry.get(name) is not None:
+                registry.unregister(name)
+        return {"tools": [], "extras": {}, "families": []}
+
+    def memory_write_available(self, workflow_id):
+        return False
+
+
+def test_sdk_uses_the_readonly_block_when_the_host_removed_write_tools(capture) -> None:
+    host = _ReadOnlyMemoryHost(delegation_extras={}, cli_bridge=False)
+    seen = _run(host, capture, provider="openai")
+    sp = seen["system_prompt"]
+    assert MEMORY_READONLY_PROMPT_BLOCK in sp and MEMORY_PROMPT_BLOCK not in sp
+    names = _registry_names(seen)
+    assert "memory_read" in names and "memory_write" not in names and "memory_pin" not in names
+
+
+def test_sdk_keeps_the_write_block_when_write_tools_remain(capture) -> None:
+    host = _FakeHost(delegation_extras={}, cli_bridge=False)
+    seen = _run(host, capture, provider="openai")
+    sp = seen["system_prompt"]
+    assert MEMORY_PROMPT_BLOCK in sp and MEMORY_READONLY_PROMPT_BLOCK not in sp
+    assert "memory_write" in _registry_names(seen)
+
+
+def test_cli_bridge_asks_the_host_whether_writes_exist(capture) -> None:
+    """CLI 브릿지 경로는 registry 를 여기서 못 본다 — 호스트 훅 memory_write_available 로 고른다."""
+    host = _ReadOnlyMemoryHost(delegation_extras={}, cli_bridge=True)
+    seen = _run(host, capture, provider="claude_code")
+    sp = seen["system_prompt"]
+    assert MEMORY_READONLY_PROMPT_BLOCK in sp and MEMORY_PROMPT_BLOCK not in sp
+    assert "mcp__connector__memory_write" in sp or "memory_" in sp  # 이름 규약 각주는 그대로
+
+
+def test_a_host_without_the_hook_keeps_the_old_wording(capture) -> None:
+    host = _FakeHost(delegation_extras={}, cli_bridge=True)
+    assert not hasattr(host, "memory_write_available")
+    seen = _run(host, capture, provider="claude_code")
+    assert MEMORY_PROMPT_BLOCK in seen["system_prompt"]

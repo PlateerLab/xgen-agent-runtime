@@ -79,6 +79,20 @@ write notes in the user's language.
 """
 
 
+#: 쓰기 도구(memory_write/memory_pin)가 이 턴에 **없을 때**의 메모리 지침 — 호스트 정책(게스트·
+#: 동결본)이 쓰기 도구를 뺀 뒤에 고른다. 위 블록은 "기억하라면 저장하라" 고 약속하는데 도구가
+#: 없으면 모델이 파일 쓰기로 그 약속을 메운다(2026-09-21 관측). 문구와 표면은 같은 판정에서 나온다.
+MEMORY_READONLY_PROMPT_BLOCK = """
+
+# Agent Memory (read-only here)
+You have a persistent memory vault with tools to read and search it; retrieved context (Pinned
+Facts / Relevant Knowledge) may already be injected above. In this conversation the vault cannot be
+changed: there are no memory write tools. If the user asks you to remember something, say that this
+conversation cannot store new memories and keep it in mind for the rest of the conversation. Do not
+write files or notes to imitate memory.
+"""
+
+
 #: CLI 백엔드에서 **도구 브릿지가 없을 때**(데스크톱 사이드카 등) 붙는 메모리 안내 —
 #: 자동 계층(Pinned Facts/Relevant Knowledge 주입 + 턴 기록)만 있음을 알리고
 #: 도구는 광고하지 않는다. 도구를 약속했는데 CLI 에 보이지 않으면 유령 호출이 된다.
