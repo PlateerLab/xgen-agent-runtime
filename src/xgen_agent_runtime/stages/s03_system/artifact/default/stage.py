@@ -281,32 +281,64 @@ class SystemStage(Stage[Any, Any]):
         list_names = getattr(registry, "list_names", None)
         if not (callable(is_core) and callable(get) and callable(list_names)):
             return ""
+        gateway_of = getattr(registry, "gateway_of", None)
+        if not callable(gateway_of):
+            gateway_of = lambda _n: None  # noqa: E731 — older registries have no gateways
+
+        def one_liner(tool: Any) -> str:
+            desc = str(getattr(tool, "description", "") or "").strip()
+            line = desc.splitlines()[0] if desc else ""
+            if len(line) > self._CATALOG_ONE_LINER_CHARS:
+                line = line[: self._CATALOG_ONE_LINER_CHARS - 1] + "…"
+            return line
+
+        # Hidden tools that stand alone get a one-liner each. Hidden tools
+        # behind a declared gate (4.33.0, registry.declare_gateway) are folded
+        # into ONE line under that gate: the gate's description already says
+        # what the room does, and calling the gate opens it — so per-member
+        # one-liners were paying ~20 tokens each to repeat the door. Measured
+        # 2026-09-20 (dev, 46 hidden tools): 38 of them sat behind a door.
+        # Names stay listed so ToolSearch("<exact name>") still works.
         entries: List[Tuple[str, str]] = []
+        rooms: Dict[str, List[str]] = {}
         for name in sorted(list_names()):
             try:
                 if is_core(name):
                     continue
-                tool = get(name)
-                desc = str(getattr(tool, "description", "") or "").strip()
-                line = desc.splitlines()[0] if desc else ""
-                if len(line) > self._CATALOG_ONE_LINER_CHARS:
-                    line = line[: self._CATALOG_ONE_LINER_CHARS - 1] + "…"
-                entries.append((name, line))
+                gate = gateway_of(name)
+                if gate and get(gate) is not None:
+                    rooms.setdefault(gate, []).append(name)
+                    continue
+                entries.append((name, one_liner(get(name))))
             except Exception:  # noqa: BLE001 — a broken tool never breaks the prompt
                 continue
-        if not entries:
+        hidden = len(entries) + sum(len(v) for v in rooms.values())
+        if not hidden:
             return ""
         header = (
             "## Additional tools (hidden — not in your tool list)\n"
-            f"{len(entries)} more tools exist. To use one, call "
+            f"{hidden} more tools exist. To use one, call "
             'ToolSearch("<keyword or exact name>") — its schema arrives on '
             "your next step. ToolSearch with no query browses this catalog."
         )
-        lines = [f"- {n} — {d}" if d else f"- {n}" for n, d in entries]
+        if rooms:
+            header += " Tools listed under a guide open when you call that guide."
+        lines: List[str] = []
+        for n, d in entries:
+            line = f"- {n} — {d}" if d else f"- {n}"
+            members = rooms.pop(n, None)
+            if members:
+                # A hidden gate (e.g. DocGuide) keeps its one-liner and carries its room.
+                line += f" → opens {', '.join(members)}"
+            lines.append(line)
+        for gate in sorted(rooms):
+            # A visible gate needs no description here — its schema is in the tool list.
+            lines.append(f"- via {gate}: {', '.join(rooms[gate])}")
         body = "\n".join(lines)
         if len(header) + len(body) > self._CATALOG_MAX_CHARS:
             # Degrade gracefully: names only on one wrapped line.
-            body = ", ".join(n for n, _ in entries)[: self._CATALOG_MAX_CHARS]
+            names = [n for n, _ in entries] + [n for v in rooms.values() for n in v]
+            body = ", ".join(names)[: self._CATALOG_MAX_CHARS]
         return header + "\n" + body
 
     async def execute(self, input: Any, state: PipelineState) -> Any:

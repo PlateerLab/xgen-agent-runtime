@@ -24,7 +24,7 @@ individual names either way.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from xgen_agent_runtime.tools.base import Tool
 
@@ -57,6 +57,13 @@ class ToolRegistry:
         # bump it too, so a ToolSearch discovery reaches the model on the very
         # next loop iteration.
         self._version: int = 0
+        # Skill gateways (4.33.0): gate name → the deferred members it opens
+        # (``_skill_gateway.open_family``). Declarative so the *prompt* can
+        # know the room exists before any door is opened — Stage 3 folds the
+        # members into one catalog line under their gate instead of listing
+        # each one, and the gate's own description carries the capability.
+        self._gateways: Dict[str, Tuple[str, ...]] = {}
+        self._gateway_of: Dict[str, str] = {}
 
     @property
     def version(self) -> int:
@@ -104,6 +111,38 @@ class ToolRegistry:
     def get(self, name: str) -> Optional[Tool]:
         """Get a tool by name."""
         return self._tools.get(name)
+
+    # ── Skill gateways ───────────────────────────────────────
+
+    def declare_gateway(self, gate: str, members: Iterable[str]) -> None:
+        """Record that calling *gate* opens *members* (a skill family).
+
+        Purely declarative — activation still happens when the gate runs
+        (``_skill_gateway.open_family``). Members need not be registered
+        (a host may enable only part of a family); the catalog only folds
+        the ones that are. A member can belong to one gate; a later
+        declaration wins. Bumps :attr:`version` on change so Stage 3
+        rebuilds its cached catalog text.
+        """
+        gate = str(gate)
+        names = tuple(str(n) for n in members if str(n) and str(n) != gate)
+        if self._gateways.get(gate) == names:
+            return
+        for old in self._gateways.get(gate, ()):
+            if self._gateway_of.get(old) == gate:
+                del self._gateway_of[old]
+        self._gateways[gate] = names
+        for n in names:
+            self._gateway_of[n] = gate
+        self._version += 1
+
+    def gateway_of(self, name: str) -> Optional[str]:
+        """The gate that opens *name*, or None when it stands alone."""
+        return self._gateway_of.get(name)
+
+    def gateway_members(self, gate: str) -> Tuple[str, ...]:
+        """Declared members of *gate* (registered or not), in declaration order."""
+        return self._gateways.get(gate, ())
 
     # ── Core / deferred exposure ─────────────────────────────
 

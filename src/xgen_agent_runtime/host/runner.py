@@ -525,6 +525,16 @@ def build_pipeline(
 
         if any(registry.get(n) is not None for n in SELF_EXTEND_FAMILY):
             registry.register(SelfExtendGuideTool(), core=True)
+    if registry is not None:
+        # 문이 서 있으면 그 방을 레지스트리에 선언한다(4.33.0). 문을 열 때가 아니라
+        # 프롬프트를 만들 때 알아야 한다 — 숨은 도구 카탈로그가 식구를 한 줄씩 나열하는
+        # 대신 문 아래 한 줄로 접는다(stages/s03 _deferred_catalog_text). 능력은 문의
+        # 설명이 이미 말하고 있으니 카탈로그의 한 줄 설명은 중복이었다.
+        from xgen_agent_runtime.tools.built_in import SKILL_GATEWAYS
+
+        for gate, family in SKILL_GATEWAYS.items():
+            if registry.get(gate) is not None:
+                registry.declare_gateway(gate, family)
 
     system = system_prompt or ""
     if output_schema:

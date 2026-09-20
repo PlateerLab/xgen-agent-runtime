@@ -4,6 +4,29 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.33.0] — 2026-09-20
+
+고정 프리픽스 2차. 4.32.0 뒤 호출당 고정분 ≈ 5,000토큰 중 남은 큰 덩어리 둘을 줄였다(Qwen 토크나이저 실측).
+
+### Changed
+
+- **숨은 도구 카탈로그가 문(게이트웨이) 뒤의 식구를 한 줄로 접는다** (`stages/s03` `_deferred_catalog_text`,
+  `ToolRegistry.declare_gateway/gateway_of/gateway_members`). dev 4.32.0 표면의 숨은 도구 46개 중 38개가
+  이미 서 있는 문(BrowserGuide/DelegationGuide/ArtifactGuide/JobGuide/SelfExtendGuide)이나 카탈로그 안의
+  문(DocGuide) 뒤에 있는데, 카탈로그는 식구마다 한 줄 설명(~22토큰)을 실어 문의 설명이 이미 말하는
+  능력을 40번 되풀이했다. 이제 보이는 문의 식구는 `- via BrowserGuide: BrowserAct, …` 한 줄(이름만),
+  숨은 문은 제 한 줄에 `→ opens …` 를 단다. **900 → 286토큰**(Job/Artifact 선언 포함; 런타임 내장 문만으로는
+  ~470). 이름은 남기므로 `ToolSearch("<exact name>")` 는 그대로 통한다.
+  - 선언은 자동: `build_pipeline` 이 등록된 `SKILL_GATEWAYS` 문을 선언하고, 어댑터 도구의 `metadata["opens_family"]`
+    (4.29.0 규약)는 `adapt_tools` 가 등록 시 선언한다. 호스트가 직접 만든 문(JobGuide/ArtifactGuide 등)은
+    `registry.declare_gateway(gate, members)` 한 줄이면 된다 — 선언이 없으면 예전처럼 각자 한 줄(회귀 없음).
+  - 문이 등록돼 있지 않으면 접지 않는다 — 문 없이 숨기는 것이 2026-08-18 회귀의 원인이었다.
+- **WebFetch 371 → 203, WebSearch 332 → 148토큰.** 광고하는 파라미터를 실제 쓰이는 것만으로(dev 28일:
+  WebFetch 332회 중 `max_bytes` 0 · `headers` 1, WebSearch 96회 중 `safesearch` 0 · `backend` 0) 줄이고
+  설명을 압축했다. 빠진 파라미터는 `execute` 가 여전히 받는다(스키마는 열려 있다).
+
+합계 호출당 약 −900토큰(5,007 → ~4,100, −18%). Grep(259토큰, 28일 5회)은 기본 파일 동사라 그대로 둔다.
+
 ## [4.32.0] — 2026-09-20
 
 근거: 고정 프리픽스 실측(dev 벤치 에이전트, Qwen 토크나이저 `/tokenize`). 모델 호출 1회의 고정분

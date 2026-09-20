@@ -136,12 +136,16 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
             result_sink[name] = text
         return ToolResult(content=text)
 
-    return build_tool(
+    tool = build_tool(
         name=name,
         description=description,
         input_schema=_json_schema_of(lc_tool),
         execute=_execute,
     )
+    if family:
+        # 등록 시 레지스트리에 방을 선언할 수 있게 남긴다(attach_port_tools).
+        tool.opens_family = tuple(family)  # type: ignore[attr-defined]
+    return tool
 
 
 def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, str]]) -> Tool:
@@ -243,4 +247,7 @@ def adapt_tools(
     decide = core if callable(core) else (lambda _name, _c=bool(core): _c)
     for tool in tools:
         registry.register(tool, core=bool(decide(getattr(tool, "name", ""))))
+        family = getattr(tool, "opens_family", None)
+        if family:
+            registry.declare_gateway(tool.name, family)
     return registry
