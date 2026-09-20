@@ -21,6 +21,10 @@ from typing import Dict, Iterable, List, Optional, Tuple, Type
 
 from xgen_agent_runtime.tools.base import Tool
 from xgen_agent_runtime.tools.built_in.agent_tool import AgentTool
+from xgen_agent_runtime.tools.built_in.self_extend_guide_tool import (
+    SELF_EXTEND_FAMILY,
+    SelfExtendGuideTool,
+)
 from xgen_agent_runtime.tools.built_in.delegation_guide_tool import (
     DELEGATION_FAMILY,
     DelegationGuideTool,
@@ -210,6 +214,9 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     # Delegation gateway — the skill guide across DelegateTask/SubAgent*/Task*
     # (Guide + compact members, DocGuide 동형 점진공개).
     "DelegationGuide": DelegationGuideTool,
+    # Self-extension gateway — ForgeTool/PythonEnv/SystemPackages/WorkflowSelf
+    # 의 문. 여섯 스키마(프리픽스의 33%) 대신 문 하나가 턴 1에 선다.
+    "SelfExtendGuide": SelfExtendGuideTool,
     # Self-modifying environment — one lean dispatcher; detailed guidance lives
     # in the bundled ``environment`` skill (progressive disclosure).
     "env": EnvTool,
@@ -256,6 +263,7 @@ SKILL_GATEWAYS: Dict[str, Tuple[str, ...]] = {
     "DocGuide": DOC_FAMILY,
     # 목록 도구가 곧 문이다 — SshRun 이 받는 서버 '이름' 의 유일한 출처다.
     "SshListServers": SSH_FAMILY,
+    "SelfExtendGuide": SELF_EXTEND_FAMILY,
 }
 
 
@@ -271,7 +279,7 @@ BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
     "documents": list(DOC_TOOL_CLASSES.keys()),
     # ToolBatch — 같은 도구를 입력 목록으로 한 왕복에 실행 (목록 작업의 왕복 수를 N → 1).
     "workflow": ["TodoWrite", "ToolBatch"],
-    "meta": ["ToolSearch", "EnterPlanMode", "ExitPlanMode"],
+    "meta": ["ToolSearch", "SelfExtendGuide", "EnterPlanMode", "ExitPlanMode"],
     "agent": ["Agent"],
     "subagent": [
         # 게이트웨이 먼저 — 위임 3표면(DelegateTask/SubAgent*/Task*)의 결정

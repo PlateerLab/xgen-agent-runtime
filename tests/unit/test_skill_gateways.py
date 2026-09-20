@@ -224,7 +224,19 @@ def test_every_declared_gateway_actually_opens_its_family(tmp_path):
 #: 호스트(xgen-workflow)가 등록하는 패밀리 멤버 — 런타임 내장 목록에는 없다.
 #: 이 예외를 여기 적어 두는 이유는, 적어 두지 않으면 오타 검사를 통째로 못 하기
 #: 때문이다. 하나씩 이름을 대면 새 오타는 여전히 걸린다.
-_HOST_PROVIDED_MEMBERS = frozenset({"DelegateTask"})
+_HOST_PROVIDED_MEMBERS = frozenset(
+    {
+        "DelegateTask",
+        # SelfExtendGuide 의 방 — 런타임 host/ 층(register_forged_tools·PythonEnv)과
+        # xgen-workflow(SystemPackages·WorkflowSelf)가 등록한다. 내장 목록에는 없다.
+        "ForgeTool",
+        "ListForgedTools",
+        "DeleteForgedTool",
+        "PythonEnv",
+        "SystemPackages",
+        "WorkflowSelf",
+    }
+)
 
 
 def test_no_gateway_opens_a_tool_that_does_not_exist():
