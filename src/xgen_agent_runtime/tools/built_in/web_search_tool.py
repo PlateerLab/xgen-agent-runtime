@@ -46,7 +46,6 @@ from typing import Any, Dict, List, Optional
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in import _web_search_backends as _backends
 from xgen_agent_runtime.tools.built_in._web_search_backends import (
-    BACKEND_NAMES,
     WebSearchConfigError,
     build_backend,
     select_backend_name,
@@ -87,12 +86,12 @@ class WebSearchTool(Tool):
 
     @property
     def description(self) -> str:
+        # 스키마는 매 호출에 실린다(4.33.0, 332 → ~150 토큰). dev 28일 96회 중 query 96 ·
+        # max_results 39 · region 2, safesearch 0 · backend 0 — 뒤의 둘은 스키마에서 뺐다
+        # (execute 는 여전히 받는다; 백엔드는 호스트가 extras/env 로 고른다).
         return (
-            "Search the web and return ranked results (title, URL, "
-            "snippet). Defaults to DuckDuckGo; hosts may enable Brave / "
-            "Tavily / SearXNG backends. Pair with WebFetch to read a "
-            "specific result's contents. Limit is capped at "
-            f"{_HARD_MAX_RESULTS} to keep output LLM-friendly."
+            "Search the web; returns ranked results (title, URL, snippet). "
+            "Pair with WebFetch to read a result."
         )
 
     @property
@@ -107,33 +106,12 @@ class WebSearchTool(Tool):
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": (
-                        f"Maximum number of results to return. "
-                        f"Default {_DEFAULT_MAX_RESULTS}, hard cap "
-                        f"{_HARD_MAX_RESULTS}."
-                    ),
+                    "description": f"Default {_DEFAULT_MAX_RESULTS}, max {_HARD_MAX_RESULTS}.",
                     "exclusiveMinimum": 0,
                 },
                 "region": {
                     "type": "string",
-                    "description": (
-                        "Optional region code (e.g. 'us-en', 'kr-kr'). "
-                        "Defaults to 'wt-wt' (worldwide, English)."
-                    ),
-                },
-                "safesearch": {
-                    "type": "string",
-                    "description": "Safe-search strictness: 'on' | 'moderate' | 'off'.",
-                    "enum": ["on", "moderate", "off"],
-                },
-                "backend": {
-                    "type": "string",
-                    "description": (
-                        "Optional search backend. Defaults to 'ddg' "
-                        "(DuckDuckGo). 'brave' / 'tavily' / 'searxng' "
-                        "require host-supplied credentials (extras or env)."
-                    ),
-                    "enum": list(BACKEND_NAMES),
+                    "description": "Region code, e.g. 'kr-kr', 'us-en'. Default worldwide.",
                 },
             },
             "required": ["query"],

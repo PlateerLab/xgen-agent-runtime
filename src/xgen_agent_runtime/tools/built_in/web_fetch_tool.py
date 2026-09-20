@@ -236,13 +236,13 @@ class WebFetchTool(Tool):
 
     @property
     def description(self) -> str:
+        # 스키마는 매 호출에 실린다(4.33.0, 371 → ~200 토큰). 광고하는 파라미터는 실제로
+        # 쓰이는 것만: dev 28일 332회 중 url 332 · render_js 34 · max_chars 31 · timeout 26,
+        # headers 1 · max_bytes 0. 빠진 둘은 execute 가 여전히 받는다(스키마는 열려 있다).
         return (
-            "Fetch an HTTP(S) URL and return its plain-text body. "
-            "HTML is stripped to text; other content types are returned "
-            "as-is. Follows up to 5 redirects. Use this for reading "
-            "documentation pages, README files, or small API responses. "
-            "For JavaScript-rendered pages (SPAs) set render_js=true, or "
-            "use BrowserNavigate for interactive sessions."
+            "Fetch an HTTP(S) URL and return its text (HTML stripped). Good for docs, "
+            "READMEs, small API responses. For JavaScript-rendered pages set render_js=true; "
+            "for interactive sessions use BrowserNavigate."
         )
 
     @property
@@ -252,51 +252,21 @@ class WebFetchTool(Tool):
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": (
-                        "Absolute URL to fetch. Schemes http:// and https:// "
-                        "only. If no scheme is given, https:// is assumed."
-                    ),
-                },
-                "timeout": {
-                    "type": "number",
-                    "description": f"Request timeout in seconds. Default {_DEFAULT_TIMEOUT}.",
-                    "exclusiveMinimum": 0,
-                },
-                "max_chars": {
-                    "type": "integer",
-                    "description": (
-                        f"Cap on the text returned to the model. Default "
-                        f"{_DEFAULT_MAX_CHARS}. Excess is truncated with a "
-                        f"marker."
-                    ),
-                    "exclusiveMinimum": 0,
-                },
-                "max_bytes": {
-                    "type": "integer",
-                    "description": (
-                        f"Cap on the raw response bytes read. Default "
-                        f"{_DEFAULT_MAX_BYTES}. Protects against very "
-                        f"large downloads."
-                    ),
-                    "exclusiveMinimum": 0,
-                },
-                "headers": {
-                    "type": "object",
-                    "description": (
-                        "Optional request headers (e.g. Accept, "
-                        "User-Agent). Supplied in addition to the "
-                        "executor's default User-Agent."
-                    ),
+                    "description": "Absolute http(s) URL (https:// assumed if no scheme).",
                 },
                 "render_js": {
                     "type": "boolean",
-                    "description": (
-                        "Execute the page's JavaScript before extracting text "
-                        "(an-web engine — needed for SPA/React pages whose "
-                        "content is client-rendered). Slower than a plain "
-                        "fetch; default false. Custom headers are ignored in "
-                        "this mode."
-                    ),
+                    "description": "Run the page's JavaScript first (SPA/React). Slower; default false.",
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": f"Cap on returned text. Default {_DEFAULT_MAX_CHARS}.",
+                    "exclusiveMinimum": 0,
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": f"Seconds. Default {_DEFAULT_TIMEOUT}.",
+                    "exclusiveMinimum": 0,
                 },
             },
             "required": ["url"],

@@ -64,7 +64,8 @@ class TestSchemaAndCapabilities:
         schema = WebSearchTool().input_schema
         assert schema["properties"]["query"]["minLength"] == 1
         assert "query" in schema["required"]
-        assert schema["properties"]["safesearch"]["enum"] == ["on", "moderate", "off"]
+        # 4.33.0: safesearch/backend 는 스키마에서 뺐다(dev 28일 0회) — execute 는 여전히 받는다.
+        assert "safesearch" not in schema["properties"] and "backend" not in schema["properties"]
 
 
 class TestHappyPath:
