@@ -458,6 +458,7 @@ def build_pipeline(
     credentials: Optional[Dict[str, Any]] = None,
     enable_prompt_cache: bool = False,
     enable_deliverable_review: bool = True,
+    enable_requirement_review: bool = True,
     prune_over_tokens: Optional[int] = DEFAULT_PRUNE_OVER_TOKENS,
     turn_input_budget_tokens: Optional[Tuple[int, int]] = (
         DEFAULT_TURN_SOFT_TOKENS,
@@ -507,6 +508,14 @@ def build_pipeline(
     30,000 은 dev 실사용에서 **5회 이하 턴을 하나도 건드리지 않으면서** 8회 이상
     턴 14개 중 13개를 덮는 값이다. None/0 이면 끔. ``enable_compaction=False``
     면 이것도 돌지 않는다(같은 스위치 아래).
+
+    ``enable_requirement_review`` — 완료 직전 **요건 대조**(4.36.0, 같은 모듈
+    RequirementReviewer). 이 턴에 파일을 썼으면 완료를 한 번 미루고, 요청에서 검증
+    가능한 요구사항(정확한 파일명·필드·값·개수·순서·금지 항목·통과해야 할 명령)을
+    스스로 나열해 **실제 출력을 읽어** ✓/✗ 하고 ✗ 를 고친 뒤 끝내게 한다. 하네스는
+    요구사항을 모른다 — 문구는 어떤 요청에도 같다. 근거: 홀드아웃 31과제 × 4회차에서
+    4회 모두 실패한 체크 37개의 대부분이 "스펙을 읽고도 출력을 스펙과 대조하지 않음"
+    (6개 도메인). 파일을 쓴 턴에만 왕복 +1.
 
     ``enable_deliverable_review`` — 완료 직전 산출물 대조(4.30.0,
     stages/s16_loop/completion_review.py). ``tool_context`` 가 있을 때만
@@ -657,6 +666,16 @@ def build_pipeline(
                 loop_stage.add_completion_reviewer(  # type: ignore[union-attr]
                     DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
                 )
+
+        if enable_requirement_review:
+            # 완료 직전 요건 대조(4.36.0) — 산출물 대조 **뒤에** 둔다. 검토자는 첫 안내에서
+            # 멈추므로 형식 문제가 있으면 그것부터, 다음 완료 시도에서 요건 대조가 걸린다.
+            # 파일을 쓴 턴에만 붙고 잡담 턴엔 비용 0.
+            from xgen_agent_runtime.stages.s16_loop.completion_review import RequirementReviewer
+
+            loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+            if hasattr(loop_stage, "add_completion_reviewer"):
+                loop_stage.add_completion_reviewer(RequirementReviewer())  # type: ignore[union-attr]
 
     soft, hard = turn_input_budget_tokens or (0, 0)
     if int(soft) > 0 and int(hard) > 0:

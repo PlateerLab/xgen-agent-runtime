@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-09-20.
-> Catalogue version: **9** · events: **133**
+> Catalogue version: **10** · events: **134**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -225,6 +225,16 @@ Enum member: `EventTypes.LOOP_COMPLETION_REVIEW`
 | `missing` | int — claimed files that do not exist |
 | `problems` | int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV) |
 | `paths` | list[str] — paths shown to the model, in order |
+
+### `loop.requirement_review`
+
+Enum member: `EventTypes.LOOP_REQUIREMENT_REVIEW`
+
+| Field | Description |
+|---|---|
+| `reviewer` | str — reviewer name ('requirement') |
+| `files` | int — files written this turn (the trigger) |
+| `paths` | list[str] — written paths shown to the model, in order |
 
 ### `loop.turn_budget`
 

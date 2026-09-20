@@ -54,7 +54,9 @@ from typing import Any, Dict, List
 #: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
 #: v7: + ``tool.same_result`` (4.29.0 identical call → identical result breaker).
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
-EVENT_CATALOG_VERSION = 9
+#: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
+#: v10: + ``loop.requirement_review`` (4.36.0 requirement check before completion).
+EVENT_CATALOG_VERSION = 10
 
 
 class EventTypes(str, Enum):
@@ -96,6 +98,7 @@ class EventTypes(str, Enum):
     LOOP_BLOCKED = "loop.blocked"
     LOOP_BUDGET_EXCEEDED = "loop.budget_exceeded"
     LOOP_COMPLETION_REVIEW = "loop.completion_review"
+    LOOP_REQUIREMENT_REVIEW = "loop.requirement_review"
     LOOP_TURN_BUDGET = "loop.turn_budget"
 
     # ── Stage 1: Input ──
@@ -392,6 +395,11 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "missing": "int — claimed files that do not exist",
         "problems": "int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV)",
         "paths": "list[str] — paths shown to the model, in order",
+    },
+    EventTypes.LOOP_REQUIREMENT_REVIEW: {
+        "reviewer": "str — reviewer name ('requirement')",
+        "files": "int — files written this turn (the trigger)",
+        "paths": "list[str] — written paths shown to the model, in order",
     },
     EventTypes.LOOP_TURN_BUDGET: {
         "phase": "str — 'soft' (wrap-up note added) | 'final' (report-now note added) | 'stop' (turn ended)",

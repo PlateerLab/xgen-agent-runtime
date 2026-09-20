@@ -4,6 +4,30 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.36.0] — 2026-09-20
+
+목표 전환: 비용에서 **정확도**로. 근거: Harness-Bench 홀드아웃 31과제 × 4회차(4.32~4.35 카나리)에서
+**4회 모두 실패한 체크 37개**를 분류하니 대부분이 한 종류였다 — 모델이 스펙을 읽고도 출력을 스펙과
+**필드 단위로 대조하지 않는다.** 라우팅 계약이 `tpl_reship_damage_photo` 를 정하는데 자기 말로
+`damaged_reship_with_evidence` 를 쓰고(071), 매니페스트 필수 필드·해시를 빠뜨리고(077), 리네임 로그의
+정렬·정확 집합을 어기고(021), 정규화 필드를 다르게 쓴다(079). 아카이브·원장·인용·라우팅·리네임·코드
+6개 도메인에서 같은 모양. 4.30.0 산출물 대조는 *형식*(존재·JSON 유효·행 수)만 봐서 형식이 멀쩡한 채로
+내용이 틀린 이 37개에는 한 번도 개입하지 않았다.
+
+### Added
+
+- **완료 직전 요건 대조** (`RequirementReviewer`, `stages/s16_loop/completion_review.py`;
+  `build_pipeline(enable_requirement_review=True)`, 노드 파라미터 `enable_requirement_review`).
+  이 턴에 파일을 썼으면(Write/Edit/ToolBatch) 완료 선언을 한 번 미루고 안내를 보낸다: 요청과 그것이
+  가리키는 스펙/계약 파일에서 **검증 가능한 요구사항**(정확한 파일명, 필드·키·값 — 스펙의 식별자 그대로,
+  개수·집합·순서, 필수 용어, 금지 내용, 통과해야 할 명령)을 나열하고, 각각을 **실제 출력을 읽거나 명령을
+  실행해서** ✓/✗ 하고, ✗ 를 고친 뒤 끝내라. 하네스는 요구사항을 알지 못한다 — 문구는 어떤 요청에도 같다
+  (도메인 규칙 없음). 잡담·읽기만 한 턴에는 붙지 않는다(비용 0). 턴당 한 번. 산출물 대조가 먼저 걸리면
+  (형식 문제) 그다음 완료 시도에 걸린다.
+- `loop.requirement_review` 이벤트(reviewer/files/paths). 이벤트 카탈로그 v10.
+
+비용: 파일을 쓴 작업 턴에 왕복 +1(고칠 것이 있으면 +2~). 정확도 우선 결정에 따른다.
+
 ## [4.35.0] — 2026-09-20
 
 ### Added

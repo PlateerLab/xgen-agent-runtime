@@ -1018,6 +1018,12 @@ class AgentTurnExecutor:
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
                 enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
+                # 노드가 끄면 끈다(기본 켬) — 요건 대조는 파일 쓴 턴에 왕복 +1.
+                **(
+                    {"enable_requirement_review": bool(kwargs["enable_requirement_review"])}
+                    if "enable_requirement_review" in kwargs
+                    else {}
+                ),
                 # 노드가 주면 그대로, 없으면 런타임 기본(30,000). 0 이면 비용 트리거 끔.
                 **(
                     {"prune_over_tokens": _prune_threshold(kwargs["prune_over_tokens"])}

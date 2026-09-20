@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CompletionReviewer",
     "DeliverableReviewer",
+    "REQUIREMENT_KEY",
     "REVIEW_KEY",
+    "RequirementReviewer",
     "build_digest",
     "claimed_paths",
     "describe_file",
@@ -48,6 +50,8 @@ __all__ = [
 
 #: ``state.shared`` 키 — 턴 단위(연속 슬라이스에 이어지고 새 턴에서 비운다).
 REVIEW_KEY = "loop.completion_review"
+#: 요건 대조(RequirementReviewer)의 턴 단위 키 — 산출물 대조와 별개로 턴당 한 번.
+REQUIREMENT_KEY = "loop.requirement_review"
 
 #: 요약에 넣을 파일 수 상한과 파일당 읽는 바이트 상한.
 MAX_FILES = 12
@@ -87,7 +91,7 @@ def _turn_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content
         ):
             continue
-        if isinstance(content, str) and content.startswith(_REVIEW_HEADER):
+        if isinstance(content, str) and content.startswith((_REVIEW_HEADER, _REQ_HEADER)):
             continue
         start = i
         break
@@ -261,6 +265,7 @@ def describe_file(path: str, data: Optional[bytes]) -> str:
 # ── 메시지 ────────────────────────────────────────────────────────────
 
 _REVIEW_HEADER = "[Deliverable check — automatic, before finishing]"
+_REQ_HEADER = "[Requirement check — automatic, before finishing]"
 
 _REVIEW_TAIL = (
     "Compare each file against the explicit requirements in the request "
@@ -400,3 +405,59 @@ class DeliverableReviewer:
             },
         )
         return build_digest(entries, problems_only=self._mode == "problems")
+
+
+# ── 요건 대조 ──────────────────────────────────────────────────────────
+
+_REQ_NOTE = (
+    _REQ_HEADER
+    + """
+Your last message declares the work done. Before it is accepted, verify it against the request itself — not against your memory of what you did.
+1. List every explicit, checkable requirement stated in the request and in any spec/contract file it points to: output files and their exact names; required fields, keys, and values (use the spec's exact identifiers, never a paraphrase); exact counts, sets, and ordering; terms that must appear; content that must NOT appear; any command that must pass.
+2. For each item, check the ACTUAL output — read the file or run the command — and mark it ✓ or ✗ with the evidence you saw.
+3. Fix every ✗, then finish. If an item cannot be met, say so explicitly rather than leaving it out.
+Files written this turn: {files}"""
+)
+
+
+class RequirementReviewer:
+    """완료 직전 요건 대조 (4.36.0) — 산출물 대조의 다음 층.
+
+    근거 (Harness-Bench 홀드아웃 31과제 × 4회차, 2026-09-20): 4회 모두 실패한 체크 37개의
+    대부분이 한 종류다 — 모델이 스펙을 읽고도 출력을 스펙과 **필드 단위로 대조하지 않는다**.
+    라우팅 계약이 `tpl_reship_damage_photo` 를 정하는데 자기 말로 `damaged_reship_with_evidence`
+    를 쓰고(071), 매니페스트 필수 필드·해시를 빠뜨리고(077), 리네임 로그의 정렬·정확 집합을
+    어기고(021), 정규화 필드를 다르게 쓴다(079). 서로 다른 6개 도메인(아카이브·원장·인용·
+    라우팅·리네임·코드)에서 같은 모양이다.
+
+    산출물 대조(DeliverableReviewer)는 *형식*만 본다 — 파일 존재·JSON 유효·행 수. 형식이
+    멀쩡한 채로 내용이 틀린 이 37개에는 한 번도 개입하지 않았다. 여기서는 하네스가 요구사항을
+    **알지 못한 채로** 모델에게 대조를 시킨다: 요청에서 검증 가능한 항목을 스스로 뽑아, 실제
+    출력을 읽어서 하나씩 ✓/✗ 하고, ✗ 를 고친 뒤 끝내라. 도메인 규칙 없음 — 문구는 어떤
+    요청에도 같다.
+
+    언제: 이 턴에 파일을 쓴(Write/Edit/ToolBatch) 경우에만, 턴당 한 번. 잡담·읽기만 한 턴에는
+    비용이 0 이다. 산출물 대조가 먼저 걸리면(형식 문제) 그다음 완료 시도에 이것이 걸린다.
+    """
+
+    name = "requirement"
+
+    def __init__(self, *, max_files: int = 20) -> None:
+        self._max_files = int(max_files)
+
+    async def review(self, state: PipelineState) -> Optional[str]:
+        marker = state.shared.get(REQUIREMENT_KEY)
+        if isinstance(marker, dict) and marker.get("done"):
+            return None
+        written = written_paths(state.messages)
+        if not written:
+            return None
+        shown = written[: self._max_files]
+        more = len(written) - len(shown)
+        files = ", ".join(shown) + (f" (+{more} more)" if more > 0 else "")
+        state.shared[REQUIREMENT_KEY] = {"done": True, "files": len(written)}
+        state.add_event(
+            "loop.requirement_review",
+            {"reviewer": self.name, "files": len(written), "paths": shown},
+        )
+        return _REQ_NOTE.format(files=files)

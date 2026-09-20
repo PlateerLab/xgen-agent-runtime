@@ -289,6 +289,7 @@ def test_pipeline_defers_completion_once_and_shows_the_digest(tmp_path: Path) ->
     pipe = runner.build_pipeline(
         name="t", provider="openai", model="m", api_key="k", llm_client=client,
         stream=False, enable_compaction=False, registry=reg, tool_context=ctx,
+        enable_requirement_review=False,  # 이 테스트는 산출물 대조만 본다 (요건 대조는 test_requirement_review.py)
     )
     text = runner.run_turn(pipe, "정확히 3행짜리 out/audit.csv 를 내라", PipelineState(session_id="s", model="m"))
 
@@ -316,7 +317,8 @@ def test_pipeline_does_not_add_a_round_trip_when_the_written_file_is_sound(tmp_p
     client = _Sound(api_key="k")
     ctx = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
     pipe = runner.build_pipeline(name="t", provider="openai", model="m", api_key="k", llm_client=client,
-                                 stream=False, enable_compaction=False, registry=reg, tool_context=ctx)
+                                 stream=False, enable_compaction=False, registry=reg, tool_context=ctx,
+                                 enable_requirement_review=False)
     runner.run_turn(pipe, "3행짜리 out/audit.csv 를 내라", PipelineState(session_id="s", model="m"))
     assert len(client.requests) == 2
 
