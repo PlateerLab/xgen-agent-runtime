@@ -4,6 +4,23 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.33.0] — 2026-09-20
+
+### Changed
+
+- **WebFetch 371 → 203, WebSearch 332 → 148토큰** (Qwen 토크나이저). 광고하는 파라미터를 실제 쓰이는 것만으로
+  줄이고 설명을 압축했다 — dev 28일: WebFetch 332회 중 `url` 332 · `render_js` 34 · `max_chars` 31 · `timeout` 26 ·
+  `headers` 1 · `max_bytes` 0, WebSearch 96회 중 `query` 96 · `max_results` 39 · `region` 2 · `safesearch` 0 ·
+  `backend` 0. 0~1회짜리는 스키마에서 뺐다. 빠진 파라미터는 `execute` 가 여전히 받는다(스키마는 열려 있다).
+  Harness-Bench 040(test-coverage-fill) 카나리 ×2 에서 왕복 28·20(dev 4.32.0 ×3: 28·21·17) — 행동 변화 없음.
+
+### Not shipped (branch `perf/catalog-fold`)
+
+- 숨은 도구 카탈로그를 문(게이트웨이) 뒤 식구별로 접는 변경은 **보류**. 4.32.0 dev 표면(숨은 46개)에서 카탈로그가
+  `_CATALOG_MAX_CHARS`(4,000자)를 넘어 이미 이름만 나열(~300토큰)되고 있었고, 접은 형태(~480토큰)로 바꾸자
+  홀드아웃 040 이 3회 연속 왕복 47~70(점수 1.0 유지)으로 늘었다 — 접기를 끈 카나리는 28·20, dev 는 28·21·17.
+  텍스트의 어느 부분이 행동을 바꾸는지 설명되기 전에는 싣지 않는다.
+
 ## [4.32.0] — 2026-09-20
 
 근거: 고정 프리픽스 실측(dev 벤치 에이전트, Qwen 토크나이저 `/tokenize`). 모델 호출 1회의 고정분
