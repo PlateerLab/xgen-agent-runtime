@@ -114,6 +114,17 @@ def test_build_pipeline_declares_built_in_gateways() -> None:
     assert reg.gateway_of("Read") is None
 
 
+def test_register_declares_a_gateway_from_opens_family_attribute() -> None:
+    """호스트 문(JobGuide/ArtifactGuide)은 클래스 속성 한 줄이면 된다."""
+
+    class _Gate(_NamedTool):
+        opens_family = ("JobSchedule", "JobList")
+
+    reg = ToolRegistry().register(_Gate("JobGuide")).register(_NamedTool("JobList"), core=False)
+    assert reg.gateway_of("JobList") == "JobGuide"
+    assert "- via JobGuide: JobList" in _catalog(reg)
+
+
 def test_adapter_opens_family_metadata_declares_a_gateway() -> None:
     class _Lc:
         name = "ConnectorGuide"

@@ -99,6 +99,13 @@ class ToolRegistry:
         # entry's exposure is whatever its ``core`` flag says.
         self._activated.discard(tool.name)
         self._version += 1
+        # A tool may carry its room with it — ``opens_family`` on the instance or
+        # class (host guides such as JobGuide/ArtifactGuide, adapted tools with
+        # ``metadata["opens_family"]``). Declaring here means every registration
+        # path (host loops, adapters, manifests) folds the same way.
+        family = getattr(tool, "opens_family", None)
+        if isinstance(family, (list, tuple)) and family:
+            self.declare_gateway(tool.name, family)
         return self
 
     def unregister(self, name: str) -> None:

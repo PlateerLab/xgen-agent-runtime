@@ -143,7 +143,7 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
         execute=_execute,
     )
     if family:
-        # 등록 시 레지스트리에 방을 선언할 수 있게 남긴다(attach_port_tools).
+        # 등록 시 레지스트리가 방을 선언한다(ToolRegistry.register 의 opens_family 규약).
         tool.opens_family = tuple(family)  # type: ignore[attr-defined]
     return tool
 
@@ -247,7 +247,4 @@ def adapt_tools(
     decide = core if callable(core) else (lambda _name, _c=bool(core): _c)
     for tool in tools:
         registry.register(tool, core=bool(decide(getattr(tool, "name", ""))))
-        family = getattr(tool, "opens_family", None)
-        if family:
-            registry.declare_gateway(tool.name, family)
     return registry
