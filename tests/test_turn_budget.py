@@ -182,6 +182,8 @@ def _run(obeys: bool, budget: Any) -> tuple[str, _Endless]:
     pipe = runner.build_pipeline(
         name="t", provider="openai", model="m", api_key="k", llm_client=client, stream=False,
         enable_compaction=False, registry=reg, max_iterations=50, turn_input_budget_tokens=budget,
+        # 같은 ping 이 같은 결과를 내므로 4.45.0 반복 거부 종료가 먼저 끊는다 — 여기선 예산만 본다.
+        repeat_stop_after=None,
     )
     text = runner.run_turn(pipe, "끝없이 해", PipelineState(session_id="s", model="m"))
     return text, client

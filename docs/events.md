@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-21.
-> Catalogue version: **9** · events: **134**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-22.
+> Catalogue version: **10** · events: **135**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -225,6 +225,17 @@ Enum member: `EventTypes.LOOP_COMPLETION_REVIEW`
 | `missing` | int — claimed files that do not exist |
 | `problems` | int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV) |
 | `paths` | list[str] — paths shown to the model, in order |
+
+### `loop.repeat_stop`
+
+Enum member: `EventTypes.LOOP_REPEAT_STOP`
+
+| Field | Description |
+|---|---|
+| `phase` | str — final (report-and-stop note appended) \| stop (turn ended) |
+| `refused` | int — tool calls the harness refused to run this turn (identical-result skips + repeated-failure blocks) |
+| `calls` | int — model calls so far this turn |
+| `iteration` | int |
 
 ### `loop.turn_budget`
 

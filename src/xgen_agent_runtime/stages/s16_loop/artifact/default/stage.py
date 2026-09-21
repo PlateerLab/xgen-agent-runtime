@@ -61,12 +61,17 @@ class LoopStage(Stage[Any, Any]):
 
         # 턴 입력 토큰 예산 (stages/s16_loop/turn_budget.py). None 이면 없음.
         self._turn_input_budget: Optional[TurnInputBudget] = turn_input_budget
+        self._repeat_stop: Optional[Any] = None
 
     def add_completion_reviewer(self, reviewer: CompletionReviewer) -> None:
         self._completion_reviewers.append(reviewer)
 
     def set_turn_input_budget(self, budget: Optional[TurnInputBudget]) -> None:
         self._turn_input_budget = budget
+
+    def set_repeat_stop(self, stop: Optional[Any]) -> None:
+        """반복 거부 종료(s16_loop/repeat_stop.py) — None 이면 끈다."""
+        self._repeat_stop = stop
 
     @property
     def _controller(self) -> LoopController:
@@ -167,6 +172,10 @@ class LoopStage(Stage[Any, Any]):
                     state.completion_detail = None
                     decision = "continue"
                     break
+
+        if self._repeat_stop is not None:
+            # 반복 거부 종료 — 검토자 뒤, 예산 앞. 마무리 응답이 온 뒤에는 무엇이든 끝낸다.
+            decision = self._repeat_stop.apply(state, decision)
 
         if self._turn_input_budget is not None:
             # 예산은 검토자 뒤에 — 마무리 응답이 온 뒤에는 검토자가 미뤄도 끝낸다.

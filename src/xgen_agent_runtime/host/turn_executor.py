@@ -1070,6 +1070,13 @@ class AgentTurnExecutor:
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
                 enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
+                # 노드가 주면 그대로, 없으면 런타임 기본(3). 0 이면 반복 거부 종료 끔.
+                **(
+                    {"repeat_stop_after": _prune_threshold(kwargs["repeat_stop_after"])}
+                    if "repeat_stop_after" in kwargs
+                    and _prune_threshold(kwargs["repeat_stop_after"]) is not None
+                    else {}
+                ),
                 # 노드가 주면 그대로, 없으면 런타임 기본(30,000). 0 이면 비용 트리거 끔.
                 **(
                     {"prune_over_tokens": _prune_threshold(kwargs["prune_over_tokens"])}
