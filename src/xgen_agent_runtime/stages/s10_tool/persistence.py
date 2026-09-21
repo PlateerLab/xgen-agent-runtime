@@ -55,22 +55,60 @@ def _render_content(content: Any) -> str:
     return str(content)
 
 
-def _summarise(body: str, *, limit: int, path: str) -> str:
+def _reachable(path: str, context: Any) -> bool:
+    """에이전트의 파일 도구가 이 절대 경로를 실제로 열 수 있는가.
+
+    열 수 없는 경로를 "여기 저장했다" 고 말하면 두 가지를 한꺼번에 잃는다: 그 턴에 파일을
+    못 읽고, 모델은 **읽을 수 없는 뿌리를 정상 경로로 학습한다**(2026-09-21 실측 — 내부
+    저장소는 세션 루트의 형제라 가드가 늘 거절하는데, 모델은 그 접두사를 첨부 경로에 다시
+    썼다). 경로를 말할 자격은 도달 가능할 때만 생긴다.
+    """
+    target = str(path or "")
+    if not target:
+        return False
+    roots = []
+    sandbox = getattr(context, "sandbox", None)
+    if sandbox is not None:
+        for attr in ("workdir", "extra_roots"):
+            value = getattr(sandbox, attr, None)
+            if isinstance(value, str):
+                roots.append(value)
+            elif isinstance(value, (list, tuple)):
+                roots.extend(str(v) for v in value)
+    else:
+        working = getattr(context, "working_dir", "")
+        if working:
+            roots.append(str(working))
+        allowed = getattr(context, "allowed_paths", None) or []
+        roots.extend(str(p) for p in allowed)
+    for root in roots:
+        root = root.rstrip("/")
+        if root and (target == root or target.startswith(root + "/")):
+            return True
+    return False
+
+
+def _summarise(body: str, *, limit: int, path: str, reachable: bool) -> str:
     """Short LLM-facing replacement for an oversized body.
 
     Shows the first ~480 characters of the persisted body so the model
-    still has a peek at the content, followed by a pointer to the file
+    still has a peek at the content, followed by where the full body went
     and the total length. Callers may override by pre-setting
     ``display_text`` on the returned ``ToolResult``.
     """
     peek = body[:480].rstrip()
     if len(body) > 480:
         peek = peek + "…"
-    return (
-        f"[tool result truncated: {len(body)} chars > {limit} limit]\n"
-        f"Full body persisted to: {path}\n"
-        f"Preview:\n{peek}"
+    where = (
+        f"Full body saved at: {path}"
+        if reachable
+        else (
+            "Full body kept on the server; it is NOT in your workspace and your "
+            "file tools cannot open it. Re-run the tool with a narrower query if "
+            "you need more than the preview."
+        )
     )
+    return f"[tool result truncated: {len(body)} chars > {limit} limit]\n{where}\nPreview:\n{peek}"
 
 
 def maybe_persist_large_result(
@@ -153,7 +191,12 @@ def maybe_persist_large_result(
 
     summary: Optional[str] = result.display_text
     if summary is None:
-        summary = _summarise(rendered, limit=capabilities.max_result_chars, path=target_path)
+        summary = _summarise(
+            rendered,
+            limit=capabilities.max_result_chars,
+            path=target_path,
+            reachable=_reachable(target_path, context),
+        )
 
     return replace(
         result,

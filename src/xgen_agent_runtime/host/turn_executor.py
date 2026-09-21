@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple
 
 # 본체가 쓰는 모듈-수준 상수/헬퍼(항상 실행) — 서버에서 resolve. lazy 트리거라
@@ -963,6 +964,22 @@ class AgentTurnExecutor:
                         )
 
             user_text = f"{text}\n\n{rag_block}" if rag_block else text
+            # 첨부 경로는 **여기서** 절대 경로가 된다. 파일 도구는 절대 경로를 요구하는데
+            # 첨부는 워크스페이스 상대로 들어오므로, 기준을 모델에게 맡기면 틀린 자리를 만든다
+            # (2026-09-21 실측: 작업 폴더가 …/<wf>/workspace 인데 …/<wf>/uploads 로 읽으려다
+            # 샌드박스 가드에 막혔다). 기준을 아는 쪽은 턴을 여는 이곳 하나다.
+            from xgen_agent_runtime.host.attachment_paths import absolutize_attachments
+
+            _ws_base = str(
+                getattr(run_tool_context, "working_dir", "")
+                or getattr(_sandbox, "workdir", "")
+                or ""
+            )
+            if _ws_base and turn_input.attachments:
+                turn_input = replace(
+                    turn_input,
+                    attachments=absolutize_attachments(turn_input.attachments, _ws_base),
+                )
             pipeline_input = turn_input.with_text(user_text).as_pipeline_input()
 
             # Codex-style durable rollout은 관리자 opt-in이다. 대화/도구 결과를

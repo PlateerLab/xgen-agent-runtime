@@ -216,7 +216,8 @@ class MultimodalNormalizer(InputNormalizer):
 
         # Provenance metadata for downstream stages (memory dehydration etc.)
         meta: Dict[str, Any] = {}
-        for k in ("name", "size", "sha256", "attachment_id", "workspace_path"):
+        # ``path`` = 세션 절대 경로 (host.attachment_paths 가 턴 시작에서 채운다).
+        for k in ("name", "size", "sha256", "attachment_id", "workspace_path", "path"):
             if image.get(k) is not None:
                 meta[k] = image[k]
         if meta:
@@ -229,6 +230,8 @@ class MultimodalNormalizer(InputNormalizer):
 
         Files stay as workspace references. The current-turn prompt tells the
         agent the exact path so it can choose the appropriate Read/document tool.
+        ``path`` carries the **session absolute** path when the host knew the
+        working folder; ``workspace_path`` stays for provenance (기억·첨부 원장).
         """
         mime = (
             file.get("mime_type")
@@ -248,4 +251,5 @@ class MultimodalNormalizer(InputNormalizer):
             "sha256": file.get("sha256"),
             "attachment_id": file.get("attachment_id"),
             "workspace_path": file.get("workspace_path") or file.get("workspacePath"),
+            "path": file.get("path"),
         }

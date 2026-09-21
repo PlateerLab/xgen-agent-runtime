@@ -32,7 +32,10 @@ class WriteTool(Tool):
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file to write.",
+                    "description": (
+                        "Absolute path to the file to write (starts with `/`). "
+                        "A relative path is resolved against your working folder."
+                    ),
                 },
                 "content": {
                     "type": "string",
