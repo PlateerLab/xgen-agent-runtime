@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import posixpath
 from typing import Any, Dict, List, Sequence
 
@@ -21,6 +22,8 @@ from typing import Any, Dict, List, Sequence
 ABS_KEY = "path"
 #: 워크스페이스 상대 경로 — 출처 기록(기억·첨부 원장)은 계속 이 값을 쓴다.
 REL_KEY = "workspace_path"
+
+logger = logging.getLogger(__name__)
 
 
 def session_path(base: str, relative: str) -> str:
@@ -50,8 +53,15 @@ def absolutize_attachments(attachments: Sequence[Any], base: str) -> List[Any]:
         if not isinstance(item, dict):
             out.append(item)
             continue
-        absolute = session_path(root, item.get(REL_KEY) or item.get(ABS_KEY) or "")
-        if not absolute or item.get(ABS_KEY) == absolute:
+        existing = str(item.get(ABS_KEY) or "")
+        if existing.startswith("/"):
+            # 호스트가 이미 절대 경로를 실었다(예: 대화 스코프 첨부 — 그 파일은 에이전트
+            # 작업 폴더가 아니라 그 대화만의 트리에 있다). 여기서 다시 계산하면 엉뚱한
+            # 자리를 가리킨다 — 기준을 아는 쪽이 이미 붙였으면 그것이 맞다.
+            out.append(item)
+            continue
+        absolute = session_path(root, item.get(REL_KEY) or existing)
+        if not absolute:
             out.append(item)
             continue
         out.append({**item, ABS_KEY: absolute})
@@ -77,5 +87,70 @@ __all__ = [
     "REL_KEY",
     "absolutize_attachments",
     "absolutize_input",
+    "hydrate_sandbox_images",
     "session_path",
 ]
+
+
+async def hydrate_sandbox_images(
+    attachments: Sequence[Any], sandbox: Any, *, max_bytes: int, turn_max_bytes: int
+) -> List[Any]:
+    """세션에만 있는 이미지 첨부의 바이트를 읽어 프로바이더가 쓸 수 있게 만든다.
+
+    배포된 고정본의 첨부는 **그 대화만의 샌드박스**에 있고 서빙 파드에는 사본이 없다.
+    그래서 호스트는 경로만 싣고 바이트는 여기서 읽는다 — 턴이 열려 세션을 들고 있는
+    지금이 유일하게 읽을 수 있는 자리다. 파일 첨부는 읽지 않는다(에이전트가 자기 파일
+    도구로 연다). 읽기 실패는 그 첨부 하나만 포기한다 — 턴은 계속된다.
+    """
+    import os
+    import tempfile
+
+    from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
+
+    if sandbox is None:
+        return list(attachments or [])
+    out: List[Any] = []
+    total = 0
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        kind = str(item.get("kind") or item.get("type") or "").lower()
+        path = str(item.get(ABS_KEY) or "")
+        needs_bytes = (
+            kind in ("image", "img", "picture")
+            and path.startswith("/")
+            and not (item.get("data") or item.get("base64") or item.get("url"))
+            and not item.get("local_path")
+        )
+        if not needs_bytes:
+            out.append(item)
+            continue
+        try:
+            data = await sb_read_bytes(sandbox, path)
+        except Exception:  # noqa: BLE001 — 첨부 하나가 턴을 깨지 않는다
+            logger.warning("세션 이미지 첨부를 읽지 못했습니다: %s", path, exc_info=True)
+            out.append(item)
+            continue
+        if len(data) > max_bytes or total + len(data) > turn_max_bytes:
+            logger.warning(
+                "세션 이미지 첨부가 예산을 넘어 건너뜁니다: %s (%d bytes)", path, len(data)
+            )
+            out.append(item)
+            continue
+        total += len(data)
+        fd, local = tempfile.mkstemp(prefix="xgen-chat-attach-", suffix=_suffix_of(path))
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+        except OSError:
+            logger.warning("세션 이미지 첨부를 내려 두지 못했습니다: %s", path, exc_info=True)
+            out.append(item)
+            continue
+        out.append({**item, "local_path": local, "size": len(data)})
+    return out
+
+
+def _suffix_of(path: str) -> str:
+    tail = str(path or "").rsplit("/", 1)[-1]
+    return f".{tail.rsplit('.', 1)[-1]}" if "." in tail else ""
