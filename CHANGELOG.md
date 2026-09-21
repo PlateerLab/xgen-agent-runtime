@@ -4,6 +4,48 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.38.0] — 2026-09-21
+
+4.36.0 단기 기억 창을 전수 재검토해 나온 결함을 고친다. 셋 다 "기억이 조용히 사라지거나 두 배가
+된다" 계열이라 증상이 다음 턴에야 보인다.
+
+### Fixed
+
+- **압축이 턴 도중에 돌면 그 턴이 기억에서 사라지던 문제.** `state.messages` 를 가리키는
+  워터마크는 넷인데(`memory.last_recorded_idx`, `memory.provider_strategy_recorded_idx`,
+  `geny_bridge.conversation_archived_idx`, `memory.short_term_window_len`)
+  `reconcile_recorded_index` 는 그중 하나만 번역했다. 압축이 리스트를 줄이면 나머지 셋은 끝을
+  넘어가 `messages[stale:]` 가 비고, Stage 18 은 아무것도 적지 않았다 — 그 턴은 STM 에도 대화
+  아카이브에도 남지 않는다. 넷을 한 목록(`RECORDED_INDEX_KEYS`)으로 묶어 함께 번역한다.
+- **같은 메시지를 STM 에 두 번 적던 문제.** Stage 18 은 전략 슬롯(`strategy.update`)과 자기
+  `_drive_provider` 를 잇달아 부르는데 둘이 서로 다른 워터마크를 셌다(실측: 메시지 2개 → 기록
+  4행). 단기 기억 창이 붙은 턴에서는 창 전체가 매 턴 다시 쌓여, 다음 턴 창이 중복 행을 논리 턴
+  경계로 읽고 같은 지시를 두 번 보여 줬다. 두 키를 함께 보고(시작점은 큰 값) 함께 갱신한다.
+- **창이 역할 교대를 깨던 문제.** 답변 없이 끝난 턴은 user 메시지를 둘 연속으로 만들고, 도구
+  실행 중 끊긴 턴은 합성 `tool_result`(=user)로 끝나 이번 턴의 지시와 맞붙었다. 도구 블록이 없는
+  순수 발화만 합치고(짝은 건드리지 않는다), 창이 user 로 끝나면 중단 표식 한 줄로 닫는다.
+- **이 세션의 기록을 거르는 규칙이 너무 넓고 너무 좁던 문제.** 본문 앞 600자에 세션 id 가 스치기만
+  해도 걸러 에이전트가 쓴 노트까지 지식 층에서 사라졌다 — 이제 라벨이 붙은 자리
+  (`**Session:** <sid>` · `session_id: <sid>`)만 본다. 반대로 백링크 층에는 규칙이 아예 없어
+  대화 아카이브가 위키링크를 타고 되돌아올 수 있었다 — 그 층에도 건다.
+
+### Changed
+
+- **STM 적재를 필요한 만큼만.** 창은 매 턴 400행을 읽었는데, STM 한 행은 도구 결과 **원문** 을
+  들고 있어 버릴 데이터를 매 턴 다 읽는 셈이었다(턴 시작 지연에 그대로 얹힌다). 96행을 먼저 읽고
+  필요한 논리 턴 수를 못 덮었을 때만 상한까지 한 번 더 읽는다. 짧은 턴 대화는 한 번, 도구가 많은
+  대화는 두 번이며 5턴 보장은 그대로다.
+- 예산 강등 기록에서 효과 없는 단계를 빼 `degraded` 가 실제로 깎은 것만 말한다.
+- 모듈 문서에 알려진 한계 둘을 적는다 — CLI 백엔드(claude_code·codex)는 전체 이력을 user 봉투
+  하나의 마크다운 프리앰블로 접으므로 "대화를 대화 자리에" 가 완전히 성립하는 것은 API 백엔드이고,
+  창이 매 턴 미끄러지므로 messages 접두부 캐시 이득은 크지 않다(접두부 고정은 누적 요약 v2 의 몫).
+
+## [4.37.0] — 2026-09-21
+
+### Changed
+
+- `xgen-edit2docs` 0.24.0 핀 — `xgen-contextifier` / PyMuPDF(AGPL) 의존 제거.
+
 ## [4.36.0] — 2026-09-21
 
 근거: XGEN 고정본 대화 실측(24단계 · 도구 23회 · 실패 8). 에이전트가 매 단계 "지난 대화를 보니까 제가 …"

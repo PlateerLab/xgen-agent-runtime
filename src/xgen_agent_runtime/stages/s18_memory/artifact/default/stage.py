@@ -40,7 +40,31 @@ from xgen_agent_runtime.stages.s18_memory.artifact.default.strategies import (
 logger = logging.getLogger(__name__)
 
 _STATE_LAST_RECORDED = "memory.last_recorded_idx"
+#: ``ProviderDrivenStrategy`` 의 워터마크 — 같은 일(STM 기록)을 세는 두 번째 자다.
+#: 이 스테이지는 전략(``strategy.update``)을 먼저 부르고 그 다음 ``_drive_provider`` 를
+#: 부르는데, 둘이 서로 다른 키를 세면 **같은 메시지를 두 번 기록한다**(실측 2메시지 → 4행).
+#: Stage 2 의 단기 기억 창이 붙은 턴에서는 창 전체가 매 턴 STM 에 다시 쌓여, 다음 턴 창이
+#: 중복 행을 논리 턴 경계로 읽는다. 그래서 두 워터마크를 **함께** 본다: 시작점은 둘 중 큰 값,
+#: 기록 후에는 둘 다 갱신한다(옛 키를 읽는 호스트 호환).
+_STRATEGY_RECORDED = "memory.provider_strategy_recorded_idx"
 _TERMINAL_DECISIONS = frozenset({"complete", "error", "escalate"})
+
+
+def _recorded_upto(state: PipelineState) -> int:
+    """이미 STM 에 들어간 messages 접두부의 길이 — 두 워터마크 중 큰 값.
+
+    기록 주체가 둘(전략 슬롯 / 이 스테이지)이라 어느 쪽이 먼저 돌든 남이 적은 만큼은
+    건너뛰어야 한다. 큰 값을 쓰는 것이 안전한 쪽이다: 작은 값을 쓰면 중복 기록이고,
+    중복은 다음 턴의 단기 기억 창에서 같은 지시를 두 번 보여 준다.
+    """
+    best = 0
+    for key in (_STATE_LAST_RECORDED, _STRATEGY_RECORDED):
+        try:
+            value = int(state.metadata.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        best = max(best, value)
+    return max(0, min(best, len(state.messages)))
 
 
 class MemoryStage(Stage[Any, Any]):
@@ -208,7 +232,7 @@ class MemoryStage(Stage[Any, Any]):
             return
 
         # Incrementally record any newly-appended messages as STM turns.
-        last_idx = int(state.metadata.get(_STATE_LAST_RECORDED, 0))
+        last_idx = _recorded_upto(state)
         new_msgs = state.messages[last_idx:]
         for msg in new_msgs:
             # STM also stores dehydrated copies — base64 payloads stay only
@@ -221,6 +245,7 @@ class MemoryStage(Stage[Any, Any]):
             )
         if new_msgs:
             state.metadata[_STATE_LAST_RECORDED] = len(state.messages)
+            state.metadata[_STRATEGY_RECORDED] = len(state.messages)
 
         is_terminal = state.loop_decision in _TERMINAL_DECISIONS
         if is_terminal and self._hooks.should_record_execution(state):

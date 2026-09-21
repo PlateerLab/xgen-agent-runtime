@@ -30,6 +30,22 @@ logger = logging.getLogger(__name__)
 
 
 _RECORDED_KEY = "memory.provider_strategy_recorded_idx"
+#: ``MemoryStage._drive_provider`` 의 워터마크. 같은 messages 접두부를 세는 두 번째 자라,
+#: 둘을 따로 보면 같은 메시지가 두 번 STM 에 들어간다(4.38.0 에서 합침). 문자열로 둔다 —
+#: memory 층이 stage 층을 import 하지 않는다.
+_STAGE_RECORDED_KEY = "memory.last_recorded_idx"
+
+
+def _recorded_upto(state: PipelineState) -> int:
+    """이미 기록된 messages 접두부 길이 — 두 워터마크 중 큰 값(중복 기록 방지)."""
+    best = 0
+    for key in (_RECORDED_KEY, _STAGE_RECORDED_KEY):
+        try:
+            value = int(state.metadata.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        best = max(best, value)
+    return max(0, min(best, len(state.messages)))
 
 
 class ProviderDrivenStrategy(MemoryUpdateStrategy):
@@ -75,7 +91,7 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
         provider = self._provider
         if provider is None:
             return
-        last_recorded = int(state.metadata.get(_RECORDED_KEY, 0))
+        last_recorded = _recorded_upto(state)
         new_msgs = state.messages[last_recorded:]
         if not new_msgs:
             return
@@ -95,6 +111,7 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
                 continue
 
         state.metadata[_RECORDED_KEY] = len(state.messages)
+        state.metadata[_STAGE_RECORDED_KEY] = len(state.messages)
         if recorded:
             try:
                 state.add_event(

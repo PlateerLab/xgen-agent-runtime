@@ -24,15 +24,37 @@ logger = logging.getLogger(__name__)
 #: the string is the contract.
 _STATE_LAST_RECORDED = "memory.last_recorded_idx"
 
+#: EVERY metadata key that holds an index into ``state.messages`` and therefore
+#: stops meaning what it says the moment compaction shrinks that list. One key
+#: was translated before 4.38.0 and the other three were not, so a compaction
+#: inside the turn left them pointing past the end of the list: Stage 18 then
+#: recorded ``messages[stale:]`` == nothing and the turn vanished from STM and
+#: from the conversation rollup — the agent forgot the turn it had just taken.
+#: Strings, not imports: the core keeps no stage/host dependency.
+RECORDED_INDEX_KEYS = (
+    _STATE_LAST_RECORDED,
+    # ProviderDrivenStrategy / host history preload / Stage 2 short-term window.
+    "memory.provider_strategy_recorded_idx",
+    # Host conversation rollup (``ConversationArchivingStrategy``).
+    "geny_bridge.conversation_archived_idx",
+    # Window length — the rollup reads it as its watermark default, so it is an
+    # index in every way that matters here.
+    "memory.short_term_window_len",
+)
+
 
 def reconcile_recorded_index(before: List[Any], after: List[Any], metadata: dict) -> None:
-    """Translate Stage-18's STM watermark across a compaction (audit D3).
+    """Translate EVERY message-index watermark across a compaction (audit D3).
 
     Stage 18 records ``state.messages[last_idx:]`` as STM turns and sets
     ``last_idx = len(messages)``. Compaction shrinks ``state.messages``,
     so a watermark of 60 against a now-15-long list makes
     ``messages[60:]`` empty forever — every subsequent turn silently
     stops being recorded until the list regrows past 60.
+
+    Four keys carry such an index (:data:`RECORDED_INDEX_KEYS`) and all four
+    are translated together. Translating only one of them is the same bug
+    wearing a different key.
 
     Compactors keep a SUFFIX of the real messages (the same dict objects,
     by identity) and prepend synthetic summary messages. We find that
@@ -41,8 +63,10 @@ def reconcile_recorded_index(before: List[Any], after: List[Any], metadata: dict
     up next turn. Pure index arithmetic on object identity — no message
     is mutated.
     """
-    old_idx = metadata.get(_STATE_LAST_RECORDED)
-    if not isinstance(old_idx, int) or old_idx <= 0:
+    if not any(
+        isinstance(metadata.get(key), int) and metadata.get(key, 0) > 0
+        for key in RECORDED_INDEX_KEYS
+    ):
         return  # nothing recorded yet — nothing to translate
 
     # Longest suffix of ``after`` whose objects are the trailing objects
@@ -58,15 +82,18 @@ def reconcile_recorded_index(before: List[Any], after: List[Any], metadata: dict
     start = len(before) - kept  # first before-index that survived
     n_synthetic = len(after) - kept  # summary messages prepended
 
-    if old_idx <= start:
-        # Recorded boundary sits entirely in the summarized region: the
-        # kept suffix was never recorded, so record all of it next turn.
-        new_idx = n_synthetic
-    else:
-        # Boundary lands inside the kept suffix: shift by the prefix delta.
-        new_idx = n_synthetic + (old_idx - start)
-
-    metadata[_STATE_LAST_RECORDED] = max(0, min(new_idx, len(after)))
+    for key in RECORDED_INDEX_KEYS:
+        old_idx = metadata.get(key)
+        if not isinstance(old_idx, int) or old_idx <= 0:
+            continue
+        if old_idx <= start:
+            # Recorded boundary sits entirely in the summarized region: the
+            # kept suffix was never recorded, so record all of it next turn.
+            new_idx = n_synthetic
+        else:
+            # Boundary lands inside the kept suffix: shift by the prefix delta.
+            new_idx = n_synthetic + (old_idx - start)
+        metadata[key] = max(0, min(new_idx, len(after)))
 
 
 def _compactor_name(compactor: Any) -> str:
