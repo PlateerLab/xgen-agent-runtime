@@ -1294,6 +1294,17 @@ class MemoryHooks:
     # 6행은 1.5턴밖에 안 됐고, 그중 도구 행은 렌더에서 버려져 자리만 차지했다 —
     # 3번째 턴에서 첫 지시가 통째로 사라졌다(실측). 세는 단위를 턴으로 바꾼다.
     recent_turns: int = 3
+    # ── 단기 기억 창 (short_term_window, 4.36.0) — 최근 논리 턴을 messages 로 재생한다.
+    # 이력을 preload 하지 않는 호스트에서 L0(recent_turns 불릿)를 대신한다: 가까운
+    # window_full_turns 턴은 도구 블록까지 그대로, 그 앞 window_dialogue_turns 턴은 사용자·
+    # 최종 답변 텍스트만(+ ``[used tools: …]`` 한 줄). 둘 다 0 이면 창을 쓰지 않는다.
+    window_full_turns: int = 2
+    window_dialogue_turns: int = 3
+    window_max_chars: int = 40_000
+    window_result_trim_over: int = 4_000
+    window_result_keep: int = 1_200
+    window_dialogue_message_chars: int = 4_000
+    window_used_tools_line: bool = True
     # L0 를 만들려고 뒤에서부터 훑을 STM 행 수의 상한. 한 턴이 몇 행인지는 도구를
     # 몇 번 썼느냐에 달려 미리 알 수 없어서, 넉넉히 훑고 턴 단위로 자른다.
     recent_scan_rows: int = 80

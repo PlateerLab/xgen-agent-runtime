@@ -136,7 +136,10 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
     def _new_utterances(state: Any) -> Tuple[List[Tuple[str, str]], int]:
         """워터마크 이후의 (role, text) 목록과 새 워터마크."""
         messages = list(getattr(state, "messages", []) or [])
-        archived_upto = int(state.metadata.get(_ARCHIVED_KEY, 0))
+        # 단기 기억 창(Stage 2)이 앞에 넣은 지난 턴은 이미 아카이브에 있다 — 창 길이가 기본 워터마크.
+        archived_upto = int(
+            state.metadata.get(_ARCHIVED_KEY, state.metadata.get("memory.short_term_window_len", 0))
+        )
         fresh: List[Tuple[str, str]] = []
         for msg in messages[archived_upto:]:
             role = str(msg.get("role", "")) if isinstance(msg, dict) else ""

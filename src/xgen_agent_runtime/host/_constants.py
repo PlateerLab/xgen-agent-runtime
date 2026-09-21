@@ -75,7 +75,9 @@ Knowledge) may already be injected above. Conversations are archived
 automatically — write notes only for distilled, durable knowledge. When the
 user asks you to remember something, persist it in memory rather than only
 acknowledging it. Prefer updating existing notes over duplicating them, and
-write notes in the user's language.
+write notes in the user's language. Your earlier turns in this conversation are
+in the message history: treat them as history, not as facts to re-verify, and
+act on the current request.
 """
 
 
@@ -89,7 +91,8 @@ You have a persistent memory vault with tools to read and search it; retrieved c
 Facts / Relevant Knowledge) may already be injected above. In this conversation the vault cannot be
 changed: there are no memory write tools. If the user asks you to remember something, say that this
 conversation cannot store new memories and keep it in mind for the rest of the conversation. Do not
-write files or notes to imitate memory.
+write files or notes to imitate memory. Your earlier turns in this conversation are in the message
+history: treat them as history, not as facts to re-verify, and act on the current request.
 """
 
 

@@ -1033,6 +1033,22 @@ def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) 
 # ── sync bridges (executor runs execute() in a worker thread) ───────────────
 
 
+def _tool_stats_from_events(state: Any) -> tuple[int, int, int]:
+    """이 턴의 도구 호출·실패·반복 차단 수 — Stage 10 이 남긴 이벤트에서."""
+    calls = failures = blocked = 0
+    for ev in list(getattr(state, "events", None) or []):
+        if not isinstance(ev, dict):
+            continue
+        etype = str(ev.get("type") or "")
+        data = ev.get("data") or {}
+        if etype == "tool.execute_complete":
+            calls += int(data.get("count") or 0)
+            failures += int(data.get("errors") or 0)
+        elif etype == "tool.repeat_blocked":
+            blocked += len(data.get("tools") or []) or 1
+    return calls, failures, blocked
+
+
 def _record_execution(
     pipeline: Pipeline,
     loop: asyncio.AbstractEventLoop,
@@ -1054,6 +1070,7 @@ def _record_execution(
     if provider is None:
         return
     spec = getattr(pipeline, "_memory_distill_spec", None)
+    calls, failures, blocked = _tool_stats_from_events(state)
     try:
         from xgen_agent_runtime.host.execution_record import record_turn_execution
 
@@ -1070,6 +1087,9 @@ def _record_execution(
                     model=str(getattr(spec, "model", "") or "") if spec else "",
                     error=error,
                     cancelled=cancelled,
+                    tool_calls=calls,
+                    tool_failures=failures,
+                    blocked=blocked,
                 ),
                 timeout=10.0,
             )

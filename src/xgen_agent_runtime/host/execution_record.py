@@ -46,6 +46,25 @@ async def _next_execution_number(provider: Any) -> int:
         return 1
 
 
+OUTCOME_MARK = {"ok": "✅", "partial": "⚠️", "failed": "❌"}
+
+
+def classify_outcome(
+    success: bool, *, tool_calls: int = 0, tool_failures: int = 0, blocked: int = 0
+) -> str:
+    """``ok`` / ``partial`` / ``failed``.
+
+    ok      = 끝까지 돌았고 도구 실패·반복 차단이 없다
+    partial = 끝까지 돌았지만 도구 실패나 반복 차단이 있었다 — "됐다" 고 적지 않는다
+    failed  = 오류·취소·미완료
+    """
+    if not success:
+        return "failed"
+    if int(tool_failures or 0) > 0 or int(blocked or 0) > 0:
+        return "partial"
+    return "ok"
+
+
 def _build_card_body(
     *,
     number: int,
@@ -57,15 +76,31 @@ def _build_card_body(
     provider_name: str,
     model: str,
     error: str,
+    outcome: str = "",
+    tool_calls: int = 0,
+    tool_failures: int = 0,
+    blocked: int = 0,
 ) -> str:
     """Geny ``_build_execution_entry`` 형식 미러 (구조 동일, 필드 간소)."""
-    mark = "✅" if success else "❌"
+    outcome = outcome or classify_outcome(
+        success, tool_calls=tool_calls, tool_failures=tool_failures, blocked=blocked
+    )
+    mark = OUTCOME_MARK[outcome]
     secs = duration_ms / 1000.0
     lines = [
         f"### [{mark}] Execution #{number}",
         f"> **Task:** {_clip(input_text, _TASK_CLIP)}",
         f"> **Duration:** {secs:.1f}s · **Session:** {session_id or '-'}",
     ]
+    if tool_calls:
+        tools_line = f"> **Tools:** {int(tool_calls)} calls · {int(tool_failures)} failed"
+        if blocked:
+            tools_line += f" · {int(blocked)} blocked (repeated failure)"
+        lines.append(tools_line)
+    if outcome == "partial":
+        lines.append(
+            "> **Outcome:** partial — some tool calls failed; do not treat the task as done"
+        )
     if provider_name or model:
         lines.append(f"> **Model:** {provider_name}/{model}".rstrip("/"))
     lines.append("")
@@ -90,8 +125,16 @@ async def record_turn_execution(
     model: str = "",
     error: str = "",
     cancelled: bool = False,
+    tool_calls: int = 0,
+    tool_failures: int = 0,
+    blocked: int = 0,
 ) -> None:
     """실행 1회를 daily 카드 + executions 저널에 기록 (best-effort).
+
+    ``success`` 는 "파이프라인이 끝까지 돌았다" 이지 "일이 됐다" 가 아니다. 도구가 8번 실패하고
+    모델이 문장만 쓴 턴을 ✅ 로 남기면, 다음 턴 검색에 "만들었다" 가 올라와 에이전트가 없는 도구를
+    있다고 믿는다(2026-09-21 관측). 그래서 도구 실패·반복 차단이 있으면 ⚠️(부분) 로 남기고 카드에
+    도구 수를 적는다 — 제목은 요청문이지 완료 주장이 아니다.
 
     실패는 로그만 — 턴 결과에 절대 영향 없음. 벡터 자동 색인은 notes.write
     훅이 처리한다.
@@ -104,8 +147,15 @@ async def record_turn_execution(
     day = now.strftime("%Y-%m-%d")
 
     # ── ① daily 결과 카드 (실행당 1장) ────────────────────────────
-    tags = ["execution", "success" if success else "failure", "auto"]
-    importance = Importance.MEDIUM if success else Importance.HIGH
+    outcome = classify_outcome(
+        success, tool_calls=tool_calls, tool_failures=tool_failures, blocked=blocked
+    )
+    tags = [
+        "execution",
+        {"ok": "success", "partial": "partial", "failed": "failure"}[outcome],
+        "auto",
+    ]
+    importance = Importance.MEDIUM if outcome == "ok" else Importance.HIGH
     title = f"Execution #{number} — {_clip(input_text, 60)}"
     if cancelled:
         # Geny 의 silent 처리 미러 — 감사용으로 남기되 시각적으로 구분되고
@@ -123,6 +173,10 @@ async def record_turn_execution(
         provider_name=provider_name,
         model=model,
         error=error,
+        outcome=outcome,
+        tool_calls=tool_calls,
+        tool_failures=tool_failures,
+        blocked=blocked,
     )
     try:
         await notes.write(
@@ -137,6 +191,9 @@ async def record_turn_execution(
                     "session_id": session_id,
                     "execution_number": number,
                     "success": bool(success),
+                    "outcome": outcome,
+                    "tool_calls": int(tool_calls),
+                    "tool_failures": int(tool_failures),
                     "duration_ms": int(duration_ms),
                 },
             )
@@ -146,7 +203,7 @@ async def record_turn_execution(
 
     # ── ② executions 일자 저널 (하루 1파일 append) ────────────────
     journal_filename = f"executions-{day}.md"
-    mark = "✅" if success else "❌"
+    mark = OUTCOME_MARK[outcome]
     line = (
         f"- {now.strftime('%H:%M')} {mark} #{number} "
         f"{_clip(input_text, 60)} ({duration_ms / 1000.0:.1f}s)"

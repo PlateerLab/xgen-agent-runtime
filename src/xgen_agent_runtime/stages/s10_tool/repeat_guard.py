@@ -36,7 +36,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 WARN_AT = 3
-BLOCK_AT = 5
+BLOCK_AT = 4
 ANY_INPUT_WARN_AT = 5
 ANY_INPUT_BLOCK_AT = 8
 
@@ -48,7 +48,9 @@ ANY_INPUT_BLOCK_AT = 8
 SAME_RESULT_WARN_AT = 4
 #: 이 횟수째 같은 호출은 실행하지 않고 직전 결과를 돌려준다 — 같은 부작용(저장·전송)의
 #: 반복도 막는다. 결과가 같았으니 모델이 받는 정보는 실행했을 때와 같다.
-SAME_RESULT_SKIP_AT = 8
+#: 4.36.0: 8→5, 같은 입력·같은 오류 차단 5→4 — 2026-09-21 대화에서 같은 그래프 조회 4회·같은
+#: 등록 실패 4회가 차단 전에 턴 예산을 다 썼다.
+SAME_RESULT_SKIP_AT = 5
 
 _COUNTS_KEY = "tool.repeat_error_counts"
 _BLOCKED_KEY = "tool.repeat_error_blocked"
