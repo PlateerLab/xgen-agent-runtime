@@ -339,9 +339,59 @@ class ContextStage(Stage[Any, Any]):
             state.add_event(MemoryEvent.CONTEXT_BUILT.value, provider_result.to_event())
         return chunks
 
+    def _window_hooks(self) -> Any:
+        """창 설정의 출처 — provider 에 붙은 hooks, 없으면 retriever 의 것, 그것도 없으면 기본값."""
+        for owner in (self._provider, self._retriever):
+            for attr in ("hooks", "_hooks"):
+                h = getattr(owner, attr, None)
+                if h is not None and hasattr(h, "window_full_turns"):
+                    return h
+        from xgen_agent_runtime.memory.provider import MemoryHooks
+
+        return MemoryHooks()
+
+    async def _preload_short_term_window(self, state: PipelineState) -> None:
+        """턴 첫 반복에서, 호스트가 이력을 preload 하지 않았으면 STM 의 최근 논리 턴을 messages
+        **앞에** 되살린다(가까운 2턴은 도구까지, 먼 3턴은 대화만). 시스템 프롬프트의 "지식" 불릿으로
+        지난 턴을 보여 주던 L0 를 대신한다 — 대화는 대화 자리에 있어야 모델이 기록으로 읽는다."""
+        from xgen_agent_runtime.memory.short_term_window import (
+            WINDOW_KEY,
+            WINDOW_LEN_KEY,
+            WindowConfig,
+            load_window,
+        )
+        from xgen_agent_runtime.memory.strategy import _RECORDED_KEY
+
+        if state.iteration != 0 or state._is_continuation_slice:
+            return
+        if _RECORDED_KEY in state.metadata or WINDOW_KEY in state.metadata:
+            return  # 호스트가 이력을 preload 했거나(워터마크 존재) 이미 창을 넣었다
+        if self._provider is None:
+            return
+        cfg = WindowConfig.from_hooks(self._window_hooks())
+        if not cfg.enabled:
+            return
+        try:
+            window, report = await asyncio.wait_for(
+                load_window(self._provider, cfg), timeout=self._retrieval_timeout_s or None
+            )
+        except Exception:  # noqa: BLE001 — 창이 없어도 턴은 돈다
+            logger.debug("context: short-term window load failed", exc_info=True)
+            return
+        if not window:
+            return
+        state.messages = list(window) + list(state.messages)
+        # 창은 STM 에서 왔다 — Stage 18 STM 기록·대화 아카이브가 다시 적지 않도록 워터마크를 세운다.
+        state.metadata[_RECORDED_KEY] = len(window)
+        state.metadata[WINDOW_LEN_KEY] = len(window)
+        state.metadata[WINDOW_KEY] = report.as_event()
+        state.add_event("context.short_term_window", report.as_event())
+
     async def execute(self, input: Any, state: PipelineState) -> Any:
         # Build context via strategy
         await self._strategy.build_context(state)
+        # 단기 기억 창 — 이력 preload 가 없는 호스트에서 최근 5 논리 턴을 messages 로.
+        await self._preload_short_term_window(state)
 
         # Retrieve memory — extract query from the last user message, not final_text
         # (final_text is only populated after Stage 9 Parse, not available here)

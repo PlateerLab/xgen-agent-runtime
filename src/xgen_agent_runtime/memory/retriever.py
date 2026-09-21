@@ -83,6 +83,33 @@ def _layer_cap(hooks: MemoryHooks, layer: str) -> int:
     return max(0, int(hooks.max_inject_chars * float(ratio)))
 
 
+def _safe_session(session_id: str) -> str:
+    try:
+        from xgen_agent_runtime.host.ids import _safe_id
+
+        return _safe_id(session_id)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _is_current_session_record(hit: Any, session_id: str) -> bool:
+    """검색 히트가 **이 세션 자신의** 대화 아카이브·실행 카드인가.
+
+    그 기록은 단기 기억 창(또는 preload 된 이력)에 이미 대화로 들어가 있다. 지식 층에 다시 올리면
+    모델은 자기 지난 말을 "관련 지식" 으로 읽고 매 단계 되짚는다(2026-09-21 관측).
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    meta = getattr(hit, "metadata", None) or {}
+    fn = str(meta.get("filename") or getattr(hit, "key", "") or "")
+    safe = _safe_session(sid)
+    if safe and fn.split("/")[-1].startswith(f"{safe}__user"):
+        return True
+    content = str(getattr(hit, "content", "") or "")
+    return sid in content[:600]
+
+
 class MemoryAwareRetriever(MemoryRetriever):
     """Provider-driven 6-layer memory retriever for Stage 2.
 
@@ -141,6 +168,17 @@ class MemoryAwareRetriever(MemoryRetriever):
         total = 0
         budget = hooks.max_inject_chars
         breakdown: Dict[str, int] = {}
+        # L0(recent_turns 불릿)는 지난 턴이 **messages 에 없을 때만** — 호스트가 이력을 preload
+        # 했거나(STM 워터마크) Stage 2 가 단기 기억 창을 넣었으면 같은 턴이 두 번 들어간다.
+        # 그 경우 지난 턴은 대화 자리에 있고, 여기서는 지식만 다룬다.
+        meta = getattr(state, "metadata", None) or {}
+        include_recent = (
+            hooks.recent_turns > 0
+            and "memory.short_term_window" not in meta
+            and "memory.provider_strategy_recorded_idx" not in meta
+        )
+        # 이 세션이 남긴 기록(대화 아카이브·실행 카드)은 창/이력과 중복이다 — 검색 층에서 뺀다.
+        self._current_session_id = str(getattr(state, "session_id", "") or "")
 
         def _record(layer: str, before: int) -> None:
             breakdown[layer] = sum(1 for c in chunks if (c.metadata or {}).get("layer") == layer)
@@ -150,10 +188,10 @@ class MemoryAwareRetriever(MemoryRetriever):
         # CONCURRENTLY, then apply in the same order/budget as before —
         # identical output, wall-clock capped by the slowest single
         # fetch instead of the sum of up to nine serial round-trips.
-        pf = await self._prefetch_layers(search_query, hooks)
+        pf = await self._prefetch_layers(search_query, hooks, include_recent=include_recent)
 
         # ── L0: recent STM tail ─────────────────────────────────────
-        if hooks.recent_turns > 0:
+        if include_recent:
             before = total
             total = await self._load_recent_turns(
                 chunks, total, budget, hooks, prefetched=pf.get("recent", _UNFETCHED)
@@ -260,7 +298,9 @@ class MemoryAwareRetriever(MemoryRetriever):
 
     # ── concurrent fetch phase (TTFT program, 2.50.0) ────────────────
 
-    async def _prefetch_layers(self, query: str, hooks: MemoryHooks) -> Dict[str, Any]:
+    async def _prefetch_layers(
+        self, query: str, hooks: MemoryHooks, *, include_recent: bool = True
+    ) -> Dict[str, Any]:
         """Fetch raw provider data for every eligible layer concurrently.
 
         The 2026-07-12 TTFT audit (finding B1) measured stage-2 retrieval
@@ -289,7 +329,7 @@ class MemoryAwareRetriever(MemoryRetriever):
             names.append(name)
             tasks.append(_safe())
 
-        if hooks.recent_turns > 0:
+        if include_recent:
             _add("recent", lambda: self._provider.stm().recent(n=_scan_rows(hooks)))
 
         async def _fetch_summary() -> Any:
@@ -724,6 +764,8 @@ class MemoryAwareRetriever(MemoryRetriever):
             return total
         already = {_dedup_key(c) for c in chunks}
         for h in hits:
+            if _is_current_session_record(h, getattr(self, "_current_session_id", "")):
+                continue
             text = h.content or ""
             if not text or _dedup_key(h) in already:
                 continue
@@ -807,6 +849,8 @@ class MemoryAwareRetriever(MemoryRetriever):
 
         already = {_dedup_key(c) for c in chunks}
         for r in results:
+            if _is_current_session_record(r, getattr(self, "_current_session_id", "")):
+                continue
             text = r.content or ""
             if not text:
                 continue

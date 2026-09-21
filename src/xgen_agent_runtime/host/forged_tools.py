@@ -502,6 +502,74 @@ def _exec_accepts_env_packages(sandbox: Any) -> bool:
 # ── 제작/관리 도구 (에이전트가 쓰는 것) ───────────────────────────────
 
 
+async def _list_workspace_scripts(sandbox: Any) -> List[str]:
+    """workspace 의 스크립트 파일 목록(상대 경로, 최대 200) — 러너 세션에 물어본다. 실패는 빈 목록."""
+    exec_fn = getattr(sandbox, "exec", None)
+    if not callable(exec_fn):
+        return []
+    try:
+        res = await exec_fn(
+            [
+                "sh",
+                "-c",
+                "find . -maxdepth 4 -type f \\( -name '*.py' -o -name '*.sh' -o -name '*.js' "
+                "-o -name '*.ts' \\) -not -path '*/.*' -not -path '*/node_modules/*' "
+                "-not -path '*/__pycache__/*' 2>/dev/null | head -200",
+            ],
+            timeout_s=10.0,
+        )
+    except Exception:  # noqa: BLE001 — 힌트는 보조다
+        return []
+    out = getattr(res, "stdout", None)
+    if out is None and isinstance(res, dict):
+        out = res.get("stdout")
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    files = []
+    for ln in str(out or "").splitlines():
+        ln = ln.strip()
+        if ln.startswith("./"):
+            ln = ln[2:]
+        if ln:
+            files.append(ln)
+    return files
+
+
+def _script_candidates(entrypoint: str, files: List[str], *, limit: int = 5) -> List[str]:
+    """요청한 entrypoint 와 비슷한 파일 — 이름 조각이 겹치거나 문자열이 가까운 것."""
+    import difflib
+
+    want = os.path.basename(str(entrypoint or "")).lower()
+    stem = os.path.splitext(want)[0]
+    tokens = {t for t in re.split(r"[^a-z0-9]+", stem) if len(t) >= 3}
+    scored: List[tuple] = []
+    for f in files:
+        bstem = os.path.splitext(os.path.basename(f).lower())[0]
+        overlap = len(tokens & {t for t in re.split(r"[^a-z0-9]+", bstem) if len(t) >= 3})
+        ratio = difflib.SequenceMatcher(None, stem, bstem).ratio()
+        if overlap or ratio >= 0.6:
+            scored.append((-(overlap * 10 + ratio), f))
+    scored.sort()
+    return [f for _, f in scored[:limit]]
+
+
+async def _missing_script_hint(sandbox: Any, entrypoint: str) -> str:
+    files = await _list_workspace_scripts(sandbox)
+    cands = _script_candidates(entrypoint, files)
+    msg = (
+        f"스크립트를 찾을 수 없습니다: {entrypoint} — entrypoint 는 workspace 기준 스크립트 "
+        "**파일 경로**(확장자 포함, 예: 'tools/fx.py')이지 함수 이름이 아닙니다."
+    )
+    if cands:
+        msg += " 비슷한 파일: " + ", ".join(cands) + "."
+    elif files:
+        shown = ", ".join(files[:8]) + ("…" if len(files) > 8 else "")
+        msg += " workspace 의 스크립트: " + shown + "."
+    else:
+        msg += " 먼저 workspace 에 파일을 만든 뒤 등록하세요."
+    return msg
+
+
 class ForgeTool:
     """에이전트가 자기 도구를 만들어 저장하는 도구."""
 
@@ -551,7 +619,10 @@ class ForgeTool:
                 },
                 "entrypoint": {
                     "type": "string",
-                    "description": "Path to the script, RELATIVE to your workspace (e.g. 'tools/fx.py').",
+                    "description": (
+                        "Path to the script FILE, relative to your workspace, including its extension "
+                        "(e.g. 'tools/fx.py' or 'fx.py'). Not a function name, not an absolute path."
+                    ),
                 },
                 "input_schema": {
                     "type": "object",
@@ -579,7 +650,8 @@ class ForgeTool:
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "pip requirements the script imports (e.g. ['pandas', 'httpx>=0.27']). "
+                        "JSON array of pip requirement strings the script imports "
+                        '(e.g. ["pandas", "httpx>=0.27"]) — never a single string or an object. '
                         "Resolved, pinned and installed once into an isolated env — declare here "
                         "instead of pip-installing at run time. Empty for stdlib-only."
                     ),
@@ -653,20 +725,20 @@ class ForgeTool:
         try:
             validate_spec(spec, self._workspace, check_file=False)
         except ForgedToolError as exc:
-            return ToolResult(content=f"도구를 만들 수 없습니다: {exc}", is_error=True)
+            # 입력 오류는 구조화 헤더로 — 반복 가드가 "같은 원인을 안 고친 재호출" 로 세어 끊는다.
+            return ToolResult(
+                content=f"ERROR invalid_input: 도구를 만들 수 없습니다: {exc}", is_error=True
+            )
         try:
             found = await _sandbox.exists(spec.entrypoint)
         except Exception as exc:  # noqa: BLE001 — 확인 실패를 '없음' 으로 읽지 않는다
             logger.warning("스크립트 존재 확인 실패 (등록은 진행): %s", exc)
             found = True
         if not found:
-            return ToolResult(
-                content=(
-                    f"스크립트를 찾을 수 없습니다: {spec.entrypoint} "
-                    "— 먼저 workspace 에 파일을 만든 뒤 등록하세요"
-                ),
-                is_error=True,
-            )
+            # 무엇을 찾았고 무엇이 있는지 말한다 — 없다고만 하면 모델은 같은 값을 네 번 다시 낸다
+            # (2026-09-21 관측: 함수 이름을 entrypoint 로 넘기고 4회 반복).
+            hint = await _missing_script_hint(_sandbox, spec.entrypoint)
+            return ToolResult(content=f"ERROR invalid_input: {hint}", is_error=True)
 
         # 의존성이 있으면 **등록 시점에** 환경을 세운다. 첫 호출로 미루면
         # 에이전트가 도구를 부른 순간 몇 분을 기다리게 되고, 그 지연이

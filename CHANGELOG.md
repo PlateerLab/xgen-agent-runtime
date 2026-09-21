@@ -4,6 +4,49 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.36.0] — 2026-09-21
+
+근거: XGEN 고정본 대화 실측(24단계 · 도구 23회 · 실패 8). 에이전트가 매 단계 "지난 대화를 보니까 제가 …"
+를 다시 쓰고, 같은 그래프 조회를 4번, 같은 등록 실패를 4번 냈다. 원인은 셋이었다 — ① 이력을 preload 하지
+않는 호스트에서 지난 턴이 시스템 프롬프트의 `# Relevant Knowledge` 불릿(`[short_term] recent_turns: …`)으로만
+들어가 모델이 자기 지난 말을 "확인해야 할 지식" 으로 읽었다(그 서술이 턴 끝에 아카이브·STM 으로 쌓여 자기 강화),
+② 도구가 8번 실패해도 문장만 쓰면 실행 카드가 `✅` 로 남아 다음 턴에 "만들었다" 로 검색됐다, ③ ForgeTool 의
+"스크립트를 찾을 수 없습니다" 가 평문이라 반복 가드가 넓은 문턱으로 세었고, 무엇이 있는지도 말하지 않았다.
+
+### Changed — 단기 기억은 messages 로 (`memory/short_term_window.py`)
+
+- 호스트가 이력을 preload 하지 않은 턴(STM 워터마크 없음)에서 Stage 2 가 STM 의 최근 **5 논리 턴**을 messages
+  **앞에** 되살린다: 가까운 2턴은 사용자·assistant·`tool_use`·`tool_result` 를 순서·id 그대로(4,000자 넘는 결과만
+  1,200자 앞머리 + 절단 표식, 이미지 제거, thinking 제외), 먼 3턴은 사용자 텍스트 + 최종 답변 텍스트 +
+  `[used tools: ForgeTool ×4 (3 failed), Bash ×2]` 한 줄(도구 블록은 양쪽 다 제거 — 쌍을 가르지 않는다).
+  예산(기본 40,000자) 초과 시 결과 절단 → 가장 먼 대화 턴 제거 → T-2 를 대화로 강등 순이고 T-1 은 마지막까지
+  남는다. 결과 없는 `tool_use` 는 합성 결과로 메운다. 워터마크(STM 기록·대화 아카이브)를 창 길이로 세워
+  재기록을 막는다. 이벤트 `context.short_term_window`. `MemoryHooks.window_*` 로 조정(둘 다 0 이면 끔).
+  레퍼런스: OpenAI Agents Sessions(이력은 messages 로 prepend), Hermes(tail 보호·오래된 결과만 절단),
+  Claude Context Editing(최근 N 쌍만 결과 유지), LangChain trim_messages(쌍 불변).
+- L0 `recent_turns` 불릿은 지난 턴이 messages 에 **없을 때만**(창도 preload 도 없음) 들어간다.
+- 검색 층(L3/L4)에서 **현재 세션 자신의** 대화 아카이브·실행 카드를 뺀다 — 창과 중복이다.
+- 메모리 지침 한 문장: 이 대화의 지난 턴은 message history 에 있다 — 기록이지 다시 확인할 사실이 아니다.
+
+### Changed — 실행 카드는 3상태 (`host/execution_record.py`)
+
+- `✅ ok`(도구 실패·차단 없음) / `⚠️ partial`(도구 실패나 반복 차단이 있었다) / `❌ failed`. 카드에
+  `**Tools:** N calls · F failed · B blocked`, partial 이면 "do not treat the task as done". 저널 표식·태그·
+  frontmatter(`outcome`, `tool_calls`, `tool_failures`) 동일. 러너가 `tool.execute_complete`/`tool.repeat_blocked`
+  이벤트에서 수를 센다.
+
+### Changed — ForgeTool 실패는 구조화 + 힌트 (`host/forged_tools.py`)
+
+- 검증 실패·스크립트 없음이 `ERROR invalid_input:` 헤더로 나간다 — 반복 가드의 입력 오류 정책(원인을 안 고친
+  재호출 차단)이 적용된다.
+- 스크립트 없음에 workspace 의 비슷한 파일 최대 5개(`find` 로 러너 세션에 묻는다) 또는 스크립트 목록을 제시하고,
+  "entrypoint 는 파일 경로이지 함수 이름이 아니다" 를 말한다. 스키마 설명도 같은 말을 한다(`dependencies` 는
+  JSON 배열).
+
+### Changed — 반복 가드 문턱 (`stages/s10_tool/repeat_guard.py`)
+
+- 같은 입력·같은 오류 차단 5→4, 같은 호출·같은 결과 건너뛰기 8→5.
+
 ## [4.35.0] — 2026-09-20
 
 ### Added

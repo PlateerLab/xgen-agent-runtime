@@ -120,6 +120,9 @@ class EventTypes(str, Enum):
     CONTEXT_COMPACTION_SCHEDULED = "context.compaction_scheduled"
     CONTEXT_COMPACTION_REQUESTED = "context.compaction_requested"
     CONTEXT_COMPACTION_TARGET_MISSED = "context.compaction_target_missed"
+    #: 단기 기억 창(4.36.0) — 호스트가 이력을 preload 하지 않은 턴에서 STM 의 최근 논리 턴을
+    #: messages 앞에 되살렸다(가까운 턴은 도구까지, 먼 턴은 대화만).
+    CONTEXT_SHORT_TERM_WINDOW = "context.short_term_window"
     MEMORY_COMPACTION_SUMMARIZED = "memory.compaction.summarized"
     MEMORY_COMPACTION_LLM_FAILED = "memory.compaction.llm_failed"
 
@@ -415,6 +418,13 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "memory_refs": "int? — count of attached memory refs (stage form)",
         "estimated_tokens": "int?",
         "chunks": "int? — RetrievalResult.to_event form (provider-driven path)",
+    },
+    EventTypes.CONTEXT_SHORT_TERM_WINDOW: {
+        "turns": "int — 되살린 논리 턴 수",
+        "full": "int — 도구 블록까지 그대로 넣은 턴 수",
+        "dialogue": "int — 대화만 넣은 턴 수",
+        "chars": "int — 창의 직렬화 길이",
+        "degraded": "list[str] — 예산 강등 단계",
     },
     EventTypes.CONTEXT_COMPACTED: {
         "strategy": "str — compactor name/class",

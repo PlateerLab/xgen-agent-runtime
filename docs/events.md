@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-20.
-> Catalogue version: **9** · events: **133**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-21.
+> Catalogue version: **9** · events: **134**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -361,6 +361,18 @@ Enum member: `EventTypes.CONTEXT_COMPACTION_TARGET_MISSED`
 | `trigger` | str — proactive \| requested \| guard |
 | `tokens_after_estimate` | int |
 | `target_tokens` | int |
+
+### `context.short_term_window`
+
+Enum member: `EventTypes.CONTEXT_SHORT_TERM_WINDOW`
+
+| Field | Description |
+|---|---|
+| `turns` | int — 되살린 논리 턴 수 |
+| `full` | int — 도구 블록까지 그대로 넣은 턴 수 |
+| `dialogue` | int — 대화만 넣은 턴 수 |
+| `chars` | int — 창의 직렬화 길이 |
+| `degraded` | list[str] — 예산 강등 단계 |
 
 ## Stage 18 — Memory (+ Stage 2 compaction)
 

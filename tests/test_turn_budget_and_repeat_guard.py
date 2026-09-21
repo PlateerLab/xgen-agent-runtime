@@ -184,7 +184,8 @@ def _stage(*tools: Tool) -> ToolStage:
     return ToolStage(registry=reg)
 
 
-def test_same_error_with_changing_query_warns_at_three_and_blocks_at_five() -> None:
+def test_same_error_with_changing_query_warns_at_three_and_blocks_at_block_at() -> None:
+    """4.36.0: 차단 문턱 5→4 — 같은 원인을 안 고친 재호출 넷이면 충분히 알 수 있다."""
     tool = _BadArgTool()
     stage, state = _stage(tool), PipelineState(session_id="s")
     results = [_round(stage, state, i) for i in range(1, 8)]
@@ -192,12 +193,11 @@ def test_same_error_with_changing_query_warns_at_three_and_blocks_at_five() -> N
     assert "[반복 실패" not in results[1]["content"]
     assert "[반복 실패 3회]" in results[2]["content"]
     assert "[반복 실패 4회]" in results[3]["content"]
-    assert "[반복 실패 5회]" in results[4]["content"]
-    # 5번 실행된 뒤로는 실행하지 않고 차단 결과를 돌려준다.
+    # BLOCK_AT 번 실행된 뒤로는 실행하지 않고 차단 결과를 돌려준다.
     assert tool.executions == repeat_guard.BLOCK_AT
-    for r in results[5:]:
+    for r in results[repeat_guard.BLOCK_AT :]:
         assert r["is_error"] and r["content"].startswith("ERROR repeated_failure_blocked")
-        assert r["tool_use_id"] in {"u6", "u7"}
+    assert results[repeat_guard.BLOCK_AT]["tool_use_id"] == f"u{repeat_guard.BLOCK_AT + 1}"
     types = [e["type"] for e in state.events]
     assert "tool.repeat_failure" in types and "tool.repeat_blocked" in types
 
