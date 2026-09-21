@@ -24,6 +24,18 @@ Sessions·Hermes·Claude Code·LangChain trim_messages)는 모두 이력을 mess
 * **쌍 불변**: 결과 없는 ``tool_use`` 에는 합성 결과를 붙이고(Hermes stub), 앞머리의 고아
   ``tool_result`` 는 버린다 — :mod:`xgen_agent_runtime.core.message_repair` 재사용.
 * 지난 턴의 ``thinking`` 블록은 재생하지 않는다(서명이 있는 블록은 다른 요청에서 거부될 수 있다).
+* **역할은 교대한다.** 답변 없이 끝난 턴은 user 가 둘 연속이 되고, 도구 실행 중 끊긴 턴은 합성
+  tool_result(=user)로 끝나 이번 턴의 지시와 맞붙는다. 순수 발화는 합치고, 창이 user 로 끝나면
+  중단 표식 한 줄로 닫는다 — 연속 role 허용치는 백엔드마다 다르다.
+
+## 알려진 한계 (고치지 않고 적는다)
+
+* **CLI 백엔드(claude_code·codex)에서는 창이 다시 텍스트가 된다.** 그 와이어 규격은 전체 이력을
+  ``type:user`` 봉투 하나 안의 마크다운 프리앰블로 접는다. "대화를 대화 자리에" 가 완전히
+  성립하는 것은 API 백엔드다. 그래도 시스템 프롬프트의 "지식" 불릿보다는 낫다(대화로 읽힌다).
+* **창은 매 턴 미끄러지므로 messages 접두부가 고정되지 않는다.** 프롬프트 캐시는 접두부 일치라
+  메시지 층 캐시 이득은 크지 않다. 시스템 프롬프트에서 지난 턴을 걷어내 그쪽이 안정해진 만큼은
+  벌었다. 접두부를 고정하려면 미끄러지는 창 대신 누적 요약(v2)이 필요하다.
 """
 
 from __future__ import annotations
@@ -63,9 +75,17 @@ DEFAULT_DIALOGUE_MESSAGE_CHARS = 4_000
 MIN_DIALOGUE_MESSAGE_CHARS = 400
 #: STM 에서 읽어 오는 행 상한 — 한 턴이 도구 40행일 수 있다.
 SCAN_ROWS = 400
+#: 첫 시도 행 수. STM 행은 도구 결과 **원문** 을 들고 있어 400행을 늘 읽으면 버릴 데이터를
+#: 매 턴 다 읽는다(턴 시작 지연에 그대로 얹힌다). 작게 읽어 보고, 필요한 턴 수를 못 덮었을
+#: 때만 상한까지 한 번 더 간다.
+SCAN_FIRST = 96
 
 _TRIM_NOTE = "…[+{n} chars trimmed from an earlier turn]"
 _IMAGE_NOTE = "[image removed from an earlier turn]"
+#: 창이 user 메시지로 끝나면 이번 턴의 사용자 지시와 맞붙어 user 가 둘 연속이 된다. 끊긴 턴
+#: (도구 호출 중 중단)이 딱 그 모양을 만든다. 합성 tool_result 와 같은 계열의 표식 한 줄로
+#: 창을 닫아 역할이 교대하게 둔다 — 백엔드마다 연속 역할 허용치가 다르다.
+_INTERRUPTED_TAIL = "[The previous turn was interrupted before it finished.]"
 
 
 @dataclass
@@ -278,9 +298,43 @@ def _full_messages(
     return out
 
 
+def _is_plain(msg: Dict[str, Any]) -> bool:
+    """도구 블록이 없는 순수 발화인가 — 합쳐도 짝이 깨지지 않는 메시지."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return all(isinstance(b, dict) and b.get("type") == "text" for b in content)
+    return False
+
+
+def _coalesce_plain_roles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """같은 role 이 연속된 **순수 발화** 를 하나로 합친다.
+
+    답변 없이 끝난 턴(사용자가 중간에 멈춘 턴)이 창에 들어오면 user 메시지가 연달아 놓인다.
+    도구 블록이 낀 메시지는 건드리지 않는다 — tool_use/tool_result 짝과 블록 순서 규칙을
+    건드리는 것이 연속 role 보다 위험하다.
+    """
+    out: List[Dict[str, Any]] = []
+    for msg in messages:
+        if out and out[-1].get("role") == msg.get("role") and _is_plain(out[-1]) and _is_plain(msg):
+            prev_text = _text_of(out[-1].get("content"))
+            next_text = _text_of(msg.get("content"))
+            merged = "\n\n".join(t for t in (prev_text, next_text) if t)
+            out[-1] = {"role": msg.get("role"), "content": merged}
+            continue
+        out.append(msg)
+    return out
+
+
 def _sanitize_pairs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     msgs = strip_leading_orphan_tool_results(list(messages))
     repair_dangling_tool_calls(msgs)
+    msgs = _coalesce_plain_roles(msgs)
+    # 창은 assistant 로 끝나야 이번 턴의 사용자 지시와 역할이 교대한다. 끊긴 턴을 복구하면
+    # 마지막이 합성 tool_result(= user)가 된다.
+    if msgs and str(msgs[-1].get("role") or "") == "user":
+        msgs.append({"role": "assistant", "content": _INTERRUPTED_TAIL})
     return msgs
 
 
@@ -305,6 +359,26 @@ def build_window(
     result_keep = cfg.result_keep
     message_chars = cfg.dialogue_message_chars
 
+    def _trimmable(keep: int) -> bool:
+        """더 깎을 tool_result 가 남았는가 — 없으면 result_keep 을 줄여도 크기가 안 준다."""
+        for turn in full:
+            for m in turn.messages:
+                for b in _blocks(_msg_content(m)):
+                    if b.get("type") != "tool_result":
+                        continue
+                    body = b.get("content")
+                    if isinstance(body, str) and len(body) > keep:
+                        return True
+                    if isinstance(body, list):
+                        for part in body:
+                            if (
+                                isinstance(part, dict)
+                                and part.get("type") == "text"
+                                and len(str(part.get("text", ""))) > keep
+                            ):
+                                return True
+        return False
+
     def _assemble() -> List[Dict[str, Any]]:
         msgs: List[Dict[str, Any]] = []
         for t in dialogue:
@@ -318,7 +392,7 @@ def build_window(
     guard = 0
     while _size(msgs) > cfg.max_chars and guard < 40:
         guard += 1
-        if result_keep > MIN_RESULT_KEEP:
+        if result_keep > MIN_RESULT_KEEP and _trimmable(result_keep):
             result_keep = max(MIN_RESULT_KEEP, result_keep // 2)
             report.degraded.append(f"result_keep={result_keep}")
         elif dialogue:
@@ -342,22 +416,42 @@ def build_window(
     return msgs, report
 
 
+def _turn_starts(rows: Sequence[Any]) -> int:
+    """논리 턴을 여는 행(도구 결과가 아닌 user)의 수."""
+    count = 0
+    for row in rows:
+        role = str(getattr(row, "role", "") or "")
+        if role == "user" and not _is_tool_result_only(getattr(row, "content", "")):
+            count += 1
+    return count
+
+
 async def load_window(
     provider: Any, cfg: Optional[WindowConfig] = None
 ) -> Tuple[List[Dict[str, Any]], WindowReport]:
-    """provider 의 STM 에서 창을 읽어 조립한다. STM 이 없거나 실패하면 빈 창."""
+    """provider 의 STM 에서 창을 읽어 조립한다. STM 이 없거나 실패하면 빈 창.
+
+    적재는 **필요한 만큼만**: STM 한 행은 도구 결과 원문을 들고 있어서(수백 KB 가 될 수 있다)
+    상한을 늘 읽으면 버릴 데이터를 매 턴 다 읽는다. 작게 읽어 필요한 턴 수를 덮었는지 보고,
+    못 덮었을 때만 상한까지 한 번 더 읽는다.
+    """
     cfg = cfg or WindowConfig()
     if not cfg.enabled or provider is None:
         return [], WindowReport()
     stm_fn = getattr(provider, "stm", None)
     if not callable(stm_fn):
         return [], WindowReport()
+    needed = cfg.full_turns + cfg.dialogue_turns
     try:
         stm = stm_fn()
-        turns = await stm.recent(n=SCAN_ROWS)
+        rows = list(await stm.recent(n=SCAN_FIRST) or [])
+        # 행이 요청보다 적으면 STM 전체를 읽은 것이고, 턴 시작이 needed 보다 많으면 가장
+        # 오래된 턴까지 온전히 덮었다. 둘 다 아니면 상한까지 한 번 더.
+        if len(rows) >= SCAN_FIRST and _turn_starts(rows) <= needed:
+            rows = list(await stm.recent(n=SCAN_ROWS) or [])
     except Exception:  # noqa: BLE001 — 창이 없어도 턴은 돈다
         return [], WindowReport()
-    return build_window(list(turns or []), cfg)
+    return build_window(rows, cfg)
 
 
 __all__ = [

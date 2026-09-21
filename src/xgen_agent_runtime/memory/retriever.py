@@ -103,11 +103,31 @@ def _is_current_session_record(hit: Any, session_id: str) -> bool:
         return False
     meta = getattr(hit, "metadata", None) or {}
     fn = str(meta.get("filename") or getattr(hit, "key", "") or "")
-    safe = _safe_session(sid)
-    if safe and fn.split("/")[-1].startswith(f"{safe}__user"):
+    if _is_current_session_name(fn, sid):
         return True
-    content = str(getattr(hit, "content", "") or "")
-    return sid in content[:600]
+    if str(meta.get("session_id") or "").strip() == sid:
+        return True
+    # 본문 판정은 **라벨이 붙은 자리** 만 본다(실행 카드 ``**Session:** <sid>``, 아카이브
+    # frontmatter ``session_id: <sid>``). 예전엔 앞 600자에 세션 id 가 스치기만 해도 걸러서,
+    # 에이전트가 직접 쓴 노트(그 id 를 인용한 것)까지 지식 층에서 사라졌다.
+    head = str(getattr(hit, "content", "") or "")[:600].lower()
+    needle = sid.lower()
+    pos = head.find(needle)
+    while pos != -1:
+        if "session" in head[max(0, pos - 40) : pos]:
+            return True
+        pos = head.find(needle, pos + 1)
+    return False
+
+
+def _is_current_session_name(filename: str, session_id: str) -> bool:
+    """파일명이 이 세션의 대화 아카이브인가 (``<safe sid>__user…``)."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    safe = _safe_session(sid)
+    bare = str(filename or "").split("/")[-1]
+    return bool(safe) and bare.startswith(f"{safe}__user")
 
 
 class MemoryAwareRetriever(MemoryRetriever):
@@ -931,6 +951,10 @@ class MemoryAwareRetriever(MemoryRetriever):
 
         for (seed, tgt), note in zip(planned, notes_read):
             if note is None or tgt in already:
+                continue
+            # 이 세션의 대화 아카이브는 창(또는 preload 이력)에 이미 대화로 들어가 있다 —
+            # 위키링크를 타고 지식 층으로 다시 올라오면 같은 말이 두 자리에 놓인다.
+            if _is_current_session_name(tgt, getattr(self, "_current_session_id", "")):
                 continue
             body = (getattr(note, "body", "") or "")[:800]
             if not body:

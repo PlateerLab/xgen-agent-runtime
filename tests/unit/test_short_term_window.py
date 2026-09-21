@@ -7,7 +7,8 @@ import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
-from xgen_agent_runtime.memory.short_term_window import (
+from xgen_agent_runtime.memory.short_term_window import (  # noqa: F401
+    SCAN_ROWS,
     WindowConfig,
     build_window,
     load_window,
@@ -164,7 +165,8 @@ class TestLoadWindow:
     def test_reads_stm_recent_and_builds(self):
         class _STM:
             async def recent(self, n=20):
-                assert n >= 100
+                # 첫 적재는 작은 쪽(SCAN_FIRST) — 도구 결과 원문을 매 턴 다 읽지 않는다.
+                assert 0 < n <= SCAN_ROWS
                 return _turns(2)
 
         class _P:
