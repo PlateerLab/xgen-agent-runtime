@@ -108,6 +108,10 @@ dependencies = [
 # Ssh* built-ins — remote command/SFTP over SSH. Pure-async (asyncssh),
 # lazy-imported so the core install stays lean.
 dev = [
+    # 테스트 전용: host/tools.py 는 LangChain 도구를 덕 타이핑으로만 다루지만, 어댑터
+    # 테스트는 StructuredTool 을 직접 만든다. 예전엔 xgen-contextifier 를 통해 전이로
+    # 들어왔다(edit2docs 0.24.0 부터 그 경로가 없다).
+    "langchain-core>=0.3",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
