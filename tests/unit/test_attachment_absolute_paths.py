@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from xgen_agent_runtime.host.attachment_paths import (
     absolutize_attachments,
     absolutize_input,
@@ -178,3 +180,103 @@ class TestOversizedResultNeverPointsOutside:
         text = self._run(storage=str(storage), workdir=str(workdir))
         assert "Full body saved at:" in text
         assert str(storage) in text
+
+
+class TestChatScopeAttachments:
+    """배포된 고정본의 첨부는 **그 대화만의 샌드박스**에 있다.
+
+    호스트가 이미 절대 경로를 실어 보내므로 여기서 다시 계산하면 엉뚱한 자리를 가리킨다.
+    """
+
+    CHAT_ABS = "/xgeny/workspace/chat/deploy_9/workspace/uploads/users_1/deploy_9/deck.pptx"
+
+    def test_a_host_supplied_absolute_path_is_left_alone(self):
+        item = {
+            "kind": "file",
+            "name": "deck.pptx",
+            "workspace_path": "uploads/users_1/deploy_9/deck.pptx",
+            "path": self.CHAT_ABS,
+            "scope": "chat",
+        }
+
+        out = absolutize_attachments([item], WORKDIR)
+
+        assert out[0]["path"] == self.CHAT_ABS, "에이전트 작업 폴더로 다시 계산하면 안 된다"
+
+    def test_a_relative_only_descriptor_still_gets_the_agent_base(self):
+        out = absolutize_attachments([{"kind": "file", "workspace_path": REL}], WORKDIR)
+        assert out[0]["path"] == ABS
+
+
+class TestSessionImageHydration:
+    @pytest.mark.asyncio
+    async def test_a_session_only_image_is_materialized(self, monkeypatch):
+        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
+
+        async def _read(sandbox, path, **kw):
+            assert path == "/chat/x/workspace/uploads/a.png"
+            return b"\x89PNG\r\n\x1a\n" + b"0" * 32
+
+        monkeypatch.setattr(sb, "sb_read_bytes", _read)
+        item = {"kind": "image", "name": "a.png", "path": "/chat/x/workspace/uploads/a.png"}
+
+        out = await hydrate_sandbox_images(
+            [item], object(), max_bytes=1 << 20, turn_max_bytes=1 << 21
+        )
+
+        local = out[0]["local_path"]
+        assert local and open(local, "rb").read().startswith(b"\x89PNG")
+        assert out[0]["size"] == 40
+
+    @pytest.mark.asyncio
+    async def test_files_are_never_read_back(self, monkeypatch):
+        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
+
+        async def _boom(sandbox, path, **kw):
+            raise AssertionError("파일 첨부는 에이전트가 자기 도구로 연다")
+
+        monkeypatch.setattr(sb, "sb_read_bytes", _boom)
+        item = {"kind": "file", "name": "a.pptx", "path": "/chat/x/workspace/uploads/a.pptx"}
+
+        out = await hydrate_sandbox_images([item], object(), max_bytes=1, turn_max_bytes=1)
+
+        assert out == [item]
+
+    @pytest.mark.asyncio
+    async def test_an_oversized_image_is_skipped_not_fatal(self, monkeypatch):
+        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
+
+        async def _read(sandbox, path, **kw):
+            return b"\x89PNG\r\n\x1a\n" + b"0" * 4096
+
+        monkeypatch.setattr(sb, "sb_read_bytes", _read)
+        item = {"kind": "image", "path": "/chat/x/workspace/uploads/big.png"}
+
+        out = await hydrate_sandbox_images([item], object(), max_bytes=10, turn_max_bytes=10)
+
+        assert "local_path" not in out[0]
+
+    @pytest.mark.asyncio
+    async def test_a_read_failure_keeps_the_turn_alive(self, monkeypatch):
+        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
+
+        async def _read(sandbox, path, **kw):
+            raise RuntimeError("runner down")
+
+        monkeypatch.setattr(sb, "sb_read_bytes", _read)
+        item = {"kind": "image", "path": "/chat/x/workspace/uploads/a.png"}
+
+        out = await hydrate_sandbox_images([item], object(), max_bytes=1 << 20, turn_max_bytes=1 << 21)
+
+        assert out == [item]
+
+    @pytest.mark.asyncio
+    async def test_no_sandbox_is_a_no_op(self):
+        from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
+
+        items = [{"kind": "image", "path": "/x.png"}]
+        assert await hydrate_sandbox_images(items, None, max_bytes=1, turn_max_bytes=1) == items

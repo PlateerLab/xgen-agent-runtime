@@ -30,6 +30,13 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
+#: 세션에서 읽어 오는 이미지 첨부의 예산 — 워크스페이스 첨부(workflow 쪽 XGENY_IMAGE_*)와
+#: 같은 값. 한 장과 한 턴 합계 둘 다 본다.
+_ATTACH_IMAGE_MAX_BYTES = int(os.getenv("XGENY_IMAGE_MAX_BYTES", str(20 * 1024 * 1024)) or 0)
+_ATTACH_TURN_IMAGE_MAX_BYTES = int(
+    os.getenv("XGENY_TURN_IMAGE_MAX_BYTES", str(40 * 1024 * 1024)) or 0
+)
+
 logger = logging.getLogger("editor.nodes.xgen.agent.agent_geny")
 
 
@@ -968,18 +975,46 @@ class AgentTurnExecutor:
             # 첨부는 워크스페이스 상대로 들어오므로, 기준을 모델에게 맡기면 틀린 자리를 만든다
             # (2026-09-21 실측: 작업 폴더가 …/<wf>/workspace 인데 …/<wf>/uploads 로 읽으려다
             # 샌드박스 가드에 막혔다). 기준을 아는 쪽은 턴을 여는 이곳 하나다.
-            from xgen_agent_runtime.host.attachment_paths import absolutize_attachments
+            from xgen_agent_runtime.host.attachment_paths import (
+                absolutize_attachments,
+                hydrate_sandbox_images,
+            )
 
             _ws_base = str(
                 getattr(run_tool_context, "working_dir", "")
                 or getattr(_sandbox, "workdir", "")
                 or ""
             )
-            if _ws_base and turn_input.attachments:
-                turn_input = replace(
-                    turn_input,
-                    attachments=absolutize_attachments(turn_input.attachments, _ws_base),
+            if turn_input.attachments:
+                _atts = (
+                    absolutize_attachments(turn_input.attachments, _ws_base)
+                    if _ws_base
+                    else list(turn_input.attachments)
                 )
+                # 세션에만 있는 이미지(배포된 고정본의 대화 첨부)는 여기서 읽는다 —
+                # 서빙 파드에는 사본이 없고, 세션을 들고 있는 자리가 여기뿐이다.
+                # ``run`` 은 동기라(노드가 그대로 부른다) 짧은 루프 하나를 돌린다;
+                # 실패는 첨부 하나를 포기할 뿐 턴을 깨지 않는다.
+                if _sandbox is not None and any(
+                    isinstance(a, dict)
+                    and str(a.get("kind") or a.get("type") or "").lower()
+                    in ("image", "img", "picture")
+                    for a in _atts
+                ):
+                    import asyncio as _asyncio
+
+                    try:
+                        _atts = _asyncio.run(
+                            hydrate_sandbox_images(
+                                _atts,
+                                _sandbox,
+                                max_bytes=_ATTACH_IMAGE_MAX_BYTES,
+                                turn_max_bytes=_ATTACH_TURN_IMAGE_MAX_BYTES,
+                            )
+                        )
+                    except Exception:  # noqa: BLE001 — 첨부 준비 실패가 턴을 깨지 않는다
+                        logger.warning("세션 이미지 첨부 준비 실패 (건너뜀)", exc_info=True)
+                turn_input = replace(turn_input, attachments=_atts)
             pipeline_input = turn_input.with_text(user_text).as_pipeline_input()
 
             # Codex-style durable rollout은 관리자 opt-in이다. 대화/도구 결과를

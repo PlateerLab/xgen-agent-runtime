@@ -4,6 +4,26 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.40.0] — 2026-09-21
+
+배포된 고정본의 대화 첨부를 받기 위한 호스트 쪽 두 가지. 짝은 xgen-workflow 의 대화 스코프
+샌드박스(`chat:<대화 id>`)다 — 접속한 사람마다 자기 동결본을 마주하고, 첨부는 그 대화의
+임시 파일이 된다.
+
+### Fixed
+
+- **호스트가 이미 실은 절대 경로를 덮어쓰지 않는다.** 대화 스코프 첨부는 에이전트 작업
+  폴더가 아니라 그 대화만의 트리에 있다. 상대 경로로 다시 계산하면 엉뚱한 자리를 가리켰다.
+  기준을 아는 쪽이 이미 붙였으면 그것이 맞다.
+
+### Added
+
+- `host.attachment_paths.hydrate_sandbox_images` — 세션에만 있는 이미지 첨부의 바이트를
+  턴이 열린 뒤 세션에서 읽어 프로바이더가 쓸 수 있게 한다. 서빙 파드에는 사본이 없고,
+  세션을 들고 있는 자리가 거기뿐이다. 파일 첨부는 읽지 않는다(에이전트가 자기 파일 도구로
+  연다). 한 장·한 턴 예산은 워크스페이스 첨부와 같은 값이며, 읽기 실패는 그 첨부 하나만
+  포기하고 턴은 계속된다.
+
 ## [4.39.0] — 2026-09-21
 
 채팅으로 올린 파일을 에이전트가 열지 못하던 문제. 업로드는 정상이었고, **경로를 말하는 방식**이
