@@ -36,7 +36,10 @@ class ReadTool(Tool):
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file to read.",
+                    "description": (
+                        "Absolute path to the file to read (starts with `/`). "
+                        "A relative path is resolved against your working folder."
+                    ),
                 },
                 "offset": {
                     "type": "integer",

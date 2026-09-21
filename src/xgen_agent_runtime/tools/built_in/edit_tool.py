@@ -33,7 +33,10 @@ class EditTool(Tool):
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file to modify.",
+                    "description": (
+                        "Absolute path to the file to modify (starts with `/`). "
+                        "A relative path is resolved against your working folder."
+                    ),
                 },
                 "old_string": {
                     "type": "string",

@@ -4,6 +4,35 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.39.0] — 2026-09-21
+
+채팅으로 올린 파일을 에이전트가 열지 못하던 문제. 업로드는 정상이었고, **경로를 말하는 방식**이
+갈라져 있던 것이 원인이다.
+
+### Fixed
+
+- **첨부는 이제 세션 절대 경로로 안내된다.** 첨부는 워크스페이스 상대(`uploads/…`)로 들어오는데
+  파일 도구 스키마는 절대 경로를 요구했다. 기준을 모델이 정하게 두었더니, 작업 폴더가
+  `…/<wf>/workspace` 인데 안내 문구가 그 값을 "workspace path" 라고 불러 모델이 그 단어를 폴더
+  이름과 겹쳐 읽고 한 조각을 건너뛴 `…/<wf>/uploads/…` 로 열려다 샌드박스 가드에 막혔다. 파일은
+  제자리에 있었는데 열지 못했다. 이제 기준을 아는 쪽(턴을 여는 호스트)이 한 번 붙인다 —
+  `host/attachment_paths.absolutize_attachments`. 상대 경로는 출처 기록(기억·첨부 원장)을 위해
+  `workspace_path` 에 그대로 남는다.
+- **기준 없는 경로를 말하지 않는다.** 절대 경로를 못 만든 경우(로컬 실행 등)에는 상대 경로에
+  "relative to your working folder" 를 함께 붙인다. 이미지 첨부 문구도 같은 규칙을 따른다.
+- **도달할 수 없는 경로를 저장 위치라고 말하지 않는다.** 예산을 넘긴 도구 결과는 내부 저장소
+  (`<스토리지 루트>/executor/tool-results/`)에 내려가는데, 그곳은 세션 루트의 **형제**라 파일
+  도구가 늘 거절한다. 그런데도 "Full body persisted to: <절대 경로>" 라고 알려 주어, 그 턴에
+  파일을 못 읽는 것은 물론 **모델이 열 수 없는 뿌리를 정상 경로로 학습**했다(첨부 사고에서 쓰인
+  접두사가 바로 그것이다). 이제 도달 가능할 때만 경로를 말하고, 아니면 서버에 남아 있고 도구로는
+  열 수 없다고 분명히 말한다.
+
+### Changed
+
+- `Read` / `Edit` / `Write` 스키마가 규칙을 끝까지 말한다: 절대 경로가 기본이고, 상대 경로는
+  작업 폴더 기준으로 풀린다. 예전에는 "Absolute path…" 한 줄이라 상대 경로만 손에 쥔 모델이
+  기준을 지어내야 했다.
+
 ## [4.38.0] — 2026-09-21
 
 4.36.0 단기 기억 창을 전수 재검토해 나온 결함을 고친다. 셋 다 "기억이 조용히 사라지거나 두 배가

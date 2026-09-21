@@ -287,12 +287,25 @@ def _image_block_to_google_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 def _file_block_to_text_fallback(block: Dict[str, Any]) -> str:
-    """Tell the agent which current-turn workspace file it can read."""
+    """Tell the agent which current-turn file it can read, **by absolute path**.
+
+    ``path`` is the session absolute path when the host knew the working folder
+    (:mod:`xgen_agent_runtime.host.attachment_paths`); only then does the agent
+    need no base of its own. Without it we fall back to the workspace-relative
+    form and say what it is relative to — never a bare path with no stated base,
+    which is what made the model invent a wrong root (2026-09-21).
+    """
     name = block.get("name") or "unnamed"
     mime = block.get("mime_type") or "application/octet-stream"
-    path = block.get("workspace_path") or block.get("path")
-    if path:
-        return f"[Current-turn attachment: {name} ({mime}). Read it from workspace path: {path}]"
+    absolute = block.get("path")
+    if absolute and str(absolute).startswith("/"):
+        return f"[Current-turn attachment: {name} ({mime}). Read it at: {absolute}]"
+    relative = block.get("workspace_path") or absolute
+    if relative:
+        return (
+            f"[Current-turn attachment: {name} ({mime}). Read it at: {relative} "
+            "(relative to your working folder)]"
+        )
     return f"[Current-turn attachment: {name} ({mime})]"
 
 

@@ -78,11 +78,23 @@ class NormalizedInput:
         for img in self.images:
             blocks.append(img)
             meta = img.get("_meta") or {}
-            if meta.get("workspace_path"):
+            # 경로는 한 가지 방식으로만 말한다 — 세션 절대 경로. 없을 때만 상대 경로이고,
+            # 그때는 기준이 무엇인지 함께 말한다(첨부 파일 문구와 같은 규칙).
+            _abs = str(meta.get("path") or "")
+            _where = (
+                f"{_abs}"
+                if _abs.startswith("/")
+                else (
+                    f"{meta.get('workspace_path')} (relative to your working folder)"
+                    if meta.get("workspace_path")
+                    else ""
+                )
+            )
+            if _where:
                 blocks.append(
                     {
                         "type": "text",
-                        "text": f"[Image attachment: {meta.get('name', 'image')}. Original workspace path: {meta['workspace_path']}]",
+                        "text": f"[Image attachment: {meta.get('name', 'image')}. Saved at: {_where}]",
                     }
                 )
         for f in self.files:
