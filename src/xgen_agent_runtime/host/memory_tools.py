@@ -53,6 +53,66 @@ def _summary_dict(s: Any) -> Dict[str, Any]:
     }
 
 
+#: 없는 노트를 물었을 때 돌려주는 후보 수 — 고르기엔 충분하고 프리픽스를 부풀리지 않는 선.
+_MISS_SUGGESTIONS = 5
+#: 후보를 찾을 때 훑는 노트 수 상한.
+_MISS_SCAN_LIMIT = 200
+
+
+async def _list_filenames(provider: Any, category: Optional[str]) -> List[str]:
+    """금고가 실제로 가진 노트 이름 — 조회 실패는 빈 목록(진단이 본작업을 막지 않는다)."""
+    try:
+        summaries = await provider.index().list_notes(category=category, limit=_MISS_SCAN_LIMIT)
+    except Exception:  # noqa: BLE001 — 힌트를 못 만들어도 오류 자체는 돌려줘야 한다
+        logger.debug("memory_read miss: list_notes(category=%r) failed", category, exc_info=True)
+        return []
+    return [str(getattr(s, "filename", "")) for s in summaries if getattr(s, "filename", "")]
+
+
+async def _read_miss_payload(provider: Any, filename: str) -> Dict[str, Any]:
+    """ "없다" 만 말하지 않고 **금고가 가진 것**을 함께 보여 준다.
+
+    실측 (2026-09-02~20 dev): ``Note not found`` 45건 / 14 대화 = 대화당 3.2회.
+    모델이 파일명을 지어내고(``conversations/conn-wf_…__user__깃허브-레포-….md``),
+    없다는 말만 듣고 또 지어낸다. 이름은 우리가 만든 규칙이라 모델이 맞힐 수 없다 —
+    한 번의 오류에 **실제 이름 몇 개**를 얹으면 추측이 끝난다.
+
+    도메인 단어는 쓰지 않는다. 금고 자신의 색인만 본다.
+    """
+    import difflib
+
+    payload: Dict[str, Any] = {"error": f"Note not found: {filename}"}
+
+    category = filename.split("/", 1)[0] if "/" in filename else None
+    names = await _list_filenames(provider, category)
+    scope = category
+    if not names and category:
+        # 그 카테고리가 통째로 없다 — 금고 전체에서 다시 본다.
+        names = await _list_filenames(provider, None)
+        scope = None
+
+    if not names:
+        payload["available"] = []
+        payload["hint"] = (
+            "This memory vault has no notes yet. Write one with memory_write before reading."
+        )
+        return payload
+
+    near = difflib.get_close_matches(filename, names, n=_MISS_SUGGESTIONS, cutoff=0.5)
+    if not near:
+        near = names[:_MISS_SUGGESTIONS]
+    payload["did_you_mean"] = near
+    payload["available_count"] = len(names)
+    if scope:
+        payload["scanned_category"] = scope
+    payload["hint"] = (
+        "Filenames are assigned by the vault, not chosen by you — do not guess them. "
+        "Use memory_search (by content) or memory_list (by category) to get a real "
+        "filename, then read that."
+    )
+    return payload
+
+
 def build_memory_tools(provider: Any) -> List[Any]:
     """provider 에 바인딩된 executor ``Tool`` 목록을 만든다.
 
@@ -130,7 +190,11 @@ def build_memory_tools(provider: Any) -> List[Any]:
             return ToolResult(content=_err("filename is required"), is_error=True)
         note = await provider.notes().read(filename)
         if note is None:
-            return ToolResult(content=_err(f"Note not found: {filename}"), is_error=True)
+            miss = await _read_miss_payload(provider, filename)
+            return ToolResult(
+                content=json.dumps(miss, ensure_ascii=False, indent=2, default=str),
+                is_error=True,
+            )
         return ToolResult(
             content=_ok(
                 {

@@ -4,6 +4,46 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.48.0] — 2026-09-22
+
+### Fixed — 없는 노트를 물으면 "없다" 만 듣고 또 지어냈다
+
+근거: dev `agent_trace_spans` 2026-09-02~20. `memory_read` 의 `Note not found`
+**45건 / 14 대화 = 대화당 3.2회**. 3주 내내, 여러 사용자. 모델이 지어낸 이름들:
+
+```
+conversations/conn-wf_1789721412638_naq7zec-…__user__깃허브-레포-주소를-넣으면-….md   ×7
+executions/exec-0002-422d6b6c.md · notes/exec-0002-f7f90ed0.md                      ×6
+critical/사용자-이름.md                                                              ×3
+```
+
+파일명은 **금고가 붙이는 것**이라 모델이 맞힐 수 없다. 그런데 응답이
+`{"error": "Note not found: …"}` 한 줄뿐이라 고칠 정보가 없었고, 모델은 규칙을
+다시 상상해 또 틀렸다 — 한 대화에서 평균 세 번.
+
+- **빗나간 읽기가 금고의 실제 이름을 들고 돌아온다** (`host/memory_tools._read_miss_payload`).
+  파일명의 카테고리 접두사로 색인을 훑어 `difflib` 근접 후보 5개(`did_you_mean`),
+  전체 노트 수, 그리고 *"filenames are assigned by the vault, not chosen by you — use
+  memory_search or memory_list"* 를 함께 돌려준다. 그 카테고리가 통째로 없으면 금고
+  전체에서 다시 찾고, 금고가 비어 있으면 `memory_write` 부터 하라고 말한다.
+  색인 조회가 실패해도 원래의 not-found 오류는 그대로 간다 — 진단이 본작업을 막지 않는다.
+
+도메인 단어는 쓰지 않는다. **금고 자신의 색인만** 본다.
+
+재현 테스트(`tests/unit/test_memory_read_miss.py`, 5개): 빈 금고 / 후보 제시 /
+없는 카테고리는 전체 폴백 / 진짜 노트는 그대로 읽힘 / 색인이 깨져도 오류는 살아남음.
+
+### Not changed (검토 뒤 보류)
+
+- **`open: command not found` 37건.** 같은 기록을 60일로 넓혀 보니 `command not found`
+  는 78건·15개 명령인데, `open`(37건)만 **3개 대화에 12.3회씩** 몰렸고 나머지 14개
+  (`file`·`sqlite3`·`git`·`xxd`·`sudo`·`node`…)는 **전부 1.0회/대화** — 모델이 한 번
+  부딪히고 곧바로 다른 길을 찾는다. 즉 일반적인 결함이 아니라 하루치 한 사례다.
+  Bash 비정상 종료를 반복 가드에 넣는 일반화도 함께 검토했으나, 같은 기록에서 3회 이상
+  되풀이된 Bash 실패 15묶음 중 다수가 pytest·AssertionError·sqlite 스키마 수정 등
+  **정상적인 "고치고 → 다시 실행"** 이라 오탐이 크다. 재현 사례가 다른 날·다른 도메인에서
+  나오면 다시 본다.
+
 ## [4.47.0] — 2026-09-22
 
 ### Fixed — 스키마 오류 한 건이 모델 왕복 한 번이었다
