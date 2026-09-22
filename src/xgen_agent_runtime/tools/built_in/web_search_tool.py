@@ -132,7 +132,14 @@ class WebSearchTool(Tool):
 
         max_results = int(input.get("max_results", _DEFAULT_MAX_RESULTS))
         max_results = max(1, min(_HARD_MAX_RESULTS, max_results))
-        region = input.get("region") or "wt-wt"
+        # ddgs 9.x fans the query out to several engines and builds the
+        # wikipedia one's host from the region prefix — ``wt-wt`` (its own
+        # "worldwide" code) becomes ``wt.wikipedia.org``, which does not exist,
+        # so that engine fails on every call and when the others are throttled
+        # the whole search fails (dev 2026-09-22: 22 of 50 WebSearch calls in
+        # one session died with "DNSError … wt.wikipedia.org"). Pass a region
+        # only when the caller asked for one; ddgs' own default works.
+        region = input.get("region") or None
         safesearch = input.get("safesearch") or "moderate"
 
         backend_name = select_backend_name(input, context)
@@ -185,7 +192,7 @@ class WebSearchTool(Tool):
         ddgs_cls: Any,
         query: str,
         max_results: int,
-        region: str,
+        region: Optional[str],
         safesearch: str,
     ) -> List[Dict[str, Any]]:
         """Blocking ddgs body — kept for backward compatibility.
@@ -194,15 +201,11 @@ class WebSearchTool(Tool):
         existing hosts / tests that monkey-patch
         ``WebSearchTool._search_sync`` keep working unchanged.
         """
+        kwargs: Dict[str, Any] = {"safesearch": safesearch, "max_results": max_results}
+        if region:
+            kwargs["region"] = region
         with ddgs_cls() as client:
-            return list(
-                client.text(
-                    query,
-                    region=region,
-                    safesearch=safesearch,
-                    max_results=max_results,
-                )
-            )
+            return list(client.text(query, **kwargs))
 
     @staticmethod
     def _normalise_hit(index: int, raw: Dict[str, Any]) -> Dict[str, Any]:

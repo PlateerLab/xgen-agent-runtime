@@ -221,3 +221,55 @@ class TestRegistry:
 
         assert "WebSearch" in BUILT_IN_TOOL_CLASSES
         assert BUILT_IN_TOOL_CLASSES["WebSearch"] is WebSearchTool
+
+
+# ── region 기본값 — ddgs 에 'wt-wt' 를 넘기지 않는다 (4.42.0) ─────────────
+#
+# dev 2026-09-22: 한 세션 WebSearch 50회 중 22회가 "DNSError … wt.wikipedia.org".
+# ddgs 9.x 는 region 접두사로 wikipedia 엔진 호스트를 만든다 — 우리 기본값
+# 'wt-wt' 가 존재하지 않는 wt.wikipedia.org 가 되어 매번 실패하고, 다른 엔진이
+# 막히면 검색 전체가 죽는다. region 은 호출자가 준 것만 넘긴다.
+
+
+class TestRegionDefault:
+    @pytest.mark.asyncio
+    async def test_default_region_is_not_sent_to_ddgs(self, monkeypatch, ddgs_available):
+        seen: Dict[str, Any] = {}
+
+        def _capture(ddgs_cls, query, max_results, region, safesearch):
+            seen["region"] = region
+            return []
+
+        monkeypatch.setattr(WebSearchTool, "_search_sync", staticmethod(_capture))
+        await WebSearchTool().execute({"query": "제주은행 입찰공고"}, ToolContext(working_dir="/tmp"))
+        assert seen["region"] is None  # 'wt-wt' 가 아니다
+
+    @pytest.mark.asyncio
+    async def test_explicit_region_is_passed_through(self, monkeypatch, ddgs_available):
+        seen: Dict[str, Any] = {}
+
+        def _capture(ddgs_cls, query, max_results, region, safesearch):
+            seen["region"] = region
+            return []
+
+        monkeypatch.setattr(WebSearchTool, "_search_sync", staticmethod(_capture))
+        await WebSearchTool().execute({"query": "q", "region": "kr-kr"}, ToolContext(working_dir="/tmp"))
+        assert seen["region"] == "kr-kr"
+
+    def test_real_search_sync_omits_region_kwarg_when_none(self):
+        calls: List[Dict[str, Any]] = []
+
+        class _Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def text(self, query, **kwargs):
+                calls.append(kwargs)
+                return []
+
+        WebSearchTool._search_sync(_Client, "q", 5, None, "moderate")
+        WebSearchTool._search_sync(_Client, "q", 5, "us-en", "moderate")
+        assert "region" not in calls[0] and calls[1]["region"] == "us-en"

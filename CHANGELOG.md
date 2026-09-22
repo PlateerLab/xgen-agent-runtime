@@ -4,6 +4,28 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.42.0] — 2026-09-22
+
+근거: dev 실사용(2026-09-22 01:34~01:43, 나라장터 입찰공고 에이전트 3턴). 도구 141회 중 오류 45회 —
+BrowserNavigate 3/3 즉사, WebSearch 22/50 실패. 에이전트는 있지도 않은 옛 나라장터 URL(`g2b.go.kr:8101`,
+2024년 차세대 전환으로 폐지)과 3자 사이트를 추측으로 긁다가 82만 토큰을 쓰고 시도 서사만 답했다.
+
+### Fixed
+
+- **Browser\* 도구가 엔진이 설치돼 있어도 "not installed" 로 죽던 것** (`browser_tools._load_an_web`).
+  an-web 이 2026-08-06 ``xgen-an-web`` 으로 개명(모듈 ``an_web`` → ``xgen_an_web``, v0.10.0)됐는데 로더가
+  옛 이름만 import 했다 — 개명 wheel 을 깐 모든 배포에서 그날 이후 브라우저 도구가 한 번도 동작하지 않았다.
+  새 이름을 먼저, 옛 이름을 폴백으로 찾는다.
+- **WebSearch 가 ddgs 에 region ``wt-wt`` 를 넘기던 것.** ddgs 9.x 는 region 접두사로 wikipedia 엔진 호스트를
+  만들어 존재하지 않는 ``wt.wikipedia.org`` 가 되고, 그 엔진이 매번 실패해 다른 엔진(yahoo·brave)까지
+  막히면 검색 전체가 죽었다. 호출자가 준 region 만 넘기고 기본은 ddgs 에 맡긴다.
+
+### Known limit (이 릴리스가 고치지 못하는 것)
+
+- an-web 은 **차세대 나라장터(`www.g2b.go.kr`) 같은 무거운 정부 SPA 를 렌더하지 못한다** — 부트스트랩 뒤 네트워크
+  요청 2건·DOM 변화 0·본문 빈 채로 "완료"(example.com 은 정상). 실제 Chromium(Playwright)이나 공공데이터포털
+  나라장터 API 가 필요하다. 이 릴리스는 브라우저 도구를 *살릴* 뿐, 그 사이트를 *열어 주지는* 않는다.
+
 ## [4.40.0] — 2026-09-21
 
 배포된 고정본의 대화 첨부를 받기 위한 호스트 쪽 두 가지. 짝은 xgen-workflow 의 대화 스코프

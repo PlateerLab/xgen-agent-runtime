@@ -180,15 +180,13 @@ def _default_ddg_search_sync(
     Used only when the tool does not inject its own (back-compat)
     ``_search_sync``.
     """
-    with ddgs_cls() as client:
-        return list(
-            client.text(
-                query,
-                region=region,
-                safesearch=safesearch,
-                max_results=max_results,
-            )
+    kwargs: Dict[str, Any] = {"safesearch": safesearch, "max_results": max_results}
+    if region:
+        kwargs["region"] = (
+            region  # ``wt-wt`` would break ddgs' wikipedia engine — see WebSearchTool
         )
+    with ddgs_cls() as client:
+        return list(client.text(query, **kwargs))
 
 
 # ─────────────────────────────────────────────────────────────────
