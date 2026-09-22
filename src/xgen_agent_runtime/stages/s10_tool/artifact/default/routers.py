@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+from dataclasses import replace as _dc_replace
 from typing import Any, Dict, Optional
 
 import jsonschema
@@ -19,10 +20,13 @@ from xgen_agent_runtime.permission.types import (
 )
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 from xgen_agent_runtime.tools.errors import (
+    UNPARSED_ARGUMENTS_KEY,
     ToolError,
     ToolFailure,
     coerce_input,
+    describe_validation_failure,
     make_error_result,
+    repair_missing_required,
     validate_input,
 )
 from xgen_agent_runtime.tools.registry import ToolRegistry
@@ -45,6 +49,41 @@ def _coerce_permission_mode(raw: Any) -> PermissionMode:
     except (ValueError, TypeError):
         logger.debug("unknown permission_mode %r — falling back to DEFAULT", raw)
         return PermissionMode.DEFAULT
+
+
+def _unparsed_arguments_reason(raw: Any) -> str:
+    """해석하지 못한 tool-call 인자에 대한 **정확한** 진단 문구.
+
+    여기까지 온 호출은 모델이 인자를 빼먹은 것이 아니라, 프로바이더가 돌려준
+    JSON 을 우리가 못 읽은 것이다(대개 길이 제한에 잘림). 필수 필드 누락이라고
+    말하면 모델은 없는 실수를 고치려 든다.
+    """
+    length = len(raw) if isinstance(raw, str) else 0
+    return (
+        f"the tool-call arguments were not valid JSON and could not be parsed "
+        f"({length} chars, usually truncated mid-generation). Nothing ran. Send the "
+        f"call again with valid JSON; if the arguments carry a long body (a file, a "
+        f"script), write it in smaller pieces instead of one call."
+    )
+
+
+def _with_repair_notes(result: ToolResult, notes: list) -> ToolResult:
+    """고쳐서 실행했다는 사실을 결과 앞에 한 줄로 붙인다.
+
+    조용히 고치면 모델은 다음 턴에도 같은 이름을 쓴다. 한 줄이면 배운다 —
+    왕복 한 번보다 훨씬 싸다. 오류 결과에는 붙이지 않는다(이미 이유가 있다).
+    """
+    if result.is_error or not notes:
+        return result
+    line = "[input repaired] " + " ".join(notes)
+    updates: Dict[str, Any] = {}
+    if isinstance(result.content, str):
+        updates["content"] = f"{line}\n{result.content}"
+    if isinstance(getattr(result, "display_text", None), str):
+        updates["display_text"] = f"{line}\n{result.display_text}"
+    if not updates:
+        return result
+    return _dc_replace(result, **updates)
 
 
 def _now_iso() -> str:
@@ -176,13 +215,47 @@ class RegistryRouter(ToolRouter):
         # 모델이 숫자·불리언을 문자열로 보낸 명백한 경우는 검증 전에 바로잡는다 —
         # 오류 한 번이 모델 왕복 한 번(=대화 전체 재전송)이다.
         tool_input = coerce_input(tool.input_schema, tool_input)
+
+        # 우리가 흘린 인자를 모델 탓으로 돌리지 않는다 — 이 키가 있다는 것은
+        # 프로바이더의 tool-call JSON 을 끝내 못 읽었다는 뜻이다.
+        if isinstance(tool_input, dict) and UNPARSED_ARGUMENTS_KEY in tool_input:
+            raw = tool_input[UNPARSED_ARGUMENTS_KEY]
+            logger.warning(
+                "%s: tool-call arguments were unparsable (%d chars) — refusing with a "
+                "parse diagnosis instead of a required-property error",
+                tool_name,
+                len(raw) if isinstance(raw, str) else 0,
+            )
+            return make_error_result(
+                ToolError.invalid_input(tool_name, _unparsed_arguments_reason(raw))
+            )
+
+        repair_notes: list = []
         try:
             validate_input(tool.input_schema, tool_input)
         except jsonschema.ValidationError as exc:
-            path = ".".join(str(p) for p in exc.absolute_path) or "<root>"
-            return make_error_result(ToolError.invalid_input(tool_name, exc.message, path=path))
+            repaired = repair_missing_required(tool.input_schema, tool_input)
+            recovered = False
+            if repaired is not None:
+                candidate, notes = repaired
+                try:
+                    validate_input(tool.input_schema, candidate)
+                except jsonschema.ValidationError:
+                    pass
+                else:
+                    tool_input, repair_notes, recovered = candidate, notes, True
+            if not recovered:
+                path = ".".join(str(p) for p in exc.absolute_path) or "<root>"
+                return make_error_result(
+                    ToolError.invalid_input(
+                        tool_name,
+                        describe_validation_failure(tool.input_schema, tool_input, exc.message),
+                        path=path,
+                    )
+                )
 
-        return await self._dispatch_with_lifecycle(tool, tool_input, context)
+        result = await self._dispatch_with_lifecycle(tool, tool_input, context)
+        return _with_repair_notes(result, repair_notes)
 
     async def _dispatch_with_lifecycle(
         self, tool: Tool, tool_input: Dict[str, Any], context: ToolContext

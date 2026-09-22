@@ -4,6 +4,57 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.47.0] — 2026-09-22
+
+### Fixed — 스키마 오류 한 건이 모델 왕복 한 번이었다
+
+근거: dev `agent_trace_spans` 30일. `Invalid input` 258건 가운데 **필수 필드 누락 166건**,
+**배열·객체 자리에 JSON 문자열 12건**. 오류 하나가 돌아갈 때마다 모델은 대화 전체를 다시 받아
+턴을 처음부터 생각한다 — 고칠 수 있는 것은 그 자리에서 고치고, 못 고칠 것은 최소한 **맞는 진단**을
+돌려준다. 판단은 전부 **스키마만** 본다 (도메인 단어 목록도, 도구별 예외도 없다).
+
+- **다른 도구의 필드명을 그대로 쓴 호출을 실행한다** (`tools.errors.repair_missing_required`).
+  모델은 한 카탈로그 안에서 이름을 섞는다 — 실측:
+
+  | 도구 | 모델이 보낸 것 | 스키마가 요구한 것 | 건수 |
+  |---|---|---|---|
+  | DocRender·DocAnalyze·DocXmlEdit | `file_path` | `path` | 8 |
+  | mcp_local_ReadFile·WriteFile | `file_path` | `path` | 4 |
+  | mcp_local_Open | `path` | `target` | 3 |
+  | comfyui_test_anima | `prompt` | `positive_prompt` | 3 |
+  | comfyui_real_pic_style | `positive_prompt` | `prompt` | 1 |
+
+  6개 도구·4개 도메인, 같은 모양. 옮기는 조건 셋: (1) 그 키가 스키마에 **아예 없어** 어차피
+  버려질 값이고, (2) 값이 빠진 필드의 서브스키마를 통과하며, (3) 후보가 하나로 좁혀진다
+  (둘 이상이면 이름이 서로를 품는 쪽 하나만 — `file_path`⊃`path`). 애매하면 손대지 않고
+  검증기가 원래대로 거절한다. 고쳐서 실행한 결과 앞에는 `[input repaired] 'file_path' is not a
+  parameter of this tool — used it as 'path'.` 한 줄이 붙는다. 조용히 고치면 다음 턴에도 같은
+  이름을 쓴다.
+
+- **배열·객체 자리에 온 JSON 문자열을 푼다** (`coerce_input`). TodoWrite·ToolBatch·ForgeTool·
+  DocApplyEdits 12건이 `'[{"content": …}]' is not of type 'array'` 였다. 문자열을 허용하는
+  스키마는 건드리지 않고, 풀었을 때 타입이 맞는 경우에만 바꾼다. 4.27.0 의 숫자·불리언 변환과
+  같은 자리·같은 규칙이다.
+
+- **우리가 흘린 인자를 모델 탓으로 돌리지 않는다** (`openai_compatible._parse_tool_arguments`,
+  `UNPARSED_ARGUMENTS_KEY`). 로컬 백엔드의 tool-call JSON 이 복구도 안 되면 지금까지 `{}` 를
+  돌려주었고, 그러면 도구 검증기가 **"'command' is a required property"** 라고 답했다 — 모델은
+  빼먹지 않은 필드를 빼먹었다고 듣고 같은 호출을 다시 만든다. 실측 35건(Bash 29·DocBuild 3·
+  Write 2·BrowserCapture 1)이 인자가 통째로 빈 채 이 오류를 받았고, Bash 쪽은 긴 셸 스크립트라
+  토큰 상한에서 잘린 모양과 맞는다. 이제 원본을 들고 가 Stage 10 이 *"arguments were not valid
+  JSON and could not be parsed (N chars, usually truncated mid-generation). Nothing ran. … if the
+  arguments carry a long body, write it in smaller pieces"* 라고 말한다. 빈 문자열은 그대로 `{}`
+  (모델이 정말 인자 없이 부른 경우) — 진단이 갈리는 지점을 파싱 결과로만 나눈다.
+  `llm_client.tool_args_unparsed` 이벤트. 이벤트 카탈로그 v11.
+
+- **고칠 수 없을 때는 무엇이 필요하고 무엇을 보냈는지 함께 말한다**
+  (`describe_validation_failure`). `'path' is a required property` →
+  `… . required: path; you sent: file_path, to`. 몇 토큰으로 이름을 섞은 경우를 한 번에 끝낸다.
+
+재현 테스트(`tests/unit/test_input_repair.py`, 20개): 위 다섯 도구 스키마 모양 그대로 — 별칭
+이동·값이 안 맞으면 보류·후보가 둘이면 보류·스키마에 있는 키는 재해석 안 함·잘린 인자는
+실행 없이 파싱 오류로 응답.
+
 ## [4.45.0] — 2026-09-22
 
 ### Fixed — 반복 호출을 건너뛰기만 하고 끝내지 않던 루프

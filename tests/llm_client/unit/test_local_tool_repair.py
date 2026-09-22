@@ -74,9 +74,34 @@ def test_ollama_client_strict_path_unchanged():
     assert client._parse_tool_arguments('{"a": 1}') == {"a": 1}
 
 
-def test_ollama_client_unsalvageable_falls_back_to_empty():
+def test_ollama_client_unsalvageable_carries_the_raw_text():
+    """복구 실패는 ``{}`` 가 아니다 — 빈 인자로 뭉개면 Stage 10 이 "필수 필드가
+    없다" 는 **틀린 진단**을 모델에게 돌려주고, 모델은 없는 실수를 고치려 든다.
+    원본을 들고 가야 "인자 JSON 을 못 읽었다" 고 말할 수 있다 (4.47.0)."""
+    from xgen_agent_runtime.tools.errors import UNPARSED_ARGUMENTS_KEY
+
     client = OllamaClient()
-    assert client._parse_tool_arguments("totally broken") == {}
+    out = client._parse_tool_arguments("totally broken")
+    assert out == {UNPARSED_ARGUMENTS_KEY: "totally broken"}
+
+
+def test_ollama_client_empty_arguments_stay_empty():
+    client = OllamaClient()
+    assert client._parse_tool_arguments("") == {}
+    assert client._parse_tool_arguments("   ") == {}
+
+
+def test_unparsed_emits_event():
+    from xgen_agent_runtime.tools.errors import UNPARSED_ARGUMENTS_KEY
+
+    events = []
+    client = OllamaClient(event_sink=events.append)
+    client._parse_tool_arguments("totally broken")
+    unparsed = [e for e in events if e.get("type") == "llm_client.tool_args_unparsed"]
+    assert len(unparsed) == 1
+    assert unparsed[0]["provider"] == "ollama"
+    assert unparsed[0]["raw_length"] == len("totally broken")
+    assert UNPARSED_ARGUMENTS_KEY  # 계약이 존재한다
 
 
 def test_repair_emits_event():

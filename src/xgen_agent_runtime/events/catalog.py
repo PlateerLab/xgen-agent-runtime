@@ -56,7 +56,7 @@ from typing import Any, Dict, List
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
 #: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
 #: v10: + ``loop.repeat_stop`` (4.45.0 end the turn once repeated calls keep getting refused).
-EVENT_CATALOG_VERSION = 10
+EVENT_CATALOG_VERSION = 11
 
 
 class EventTypes(str, Enum):
@@ -292,6 +292,7 @@ class EventTypes(str, Enum):
     LLM_CLIENT_DRIFT_HEALED = "llm_client.drift_healed"
     LLM_CLIENT_UNKNOWN_WIRE_SHAPE = "llm_client.unknown_wire_shape"
     LLM_CLIENT_TOOL_ARGS_REPAIRED = "llm_client.tool_args_repaired"
+    LLM_CLIENT_TOOL_ARGS_UNPARSED = "llm_client.tool_args_unparsed"
 
 
 #: Field-level payload documentation, one entry per :class:`EventTypes`
@@ -947,6 +948,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     EventTypes.LLM_CLIENT_TOOL_ARGS_REPAIRED: {
         "provider": "str — local provider whose tool-call JSON was repaired",
         "raw_length": "int — length of the malformed arguments string",
+    },
+    EventTypes.LLM_CLIENT_TOOL_ARGS_UNPARSED: {
+        "provider": "str — local provider whose tool-call JSON could not be parsed",
+        "raw_length": "int — length of the unparsable arguments string",
     },
 }
 

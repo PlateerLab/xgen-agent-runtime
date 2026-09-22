@@ -49,6 +49,11 @@ _PY_LITERALS_RE = re.compile(r"\b(None|True|False)\b")
 _PY_TO_JSON = {"None": "null", "True": "true", "False": "false"}
 
 
+#: 해석 못 한 인자 원본을 트레이스에 남길 때의 길이 상한 — 진단에는 충분하고
+#: 스팬을 부풀리지 않는 선.
+_UNPARSED_KEEP_CHARS = 4000
+
+
 def _repair_json(raw: str) -> Optional[Dict[str, Any]]:
     """Best-effort repair of malformed tool-call argument JSON.
 
@@ -151,7 +156,10 @@ class OpenAICompatibleClient(OpenAIClient):
         looks like the model "called the tool with nothing" — try a
         conservative repair first. A successful repair is reported (WARNING
         + ``llm_client.tool_args_repaired`` event) so it stays visible
-        instead of masking a flaky server.
+        instead of masking a flaky server. When even the repair fails the
+        raw text is carried under ``UNPARSED_ARGUMENTS_KEY`` (+ WARNING and
+        ``llm_client.tool_args_unparsed``) so Stage 10 can name the real
+        cause rather than reporting a missing required property.
         """
         try:
             return json.loads(raw)
@@ -162,6 +170,15 @@ class OpenAICompatibleClient(OpenAIClient):
             if repaired is not None:
                 self._report_tool_args_repaired(raw)
                 return repaired
+            if raw.strip():
+                # 복구도 실패. ``{}`` 로 돌려주면 도구 검증기가 "필수 필드가
+                # 없다" 고 답하고, 모델은 자기가 빼먹은 줄 알고 같은 호출을
+                # 다시 만든다 — 진단이 틀려서 생기는 왕복이다. 원본을 들고
+                # 가서 Stage 10 이 "인자 JSON 을 못 읽었다" 고 말하게 한다.
+                from xgen_agent_runtime.tools.errors import UNPARSED_ARGUMENTS_KEY
+
+                self._report_tool_args_unparsed(raw)
+                return {UNPARSED_ARGUMENTS_KEY: raw[:_UNPARSED_KEEP_CHARS]}
         return {}
 
     def _report_tool_args_repaired(self, raw: str) -> None:
@@ -176,6 +193,24 @@ class OpenAICompatibleClient(OpenAIClient):
             self._event_sink(
                 {
                     "type": "llm_client.tool_args_repaired",
+                    "provider": self.provider,
+                    "raw_length": len(raw),
+                }
+            )
+
+    def _report_tool_args_unparsed(self, raw: str) -> None:
+        logger.warning(
+            "%s: tool-call arguments could not be parsed or repaired (%d chars). "
+            "Most often the server truncated the JSON at the token cap. The raw "
+            "text is carried to Stage 10 so the model is told what actually "
+            "happened instead of 'required property missing'.",
+            self.provider,
+            len(raw),
+        )
+        if self._event_sink is not None:
+            self._event_sink(
+                {
+                    "type": "llm_client.tool_args_unparsed",
                     "provider": self.provider,
                     "raw_length": len(raw),
                 }
