@@ -458,6 +458,7 @@ def build_pipeline(
     credentials: Optional[Dict[str, Any]] = None,
     enable_prompt_cache: bool = False,
     enable_deliverable_review: bool = True,
+    repeat_stop_after: Optional[int] = 3,
     prune_over_tokens: Optional[int] = DEFAULT_PRUNE_OVER_TOKENS,
     turn_input_budget_tokens: Optional[Tuple[int, int]] = (
         DEFAULT_TURN_SOFT_TOKENS,
@@ -507,6 +508,12 @@ def build_pipeline(
     30,000 은 dev 실사용에서 **5회 이하 턴을 하나도 건드리지 않으면서** 8회 이상
     턴 14개 중 13개를 덮는 값이다. None/0 이면 끔. ``enable_compaction=False``
     면 이것도 돌지 않는다(같은 스위치 아래).
+
+    ``repeat_stop_after`` — 반복 거부 종료(4.45.0, stages/s16_loop/repeat_stop.py).
+    하네스가 이 턴에 실행을 거부한 호출(4.29.0 같은 호출·같은 결과 건너뛰기, 4.26.0
+    반복 실패 차단)이 이만큼 쌓이면 "도구 없이 보고하라" 를 붙이고 다음 응답으로 끝낸다.
+    근거: 벤치 033·087·086 에서 건너뛴 호출 95·94·32회, 각 입력 300만 토큰(예산 종료).
+    같은 기간 실사용 0건. None/0 이면 끔.
 
     ``enable_deliverable_review`` — 완료 직전 산출물 대조(4.30.0,
     stages/s16_loop/completion_review.py). ``tool_context`` 가 있을 때만
@@ -657,6 +664,16 @@ def build_pipeline(
                 loop_stage.add_completion_reviewer(  # type: ignore[union-attr]
                     DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
                 )
+
+    if repeat_stop_after and int(repeat_stop_after) > 0:
+        # 반복 거부 종료(4.45.0, s16_loop/repeat_stop.py) — 하네스가 실행을 거부한 호출이
+        # 이만큼 쌓이면 보고를 받고 턴을 끝낸다. 건너뛰기만 하면 모델이 안내를 무시하고
+        # 300만 토큰까지 같은 호출을 되풀이했다(033·087·086).
+        from xgen_agent_runtime.stages.s16_loop.repeat_stop import RepeatStop
+
+        loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+        if hasattr(loop_stage, "set_repeat_stop"):
+            loop_stage.set_repeat_stop(RepeatStop(stop_after=int(repeat_stop_after)))  # type: ignore[union-attr]
 
     soft, hard = turn_input_budget_tokens or (0, 0)
     if int(soft) > 0 and int(hard) > 0:
@@ -1214,6 +1231,23 @@ BUDGET_NOTICE = (
     "이어서 진행하려면 '계속'이라고 보내 주세요.]"
 )
 
+#: 반복 거부 종료(stages/s16_loop/repeat_stop.py)로 끝난 턴의 안내.
+REPEAT_NOTICE = (
+    "\n\n[안내: 같은 작업이 반복되어 진전이 없어 여기서 마무리했습니다. "
+    "방향을 바꿔 다시 요청하거나 '계속'이라고 보내 주세요.]"
+)
+
+
+def _stop_notice(state: Any) -> str:
+    """턴 예산·반복 거부로 끝난 턴이면 붙일 안내, 아니면 빈 문자열."""
+    from xgen_agent_runtime.stages.s16_loop.repeat_stop import repeat_stopped
+
+    if (stopped := budget_stopped(state)) is not None:
+        return BUDGET_NOTICE.format(used=int(stopped.get("used") or 0))
+    if repeat_stopped(state) is not None:
+        return REPEAT_NOTICE
+    return ""
+
 
 def stream_turn(
     pipeline: Pipeline,
@@ -1445,9 +1479,8 @@ def stream_turn(
                         "timestamp": datetime.now().isoformat(),
                     },
                 }
-            elif output_schema is None and (stopped := budget_stopped(state)) is not None:
-                # 턴 입력 토큰 예산으로 마무리된 턴 — 모델의 보고 뒤에 안내를 붙인다.
-                notice = BUDGET_NOTICE.format(used=int(stopped.get("used") or 0))
+            elif output_schema is None and (notice := _stop_notice(state)):
+                # 턴 예산·반복 거부로 마무리된 턴 — 모델의 보고 뒤에 안내를 붙인다.
                 out_parts.append(notice)
                 yield notice
             turn_completed = True
@@ -1576,8 +1609,8 @@ def run_turn(
         final = result.text or ""
         if output_schema:
             final = settle_structured(final, output_schema)
-        elif (stopped := budget_stopped(state)) is not None:
-            final += BUDGET_NOTICE.format(used=int(stopped.get("used") or 0))
+        else:
+            final += _stop_notice(state)
         turn_output = final
         turn_success = True
         return final

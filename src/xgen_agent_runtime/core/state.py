@@ -433,6 +433,9 @@ class PipelineState:
             "loop.completion_review",
             # 턴 입력 토큰 예산(stages/s16_loop/turn_budget.py) — 턴마다 새로 센다.
             "loop.turn_budget",
+            # 반복 거부 종료(stages/s16_loop/repeat_stop.py) — 거부 수와 진행 기록.
+            "tool.refused_calls",
+            "loop.repeat_stop",
         ):
             self.shared.pop(_k, None)
 

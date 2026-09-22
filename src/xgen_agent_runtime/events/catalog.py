@@ -54,7 +54,9 @@ from typing import Any, Dict, List
 #: v6: + ``tool.repeat_failure`` / ``tool.repeat_blocked`` (4.26.0 repeated-error breaker).
 #: v7: + ``tool.same_result`` (4.29.0 identical call → identical result breaker).
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
-EVENT_CATALOG_VERSION = 9
+#: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
+#: v10: + ``loop.repeat_stop`` (4.45.0 end the turn once repeated calls keep getting refused).
+EVENT_CATALOG_VERSION = 10
 
 
 class EventTypes(str, Enum):
@@ -96,6 +98,7 @@ class EventTypes(str, Enum):
     LOOP_BLOCKED = "loop.blocked"
     LOOP_BUDGET_EXCEEDED = "loop.budget_exceeded"
     LOOP_COMPLETION_REVIEW = "loop.completion_review"
+    LOOP_REPEAT_STOP = "loop.repeat_stop"
     LOOP_TURN_BUDGET = "loop.turn_budget"
 
     # ── Stage 1: Input ──
@@ -395,6 +398,12 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "missing": "int — claimed files that do not exist",
         "problems": "int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV)",
         "paths": "list[str] — paths shown to the model, in order",
+    },
+    EventTypes.LOOP_REPEAT_STOP: {
+        "phase": "str — final (report-and-stop note appended) | stop (turn ended)",
+        "refused": "int — tool calls the harness refused to run this turn (identical-result skips + repeated-failure blocks)",
+        "calls": "int — model calls so far this turn",
+        "iteration": "int",
     },
     EventTypes.LOOP_TURN_BUDGET: {
         "phase": "str — 'soft' (wrap-up note added) | 'final' (report-now note added) | 'stop' (turn ended)",

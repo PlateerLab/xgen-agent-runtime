@@ -330,6 +330,10 @@ class ToolStage(Stage[Any, Any]):
             else []
         )
         if precomputed:
+            # 실행을 거부한 호출 수 — 쌓이면 Stage 16 이 턴을 끝낸다(s16_loop/repeat_stop.py).
+            from xgen_agent_runtime.stages.s16_loop.repeat_stop import note_refused
+
+            note_refused(state.shared, len(precomputed))
             by_id = {str(r.get("tool_use_id") or ""): r for r in executed}
             results = [
                 precomputed.get(str(tc.get("tool_use_id") or ""))
