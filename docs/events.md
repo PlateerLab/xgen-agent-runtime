@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-09-22.
-> Catalogue version: **10** · events: **135**
+> Catalogue version: **11** · events: **136**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -1398,6 +1398,15 @@ Enum member: `EventTypes.LLM_CLIENT_TOOL_ARGS_REPAIRED`
 |---|---|
 | `provider` | str — local provider whose tool-call JSON was repaired |
 | `raw_length` | int — length of the malformed arguments string |
+
+### `llm_client.tool_args_unparsed`
+
+Enum member: `EventTypes.LLM_CLIENT_TOOL_ARGS_UNPARSED`
+
+| Field | Description |
+|---|---|
+| `provider` | str — local provider whose tool-call JSON could not be parsed |
+| `raw_length` | int — length of the unparsable arguments string |
 
 ---
 
