@@ -68,11 +68,23 @@ _SESSION_IDLE_TTL = 900.0  # seconds
 
 
 def _load_an_web():
-    """Import an-web lazily. Raises RuntimeError with an install hint."""
+    """Import an-web lazily. Raises RuntimeError with an install hint.
+
+    The engine package was renamed ``an-web`` → ``xgen-an-web`` (module
+    ``an_web`` → ``xgen_an_web``, v0.10.0, 2026-08-06) but this loader kept
+    the old name — so on every deployment that installed the renamed wheel
+    the Browser* tools reported "not installed" while the engine sat right
+    there (dev 2026-09-22: ``xgen-an-web 0.11.0`` present, every
+    BrowserNavigate failed on the first call). Try the current name first
+    and keep the old one for hosts that still ship it.
+    """
     try:
-        from an_web import ANWebEngine  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - depends on env
-        raise RuntimeError(_INSTALL_HINT) from exc
+        from xgen_an_web import ANWebEngine  # noqa: PLC0415
+    except ImportError:
+        try:
+            from an_web import ANWebEngine  # type: ignore[no-redef]  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover - depends on env
+            raise RuntimeError(_INSTALL_HINT) from exc
     return ANWebEngine
 
 
