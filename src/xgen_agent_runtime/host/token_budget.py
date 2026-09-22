@@ -5,14 +5,17 @@
     토큰≠글자이고 모델별 실제 컨텍스트 윈도우(128K/200K/1M)도 무시했으며, system
     prompt·tool 스키마·memory·이미지를 한도 계산에 합산하지 않았다. 이 모듈은:
 
-      1) tiktoken 기반 *토큰* 추정 (+ provider 보정계수 + 안전마진) — 항상 과대추정해
+      1) 문자 부류 기반 *토큰* 추정 (+ provider 보정계수 + 안전마진) — 항상 과대추정해
          provider 측 400(context length exceeded) 을 사전 차단한다.
       2) 모델별 실제 컨텍스트 윈도우 테이블 (+ 사용자 override).
       3) 유효 입력 예산 = 윈도우 − 출력 max_tokens − 안전마진.
       4) 토큰 인지 truncation / 대화 compaction(드롭+요약 하이브리드, 동일 모델 사용).
 
-    tiktoken 이 없는(폐쇄망 등) 환경에서도 동작하도록 글자/4 fallback 으로 graceful
-    degrade 한다. 정확도보다 "안전한 과대추정"이 우선.
+    **네트워크를 타지 않는다.** 예전에는 tiktoken 으로 셌는데, 그 라이브러리는 인코딩
+    표(BPE)를 첫 호출 때 인터넷에서 내려받는다 — 타임아웃조차 없다. 폐쇄망에서는 그 한
+    줄이 턴을 멈춰 세웠다(o200k → cl100k 로 두 번 시도했으므로 두 배로). 지금은
+    :mod:`.token_estimator` 로 센다 — 실제 tiktoken 대조 평균 절대 오차 8.6%(옛 글자/4
+    fallback 은 48%). 정확도보다 "안전한 과대추정"이 우선인 것은 그대로다.
 """
 
 from __future__ import annotations
@@ -22,32 +25,9 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from xgen_agent_runtime.host.token_estimator import estimate_tokens
+
 logger = logging.getLogger("token-budget")
-
-# ─────────────────────────────────────────────────────────────────────────
-# tiktoken lazy load (없으면 char/4 fallback)
-# ─────────────────────────────────────────────────────────────────────────
-_ENCODER = None
-_ENCODER_TRIED = False
-
-
-def _get_encoder():
-    """tiktoken o200k_base 인코더 (best-effort, 캐시). 실패 시 None → char fallback."""
-    global _ENCODER, _ENCODER_TRIED
-    if _ENCODER_TRIED:
-        return _ENCODER
-    _ENCODER_TRIED = True
-    try:
-        import tiktoken  # noqa: PLC0415
-
-        try:
-            _ENCODER = tiktoken.get_encoding("o200k_base")
-        except Exception:
-            _ENCODER = tiktoken.get_encoding("cl100k_base")
-    except Exception as e:  # tiktoken 미설치 등
-        logger.warning("[TOKEN_BUDGET] tiktoken 사용 불가 — 글자/4 추정으로 fallback: %s", e)
-        _ENCODER = None
-    return _ENCODER
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -250,17 +230,10 @@ def effective_input_budget(
 # 토큰 카운팅
 # ─────────────────────────────────────────────────────────────────────────
 def _raw_token_count(text: str) -> int:
-    """보정 전 원시 토큰 수 (tiktoken 또는 글자/4 fallback)."""
+    """보정 전 원시 토큰 수. 네트워크를 타지 않는다(:mod:`.token_estimator`)."""
     if not text:
         return 0
-    enc = _get_encoder()
-    if enc is not None:
-        try:
-            return len(enc.encode(text))
-        except Exception:
-            pass
-    # fallback: 영문 ~4자/토큰, 한중일은 더 조밀하나 보수적으로 4 사용 후 보정계수가 흡수.
-    return (len(text) + 3) // 4
+    return estimate_tokens(text)
 
 
 def count_text_tokens(
@@ -377,8 +350,10 @@ def truncate_text_to_token_budget(
 ) -> Tuple[str, bool]:
     """텍스트를 max_tokens 이하로 토큰 인지 truncate. (결과, 잘렸는지) 반환.
 
-    앞 front_ratio, 뒤 (1-front_ratio) 비율로 유지하고 중간을 생략(기존 동작 계승하되
-    글자→토큰 기준). tiktoken 이 있으면 토큰 단위로 정확히 자르고, 없으면 글자 비례로 자른다.
+    앞 front_ratio, 뒤 (1-front_ratio) 비율로 유지하고 중간을 생략한다. 자르는 단위는
+    글자이지만, **그 텍스트에서 잰 글자/토큰 비율**로 환산하므로 언어가 섞여 있어도
+    치우치지 않는다(한글은 글자당 토큰이 영어의 다섯 배다 — 고정 4자/토큰으로 자르면
+    한국어 문서가 한도의 다섯 배로 잘린다).
     """
     if max_tokens <= 0:
         return "", bool(text)
@@ -389,7 +364,6 @@ def truncate_text_to_token_budget(
     if current <= max_tokens:
         return text, False
 
-    enc = _get_encoder()
     notice_tokens = count_text_tokens(omit_notice, provider, model)
     # max_tokens 는 count_text_tokens(보정계수·안전마진 포함) 기준이다. raw 토큰으로 자를 때는
     # 그 배율을 역산해야 결과를 다시 세었을 때 한도 안에 든다 — 역산하지 않으면 vLLM(×1.26)
@@ -403,30 +377,28 @@ def truncate_text_to_token_budget(
     for _ in range(4):
         front_budget = max(1, int(keep * front_ratio))
         back_budget = max(1, keep - front_budget)
-        truncated = _cut_middle(text, enc, front_budget, back_budget, omit_notice)
+        truncated = _cut_middle(text, front_budget, back_budget, omit_notice)
         if count_text_tokens(truncated, provider, model) <= max_tokens or keep <= 1:
             return truncated, True
         keep = max(1, int(keep * 0.9))
     return truncated, True
 
 
-def _cut_middle(text: str, enc: Any, front_budget: int, back_budget: int, omit_notice: str) -> str:
-    """앞 front_budget, 뒤 back_budget raw 토큰(또는 글자/4 근사)만 남기고 중간을 생략한다."""
-    if enc is not None:
-        try:
-            ids = enc.encode(text)
-            front_ids = ids[:front_budget]
-            back_ids = ids[-back_budget:] if back_budget < len(ids) else []
-            return enc.decode(front_ids) + omit_notice + enc.decode(back_ids)
-        except Exception:
-            pass
+def _cut_middle(text: str, front_budget: int, back_budget: int, omit_notice: str) -> str:
+    """앞 front_budget, 뒤 back_budget raw 토큰만 남기고 중간을 생략한다.
 
-    # fallback: 글자 비례 (토큰≈글자/4 가정 역산).
-    approx_front_chars = front_budget * 4
-    approx_back_chars = back_budget * 4
-    if approx_front_chars + approx_back_chars >= len(text):
-        return text[: approx_front_chars + approx_back_chars]
-    return text[:approx_front_chars] + omit_notice + text[-approx_back_chars:]
+    토큰 경계를 아는 인코더가 없으므로 글자로 자르되, **이 텍스트에서 잰** 글자/토큰
+    비율을 쓴다. 고정 상수(옛 4자/토큰)를 쓰면 한국어에서 다섯 배로 잘린다.
+    """
+    total_tokens = estimate_tokens(text)
+    if total_tokens <= 0:
+        return text
+    chars_per_token = len(text) / total_tokens
+    front_chars = max(1, int(front_budget * chars_per_token))
+    back_chars = max(1, int(back_budget * chars_per_token))
+    if front_chars + back_chars >= len(text):
+        return text
+    return text[:front_chars] + omit_notice + text[-back_chars:]
 
 
 # ─────────────────────────────────────────────────────────────────────────
