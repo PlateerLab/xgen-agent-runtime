@@ -4,6 +4,24 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.44.0] — 2026-09-22
+
+### Changed
+
+- **WebSearch 동시 실행 상한 2/프로세스** (`web_search_tool._search_slot`). 공개 검색 백엔드는 버스트에
+  약하다 — 모델이 ToolBatch(parallel 8)로 검색 3개를 동시에 쏘자 세 번째가 "RequestError … yahoo" / brave 429
+  로 죽고, ddgs 의 wikipedia 엔진까지 막힌 상태면 호출 전체가 실패했다(dev 2026-09-22, 50회 중 22회).
+  상한은 실행기가 아니라 **도구 안**에 두어 Stage 10 병렬 배치·ToolBatch·서브에이전트 어느 경로에서든
+  같이 걸린다(이벤트 루프당 세마포어 하나).
+
+### Not changed (검토 뒤 보류)
+
+- 같은 세션의 WebFetch 404 ×16(추측한 URL)을 반복 실패 가드가 못 잡은 것. 원인은 오류 키에 URL 이 들어가는
+  것 **과** 404 사이사이의 정상 fetch 가 실패 이력을 리셋하는 것(edit→build 정상 루프를 위한 규칙) 둘이다.
+  실제 기록 시뮬레이션: URL 정규화 + 리셋 축소를 해도 경고 0. "루프" 가 아니라 "추측을 섞어 쓰는 것" 이라
+  리셋 없는 턴당 실패 예산이 필요한데, 정상 fetch 까지 막을 위험이 있고 브라우저가 살아난 뒤(4.42.0)
+  프로브 턴에선 추측이 0회였다. 실사용에서 재발하면 다시 본다.
+
 ## [4.42.0] — 2026-09-22
 
 근거: dev 실사용(2026-09-22 01:34~01:43, 나라장터 입찰공고 에이전트 3턴). 도구 141회 중 오류 45회 —

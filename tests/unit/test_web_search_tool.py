@@ -273,3 +273,34 @@ class TestRegionDefault:
         WebSearchTool._search_sync(_Client, "q", 5, None, "moderate")
         WebSearchTool._search_sync(_Client, "q", 5, "us-en", "moderate")
         assert "region" not in calls[0] and calls[1]["region"] == "us-en"
+
+
+# ── 동시성 상한 — 프로세스당 2 (4.44.0) ────────────────────────────────
+#
+# dev 2026-09-22: 모델이 ToolBatch(parallel 8)로 검색 3개를 동시에 쏘자 yahoo RequestError·
+# brave 429. 상한은 실행기가 아니라 도구 안에 두어 Stage 10 병렬·ToolBatch·서브에이전트
+# 어느 경로에서든 같이 걸린다.
+
+
+class TestConcurrencyCap:
+    @pytest.mark.asyncio
+    async def test_at_most_two_searches_run_at_once(self, monkeypatch, ddgs_available):
+        import asyncio
+
+        from xgen_agent_runtime.tools.built_in import web_search_tool as m
+
+        state = {"active": 0, "peak": 0}
+
+        class _SlowBackend:
+            async def search(self, query, max_results, region, safesearch):
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+                await asyncio.sleep(0.05)
+                state["active"] -= 1
+                return []
+
+        monkeypatch.setattr(m, "build_backend", lambda *a, **k: _SlowBackend())
+        tool = WebSearchTool()
+        ctx = ToolContext(working_dir="/tmp")
+        await asyncio.gather(*(tool.execute({"query": f"q{i}"}, ctx) for i in range(6)))
+        assert state["peak"] == m._MAX_CONCURRENT_SEARCHES == 2

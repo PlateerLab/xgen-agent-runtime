@@ -40,6 +40,8 @@ See ``executor_uplift/06_design_tool_system.md`` §7 and
 
 from __future__ import annotations
 
+import asyncio
+
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -55,6 +57,27 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_RESULTS = 10
 _HARD_MAX_RESULTS = 30
+
+
+#: Concurrent searches per process. Public search backends throttle bursts —
+#: when the model fires three queries in one ToolBatch (parallel 8) the third
+#: comes back "RequestError … yahoo" / brave 429 and, with ddgs' wikipedia
+#: engine already down, the whole call fails (dev 2026-09-22: 22 of 50
+#: WebSearch calls in one session). The cap lives in the tool, not the
+#: executor, so it holds on every path — Stage 10 parallel batches, ToolBatch,
+#: sub-agents sharing the process. Two keeps a pair of queries in flight
+#: without tripping the free backends.
+_MAX_CONCURRENT_SEARCHES = 2
+_search_semaphores: Dict[int, asyncio.Semaphore] = {}
+
+
+def _search_slot() -> asyncio.Semaphore:
+    """One semaphore per running event loop (a semaphore is loop-bound)."""
+    loop = asyncio.get_running_loop()
+    sem = _search_semaphores.get(id(loop))
+    if sem is None:
+        sem = _search_semaphores[id(loop)] = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
+    return sem
 
 
 def _load_ddgs() -> Optional[Any]:
@@ -158,7 +181,8 @@ class WebSearchTool(Tool):
             return ToolResult(content=str(exc), is_error=True)
 
         try:
-            hits = await backend.search(query, max_results, region, safesearch)
+            async with _search_slot():
+                hits = await backend.search(query, max_results, region, safesearch)
         except WebSearchConfigError as exc:
             # Missing key / url (or missing ddgs package) → config hint.
             return ToolResult(content=str(exc), is_error=True)
