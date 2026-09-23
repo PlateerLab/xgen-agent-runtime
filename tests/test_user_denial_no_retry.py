@@ -26,11 +26,18 @@ class _ShellArgs(BaseModel):
     command: str
 
 
-def _connector_shell(dialogs: List[str], *, error: Exception | None = None):
-    """커넥터 Shell 흉내 — 부를 때마다 확인 창이 한 번 뜨고 사용자는 거부한다."""
+def _connector_shell(dialogs: List[str], *, error: Exception | None = None, reply: str | None = None):
+    """커넥터 Shell 흉내 — 부를 때마다 확인 창이 한 번 뜨고 사용자는 거부한다.
+
+    ``reply`` 를 주면 예외 대신 그 문자열을 **결과로** 돌려준다 — 실제 workflow 커넥터 어댑터
+    (``connector_mcp/injector.py``)의 모양이다: MCP ``isError=True`` 를 ``"Error: <본문>"`` 문자열로
+    바꿔 돌려주고 예외는 던지지 않는다.
+    """
 
     async def _run(command: str) -> str:
         dialogs.append(command)
+        if reply is not None:
+            return reply
         raise error or RuntimeError(DEX_DENIAL)
 
     return StructuredTool.from_function(
@@ -79,6 +86,37 @@ def test_the_confirmation_dialog_appears_only_once_per_turn():
     text = _run(dialogs)
     assert len(dialogs) == 1, dialogs
     assert "[안내: 같은 작업이 반복되어" in text  # 거부 누적으로 반복 종료가 턴을 끝냄
+
+
+def test_a_denial_returned_as_error_text_is_still_a_denial():
+    """실제 경로: 커넥터 어댑터는 거부를 예외가 아니라 ``"Error: …"`` 문자열로 돌려준다.
+
+    고치기 전(4.58.0): 예외 경로에서만 거부를 알아봐서 dev 에서 한 번도 걸리지 않았다 —
+    모델은 거부 안내를 못 받고 "시스템에서 차단되었습니다" 라고 답했다(2026-09-24 dev, trace 46748·46749).
+    """
+    dialogs: List[str] = []
+    text = _run(dialogs, reply=f"Error: {DEX_DENIAL}")
+    assert len(dialogs) == 1, dialogs
+    assert "[안내: 같은 작업이 반복되어" in text
+
+
+def test_a_structured_denial_code_in_error_text_works():
+    dialogs: List[str] = []
+    _run(dialogs, reply="Error: user_denied: blocked by the user")
+    assert len(dialogs) == 1
+
+
+def test_ordinary_error_text_is_not_a_denial():
+    dialogs: List[str] = []
+    _run(dialogs, reply="Error: /usr/bin/bash: line 1: rmx: command not found")
+    assert len(dialogs) > 1
+
+
+def test_output_that_merely_mentions_the_phrase_is_not_a_denial():
+    """성공한 결과가 우연히 그 문구를 담아도(파일 내용 등) 거부로 보지 않는다 — 오류 머리말일 때만."""
+    dialogs: List[str] = []
+    _run(dialogs, reply=f"로그 내용:\n{DEX_DENIAL}")
+    assert len(dialogs) > 1
 
 
 def test_a_structured_denial_code_works_without_the_legacy_phrase():
