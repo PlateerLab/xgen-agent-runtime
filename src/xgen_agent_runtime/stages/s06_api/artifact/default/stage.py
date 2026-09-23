@@ -49,6 +49,65 @@ from xgen_agent_runtime.stages.s06_api.artifact.default.tool_loop import (
     assistant_content_blocks,
 )
 from xgen_agent_runtime.stages.s06_api.types import APIRequest, APIResponse
+from xgen_agent_runtime.llm_client import timeouts as _timeouts
+
+#: "모델이 무언가를 내놓았다" 로 치는 청크. 첫 응답 감시는 이것이 올 때까지 잰다 —
+#: 스트림을 열자마자 오는 머리 청크(사용량·메타)로 대기가 끝난 것처럼 보이면 안 된다.
+_CONTENT_CHUNK_TYPES = frozenset({"text_delta", "thinking_delta", "tool_use", "input_json_delta"})
+
+
+async def _watched_stream(
+    stream: AsyncIterator[Dict[str, Any]],
+    *,
+    first_chunk_s: float,
+    idle_s: float,
+) -> AsyncIterator[Dict[str, Any]]:
+    """스트림을 흘려보내되 **멎으면 끊는다.**
+
+    두 가지를 잰다:
+
+    * 첫 내용까지 — ``first_chunk_s``. 요청 시각부터 재며, 내용이 아닌 청크는 이 시계를
+      되돌리지 않는다. 추론형 모델은 첫 글자 전에 오래 생각할 수 있어 넉넉하다.
+    * 그 뒤 청크와 청크 사이 — ``idle_s``.
+
+    초과하면 :class:`APIError` (``TIMEOUT``) 로 끝내고 스트림을 닫아 연결을 돌려준다.
+    SDK 의 소켓 타임아웃은 이것보다 길게 둬서(``timeouts.sdk_read_timeout_s``) 여기서
+    먼저 판정한다 — 그래야 "무엇을 기다리다 끊겼는지" 를 말할 수 있다.
+    """
+    iterator = stream.__aiter__()
+    deadline = time.monotonic() + first_chunk_s
+    seen_content = False
+    try:
+        while True:
+            wait = idle_s if seen_content else max(0.05, deadline - time.monotonic())
+            try:
+                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=wait)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                if seen_content:
+                    detail = f"모델 응답이 {idle_s:g}초 동안 멈췄습니다"
+                else:
+                    detail = f"모델이 {first_chunk_s:g}초 안에 응답을 시작하지 않았습니다"
+                raise APIError(
+                    detail,
+                    category=ErrorCategory.TIMEOUT,
+                    code=ExecutorErrorCode.EXEC_API_TIMEOUT,
+                ) from None
+            if (
+                not seen_content
+                and isinstance(chunk, dict)
+                and chunk.get("type") in _CONTENT_CHUNK_TYPES
+            ):
+                seen_content = True
+            yield chunk
+    finally:
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:  # noqa: BLE001 — 닫기 실패가 원래 결과를 가리지 않는다
+                pass
 
 
 class _LegacyProviderAdapter(BaseClient):
@@ -614,11 +673,15 @@ class APIStage(Stage[Any, APIResponse]):
 
         2026-06-09 audit ("validated-but-inert" table): ``timeout_ms`` was
         accepted by the schema, stored, serialized — and never reached the
-        client. Clients gain the kwarg in a separate wave, so we feed it
-        only to clients whose method signature accepts it (named param or
-        ``**kwargs``); for older clients we emit ``api.timeout_unsupported``
-        instead of a silent drop OR a TypeError that would regress
-        previously-working (if inert) manifests.
+        client. We feed it only to clients whose method signature accepts it
+        (named param or ``**kwargs``).
+
+        2026-09-23 (audit F2): no client ever took the kwarg, so the knob
+        stayed inert and the stage used to announce ``api.timeout_unsupported``
+        instead. The stage now **enforces the limit itself** — the first-chunk
+        watchdog on streams (:func:`_watched_stream`) and ``asyncio.wait_for``
+        on non-streaming calls — so a client that doesn't take the kwarg is no
+        longer "unsupported" and nothing is announced.
         """
         if not self._timeout_ms:
             return
@@ -636,11 +699,31 @@ class APIStage(Stage[Any, APIResponse]):
                 accepts = False
         if accepts:
             kwargs["timeout_ms"] = self._timeout_ms
-        else:
-            state.add_event(
-                "api.timeout_unsupported",
-                {"provider": getattr(client, "provider", ""), "timeout_ms": self._timeout_ms},
-            )
+
+    def _first_chunk_timeout_s(self) -> float:
+        """스테이지의 ``timeout_ms`` 가 있으면 그것, 없으면 전역 기본값.
+
+        ``timeout_ms`` 는 예전에 클라이언트에 kwarg 로만 건네졌는데 받는 클라이언트가
+        없어서 **무효**였다. 이제 스테이지가 직접 집행한다.
+        """
+        if self._timeout_ms:
+            return max(0.001, self._timeout_ms / 1000.0)
+        return _timeouts.first_chunk_timeout_s()
+
+    def _request_timeout_s(self) -> float:
+        if self._timeout_ms:
+            return max(0.001, self._timeout_ms / 1000.0)
+        return _timeouts.request_timeout_s()
+
+    @staticmethod
+    def _timeout_budget_spent(category: ErrorCategory, timeouts_so_far: int) -> bool:
+        """타임아웃 재시도를 다 썼는가.
+
+        타임아웃도 "복구 가능" 으로 분류되지만, 멎어 있는 게이트웨이에 같은 요청을 여러
+        번 보내 봐야 그만큼 다시 기다릴 뿐이다. 다른 복구 가능 오류(429·5xx·연결 끊김)는
+        전략의 횟수를 그대로 쓴다.
+        """
+        return category == ErrorCategory.TIMEOUT and timeouts_so_far > _timeouts.timeout_retries()
 
     async def _call_with_retry(
         self,
@@ -654,11 +737,24 @@ class APIStage(Stage[Any, APIResponse]):
         kwargs = self._call_kwargs(cfg, state, extra_messages=extra_messages)
         self._apply_timeout_kwarg(kwargs, client, state, "create_message")
 
+        timeouts_seen = 0
         for attempt in range(self._retry.max_retries + 1):
             try:
-                return await client.create_message(**kwargs)
+                limit = self._request_timeout_s()
+                try:
+                    return await asyncio.wait_for(client.create_message(**kwargs), timeout=limit)
+                except asyncio.TimeoutError:
+                    raise APIError(
+                        f"모델이 {limit:g}초 안에 답하지 않았습니다",
+                        category=ErrorCategory.TIMEOUT,
+                        code=ExecutorErrorCode.EXEC_API_TIMEOUT,
+                    ) from None
             except APIError as e:
                 last_error = e
+                if e.category == ErrorCategory.TIMEOUT:
+                    timeouts_seen += 1
+                if self._timeout_budget_spent(e.category, timeouts_seen):
+                    raise
                 if not self._retry.should_retry(e.category, attempt):
                     raise
                 delay = self._retry.get_delay(attempt)
@@ -704,12 +800,17 @@ class APIStage(Stage[Any, APIResponse]):
         extra_messages: Optional[List[Dict[str, Any]]] = None,
     ) -> APIResponse:
         last_error: Optional[Exception] = None
+        timeouts_seen = 0
 
         for attempt in range(self._retry.max_retries + 1):
             try:
                 return await self._call_streaming(client, cfg, state, extra_messages=extra_messages)
             except APIError as e:
                 last_error = e
+                if e.category == ErrorCategory.TIMEOUT:
+                    timeouts_seen += 1
+                if self._timeout_budget_spent(e.category, timeouts_seen):
+                    raise
                 if not self._retry.should_retry(e.category, attempt):
                     raise
                 delay = self._retry.get_delay(attempt)
@@ -834,6 +935,15 @@ class APIStage(Stage[Any, APIResponse]):
         )
 
         stream: AsyncIterator[Dict[str, Any]] = client.create_message_stream(**kwargs)
+        if source != "cli":
+            # API 백엔드는 스트림 도중에 도구를 돌리지 않는다 — 청크 사이 침묵은 곧 모델의
+            # 침묵이다. CLI 백엔드는 스트림 안에서 도구를 **직접 실행**하므로(몇 분짜리
+            # Bash 도 정상) 이 감시를 걸지 않는다. 그쪽은 CLI 자체의 시간 상한이 있다.
+            stream = _watched_stream(
+                stream,
+                first_chunk_s=self._first_chunk_timeout_s(),
+                idle_s=_timeouts.idle_timeout_s(),
+            )
         async for chunk in stream:
             chunk_type = chunk.get("type")
             if chunk_type in _CONTENT_CHUNKS and not state.shared.get("_api_ttft_emitted"):

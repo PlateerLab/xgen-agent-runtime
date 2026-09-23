@@ -170,6 +170,10 @@ class BedrockClient(AnthropicClient):
                 kwargs["base_url"] = self._base_url  # VPC endpoint override
             if self._default_headers:
                 kwargs["default_headers"] = self._default_headers
+            # 시간 상한·재시도는 한 곳(llm_client.timeouts)에서.
+            from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
+
+            kwargs.update(sdk_client_kwargs())
             self._client = AsyncAnthropicBedrock(**kwargs)
         return self._client
 

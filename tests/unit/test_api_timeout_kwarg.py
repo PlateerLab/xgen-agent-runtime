@@ -130,7 +130,11 @@ class TestTimeoutReachesCallKwargs:
 
 class TestLegacyClientBackCompat:
     @pytest.mark.asyncio
-    async def test_legacy_client_not_passed_timeout_and_event_emitted(self):
+    async def test_legacy_client_not_passed_timeout_and_nothing_announced(self):
+        """The kwarg still never reaches a client that can't take it (no
+        TypeError), but the stage no longer calls that "unsupported": it
+        enforces ``timeout_ms`` itself — the stream watchdog and
+        ``wait_for`` on non-streaming calls (2026-09-23 audit F2)."""
         client = _LegacyClient()
         stage = APIStage(timeout_ms=12_345)
         state = _state(client)
@@ -138,9 +142,7 @@ class TestLegacyClientBackCompat:
         await stage.execute("in", state)  # must not TypeError
 
         assert client.calls == 1
-        unsupported = [e for e in state.events if e["type"] == "api.timeout_unsupported"]
-        assert len(unsupported) == 1
-        assert unsupported[0]["data"]["timeout_ms"] == 12_345
+        assert not [e for e in state.events if e["type"] == "api.timeout_unsupported"]
 
     @pytest.mark.asyncio
     async def test_legacy_client_without_timeout_no_event(self):
