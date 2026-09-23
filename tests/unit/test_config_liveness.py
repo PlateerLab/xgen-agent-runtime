@@ -313,25 +313,34 @@ async def _probe_s06_stream() -> None:
 
 
 async def _probe_s06_timeout_ms() -> None:
-    """timeout_ms reaches the call site: clients that can't take the
-    kwarg get the api.timeout_unsupported event instead of a silent drop."""
+    """timeout_ms is **enforced by the stage**: a stream that does not start
+    within it ends with a TIMEOUT error (2026-09-23 audit F2 — before that no
+    client took the kwarg and the knob was inert)."""
+    import asyncio
+
+    from xgen_agent_runtime.core.errors import APIError, ErrorCategory
     from xgen_agent_runtime.stages.s06_api import APIStage, MockProvider
 
-    def _events(state: PipelineState) -> list:
-        return [e["type"] for e in state.events if e["type"] == "api.timeout_unsupported"]
+    class _Stalling(MockProvider):
+        async def create_message_stream(self, request):  # noqa: ANN001
+            await asyncio.sleep(5)
+            yield {"type": "text_delta", "text": "late"}
 
     stage = APIStage(provider=MockProvider(default_text="x"))
     state = PipelineState(session_id="t0")
     state.add_message("user", "hi")
-    await stage.execute("in", state)
-    assert _events(state) == []  # knob unset → nothing to report
+    await stage.execute("in", state)  # knob unset → the normal path still works
 
-    stage2 = APIStage(provider=MockProvider(default_text="x"))
-    stage2.update_config({"timeout_ms": 1234})
+    stage2 = APIStage(provider=_Stalling(default_text="x"))
+    stage2.update_config({"timeout_ms": 50})
     state2 = PipelineState(session_id="t1")
     state2.add_message("user", "hi")
-    await stage2.execute("in", state2)
-    assert _events(state2) == ["api.timeout_unsupported"]
+    try:
+        await stage2.execute("in", state2)
+    except APIError as exc:
+        assert exc.category == ErrorCategory.TIMEOUT
+    else:  # pragma: no cover — the probe's whole point
+        raise AssertionError("timeout_ms did not bound a stream that never started")
 
 
 class _RecordingOrchestrator:

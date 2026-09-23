@@ -103,14 +103,19 @@ class GoogleClient(BaseClient):
     # ignores the override, say so once instead of failing silently.
 
     def _http_options(self) -> Optional[Dict[str, Any]]:
-        """``http_options`` kwarg for ``genai.Client`` or ``None`` when
-        neither ``base_url`` nor ``default_headers`` is configured."""
-        opts: Dict[str, Any] = {}
+        """``http_options`` kwarg for ``genai.Client``.
+
+        Always carries ``timeout`` (ms) — without it google-genai waits on the
+        transport default, which is the unbounded hang this runtime's
+        ``llm_client.timeouts`` exists to prevent (2026-09-23 audit F2)."""
+        from xgen_agent_runtime.llm_client.timeouts import genai_timeout_ms
+
+        opts: Dict[str, Any] = {"timeout": genai_timeout_ms()}
         if self._base_url:
             opts["base_url"] = self._base_url
         if self._default_headers:
             opts["headers"] = dict(self._default_headers)
-        return opts or None
+        return opts
 
     def _verify_base_url_honoured(self, client: Any) -> None:
         """Warn ONCE when the SDK resolved a different endpoint than the

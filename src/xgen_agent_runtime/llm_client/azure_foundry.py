@@ -187,11 +187,14 @@ class AzureFoundryClient(OpenAIClient):
             # 옛 경로: 배포 이름이 URL 에 들어가고 api-version 이 필수다.
             # SDK 의 Azure 클라이언트가 그 조립을 안다 — 우리가 손으로 만들지
             # 않는다(만들면 responses/embeddings 마다 다시 만들어야 한다).
+            from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
+
             self._client = AsyncAzureOpenAI(
                 api_key=self._api_key,
                 azure_endpoint=self._azure_resource,
                 api_version=self._azure_api_version,
                 default_headers=self._default_headers or None,
+                **sdk_client_kwargs(),
             )
         else:
             kwargs: Dict[str, Any] = {
@@ -200,6 +203,9 @@ class AzureFoundryClient(OpenAIClient):
             }
             if self._default_headers:
                 kwargs["default_headers"] = self._default_headers
+            from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
+
+            kwargs.update(sdk_client_kwargs())
             self._client = AsyncOpenAI(**kwargs)
         return self._client
 

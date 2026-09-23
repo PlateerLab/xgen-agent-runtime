@@ -11,7 +11,12 @@ import types
 import pytest
 
 from xgen_agent_runtime.llm_client.google import GoogleClient
+from xgen_agent_runtime.llm_client.timeouts import genai_timeout_ms
 from xgen_agent_runtime.llm_client.vertex import VertexClient
+
+#: 모든 genai 클라이언트가 싣는 시간 상한(ms). 없으면 SDK 가 전송 기본값으로 무한정
+#: 기다린다 — 2026-09-23 감사 F2.
+_T = genai_timeout_ms()
 
 
 def _stub_genai(monkeypatch, captured, *, effective_base_url=None):
@@ -35,7 +40,7 @@ def test_google_without_base_url_builds_bare_client(monkeypatch):
     captured = {}
     _stub_genai(monkeypatch, captured)
     GoogleClient(api_key="k")._get_client()
-    assert captured == {"api_key": "k"}
+    assert captured == {"api_key": "k", "http_options": {"timeout": _T}}
 
 
 def test_google_base_url_and_headers_become_http_options(monkeypatch):
@@ -46,6 +51,7 @@ def test_google_base_url_and_headers_become_http_options(monkeypatch):
     )._get_client()
     assert captured["api_key"] == "k"
     assert captured["http_options"] == {
+        "timeout": _T,
         "base_url": "https://gw.example/gemini",
         "headers": {"X-A": "1"},
     }
@@ -56,7 +62,7 @@ def test_google_configure_base_url_rebuilds_client(monkeypatch):
     _stub_genai(monkeypatch, captured)
     client = GoogleClient(api_key="k")
     client._get_client()
-    assert "http_options" not in captured
+    assert "base_url" not in captured["http_options"]
     client.configure(base_url="https://gw.example/v2")
     client._get_client()
     assert captured["http_options"]["base_url"] == "https://gw.example/v2"
@@ -72,7 +78,7 @@ def test_vertex_adc_channel_passes_http_options(monkeypatch):
         "vertexai": True,
         "project": "p-1",
         "location": "asia-northeast3",
-        "http_options": {"base_url": "https://gw.example/vertex/"},
+        "http_options": {"timeout": _T, "base_url": "https://gw.example/vertex/"},
     }
 
 
@@ -83,15 +89,20 @@ def test_vertex_express_channel_passes_http_options(monkeypatch):
     assert captured == {
         "vertexai": True,
         "api_key": "express",
-        "http_options": {"base_url": "https://gw.example/vertex"},
+        "http_options": {"timeout": _T, "base_url": "https://gw.example/vertex"},
     }
 
 
-def test_vertex_without_base_url_unchanged(monkeypatch):
+def test_vertex_without_base_url_only_carries_the_timeout(monkeypatch):
     captured = {}
     _stub_genai(monkeypatch, captured)
     VertexClient(project="p-1")._get_client()
-    assert captured == {"vertexai": True, "project": "p-1", "location": "us-central1"}
+    assert captured == {
+        "vertexai": True,
+        "project": "p-1",
+        "location": "us-central1",
+        "http_options": {"timeout": _T},
+    }
 
 
 def test_unhonoured_base_url_warns_once(monkeypatch, caplog):

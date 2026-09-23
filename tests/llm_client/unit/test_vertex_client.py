@@ -8,7 +8,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
 
+from xgen_agent_runtime.llm_client.timeouts import genai_timeout_ms
 from xgen_agent_runtime.llm_client.vertex import VertexClient
+
+#: 모든 genai 클라이언트가 싣는 시간 상한 — 2026-09-23 감사 F2.
+_HTTP = {"timeout": genai_timeout_ms()}
 
 
 def _stub_genai(monkeypatch, captured):
@@ -38,6 +42,7 @@ def test_adc_channel_passes_project_and_location(monkeypatch):
         "vertexai": True,
         "project": "p-1",
         "location": "asia-northeast3",
+        "http_options": _HTTP,
     }
 
 
@@ -47,7 +52,7 @@ def test_express_key_channel_omits_project(monkeypatch):
     captured = {}
     _stub_genai(monkeypatch, captured)
     VertexClient(project="p-1", api_key="express")._get_client()
-    assert captured == {"vertexai": True, "api_key": "express"}
+    assert captured == {"vertexai": True, "api_key": "express", "http_options": _HTTP}
 
 
 def test_service_account_json_is_validated():

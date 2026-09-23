@@ -104,7 +104,12 @@ class TestClientConstruction:
 
         client = BedrockClient(aws_region="eu-central-1")
         client._get_client()
-        assert captured == {"aws_region": "eu-central-1"}
+        # 자격증명 쪽은 명시한 것만 간다. 시간 상한·재시도는 모든 SDK 클라이언트에
+        # 공통으로 붙는다(llm_client.timeouts — 2026-09-23 감사 F2).
+        credentials = {k: v for k, v in captured.items() if k not in ("timeout", "max_retries")}
+        assert credentials == {"aws_region": "eu-central-1"}
+        assert captured["max_retries"] == 0
+        assert captured["timeout"].connect > 0
 
         captured.clear()
         client2 = BedrockClient(
