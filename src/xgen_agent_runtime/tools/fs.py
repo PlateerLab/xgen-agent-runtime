@@ -83,6 +83,11 @@ class ToolFileSystem(Protocol):
         """로컬 파일(엔진의 산출물)을 워크스페이스의 ``path`` 로 들여놓는다."""
         ...
 
+    async def search(self, req: dict) -> dict:
+        """Glob·Grep. ``{"ok": bool, "text": str}`` — 두 백엔드가 **같은 코드**를 돌린다
+        (``tools/built_in/_search.py``)."""
+        ...
+
 
 # ── 로컬 ──────────────────────────────────────────────────────────────
 
@@ -142,6 +147,12 @@ class LocalFS:
             return target.stat().st_size
 
         return await asyncio.to_thread(_copy)
+
+    async def search(self, req: dict) -> dict:
+        from xgen_agent_runtime.tools.built_in import _search
+
+        req = dict(req, roots=list(self.allowed_paths or []))
+        return await asyncio.to_thread(_search.run, req)
 
 
 # ── 러너 ──────────────────────────────────────────────────────────────
@@ -218,6 +229,36 @@ class RunnerFS:
     async def commit(self, local: Path, path: str) -> int:
         data = await asyncio.to_thread(Path(local).read_bytes)
         return await self.write_bytes(path, data)
+
+    async def search(self, req: dict) -> dict:
+        """로컬과 **같은 파일**(``_search.py``)을 러너의 python3 로 실행한다.
+
+        셸을 거치지 않는다 — 요청은 argv 의 JSON 한 덩어리다. 예전 러너 Glob 은 패턴을
+        ``for f in {pattern}`` 으로 셸에 끼워 넣어서 ``$(…)`` 가 실행됐다.
+        """
+        import json
+
+        from xgen_agent_runtime.tools._xgeny_sandbox import (
+            sandbox_extra_roots,
+            sandbox_root,
+        )
+        from xgen_agent_runtime.tools.built_in import _search
+
+        await self.sandbox.ensure()
+        roots = [sandbox_root(self.sandbox), *sandbox_extra_roots(self.sandbox)]
+        payload = json.dumps(dict(req, roots=roots), ensure_ascii=False)
+        source = Path(_search.__file__).read_text(encoding="utf-8")
+        result = await self.sandbox.exec(["python3", "-c", source, payload], timeout_s=60.0)
+        if result.rc == 127:
+            return {
+                "ok": False,
+                "text": "Search is unavailable: python3 is not installed in this session.",
+            }
+        try:
+            return json.loads(result.stdout.decode("utf-8", "replace"))
+        except ValueError:
+            err = result.stderr.decode("utf-8", "replace").strip()[-300:]
+            return {"ok": False, "text": f"Search failed (exit {result.rc}): {err or 'no output'}"}
 
 
 # ── 선택 ──────────────────────────────────────────────────────────────

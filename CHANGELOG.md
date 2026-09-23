@@ -4,6 +4,47 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.55.0] — 2026-09-23
+
+### Security — 러너 Glob 이 패턴을 셸 명령으로 실행했다
+
+러너 분기의 Glob 은 모델이 준 패턴을 **따옴표 없이** 셸에 끼워 넣었다:
+
+```bash
+for f in {pattern}; do …
+```
+
+그래서 패턴 안의 `$(…)`·백틱·`; do :; done; …` 가 **그대로 실행됐다**(세 가지 모두 재현).
+Glob 은 `read_only` 로 선언된 도구라 PLAN 모드(destructive 만 확인을 요구)에서도 확인 없이
+돈다 — 사실상 확인 없는 명령 실행기였다. 에이전트가 읽은 웹 문서·사용자 파일의 프롬프트
+주입이 모델을 거쳐 Glob 패턴으로 들어오는 경로가 열려 있었다. 실사용(dev 60일 129건)에서
+셸 문자가 든 패턴은 0건 — 밟힌 적은 없다.
+
+### Fixed — Glob·Grep 이 러너와 로컬에서 다른 답을 했다 (파일시스템 포트 2단계)
+
+두 곳이 **서로 다른 프로그램**이었다 — 러너는 셸 `for`/`grep -E`, 로컬은 `Path.glob`/Python
+`re`. 같은 폴더·같은 질문 12개 중 **11개의 답이 달랐다**:
+
+- **`Grep("order_id = \\d+")` → 러너만 "No matches"** — `grep -E` 에는 `\d` 가 없다. 파일에
+  있는 것을 없다고 말하는, 조용히 틀린 답. (Grep 은 60일 6건이라 실제로 밟힌 적은 없다.)
+- 경로: 러너 상대(`src/a.py`, `./src/a.py`) / 로컬 절대.
+- 출력 모양(`:>` 표시), 결과 순서, 제외 디렉터리 목록.
+
+**이제 같은 코드가 두 곳에서 돈다.** 검색을 표준 라이브러리만 쓰는 `tools/built_in/_search.py`
+한 파일로 옮기고, 로컬은 import 해서, 러너는 **그 파일의 소스를 `python3 -c <소스> <JSON>`
+로** 실행한다(`ToolFileSystem.search`). 러너는 workflow 와 같은 Python 3.14 라 `re`·`glob`
+의미가 구조적으로 같고, 출력 텍스트까지 그 파일이 만들어서 포맷도 같다. 요청은 argv 의 JSON
+한 덩어리라 **셸 해석이 없다.** 경로는 절대 경로 하나로 말한다(4.39.0 원칙).
+
+실제 dev 러너 파드에서 확인: `python3` = 3.14.2, `\d` 매칭 성공, `$(touch …)` 는 글자 그대로의
+패턴으로 취급돼 아무것도 실행되지 않음.
+
+재현 테스트(`tests/unit/test_search_tools_parity.py`, 19개): 같은 질문 12개를 두 백엔드에
+돌려 같은 답인지 + `\d` + 러너 절대 경로 + 잡음 디렉터리 제외 + **주입 페이로드 3종** + 잘못된
+정규식. **고치기 전 코드에 돌리면 16개가 실패한다**(불일치 11 + `\d` + 상대 경로 + 주입 3종
+전부 실행). 기존 5,530개 중 러너 Glob·Grep 의 출력을 검사하던 테스트는 하나도 없었다 — 그래서
+갈린 것이 안 잡혔다.
+
 ## [4.54.2] — 2026-09-23
 
 ### Changed — edit2docs 0.26.1 (HWP 검토 보완)

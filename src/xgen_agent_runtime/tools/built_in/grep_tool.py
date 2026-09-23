@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
-from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
-
-_MAX_FILES = 200
-_MAX_MATCHES = 300
-_MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
+from xgen_agent_runtime.tools.fs import tool_fs
 
 
 class GrepTool(Tool):
@@ -78,135 +73,30 @@ class GrepTool(Tool):
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         pattern_str = input.get("pattern", "")
-        search_path = input.get("path", "") or context.working_dir
-        file_glob = input.get("glob")
-        output_mode = input.get("output_mode", "files")
-        ctx_lines = input.get("context", 0)
-        case_insensitive = input.get("case_insensitive", False)
-
         if not pattern_str:
             return ToolResult(content="pattern must not be empty", is_error=True)
-
-        flags = re.IGNORECASE if case_insensitive else 0
         try:
-            regex = re.compile(pattern_str, flags)
+            re.compile(pattern_str)  # 러너까지 가기 전에 여기서 알려 준다
         except re.error as e:
             return ToolResult(content=f"Invalid regex: {e}", is_error=True)
 
-        # Sandbox: run grep inside the container (the files live there).
-        if context.sandbox is not None:
-            import shlex
-
-            from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
-
-            wd = context.working_dir or "/workspace"
-            spath = input.get("path", "") or "."
-            opts = ["-rEn", "-I"]  # recursive, extended-regex, line-num, skip binary
-            if case_insensitive:
-                opts.append("-i")
-            if output_mode == "files":
-                opts.append("-l")
-            elif output_mode == "count":
-                opts.append("-c")
-            elif ctx_lines:
-                opts.append(f"-C{int(ctx_lines)}")
-            excludes = "--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ --exclude-dir=.venv"
-            # Honor the file glob (the local branch does) — without this an
-            # in-sandbox Grep(pattern, glob="*.py") searched every file.
-            include = f" --include={shlex.quote(file_glob)}" if file_glob else ""
-            cmd = (
-                f"grep {' '.join(opts)} {excludes}{include} -e {shlex.quote(pattern_str)} "
-                f"-- {shlex.quote(spath)} 2>/dev/null | head -n {_MAX_MATCHES}"
-            )
-            rc, out, _err = await sb_run(context.sandbox, cmd, workdir=wd)
-            out = out.strip()
-            if not out:
-                return ToolResult(content=f"No matches for '{pattern_str}'")
-            return ToolResult(content=out)
-
-        # 호스트 경로(sandbox 없음): 검색 루트도 allowed_paths 안이어야 한다(Read/Write 와 같은 가드).
+        # 러너든 로컬이든 **같은 Python re** 로 찾는다(_search.py). 예전 러너 분기는
+        # ``grep -E`` 라서 ``\d`` 같은 표현을 모르고 "No matches" 를 돌려줬다 —
+        # 파일에 있는 것을 없다고 말하는, 조용히 틀린 답이었다.
+        fs = tool_fs(context)
         try:
-            base = resolve_and_validate(search_path, context.working_dir, context.allowed_paths)
-        except PermissionError as e:
+            base = fs.resolve(input.get("path", "") or ".")
+        except (PermissionError, ValueError) as e:
             return ToolResult(content=str(e), is_error=True)
-        except ValueError:
-            base = Path(context.working_dir or ".")
-        if not base.exists():
-            return ToolResult(content=f"Path not found: {search_path}", is_error=True)
-
-        # Collect target files
-        if base.is_file():
-            targets = [base]
-        else:
-            if file_glob:
-                targets = sorted(base.rglob(file_glob))
-            else:
-                targets = sorted(base.rglob("*"))
-            targets = [t for t in targets if t.is_file()]
-
-        # Skip hidden dirs and common noise
-        skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox"}
-        filtered: List[Path] = []
-        for t in targets:
-            parts = set(t.relative_to(base).parts[:-1]) if base.is_dir() else set()
-            if not parts.intersection(skip_dirs):
-                filtered.append(t)
-        targets = filtered[:_MAX_FILES]
-
-        match_files: List[str] = []
-        match_lines: List[str] = []
-        total_matches = 0
-
-        for fpath in targets:
-            if fpath.stat().st_size > _MAX_FILE_SIZE:
-                continue
-
-            try:
-                text = fpath.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-
-            lines = text.splitlines()
-            file_matches = []
-
-            for i, line in enumerate(lines):
-                if regex.search(line):
-                    file_matches.append((i, line))
-
-            if not file_matches:
-                continue
-
-            match_files.append(str(fpath))
-            total_matches += len(file_matches)
-
-            if output_mode == "content":
-                for line_num, line_text in file_matches:
-                    if total_matches > _MAX_MATCHES:
-                        break
-                    # Context lines
-                    start = max(0, line_num - ctx_lines)
-                    end = min(len(lines), line_num + ctx_lines + 1)
-                    for ci in range(start, end):
-                        prefix = ">" if ci == line_num else " "
-                        match_lines.append(f"{fpath}:{ci + 1}:{prefix} {lines[ci]}")
-                    if ctx_lines > 0:
-                        match_lines.append("--")
-
-        if output_mode == "files":
-            if not match_files:
-                return ToolResult(content=f"No matches for '{pattern_str}'")
-            output = "\n".join(match_files)
-            if len(match_files) >= _MAX_FILES:
-                output += f"\n\n... (limited to {_MAX_FILES} files)"
-            return ToolResult(content=output)
-
-        elif output_mode == "count":
-            return ToolResult(content=f"{total_matches} matches in {len(match_files)} files")
-
-        else:  # content
-            if not match_lines:
-                return ToolResult(content=f"No matches for '{pattern_str}'")
-            output = "\n".join(match_lines[: _MAX_MATCHES * 3])
-            if total_matches > _MAX_MATCHES:
-                output += f"\n\n... ({total_matches} total matches, showing first {_MAX_MATCHES})"
-            return ToolResult(content=output)
+        result = await fs.search(
+            {
+                "op": "grep",
+                "base": base,
+                "pattern": pattern_str,
+                "glob": input.get("glob"),
+                "output_mode": input.get("output_mode", "files"),
+                "context": input.get("context", 0),
+                "case_insensitive": bool(input.get("case_insensitive", False)),
+            }
+        )
+        return ToolResult(content=result["text"], is_error=not result["ok"])
