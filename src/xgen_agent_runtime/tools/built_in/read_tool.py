@@ -5,6 +5,7 @@ from __future__ import annotations
 import mimetypes
 from typing import Any, Dict
 
+from xgen_agent_runtime.tools.built_in._file_witness import witnessed_mutation
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
 
@@ -104,7 +105,12 @@ class ReadTool(Tool):
             output = "\n".join(numbered)
             if offset + limit < total:
                 output += f"\n\n... ({total - offset - limit} more lines, {total} total)"
-            return ToolResult(content=output)
+            return ToolResult(
+                content=output,
+                # 이 세션에서 내용을 본 파일로 기록한다 — Write 가 모르는 파일을
+                # 말없이 덮어쓰지 않게 하는 장부(_file_witness).
+                state_mutations=witnessed_mutation(context.state_view, file_path),
+            )
 
         try:
             resolved = resolve_and_validate(file_path, context.working_dir, context.allowed_paths)
@@ -163,4 +169,9 @@ class ReadTool(Tool):
         if offset + limit < total:
             output += f"\n\n... ({total - offset - limit} more lines, {total} total)"
 
-        return ToolResult(content=output)
+        return ToolResult(
+            content=output,
+            # 모델이 준 표기와 해석된 절대 경로 둘 다 적는다 — Write 가 어느 쪽으로
+            # 와도 "이미 본 파일" 로 알아본다.
+            state_mutations=witnessed_mutation(context.state_view, file_path, str(resolved)),
+        )

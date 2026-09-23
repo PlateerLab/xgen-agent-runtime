@@ -4,6 +4,44 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.51.0] — 2026-09-23
+
+### Fixed — 본 적 없는 파일을 말없이 덮어쓸 수 있었다
+
+참고 하네스의 기본 계약은 "파일을 바꾸려면 먼저 읽는다" 다. 우리에겐 그 계약이 없어서
+``Write`` 가 이미 있는 파일을 내용도 모른 채 잘라내고 새로 썼다. 사용자가 올린 문서나
+이전 세션의 산출물(`결과물/*.docx`)이 그렇게 사라져도 **로그에는 아무 흔적이 남지 않는다**
+— 성공한 쓰기이기 때문이다. 이 구멍은 기록으로 셀 수 없고 계약으로만 막을 수 있다.
+
+- **읽지 않은 기존 파일에는 쓰지 않는다** (`tools/built_in/_file_witness.py`). ``Read`` 가
+  본 경로를 ``state.shared`` 장부에 올리고, ``Write`` 는 대상이 **이미 있고 비어 있지 않으며
+  이 세션에서 읽은 적이 없을 때만** 거절한다. 거절은 다음 한 수를 말해 준다 — *"Nothing was
+  written … Read it first, then use Edit to change part of it, or Write again to replace it
+  knowingly."* 로컬 경로와 XGeny 샌드박스 경로 **양쪽**에 같은 규칙이 걸린다.
+- 장부는 ``state.shared`` 에 있으므로 **세션 단위**다(``begin_turn`` 이 건드리지 않는다) —
+  앞 턴에서 읽은 파일을 이번 턴에 고쳐도 마찰이 없다. 상한 500개, 넘으면 오래된 것부터
+  잊는다(잊힌 파일은 한 번 더 읽으면 그만이다).
+
+**마찰은 실측했다** (dev 30일):
+
+| | 건수 |
+|---|---|
+| Write — 그 대화에서 처음 건드리는 경로 | 841 |
+| Write — 읽고 씀 | 121 |
+| Write — 자기가 쓴 걸 다시 씀 | 54 |
+
+841건은 대부분 새 파일이라 **그대로 통과**한다(새 파일은 막지 않는다). 걸리는 것은 그중
+이미 존재하는 파일을 향한 쓰기뿐이고, 복구는 ``Read`` 한 번이다.
+
+**``Edit`` 에는 같은 요구를 걸지 않았다.** 같은 기간 Edit 372건 중 **371건이 이미 내용을
+알고 있었다**(Read 했거나 자기가 Write 한 파일) — 모델이 이미 지키고 있는 규율에 관문을
+세우면 비용만 생긴다. Edit 은 ``old_string`` 이 정확히 맞아야 하고 여러 번 나오면 거절하므로
+모르는 파일을 망칠 길도 좁다.
+
+재현 테스트(`tests/unit/test_write_guard.py`, 10개): 새 파일은 그냥 통과 / 기존 파일은 내용
+보존한 채 거절 / 읽은 뒤에는 통과 / 빈 파일은 막지 않음(잃을 내용이 없다) / 상대 경로로 읽고
+절대 경로로 써도 알아봄 / 장부 상한·중복 처리.
+
 ## [4.50.0] — 2026-09-23
 
 ### Fixed — 모델에게 알려 주던 "지금" 이 하루 중 9시간 틀렸다
