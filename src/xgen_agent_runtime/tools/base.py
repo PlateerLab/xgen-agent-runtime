@@ -168,6 +168,10 @@ class ToolContext:
     # this host. ``None`` (default) = host execution. Typed ``Any`` so this
     # module stays free of the protocol import.
     sandbox: Optional[Any] = None
+    # 파일시스템 포트(``tools.fs.ToolFileSystem``)를 호스트가 **직접** 정할 때만 채운다.
+    # 비워 두면 ``tools.fs.tool_fs`` 가 ``sandbox`` 유무로 러너/로컬을 고른다 — 그 선택은
+    # 거기 한 곳에서만 일어난다. 도구는 이 필드를 직접 읽지 말고 ``tool_fs(context)`` 를 쓴다.
+    fs: Optional[Any] = None
     # Self-modifying environment: the live PipelineEnvironment controller for
     # this session. The built-in ``env_*`` tools read it to view/edit the
     # running environment (prompt, active tools, skills). ``None`` (default)
