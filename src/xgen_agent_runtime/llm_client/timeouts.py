@@ -90,17 +90,36 @@ def sdk_read_timeout_s() -> float:
     return max(first_chunk_timeout_s(), idle_timeout_s(), request_timeout_s()) + 30.0
 
 
-def httpx_timeout() -> Any:
-    """anthropic·openai SDK 가 받는 ``httpx.Timeout``."""
-    import httpx
+def sdk_timeout(sdk: Any = None) -> Any:
+    """SDK 클라이언트가 받는 Timeout — **그 SDK 가 내보내는 ``Timeout`` 클래스로** 만든다.
 
+    anthropic(1.x)·openai(3.x) 최근 판은 HTTP 층을 ``httpx`` 에서 ``httpx2`` 로 옮겼고, 다른
+    패키지의 Timeout 을 받으면 생성자에서 곧바로 ``TypeError`` 를 던진다("`httpx.Timeout` is
+    from the `httpx` package, but this SDK uses `httpx2`"). 설치된 판이 무엇이든 맞는 것은
+    SDK 가 최상위에 내보내는 ``Timeout`` 이다(옛 판은 httpx.Timeout, 새 판은 httpx2.Timeout).
+    ``sdk`` 를 주지 않으면(또는 Timeout 을 내보내지 않으면) ``httpx.Timeout``.
+    """
+    cls = getattr(sdk, "Timeout", None) if sdk is not None else None
+    if cls is None:
+        import httpx
+
+        cls = httpx.Timeout
     connect = connect_timeout_s()
-    return httpx.Timeout(sdk_read_timeout_s(), connect=connect, pool=connect)
+    return cls(sdk_read_timeout_s(), connect=connect, pool=connect)
 
 
-def sdk_client_kwargs() -> Dict[str, Any]:
-    """anthropic·openai 계열 SDK 클라이언트 생성자에 그대로 붙이는 인자."""
-    return {"timeout": httpx_timeout(), "max_retries": SDK_MAX_RETRIES}
+def httpx_timeout() -> Any:
+    """``httpx.Timeout`` — SDK 에 넘길 때는 :func:`sdk_timeout` (그 SDK 의 클래스)을 쓴다."""
+    return sdk_timeout(None)
+
+
+def sdk_client_kwargs(sdk: Any = None) -> Dict[str, Any]:
+    """anthropic·openai 계열 SDK 클라이언트 생성자에 그대로 붙이는 인자.
+
+    ``sdk`` 는 그 클라이언트를 만든 **모듈**(``anthropic``/``openai``) — Timeout 을 그
+    모듈의 클래스로 만들기 위해서다(:func:`sdk_timeout`).
+    """
+    return {"timeout": sdk_timeout(sdk), "max_retries": SDK_MAX_RETRIES}
 
 
 def genai_timeout_ms() -> int:
@@ -118,5 +137,6 @@ __all__ = [
     "request_timeout_s",
     "sdk_client_kwargs",
     "sdk_read_timeout_s",
+    "sdk_timeout",
     "timeout_retries",
 ]

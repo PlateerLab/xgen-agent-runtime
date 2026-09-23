@@ -55,6 +55,37 @@ class TestTheLimitsLiveInOnePlace:
         assert read > timeouts.request_timeout_s()
 
 
+    def test_the_timeout_is_built_from_the_sdks_own_class(self):
+        """anthropic 1.x·openai 3.x 는 httpx → httpx2 로 옮겨 다른 패키지의 Timeout 을 생성자에서
+        거절한다(TypeError). 그래서 SDK 가 내보내는 Timeout 클래스로 만든다 — 판과 무관하게 맞다.
+        (2026-09-23 4.52.0 main CI 가 anthropic 1.8.0 에서 이것으로 깨졌다.)"""
+
+        class _Timeout:
+            def __init__(self, read, *, connect, pool):
+                self.read, self.connect, self.pool = read, connect, pool
+
+        class _FakeSdk:
+            Timeout = _Timeout
+
+        t = timeouts.sdk_timeout(_FakeSdk)
+        assert isinstance(t, _Timeout)
+        assert t.connect == timeouts.connect_timeout_s()
+        assert t.read == timeouts.sdk_read_timeout_s()
+        assert isinstance(timeouts.sdk_client_kwargs(_FakeSdk)["timeout"], _Timeout)
+
+    def test_real_sdks_get_their_own_timeout_type(self):
+        import anthropic
+        import openai
+
+        assert isinstance(timeouts.sdk_timeout(anthropic), anthropic.Timeout)
+        assert isinstance(timeouts.sdk_timeout(openai), openai.Timeout)
+
+    def test_without_an_sdk_it_is_plain_httpx(self):
+        import httpx
+
+        assert isinstance(timeouts.sdk_timeout(None), httpx.Timeout)
+
+
 # ── 모든 SDK 클라이언트가 그 값을 쓴다 ─────────────────────────────
 
 
@@ -95,6 +126,8 @@ class TestEveryClientUsesThem:
         for name in ("anthropic.py", "openai.py", "azure_foundry.py", "bedrock.py"):
             src = (root / name).read_text("utf-8")
             assert "sdk_client_kwargs" in src, name
+            # SDK 모듈을 넘겨야 그 SDK 의 Timeout 클래스로 만든다(httpx2 판에서 깨지지 않게).
+            assert "sdk_client_kwargs()" not in src, f"{name}: SDK 모듈 없이 불렀다"
 
 
 # ── 스트림 감시 ───────────────────────────────────────────────────
