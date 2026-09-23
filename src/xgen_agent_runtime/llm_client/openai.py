@@ -151,7 +151,9 @@ class OpenAIClient(BaseClient):
             # 시간 상한·재시도는 한 곳(llm_client.timeouts)에서.
             from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
 
-            kwargs.update(sdk_client_kwargs())
+            import openai as _openai_sdk
+
+            kwargs.update(sdk_client_kwargs(_openai_sdk))
             self._client = AsyncOpenAI(**kwargs)
         return self._client
 

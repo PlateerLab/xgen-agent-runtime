@@ -332,7 +332,7 @@ class AnthropicClient(BaseClient):
             # 그대로 두면 스테이지 재시도와 곱해져 호출 하나가 최악 2시간을 잡는다.
             from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
 
-            kwargs.update(sdk_client_kwargs())
+            kwargs.update(sdk_client_kwargs(anthropic))
             self._client = anthropic.AsyncAnthropic(**kwargs)
         return self._client
 

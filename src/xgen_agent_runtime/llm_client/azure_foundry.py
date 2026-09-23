@@ -176,6 +176,7 @@ class AzureFoundryClient(OpenAIClient):
                 "예: https://<리소스이름>.openai.azure.com"
             )
         try:
+            import openai as _openai_sdk
             from openai import AsyncAzureOpenAI, AsyncOpenAI
         except ImportError as e:  # pragma: no cover — SDK 없는 환경
             raise ImportError(
@@ -194,7 +195,7 @@ class AzureFoundryClient(OpenAIClient):
                 azure_endpoint=self._azure_resource,
                 api_version=self._azure_api_version,
                 default_headers=self._default_headers or None,
-                **sdk_client_kwargs(),
+                **sdk_client_kwargs(_openai_sdk),
             )
         else:
             kwargs: Dict[str, Any] = {
@@ -205,7 +206,7 @@ class AzureFoundryClient(OpenAIClient):
                 kwargs["default_headers"] = self._default_headers
             from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
 
-            kwargs.update(sdk_client_kwargs())
+            kwargs.update(sdk_client_kwargs(_openai_sdk))
             self._client = AsyncOpenAI(**kwargs)
         return self._client
 

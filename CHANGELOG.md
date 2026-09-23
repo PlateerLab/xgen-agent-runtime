@@ -19,6 +19,9 @@ SDK 클라이언트를 만들 때 타임아웃을 넘기지 않아 anthropic·op
 - s06 스트림 감시(`_watched_stream`): 첫 내용 청크까지·청크 사이 무응답을 재서 넘으면
   `EXEC_API_TIMEOUT` 으로 끊는다. CLI 백엔드는 자기 300초 상한이 있어 제외.
 - 최악의 경우: 약 2시간 → 약 6분.
+- SDK 에 넘기는 Timeout 은 **그 SDK 가 내보내는 ``Timeout`` 클래스**로 만든다(`sdk_timeout`).
+  anthropic 1.x·openai 3.x 는 HTTP 층을 ``httpx2`` 로 옮겨 ``httpx.Timeout`` 을 생성자에서
+  거절한다(TypeError) — 설치된 판과 무관하게 맞는 것은 SDK 최상위의 ``Timeout`` 이다.
 
 ### Changed — Claude Code CLI 의 비필수 외부 트래픽을 끈다 (안정성 감사 F18)
 

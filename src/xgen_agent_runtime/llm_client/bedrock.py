@@ -173,7 +173,9 @@ class BedrockClient(AnthropicClient):
             # 시간 상한·재시도는 한 곳(llm_client.timeouts)에서.
             from xgen_agent_runtime.llm_client.timeouts import sdk_client_kwargs
 
-            kwargs.update(sdk_client_kwargs())
+            import anthropic as _anthropic_sdk
+
+            kwargs.update(sdk_client_kwargs(_anthropic_sdk))
             self._client = AsyncAnthropicBedrock(**kwargs)
         return self._client
 
