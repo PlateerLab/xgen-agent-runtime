@@ -147,6 +147,11 @@ def _llm_kwargs(context: ToolContext) -> Dict[str, Any]:
 class _DocToolBase(Tool):
     """Shared plumbing: path guard + engine/install error handling."""
 
+    #: 4.49.0 이전 이름. 스키마에는 싣지 않는다 — Tool.input_aliases 설명 참조.
+    @property
+    def input_aliases(self):
+        return {"file_path": ("path",)}
+
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         try:
             return await self._run(input, context)
@@ -206,7 +211,7 @@ class DocGuideTool(_DocToolBase):
                     "type": "string",
                     "description": "Optional topic or prefix (e.g. 'recipes').",
                 },
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": (
                         "Optional document path — scopes the topic list to "
@@ -239,7 +244,7 @@ class DocGuideTool(_DocToolBase):
         # 토픽(arrange, recipes.slides)이 목록에 섞여 있으면, 에이전트는 그
         # 파일에 쓸 수 없는 도구를 읽고 시도한다 — 실패하는 한 턴이 늘어난다.
         fmt = None
-        raw_path = input.get("path")
+        raw_path = input.get("file_path")
         if raw_path:
             ext = str(raw_path).lower().rsplit(".", 1)[-1]
             if ext in ("docx", "xlsx", "pptx"):
@@ -283,9 +288,9 @@ class DocAnalyzeTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
             },
-            "required": ["path"],
+            "required": ["file_path"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -298,7 +303,7 @@ class DocAnalyzeTool(_DocToolBase):
 
     async def _run(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         engine = _load_edit2docs()
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         info = await asyncio.to_thread(engine.analyze_doc, str(path))
         return ToolResult(
             content=json.dumps(info, ensure_ascii=False, indent=1, default=str),
@@ -327,7 +332,7 @@ class DocApplyEditsTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
                 "edits": {
                     "type": "array",
                     "items": {"type": "object"},
@@ -339,7 +344,7 @@ class DocApplyEditsTool(_DocToolBase):
                     "description": ("Output path. Default: edit in place (same path). "),
                 },
             },
-            "required": ["path", "edits"],
+            "required": ["file_path", "edits"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -347,7 +352,7 @@ class DocApplyEditsTool(_DocToolBase):
 
     async def _run(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         engine = _load_edit2docs()
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         edits = input.get("edits") or []
         if not isinstance(edits, list) or not all(isinstance(e, dict) for e in edits):
             return ToolResult(content="edits must be a list of objects", is_error=True)
@@ -410,7 +415,7 @@ class DocArrangeTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
                 "ops": {
                     "type": "array",
                     "items": {"type": "object"},
@@ -425,7 +430,7 @@ class DocArrangeTool(_DocToolBase):
                     "description": "Output path (default: in place).",
                 },
             },
-            "required": ["path", "ops"],
+            "required": ["file_path", "ops"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -433,7 +438,7 @@ class DocArrangeTool(_DocToolBase):
 
     async def _run(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         engine = _load_edit2docs()
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         ops = input.get("ops") or []
         if not isinstance(ops, list) or not all(isinstance(o, dict) for o in ops):
             return ToolResult(content="ops must be a list of objects", is_error=True)
@@ -475,13 +480,13 @@ class DocXmlReadTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
                 "part": {
                     "type": "string",
                     "description": "Part name to read. Omit to list all parts.",
                 },
             },
-            "required": ["path"],
+            "required": ["file_path"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -490,7 +495,7 @@ class DocXmlReadTool(_DocToolBase):
 
     async def _run(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         engine = _load_edit2docs()
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         part = input.get("part")
         if not part:
             parts = await asyncio.to_thread(engine.list_doc_parts, str(path))
@@ -526,7 +531,7 @@ class DocXmlEditTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
                 "part": {
                     "type": "string",
                     "description": "Part to patch, e.g. ppt/charts/chart1.xml.",
@@ -565,7 +570,7 @@ class DocXmlEditTool(_DocToolBase):
                     "description": "Output path. Default: edit in place (same path).",
                 },
             },
-            "required": ["path", "part"],
+            "required": ["file_path", "part"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -573,7 +578,7 @@ class DocXmlEditTool(_DocToolBase):
 
     async def _run(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         engine = _load_edit2docs()
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         part = str(input.get("part") or "")
         edits = input.get("edits")
         xml = input.get("xml")
@@ -795,7 +800,7 @@ class DocEditTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
                 "instruction": {
                     "type": "string",
                     "description": "Natural-language edit instruction.",
@@ -805,7 +810,7 @@ class DocEditTool(_DocToolBase):
                     "description": "Output path. Default: edit in place.",
                 },
             },
-            "required": ["path", "instruction"],
+            "required": ["file_path", "instruction"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -818,7 +823,7 @@ class DocEditTool(_DocToolBase):
     async def _run(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         engine = _load_edit2docs()
         kwargs = _llm_kwargs(context)
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         out = input.get("output")
         output = _resolve_doc_path(str(out), context, must_exist=False) if out else path
         result = await engine.async_edit_doc(
@@ -859,7 +864,7 @@ class DocRenderTool(_DocToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Document file path."},
+                "file_path": {"type": "string", "description": "Document file path."},
                 "to": {
                     "type": "string",
                     "enum": ["png", "pdf", "svg", "md"],
@@ -875,7 +880,7 @@ class DocRenderTool(_DocToolBase):
                     "exclusiveMinimum": 0,
                 },
             },
-            "required": ["path"],
+            "required": ["file_path"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -891,7 +896,7 @@ class DocRenderTool(_DocToolBase):
                 ),
                 is_error=True,
             )
-        path = _resolve_doc_path(input.get("path") or "", context)
+        path = _resolve_doc_path(input.get("file_path") or "", context)
         out = input.get("out_dir")
         kwargs: Dict[str, Any] = {
             "to": str(input.get("to") or "png"),

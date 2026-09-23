@@ -213,6 +213,32 @@ def coerce_input(schema: Dict[str, Any], payload: Any) -> Any:
     return payload
 
 
+def apply_input_aliases(
+    aliases: Dict[str, Tuple[str, ...]], payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    """도구가 **선언한** 옛 이름을 정본 이름으로 옮긴다 (검증 전).
+
+    ``repair_missing_required`` 와 다르다 — 저쪽은 스키마에 없는 키를 보고 *추측*하는
+    안전망이고, 이쪽은 우리가 이름을 바꾼 자리를 도구가 **명시**한 호환 다리다.
+    추측이 없으니 조건도 없다: 정본이 비어 있고 옛 이름에 값이 있으면 옮긴다.
+
+    원본은 바꾸지 않고, 바뀐 것이 없으면 같은 객체를 돌려준다.
+    """
+    if not aliases or not isinstance(payload, dict):
+        return payload
+    out = None
+    for canonical, olds in aliases.items():
+        if canonical in payload:
+            continue
+        for old in olds:
+            if old in payload:
+                if out is None:
+                    out = dict(payload)
+                out[canonical] = out.pop(old)
+                break
+    return payload if out is None else out
+
+
 #: 프로바이더가 돌려준 tool-call 인자 JSON 을 끝내 해석하지 못했을 때, 그 원본을
 #: 담아 두는 키. 빈 ``{}`` 로 뭉개면 "모델이 인자 없이 불렀다" 로 보여 필수 필드
 #: 누락이라는 **틀린 진단**이 모델에게 돌아간다 — 실제로는 우리가 흘린 것이다.

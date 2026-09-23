@@ -246,6 +246,11 @@ def _format_transcript(data: dict, *, cached: bool, include_segments: bool) -> s
 class _AudioToolBase(Tool):
     """Shared feature gate for the audio family."""
 
+    #: 4.49.0 이전 이름. 스키마에는 싣지 않는다 — Tool.input_aliases 설명 참조.
+    @property
+    def input_aliases(self):
+        return {"file_path": ("path",)}
+
     def required_config_keys(self) -> List[str]:
         # Host gate — hidden until the host wires a usable STT provider.
         return [_STT_FEATURE_KEY]
@@ -273,7 +278,7 @@ class AudioTranscribeTool(_AudioToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Audio file path (relative to the workspace).",
                 },
@@ -290,7 +295,7 @@ class AudioTranscribeTool(_AudioToolBase):
                     "description": "Ignore the cached transcript and call the STT model again.",
                 },
             },
-            "required": ["path"],
+            "required": ["file_path"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
@@ -302,7 +307,7 @@ class AudioTranscribeTool(_AudioToolBase):
             # unreachable when the gate works; kept for defense in depth
             return _err("STT_NOT_CONFIGURED", "No STT provider is configured for this session.")
 
-        target, err = _resolve_audio_path(context, str(input.get("path", "")))
+        target, err = _resolve_audio_path(context, str(input.get("file_path", "")))
         if err:
             return err
         assert target is not None
@@ -415,7 +420,7 @@ class AudioListFilesTool(_AudioToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Subdirectory to search (default: whole workspace).",
                 },
@@ -428,7 +433,7 @@ class AudioListFilesTool(_AudioToolBase):
     async def execute(self, input: Dict[str, Any], context: Any) -> ToolResult:
         working_dir = getattr(context, "working_dir", "") or ""
         allowed = getattr(context, "allowed_paths", None)
-        base = str(input.get("path") or ".")
+        base = str(input.get("file_path") or ".")
         try:
             root = resolve_and_validate(base, working_dir, allowed)
         except (PermissionError, ValueError) as exc:
@@ -516,16 +521,16 @@ class AudioInfoTool(_AudioToolBase):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Audio file path."},
+                "file_path": {"type": "string", "description": "Audio file path."},
             },
-            "required": ["path"],
+            "required": ["file_path"],
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
         return ToolCapabilities(read_only=True, concurrency_safe=True, idempotent=True)
 
     async def execute(self, input: Dict[str, Any], context: Any) -> ToolResult:
-        target, err = _resolve_audio_path(context, str(input.get("path", "")))
+        target, err = _resolve_audio_path(context, str(input.get("file_path", "")))
         if err:
             return err
         assert target is not None

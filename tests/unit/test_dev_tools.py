@@ -34,7 +34,7 @@ class TestLSP:
 
         ctx = ToolContext(extras={"lsp_adapters": {"python": py_adapter}})
         result = await LSPTool().execute(
-            {"language": "python", "action": "diagnostics", "file": "/x.py"}, ctx,
+            {"language": "python", "action": "diagnostics", "file_path": "/x.py"}, ctx,
         )
         assert result.is_error is False
         assert called["action"] == "diagnostics"
@@ -44,7 +44,7 @@ class TestLSP:
     async def test_no_adapter(self):
         ctx = ToolContext(extras={"lsp_adapters": {}})
         result = await LSPTool().execute(
-            {"language": "rust", "action": "diagnostics", "file": "x.rs"}, ctx,
+            {"language": "rust", "action": "diagnostics", "file_path": "x.rs"}, ctx,
         )
         assert result.is_error is True
         assert result.content["error"]["code"] == "NO_ADAPTER"
@@ -55,7 +55,7 @@ class TestLSP:
             raise RuntimeError("server down")
         ctx = ToolContext(extras={"lsp_adapters": {"python": adapter}})
         result = await LSPTool().execute(
-            {"language": "python", "action": "hover", "file": "x.py"}, ctx,
+            {"language": "python", "action": "hover", "file_path": "x.py"}, ctx,
         )
         assert result.is_error is True
         assert result.content["error"]["code"] == "LSP_FAILED"
@@ -64,7 +64,7 @@ class TestLSP:
     async def test_no_adapters_dict(self):
         ctx = ToolContext(extras={})
         result = await LSPTool().execute(
-            {"language": "python", "action": "hover", "file": "x.py"}, ctx,
+            {"language": "python", "action": "hover", "file_path": "x.py"}, ctx,
         )
         assert result.is_error is True
 
