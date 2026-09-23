@@ -254,6 +254,15 @@ def _log_native_tool_report(disallowed: Any) -> None:
 _CLI_AUTH_MODES = ("api_key", "setup_token", "oauth", "auto")
 
 
+#: Claude Code CLI 에 늘 주는 환경 — 자동 업데이트와 비필수 외부 트래픽을 끈다.
+#: ``CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`` 는 자동 업데이트·오류 보고·텔레메트리·버그
+#: 보고를 한 번에 끈다. 자동 업데이트는 옛 이름으로도 명시해 둔다(버전과 무관하게 확실히).
+CLI_QUIET_ENV: Dict[str, str] = {
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+}
+
+
 def build_cli_client(
     *,
     auth_mode: str = "api_key",
@@ -304,8 +313,11 @@ def build_cli_client(
         "auth_mode": auth_mode,
         "timeout_s": float(timeout_s),
         "default_permission_mode": permission_mode,
-        # CLI 자체 자동업데이트 차단 — 버전은 service/claude_code/cli_installer 가 관리
-        "env_extras": {"DISABLE_AUTOUPDATER": "1"},
+        # CLI 자체 자동업데이트 차단 — 버전은 service/claude_code/cli_installer 가 관리.
+        # 비필수 트래픽(텔레메트리·오류 보고·버그 보고·업데이트 확인)도 끈다 — 폐쇄망에서
+        # 실행마다 외부 연결을 시도하고, 인터넷이 되는 곳에서도 서버가 보낼 이유가 없다
+        # (2026-09-23 감사 F18).
+        "env_extras": dict(CLI_QUIET_ENV),
     }
     if auth_mode == "api_key":
         kwargs["api_key"] = api_key
