@@ -4,6 +4,40 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.50.0] — 2026-09-23
+
+### Fixed — 모델에게 알려 주던 "지금" 이 하루 중 9시간 틀렸다
+
+시스템 프롬프트의 시각 블록이 **고정 UTC** 였다:
+
+```
+Current date: 2026-09-23 00:06 UTC
+```
+
+한국(UTC+9)에서는 **자정~오전 9시** 사이에 이 값의 *날짜*가 어제다. 그 시간대에
+사용자가 "오늘 공고", "어제까지 접수" 를 물으면 모델은 하루 전을 기준으로 일한다.
+시차가 있는 어느 배포에서나 오프셋만큼 같은 크기의 구멍이 생긴다.
+
+- **프로세스의 지역 시각으로 말한다** (`DateTimeBlock.render`). 시간대 *값*은 엔진이
+  정할 일이 아니라 배포가 정한다(`TZ` 환경변수) — 엔진은 그 값을 읽고 **어느 시간대인지
+  이름과 오프셋을 함께** 적는다. 모델이 `09:06` 만 보고 지역을 추측하지 않도록:
+
+  | TZ | 출력 |
+  |---|---|
+  | `Asia/Seoul` | `Current date: 2026-09-23 09:06 KST (UTC+09:00)` |
+  | `America/New_York` | `Current date: 2026-09-22 20:06 EDT (UTC-04:00)` |
+  | 미설정 | `Current date: 2026-09-23 00:06 UTC+00:00` (이전과 같은 값) |
+
+  `TZ` 가 없으면 예전과 똑같이 UTC 다 — 설정하지 않은 배포의 동작은 바뀌지 않는다.
+- 블록은 그대로 **volatile** 이다(캐시된 프리픽스 밖). 1분 단위로 바뀌는 값이 프리픽스에
+  들어가면 매분 system+history 전체를 다시 프리필한다.
+
+짝이 되는 설정은 xgen-infra 쪽이다 — 배포별 `TZ`.
+
+재현 테스트(`tests/unit/test_prompt_local_time.py`, 5개): 시간대 이름+오프셋 표기 /
+UTC 중복 표기 안 함 / 시간대가 다르면 날짜도 다를 수 있음(서울 vs 호놀룰루, 19시간 차) /
+`TZ` 없어도 동작 / volatile 유지.
+
 ## [4.49.0] — 2026-09-23
 
 ### Changed — 파일 하나를 받는 도구는 전부 `file_path` 를 쓴다

@@ -192,8 +192,25 @@ class DateTimeBlock(PromptBlock):
         return True
 
     def render(self, state: PipelineState) -> str:
-        now = datetime.now(timezone.utc)
-        return f"Current date: {now.strftime('%Y-%m-%d %H:%M UTC')}"
+        # 배포가 정한 시간대로 말한다 (``TZ`` 미설정이면 UTC).
+        #
+        # 고정 UTC 였을 때: 한국(UTC+9) 사용자가 자정~오전 9시에 "오늘" 을 물으면
+        # 모델은 **어제 날짜**를 들고 일한다 — 하루 중 9시간이 틀린다. 시차가 있는
+        # 어느 배포에서나 같은 크기의 구멍이 생긴다.
+        #
+        # 시간대 **값**은 엔진이 정할 일이 아니다(배포마다 다르다). 엔진은 프로세스의
+        # 지역 시각을 읽고, 어느 시간대인지 **이름과 오프셋을 함께** 말해 준다 —
+        # 모델이 "09:06" 만 보고 어느 지역인지 추측하지 않도록.
+        now = datetime.now(timezone.utc).astimezone()
+        zone = now.tzname() or ""
+        offset = now.strftime("%z")
+        if offset:
+            offset = f"UTC{offset[:3]}:{offset[3:]}"
+        if zone.upper().startswith("UTC") or not zone:
+            label = offset or "UTC"
+        else:
+            label = f"{zone} ({offset})" if offset else zone
+        return f"Current date: {now.strftime('%Y-%m-%d %H:%M')} {label}".rstrip()
 
 
 class PinnedFactsBlock(PromptBlock):
