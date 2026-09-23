@@ -258,7 +258,44 @@ class RegistryRouter(ToolRouter):
                 )
 
         result = await self._dispatch_with_lifecycle(tool, tool_input, context)
+        result = self._open_gate_family(tool_name, result, context)
         return _with_repair_notes(result, repair_notes)
+
+    def _open_gate_family(
+        self, tool_name: str, result: ToolResult, context: ToolContext
+    ) -> ToolResult:
+        """표(``tools.gates.GATES``)에 있는 문이 성공하면 그 가족을 **여기서** 연다.
+
+        문이 스스로 열든(내장 안내 도구의 ``open_family``, 어댑트 도구의 ``opens_family``)
+        말든 상관없이 열린다 — 여는 일을 문마다 따로 선언하게 했더니 빠뜨린 문에서 방이
+        잠겼다(SSH·Delegation·Browser·LocalControl, 2주 새 네 번). 이미 열린 것은 다시
+        말하지 않는다(문이 스스로 열었으면 여기서는 새로 연 것이 없다).
+        """
+        if result.is_error:
+            return result
+        from xgen_agent_runtime.tools.gates import family_of, gate_of
+
+        if gate_of(tool_name) is None:
+            return result
+        # 모델에게 노출을 결정하는 레지스트리는 턴의 것(``context.tool_registry``)이다 —
+        # 내장 안내 도구의 open_family 가 이미 그걸 쓴다. 없을 때만 라우터 자신의 것.
+        registry = getattr(context, "tool_registry", None) or self._registry
+        if not callable(getattr(registry, "activate", None)):
+            return result
+        opened = []
+        for name in family_of(tool_name, registry.list_names()):
+            if not registry.is_exposed(name) and registry.activate(name):
+                opened.append(name)
+        if not opened:
+            return result
+        from xgen_agent_runtime.tools.built_in._skill_gateway import with_opened
+
+        updates: Dict[str, Any] = {}
+        if isinstance(result.content, str):
+            updates["content"] = with_opened(result.content, opened)
+        if isinstance(getattr(result, "display_text", None), str):
+            updates["display_text"] = with_opened(result.display_text, opened)
+        return _dc_replace(result, **updates) if updates else result
 
     async def _dispatch_with_lifecycle(
         self, tool: Tool, tool_input: Dict[str, Any], context: ToolContext
