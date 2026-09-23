@@ -4,6 +4,19 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.54.1] — 2026-09-23
+
+### Changed — edit2docs 0.26.0 (AGPL 의존 마지막 정리)
+
+- `xgen-edit2docs` 0.24.0 → **0.26.0**.
+  - 0.25.0: EPUB 경로와 **ebooklib(AGPL-3.0)** 제거 — `.epub` 근거 자료는 이제
+    `Unsupported source format` 으로 분명히 거부된다(예전엔 빈 내용이 조용히 들어갔다).
+  - 0.26.0: HWP 해석 수정 — 날것으로 저장된 png/jpg 그림 누락, 취소선 오판(표 35),
+    컨트롤 뒤 글자 모양 어긋남, 하이픈·묶음/고정폭 빈칸·자동 번호·덧말 글자, 배포용 문서 열기.
+    Doc* 도구가 hwp 를 정규화할 때 그대로 좋아진다.
+- `uv.lock` 재생성 — 0.23.0 시절 그대로여서 xgen-contextifier → **pymupdf(AGPL)** 를
+  품고 있었다(`uv sync --frozen` 이면 개발 환경에 설치됐다). 이제 pymupdf·ebooklib·pyhwp 0건.
+
 ## [4.54.0] — 2026-09-23
 
 ### Fixed — Read·Write·Edit 가 러너와 로컬에서 다른 말을 했다 (파일시스템 포트 2단계)
