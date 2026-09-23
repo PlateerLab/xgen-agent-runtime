@@ -4,6 +4,46 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.49.0] — 2026-09-23
+
+### Changed — 파일 하나를 받는 도구는 전부 `file_path` 를 쓴다
+
+4.47.0 의 별칭 복구는 **증상을 받아 준 것**이지 원인을 고친 게 아니었다. 원인은 우리
+카탈로그가 같은 "파일 경로" 개념을 여섯 이름으로 갈라 놓은 데 있다 (내장 94개 조사):
+
+| 파라미터 | 도구 수 |
+|---|---|
+| `path` | 15 |
+| `file_path` | 5 (Read·Write·Edit·NotebookEdit·SendUserFile) |
+| `source` | 2 (SandboxFetch·SandboxPut) |
+| `target` · `file` · `filename` | 각 1 |
+
+참고 하네스의 규약은 **파일 하나 = `file_path`, 검색 루트/디렉터리 = `path`** 다.
+모델은 그 규약으로 학습돼 있어 우리 `Doc*`/`Audio*` 에도 `file_path` 를 보냈고, 그게
+dev 실측 별칭 오류 19건의 전부다 — 모델이 틀린 게 아니라 **우리가 두 규약을 섞어 놓은**
+것이다.
+
+- **`Doc*`(8) · `Audio*`(3) · `LSP`(1) 이 `file_path` 로 통일**. `Glob`·`Grep`·
+  `EnterWorktree`·`WorkspaceInfo` 의 `path` 는 **그대로 둔다** — 그쪽은 디렉터리라
+  규약대로다. 바꾼 것은 "파일 하나를 받는" 자리뿐이다.
+- **옛 이름은 도구가 선언하는 다리로 계속 받는다** (`Tool.input_aliases`,
+  `tools.errors.apply_input_aliases`). `{"file_path": ("path",)}` 처럼 선언하면
+  Stage 10 이 검증 **전에** 옮긴다. 기존 워크플로·에이전트 호출이 깨지지 않는다.
+- **별칭은 스키마에 싣지 않는다.** 실으면 호출마다 프리픽스 토큰을 내고 모델에게
+  "둘 다 된다" 고 가르쳐 불일치가 영구화된다. 선언은 파이썬 속성으로만 둔다.
+
+`repair_missing_required`(4.47.0)와 역할이 다르다 — 저쪽은 스키마에 **없는** 키를 보고
+추측하는 안전망이고, 이쪽은 우리가 이름을 바꾼 자리를 도구가 **명시**한 호환 다리다.
+추측이 없으므로 조건도 없다.
+
+**호환성**: 모델 경로는 전부 `RegistryRouter.route` 를 지난다(ToolBatch 포함, `src/`
+전체에서 `tool.execute` 직접 호출은 라우터 한 곳뿐) — 옛 이름 호출은 그대로 동작한다.
+내부 코드가 직접 `execute()` 를 부를 때는 정본 이름을 써야 한다.
+
+재현 테스트(`tests/unit/test_input_aliases.py`, 11개): 다리 동작 6 + **카탈로그 일관성
+3**(옛 이름을 required 로 남긴 도구 0 / 이름 바꾼 도구는 전부 다리 선언 / 별칭이 스키마로
+새지 않음) + 라우터 경유 옛 호출 1. 기존 테스트 19건은 정본 이름으로 갱신.
+
 ## [4.48.0] — 2026-09-22
 
 ### Fixed — 없는 노트를 물으면 "없다" 만 듣고 또 지어냈다

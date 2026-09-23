@@ -84,7 +84,7 @@ class TestLSPUsesWorkspace:
         )
         await EnterWorktreeTool().execute({"branch": "feat-b", "base": "main"}, ctx)
         await LSPTool().execute(
-            {"language": "python", "action": "diagnostics", "file": "x.py"},
+            {"language": "python", "action": "diagnostics", "file_path": "x.py"},
             ctx,
         )
         # cwd should be the worktree path (under .worktrees/feat-b),
@@ -104,7 +104,7 @@ class TestLSPUsesWorkspace:
             extras={"lsp_adapters": {"python": adapter}},
         )
         await LSPTool().execute(
-            {"language": "python", "action": "hover", "file": "x.py"},
+            {"language": "python", "action": "hover", "file_path": "x.py"},
             ctx,
         )
         # No workspace_stack in extras → working_dir.

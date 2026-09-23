@@ -41,6 +41,11 @@ class LSPTool(Tool):
         async def adapter(*, action, file, line, col, cwd) -> dict
     """
 
+    #: 4.49.0 이전 이름(``file``). 스키마에는 싣지 않는다 — Tool.input_aliases 참조.
+    @property
+    def input_aliases(self):
+        return {"file_path": ("file",)}
+
     @property
     def name(self) -> str:
         return "LSP"
@@ -59,11 +64,11 @@ class LSPTool(Tool):
             "properties": {
                 "language": {"type": "string"},
                 "action": {"enum": ["diagnostics", "hover", "definition", "references"]},
-                "file": {"type": "string"},
+                "file_path": {"type": "string"},
                 "line": {"type": "integer", "minimum": 0, "default": 0},
                 "col": {"type": "integer", "minimum": 0, "default": 0},
             },
-            "required": ["language", "action", "file"],
+            "required": ["language", "action", "file_path"],
         }
 
     def capabilities(self, input):
@@ -80,7 +85,7 @@ class LSPTool(Tool):
         try:
             result = adapter(
                 action=input["action"],
-                file=input["file"],
+                file=input["file_path"],
                 line=input.get("line", 0),
                 col=input.get("col", 0),
                 cwd=cwd,

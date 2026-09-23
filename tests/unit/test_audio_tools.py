@@ -125,7 +125,7 @@ def test_gate_drops_family_without_feature_token():
 def test_transcribe_writes_sidecar_and_returns_text(tmp_path):
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert not res.is_error
     assert "안녕하세요 테스트입니다" in res.content
     assert "cached=no" in res.content
@@ -141,9 +141,9 @@ def test_sidecar_cache_prevents_repeat_stt_calls(tmp_path):
     provider is NOT called again (measured call count)."""
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    _run(AudioTranscribeTool(), {"path": name}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert FakeSTT.calls == 1
-    res2 = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res2 = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert FakeSTT.calls == 1, "cache hit must not touch the STT model"
     assert "cached=yes" in res2.content
     assert "안녕하세요 테스트입니다" in res2.content
@@ -154,19 +154,19 @@ def test_cache_invalidated_when_audio_changes(tmp_path):
     (sha-bound), so stale transcripts can never be served."""
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx, content=b"RIFF-take-one")
-    _run(AudioTranscribeTool(), {"path": name}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     from pathlib import Path
 
     Path(ctx.working_dir, name).write_bytes(b"RIFF-take-two-different")
-    _run(AudioTranscribeTool(), {"path": name}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert FakeSTT.calls == 2, "changed audio must be re-transcribed"
 
 
 def test_force_retranscribes(tmp_path):
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    _run(AudioTranscribeTool(), {"path": name}, ctx)
-    _run(AudioTranscribeTool(), {"path": name, "force": True}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name, "force": True}, ctx)
     assert FakeSTT.calls == 2
 
 
@@ -175,12 +175,12 @@ def test_timestamps_upgrade_bypasses_textonly_cache(tmp_path):
     the tool re-transcribes with segments and caches the richer result."""
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    _run(AudioTranscribeTool(), {"path": name}, ctx)
-    res = _run(AudioTranscribeTool(), {"path": name, "timestamps": True}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name, "timestamps": True}, ctx)
     assert FakeSTT.calls == 2
     assert "[segments]" in res.content and "안녕하세요" in res.content
     # …and now the segment-bearing sidecar serves timestamp requests too
-    res3 = _run(AudioTranscribeTool(), {"path": name, "timestamps": True}, ctx)
+    res3 = _run(AudioTranscribeTool(), {"file_path": name, "timestamps": True}, ctx)
     assert FakeSTT.calls == 2 and "cached=yes" in res3.content
 
 
@@ -190,14 +190,14 @@ def test_timestamps_upgrade_bypasses_textonly_cache(tmp_path):
 def test_path_guard_blocks_escape_and_nonaudio(tmp_path):
     ctx = _ctx(tmp_path)
     (tmp_path / "secret.wav").write_bytes(b"outside-workspace")
-    res = _run(AudioTranscribeTool(), {"path": "../secret.wav"}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": "../secret.wav"}, ctx)
     assert res.is_error and "PATH_ESCAPE" in str(res.content)
 
     name = _mk_audio(ctx, name="문서.pdf")
-    res2 = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res2 = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert res2.is_error and "NOT_AUDIO" in str(res2.content)
 
-    res3 = _run(AudioTranscribeTool(), {"path": "없는파일.wav"}, ctx)
+    res3 = _run(AudioTranscribeTool(), {"file_path": "없는파일.wav"}, ctx)
     assert res3.is_error and "NOT_FOUND" in str(res3.content)
     assert FakeSTT.calls == 0, "guard failures must never reach the model"
 
@@ -206,7 +206,7 @@ def test_size_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(audio_tools, "_MAX_AUDIO_BYTES", 10)
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx, content=b"x" * 100)
-    res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert res.is_error and "TOO_LARGE" in str(res.content)
     assert FakeSTT.calls == 0
 
@@ -217,7 +217,7 @@ def test_stt_error_categories_actionable(tmp_path):
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
     FakeSTT.fail_category = "auth"
-    res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert res.is_error
     assert "STT_AUTH" in str(res.content) and "key/URL" in str(res.content)
     # no sidecar for failed transcriptions
@@ -232,7 +232,7 @@ def test_list_files_reports_transcription_state(tmp_path):
     a = _mk_audio(ctx, "a.mp3")
     _mk_audio(ctx, "sub/b.flac")
     _mk_audio(ctx, "노트.txt", b"not audio")
-    _run(AudioTranscribeTool(), {"path": a}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": a}, ctx)
 
     res = _run(AudioListFilesTool(), {}, ctx)
     assert "a.mp3" in res.content and "✓ transcribed" in res.content
@@ -243,18 +243,18 @@ def test_list_files_reports_transcription_state(tmp_path):
 def test_audio_info_reports_freshness(tmp_path):
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    info0 = json.loads(_run(AudioInfoTool(), {"path": name}, ctx).content)
+    info0 = json.loads(_run(AudioInfoTool(), {"file_path": name}, ctx).content)
     assert info0["transcript"] == {"exists": False}
 
-    _run(AudioTranscribeTool(), {"path": name}, ctx)
-    info1 = json.loads(_run(AudioInfoTool(), {"path": name}, ctx).content)
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
+    info1 = json.loads(_run(AudioInfoTool(), {"file_path": name}, ctx).content)
     assert info1["transcript"]["exists"] and info1["transcript"]["fresh"]
     assert info1["within_transcribe_limit"] is True
 
     from pathlib import Path
 
     Path(ctx.working_dir, name).write_bytes(b"different bytes now")
-    info2 = json.loads(_run(AudioInfoTool(), {"path": name}, ctx).content)
+    info2 = json.loads(_run(AudioInfoTool(), {"file_path": name}, ctx).content)
     assert info2["transcript"]["exists"] and not info2["transcript"]["fresh"]
 
 
@@ -355,7 +355,7 @@ def test_malformed_sidecars_never_crash(tmp_path):
     for payload in invalid_payloads:
         FakeSTT.calls = 0
         _write_raw_sidecar(ctx, name, payload)
-        res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+        res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
         assert not res.is_error, f"crashed on {payload!r}: {res.content}"
         assert FakeSTT.calls == 1, f"invalid sidecar must be a cache MISS: {payload!r}"
 
@@ -369,13 +369,13 @@ def test_malformed_sidecars_never_crash(tmp_path):
     for payload in messy_payloads:
         FakeSTT.calls = 0
         _write_raw_sidecar(ctx, name, payload)
-        res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+        res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
         assert not res.is_error, f"crashed on {payload!r}: {res.content}"
         assert FakeSTT.calls == 0 and "cached=yes" in res.content, payload
 
     # AudioInfo reports malformed instead of crashing
     _write_raw_sidecar(ctx, name, ["broken"])
-    info = json.loads(_run(AudioInfoTool(), {"path": name}, ctx).content)
+    info = json.loads(_run(AudioInfoTool(), {"file_path": name}, ctx).content)
     assert info["transcript"]["exists"] and info["transcript"].get("malformed")
 
 
@@ -384,7 +384,7 @@ def test_string_duration_sidecar_partially_coerced(tmp_path):
     cache-miss (strict schema) — and formatting never crashes."""
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert "duration=3.0s" in res.content  # runtime float path formats fine
 
 
@@ -402,9 +402,9 @@ def test_timestamps_cache_hits_on_flag_not_segments(tmp_path):
     try:
         ctx = _ctx(tmp_path, provider="noseg-test")
         name = _mk_audio(ctx)
-        _run(AudioTranscribeTool(), {"path": name, "timestamps": True}, ctx)
+        _run(AudioTranscribeTool(), {"file_path": name, "timestamps": True}, ctx)
         assert FakeSTT.calls == 1
-        res2 = _run(AudioTranscribeTool(), {"path": name, "timestamps": True}, ctx)
+        res2 = _run(AudioTranscribeTool(), {"file_path": name, "timestamps": True}, ctx)
         assert FakeSTT.calls == 1, "no-segment result must still cache timestamps runs"
         assert "cached=yes" in res2.content
     finally:
@@ -420,7 +420,7 @@ def test_sidecar_write_failure_keeps_paid_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(audio_tools, "_write_sidecar", _boom)
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx)
-    res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert not res.is_error
     assert "안녕하세요 테스트입니다" in res.content
     assert "cache could not be saved" in res.content
@@ -434,8 +434,8 @@ def test_concurrent_transcribes_one_paid_call(tmp_path):
 
     async def both():
         return await asyncio.gather(
-            AudioTranscribeTool().execute({"path": name}, ctx),
-            AudioTranscribeTool().execute({"path": name}, ctx),
+            AudioTranscribeTool().execute({"file_path": name}, ctx),
+            AudioTranscribeTool().execute({"file_path": name}, ctx),
         )
 
     r1, r2 = asyncio.run(both())
@@ -461,7 +461,7 @@ def test_list_prunes_heavy_dirs_and_reports_truncation(tmp_path):
 def test_mp4_no_longer_advertised(tmp_path):
     ctx = _ctx(tmp_path)
     name = _mk_audio(ctx, "영상.mp4")
-    res = _run(AudioTranscribeTool(), {"path": name}, ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
     assert res.is_error and "NOT_AUDIO" in str(res.content)
     lst = _run(AudioListFilesTool(), {}, ctx)
     assert "영상.mp4" not in lst.content

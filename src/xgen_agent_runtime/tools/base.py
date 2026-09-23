@@ -321,6 +321,21 @@ class Tool(ABC):
         """JSON Schema for tool input parameters."""
         ...
 
+    @property
+    def input_aliases(self) -> Dict[str, Tuple[str, ...]]:
+        """옛 파라미터 이름 → 정본 이름. 기본 없음.
+
+        ``{"file_path": ("path",)}`` 이면, 모델이나 오래된 호출자가 ``path`` 로
+        보낸 값을 검증 **전에** ``file_path`` 로 옮긴다. 정본 이름이 이미 있으면
+        건드리지 않는다.
+
+        스키마(= 모델이 보는 것)에는 정본 이름만 싣는다 — 별칭을 스키마에 넣으면
+        호출마다 프리픽스 토큰을 내고 모델에게 "둘 다 된다" 고 가르치게 된다.
+        여기 선언은 **우리가 이름을 바꾼 자리의 호환 다리**이지, 모델이 아무 이름이나
+        써도 된다는 뜻이 아니다.
+        """
+        return {}
+
     @abstractmethod
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         """Execute the tool with given input."""

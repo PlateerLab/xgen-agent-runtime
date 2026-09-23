@@ -21,6 +21,7 @@ from xgen_agent_runtime.permission.types import (
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 from xgen_agent_runtime.tools.errors import (
     UNPARSED_ARGUMENTS_KEY,
+    apply_input_aliases,
     ToolError,
     ToolFailure,
     coerce_input,
@@ -214,6 +215,8 @@ class RegistryRouter(ToolRouter):
 
         # 모델이 숫자·불리언을 문자열로 보낸 명백한 경우는 검증 전에 바로잡는다 —
         # 오류 한 번이 모델 왕복 한 번(=대화 전체 재전송)이다.
+        # 이름을 바꾼 파라미터의 호환 다리 — 도구가 선언한 것만 옮긴다.
+        tool_input = apply_input_aliases(getattr(tool, "input_aliases", {}) or {}, tool_input)
         tool_input = coerce_input(tool.input_schema, tool_input)
 
         # 우리가 흘린 인자를 모델 탓으로 돌리지 않는다 — 이 키가 있다는 것은
