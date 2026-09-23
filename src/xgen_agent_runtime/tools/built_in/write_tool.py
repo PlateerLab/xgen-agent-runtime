@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from xgen_agent_runtime.tools.built_in._file_witness import is_witnessed, refusal
+from xgen_agent_runtime.tools.built_in._file_witness import (
+    is_witnessed,
+    refusal,
+    witnessed_mutation,
+)
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
-from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
+from xgen_agent_runtime.tools.fs import tool_fs
 
 
 class WriteTool(Tool):
@@ -50,53 +54,40 @@ class WriteTool(Tool):
         file_path = input.get("file_path", "")
         content = input.get("content", "")
 
-        # Sandbox: write the file into the agent's XGeny session.
-        if context.sandbox is not None:
-            from xgen_agent_runtime.tools._xgeny_sandbox import sb_write_bytes
-
-            wd = context.working_dir or "/workspace"
-
-            # 읽지 않은 파일을 말없이 덮어쓰지 않는다 (_file_witness).
-            if not is_witnessed(context.state_view, file_path):
-                from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
-
-                try:
-                    existing = await sb_read_bytes(context.sandbox, file_path, workdir=wd)
-                except Exception:  # noqa: BLE001 — 없는 파일이면 그대로 새로 쓴다
-                    existing = b""
-                if existing:
-                    return ToolResult(content=refusal(file_path), is_error=True)
-
-            try:
-                n = await sb_write_bytes(
-                    context.sandbox, file_path, content.encode("utf-8"), workdir=wd
-                )
-                return ToolResult(content=f"Successfully wrote {n} bytes to {file_path}")
-            except PermissionError as e:
-                return ToolResult(content=str(e), is_error=True)
-            except Exception as e:  # noqa: BLE001
-                return ToolResult(content=f"Write error: {e}", is_error=True)
-
+        fs = tool_fs(context)
         try:
-            resolved = resolve_and_validate(file_path, context.working_dir, context.allowed_paths)
+            resolved = fs.resolve(file_path, write=True)
         except (PermissionError, ValueError) as e:
             return ToolResult(content=str(e), is_error=True)
 
-        # 읽지 않은 파일을 말없이 덮어쓰지 않는다 (_file_witness). 새 파일은 그대로
-        # 통과한다 — 막으려는 것은 "내용을 모른 채 지우는 일" 뿐이다.
-        if (
-            resolved.exists()
-            and resolved.is_file()
-            and resolved.stat().st_size > 0
-            and not is_witnessed(context.state_view, file_path)
-            and not is_witnessed(context.state_view, str(resolved))
-        ):
-            return ToolResult(content=refusal(str(resolved)), is_error=True)
+        # 읽지 않은 기존 파일을 말없이 덮어쓰지 않는다 (_file_witness, 4.51.0).
+        # 새 파일은 그대로 통과한다 — 막으려는 것은 "내용을 모른 채 지우는 일" 뿐이다.
+        view = context.state_view
+        if not (is_witnessed(view, file_path) or is_witnessed(view, resolved)):
+            try:
+                existing = await fs.read_bytes(file_path)
+            except FileNotFoundError:
+                existing = b""
+            except IsADirectoryError:
+                return ToolResult(
+                    content=f"Cannot write: {resolved} is a directory.", is_error=True
+                )
+            except Exception:  # noqa: BLE001 — 확인 실패로 쓰기를 막지 않는다(예전 러너 동작)
+                existing = b""
+            if existing:
+                return ToolResult(content=refusal(resolved), is_error=True)
 
         try:
-            resolved.parent.mkdir(parents=True, exist_ok=True)
-            resolved.write_text(content, encoding="utf-8")
-            size = resolved.stat().st_size
-            return ToolResult(content=f"Successfully wrote {size} bytes to {resolved}")
-        except OSError as e:
+            n = await fs.write_bytes(file_path, content.encode("utf-8"))
+        except PermissionError as e:
+            return ToolResult(content=str(e), is_error=True)
+        except Exception as e:  # noqa: BLE001
             return ToolResult(content=f"Write error: {e}", is_error=True)
+
+        return ToolResult(
+            content=f"Successfully wrote {n} bytes to {resolved}",
+            # 방금 쓴 파일은 에이전트가 내용을 안다 — 장부에 올린다. 4.51.0 은 이걸 빠뜨려서
+            # **자기가 방금 만든 파일을 다시 쓰면 거절**했다(Write→Write). 실측상 "자기가 쓴
+            # 걸 다시 씀" 이 월 54건인데, 그 전부가 막힐 뻔했다.
+            state_mutations=witnessed_mutation(view, file_path, resolved),
+        )
