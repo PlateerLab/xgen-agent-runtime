@@ -37,12 +37,10 @@ See ``executor_uplift/06_design_tool_system.md`` §7 and
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
-from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
+from xgen_agent_runtime.tools.fs import tool_fs
 
 _VALID_CELL_TYPES = ("code", "markdown", "raw")
 _VALID_OPS = ("replace", "insert", "delete")
@@ -59,33 +57,6 @@ def _parse_notebook(data: bytes) -> Dict[str, Any]:
 def _serialize_notebook(payload: Dict[str, Any]) -> bytes:
     """Serialize a notebook to bytes with the same shape ``_atomic_write`` uses."""
     return (json.dumps(payload, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
-
-
-def _load_notebook(path: str) -> Dict[str, Any]:
-    with open(path, "rb") as fh:
-        return _parse_notebook(fh.read())
-
-
-def _atomic_write(path: str, payload: Dict[str, Any]) -> None:
-    """Write ``payload`` to ``path`` atomically via temp-file + rename.
-
-    Keeps the original untouched if JSON serialisation or fsync fails.
-    """
-    directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".nbedit-", suffix=".tmp", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=1)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
 
 
 def _ensure_source_shape(src: Any) -> List[str]:
@@ -262,50 +233,30 @@ class NotebookEditTool(Tool):
                 is_error=True,
             )
 
-        sandbox = context.sandbox
-        wd = context.working_dir or "/workspace"
-        resolved = None  # set on the local path; None means sandbox mode
-
-        # Sandbox: read-modify-write the notebook inside the agent's session
-        # (mirrors EditTool). NEVER touch the serving pod's filesystem.
-        if sandbox is not None:
-            from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
-
-            try:
-                raw_bytes = await sb_read_bytes(sandbox, str(raw_path), workdir=wd)
-            except FileNotFoundError:
-                return ToolResult(content=f"notebook not found: {raw_path}", is_error=True)
-            except PermissionError as exc:
-                return ToolResult(content=str(exc), is_error=True)
-            except Exception as exc:  # noqa: BLE001
-                return ToolResult(content=f"read error: {exc}", is_error=True)
-            try:
-                notebook = _parse_notebook(raw_bytes)
-            except (json.JSONDecodeError, ValueError) as exc:
-                return ToolResult(content=f"notebook parse error: {exc}", is_error=True)
-            target_label = str(raw_path)
-        else:
-            try:
-                resolved = resolve_and_validate(
-                    raw_path, context.working_dir, context.allowed_paths
-                )
-            except (PermissionError, ValueError) as exc:
-                return ToolResult(content=str(exc), is_error=True)
-
-            if not resolved.exists():
-                return ToolResult(content=f"notebook not found: {resolved}", is_error=True)
-            if resolved.is_dir():
-                return ToolResult(content=f"not a file: {resolved}", is_error=True)
-
-            try:
-                notebook = _load_notebook(str(resolved))
-            except json.JSONDecodeError as exc:
-                return ToolResult(content=f"notebook JSON parse error: {exc}", is_error=True)
-            except ValueError as exc:
-                return ToolResult(content=str(exc), is_error=True)
-            except OSError as exc:
-                return ToolResult(content=f"read error: {exc}", is_error=True)
-            target_label = str(resolved)
+        # 러너든 로컬이든 한 길로 읽고 쓴다(tools.fs). 예전엔 분기마다 따로여서 파싱
+        # 오류 문구가 둘로 갈렸고, 러너 쪽 결과 metadata 의 path 는 문자열 "None" 이었다.
+        fs = tool_fs(context)
+        try:
+            resolved = fs.resolve(str(raw_path), write=save)
+        except (PermissionError, ValueError) as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        try:
+            raw_bytes = await fs.read_bytes(str(raw_path))
+        except FileNotFoundError:
+            return ToolResult(content=f"notebook not found: {resolved}", is_error=True)
+        except IsADirectoryError:
+            return ToolResult(content=f"not a file: {resolved}", is_error=True)
+        except PermissionError as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(content=f"read error: {exc}", is_error=True)
+        try:
+            notebook = _parse_notebook(raw_bytes)
+        except json.JSONDecodeError as exc:
+            return ToolResult(content=f"notebook JSON parse error: {exc}", is_error=True)
+        except ValueError as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        target_label = resolved
 
         cells: List[Dict[str, Any]] = notebook["cells"]
         before_count = len(cells)
@@ -340,20 +291,13 @@ class NotebookEditTool(Tool):
         after_count = len(cells)
 
         if save:
-            if sandbox is not None:
-                from xgen_agent_runtime.tools._xgeny_sandbox import sb_write_bytes
-
-                try:
-                    await sb_write_bytes(
-                        sandbox, str(raw_path), _serialize_notebook(notebook), workdir=wd
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    return ToolResult(content=f"write error: {exc}", is_error=True)
-            else:
-                try:
-                    _atomic_write(str(resolved), notebook)
-                except OSError as exc:
-                    return ToolResult(content=f"write error: {exc}", is_error=True)
+            # 로컬은 원자적 쓰기(임시 파일 + rename, 권한 보존)가 포트 안에 있다.
+            try:
+                await fs.write_bytes(str(raw_path), _serialize_notebook(notebook))
+            except PermissionError as exc:
+                return ToolResult(content=str(exc), is_error=True)
+            except Exception as exc:  # noqa: BLE001
+                return ToolResult(content=f"write error: {exc}", is_error=True)
 
         summary = (
             f"NotebookEdit: {target_label}\n"
@@ -365,7 +309,7 @@ class NotebookEditTool(Tool):
         return ToolResult(
             content=summary,
             metadata={
-                "path": str(resolved),
+                "path": resolved,
                 "before_cells": before_count,
                 "after_cells": after_count,
                 "saved": save,
