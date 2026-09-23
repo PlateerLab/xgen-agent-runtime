@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.52.0] — 2026-09-23
+
+### Fixed — LLM 호출 하나가 턴을 무한정 붙잡을 수 있었다 (안정성 감사 F2)
+
+SDK 클라이언트를 만들 때 타임아웃을 넘기지 않아 anthropic·openai 설치본 기본값(읽기 600초 ×
+재시도 2)을 그대로 썼고, 스트림 도중 멈춤을 감시하는 코드도 없었다. 턴 예산(WallClockBudget)은
+반복 **사이**에서만 판정하므로 걸려 있는 호출 하나는 끊지 못한다. 폐쇄망 게이트웨이가 연결만 받고
+응답을 흘리지 않으면 호출 하나가 **최대 약 2시간**(재시도 겹겹이) 실행 스레드를 붙잡았다.
+
+- `llm_client/timeouts.py` — 연결 10초 · 첫 청크 180초 · 청크 간 무응답 120초 · 요청 전체 600초,
+  타임아웃 재시도 1회(`XGEN_LLM_*` 환경 변수, 호출 시점에 읽는다). SDK 자체 재시도는 끈다
+  (재시도는 런타임 한 곳에서). anthropic·openai·azure_foundry·bedrock·google 에 적용.
+- s06 스트림 감시(`_watched_stream`): 첫 내용 청크까지·청크 사이 무응답을 재서 넘으면
+  `EXEC_API_TIMEOUT` 으로 끊는다. CLI 백엔드는 자기 300초 상한이 있어 제외.
+- 최악의 경우: 약 2시간 → 약 6분.
+
+### Changed — Claude Code CLI 의 비필수 외부 트래픽을 끈다 (안정성 감사 F18)
+
+`host.runner.CLI_QUIET_ENV` = `DISABLE_AUTOUPDATER` + `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+를 모든 인증 모드의 기본으로. 폐쇄망에서 실행마다 텔레메트리·오류 보고 연결을 시도하던 것.
+
 ## [4.51.0] — 2026-09-23
 
 ### Fixed — 본 적 없는 파일을 말없이 덮어쓸 수 있었다
