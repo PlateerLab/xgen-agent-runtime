@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-22.
-> Catalogue version: **11** · events: **136**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-23.
+> Catalogue version: **12** · events: **137**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -750,6 +750,14 @@ Enum member: `EventTypes.TOOL_SAME_RESULT`
 |---|---|
 | `tools` | list[{name: str, count: int}] — identical call returned an identical result past the warn threshold |
 | `skipped` | list[str] — identical calls answered from the previous result without executing |
+
+### `tool.gate_reachability_repaired`
+
+Enum member: `EventTypes.TOOL_GATE_REACHABILITY_REPAIRED`
+
+| Field | Description |
+|---|---|
+| `opened` | list[str] — tools (or their gates) that were hidden with no visible gate and were exposed instead (tools.gates.reachability_fixes) |
 
 ## Stage 11 — Tool review
 

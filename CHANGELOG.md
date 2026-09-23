@@ -4,6 +4,53 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.56.0] — 2026-09-23
+
+### Fixed — "문은 보이는데 방이 안 열린다" 를 부류째로 막는다
+
+턴-1 표면은 기본 동사만 세우고, 나머지 능력은 가족마다 **문 하나** 뒤에 숨긴다. 숨기는 일은
+한 곳(`TURN_ONE_TOOLS`)이 한꺼번에 했지만 **여는 일은 문마다 따로** 선언해야 했다 — 내장 안내
+도구는 모듈마다 `open_family(...)`, 어댑트된 도구는 `metadata["opens_family"]`. 빠뜨려도 아무
+오류가 없었고, 같은 사고가 2주 새 네 번 났다:
+
+| 언제 | 문 | 무슨 일 |
+|---|---|---|
+| 09-09 | `SshListServers` | 방도 문도 숨어 "인증 정보가 없다" 로 멈춤 |
+| — | `DelegationGuide` | 지도만 주고 방을 잠가 둠 |
+| 09-19 | `BrowserGuide`(커넥터) | 안내만 100회 되풀이, 입력 약 750만 토큰 |
+| 09-23 | `LocalControl`(커넥터, SDK 경로) | 지도의 Shell·WriteFile 을 한 번도 못 부르고 브라우저 도구에 `rm -rf` 를 우겨넣음(우연히 실패). 부르지도 않은 쓰기로 "PC 에 저장했다" 고 답함 |
+
+매번 그 문 하나에 여는 코드를 덧댔다. 이 버전은 **문과 방의 관계를 한 표**(`tools/gates.py`
+`GATES`)에 두고, 숨김·열림·검사가 전부 그 표를 읽게 한다.
+
+- **표에 있는 문은 스스로 열 줄 몰라도 열린다.** Stage 10 라우터가 문의 성공을 보고 가족을
+  연다(`family_of`). 문이 스스로 열었으면 새로 연 것이 없으니 "Now callable" 은 한 번만 붙는다.
+  실패한 문은 아무것도 열지 않는다. → 09-23 사례는 **workflow 패치 없이도** 풀린다(재현 테스트).
+- **불변식 — 숨긴 가족에는 보이는 문이 있다.** Stage 3 가 모델에게 표면을 굳히기 직전에
+  검사하고(`reachability_fixes`), 어기면 숨기지 않는다: 문이 등록돼 있는데 숨었으면 **문 하나만**
+  열고, 우리 내장 가족인데 문이 아예 없으면 그 도구를 연다. 최악의 결과가 "도구에 영영 못 닿음"
+  에서 "표면이 조금 커짐" 으로 바뀌고, `tool.gate_reachability_repaired` 이벤트와 WARNING 으로
+  드러난다. 이벤트 카탈로그 v12.
+- **가족은 이름 규칙 + 같은 MCP 접두.** `Browser*`·`Doc*`·`Job*`·`Artifact*` 처럼 규칙으로 적어서
+  workflow 가 가진 가족(작업·아티팩트)도 목록을 두 저장소에 나눠 적을 필요가 없다. 커넥터의
+  `mcp_local_BrowserGuide` 는 `mcp_local_Browser*` 를, 내장 `BrowserGuide` 는 접두 없는 것을 연다.
+  `LocalControl` 은 같은 접두의 나머지 전부(다른 문 제외)를 연다. 접두 없는 `LocalControl`(CLI
+  경로)은 문으로 치지 않는다 — 모든 내장 도구가 그 가족이 되는 사고를 막는다.
+- **긴 꼬리는 건드리지 않는다.** 연결된 DB·API 노드와 사용자가 붙인 MCP 서버의 도구는 어느 문의
+  가족도 아니다 — ToolSearch 뒤에 있는 것이 설계다. 남의 MCP 서버 도구가 이름 규칙에 우연히 맞아도
+  (예: `mcp_github_BrowserNavigate`) 그 서버엔 우리 문이 없으므로 가족이 아니다.
+- **`DocGuide` 는 지금 동작을 선언만 했다(`visible=False`).** 문서 가족은 원래부터 문까지 턴-1 에
+  없었고 ToolSearch(60일 212회)로 찾아 쓰인다. 문을 세우면 호출당 약 211토큰이라, 올릴지는 따로
+  판단한다. 불변식은 이 선언을 존중한다.
+
+**실제 dev 표면에서 확인**: XGeny 내장 등록 경로(27개 / 턴-1 10개)로 표면을 짜서 검사했더니
+불변식이 여는 것은 **없음** — 평소 표면은 그대로다. 커지는 것은 문이 빠지거나 숨었을 때뿐이다.
+
+재현 테스트(`tests/unit/test_gate_table.py`, 19개): 표 ↔ 턴-1 목록 일관성(어긋나면 CI 에서
+잡힘), 접두 분리, **여는 선언 없는 커넥터 LocalControl 이 Shell·WriteFile 을 연다(고치기 전
+라우터에서 실패)**, 실패한 문은 안 연다, 스스로 연 문은 한 번만 알린다, SSH 사례 fail-open,
+숨은 문은 문만 연다, 긴 꼬리·남의 MCP·문서는 안 건드린다, Stage 3 가 굳히기 전에 고친다.
+
 ## [4.55.0] — 2026-09-23
 
 ### Security — 러너 Glob 이 패턴을 셸 명령으로 실행했다

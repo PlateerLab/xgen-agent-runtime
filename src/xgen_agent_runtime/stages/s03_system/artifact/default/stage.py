@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
@@ -16,6 +17,8 @@ from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
 )
 from xgen_agent_runtime.stages.s03_system.persona import DynamicPersonaPromptBuilder
 from xgen_agent_runtime.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class SystemStage(Stage[Any, Any]):
@@ -366,6 +369,14 @@ class SystemStage(Stage[Any, Any]):
         if self._tool_registry is not None:
             reg_version = getattr(self._tool_registry, "version", None)
             if not state.tools or (reg_version is not None and reg_version != state.tools_version):
+                # 모델이 보는 표면을 굳히기 **직전에** "숨긴 가족에는 보이는 문이 있다" 를
+                # 검사한다(tools.gates). 어기면 숨기지 않는다 — 최악의 결과를 "도구에 영영 못
+                # 닿음" 에서 "표면이 조금 커짐" 으로 바꾼다. 열었으면 버전이 올라가므로
+                # 아래에서 다시 읽는다.
+                repaired = _enforce_gate_reachability(self._tool_registry)
+                if repaired:
+                    state.add_event("tool.gate_reachability_repaired", {"opened": repaired})
+                    reg_version = getattr(self._tool_registry, "version", None)
                 try:
                     state.tools = self._tool_registry.to_api_format(exposed_only=True)
                 except TypeError:
@@ -390,3 +401,27 @@ class SystemStage(Stage[Any, Any]):
         )
 
         return input
+
+
+def _enforce_gate_reachability(registry: Any) -> List[str]:
+    """레지스트리가 노출 API 를 가질 때만 — 손으로 만든 레지스트리 흉내는 건드리지 않는다."""
+    names = getattr(registry, "list_names", None)
+    is_exposed = getattr(registry, "is_exposed", None)
+    activate = getattr(registry, "activate", None)
+    if not (callable(names) and callable(is_exposed) and callable(activate)):
+        return []
+    from xgen_agent_runtime.tools.gates import reachability_fixes
+
+    try:
+        fixes = reachability_fixes(names(), is_exposed)
+    except Exception:  # noqa: BLE001 — 검사가 턴을 막지 않는다
+        logger.debug("gate reachability check failed", exc_info=True)
+        return []
+    opened = [n for n in fixes if activate(n)]
+    if opened:
+        logger.warning(
+            "tool surface: %d tool(s) were hidden with no visible gate — exposed instead: %s",
+            len(opened),
+            ", ".join(opened),
+        )
+    return opened
