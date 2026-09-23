@@ -131,6 +131,19 @@ def _rank(descriptor: Dict[str, Any], query: str) -> int:
     return total
 
 
+def _named_in_query(descriptors: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    """질의에 **정확한 도구 이름**으로 적힌 것들 (질의 순서, 대소문자 무시).
+
+    쉼표로 이어 적은 이름도 받는다(``"Read, Write"``)."""
+    by_name = {str(d.get("name", "")).lower(): d for d in descriptors if d.get("name")}
+    out: List[Dict[str, Any]] = []
+    for token in query.replace(",", " ").split():
+        d = by_name.get(token.strip().lower())
+        if d is not None and d not in out:
+            out.append(d)
+    return out
+
+
 class ToolSearchTool(Tool):
     """Discover tools from the full catalogue — and activate deferred ones.
 
@@ -216,10 +229,22 @@ class ToolSearchTool(Tool):
         limit = max(1, min(_HARD_LIMIT, limit))
 
         ranked: List[Tuple[int, Dict[str, Any]]] = []
-        for desc in descriptors:
-            score = _rank(desc, query)
-            if score > 0:
-                ranked.append((score, desc))
+        named = _named_in_query(descriptors, query)
+        if named:
+            # 정확한 도구 이름은 그 자체로 답이다 — 이름을 여럿 적었으면 **각각** 찾는다.
+            # AND 규칙은 키워드 검색용이다: "mcp_local_ListDir mcp_local_ReadFile" 에 AND 를
+            # 걸면 세 이름을 다 품은 도구가 없어 "없음" 이 되고, 모델은 있는 도구를 못
+            # 연다(2026-09-24 로컬 재현 qwen: 같은 검색 4회 뒤 포기 / dev 30일 ToolSearch
+            # 212회 중 "이름 여럿·이름+키워드" 미스 4건 — ForgeTool ListForgedTools,
+            # workspace_write_file workspace_run …, DocBuild pptx presentation, DocAnalyze PDF).
+            # 퍼지가 아니다 — 이름이 **정확히** 같은 것만 잡으므로 엉뚱한 도구가 켜지지 않는다.
+            ranked = [(100, d) for d in named]
+            limit = max(limit, min(_HARD_LIMIT, len(named)))
+        else:
+            for desc in descriptors:
+                score = _rank(desc, query)
+                if score > 0:
+                    ranked.append((score, desc))
 
         # No OR fallback. It used to retry with any single token when AND
         # found nothing, and label the result "(fuzzy: matched any keyword)".
