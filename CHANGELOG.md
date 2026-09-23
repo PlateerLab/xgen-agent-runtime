@@ -4,6 +4,33 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.59.0] — 2026-09-23
+
+### Fixed — 앞 턴에 연 도구가 다음 턴에 다시 숨었다
+
+실측(2026-09-23 dev, gpt-4.1, 시연 준비 "업무 비서"): 모델이 말로 "정말 삭제할까요?" 를 묻고(도구
+0회) 사용자가 "정말 삭제해도 좋다" 고 답한 **다음 턴** — 모델은 문(`LocalControl`)을 다시 열지 않고
+브라우저 안내(`BrowserGuide`)만 5번, `BrowserTabs` 4번 부르다 반복 종료로 끝났다. 말로 확인을 받고
+사용자가 좋다고 하는, **가장 자연스러운 대화 흐름**에서 실패했다.
+
+원인: 호스트가 턴마다 레지스트리를 **새로** 만든다(`host.turn_executor`: `adapt_tools(...)`,
+`PipelineState(...)`). 앞 턴에 문을 열어 `mcp_local_Shell`·`ListDir` 를 쓴 대화도 다음 턴에는 그
+도구들이 다시 숨는다. 모델은 기록에서 자기가 셸을 썼다는 걸 보는데 정작 부를 수 없다. 4.56.0 의
+불변식은 "문이 보이게" 까지만 보장하고, "열린 상태" 는 턴을 넘어 들고 가지 않았다.
+
+- **표면은 기록 속에서 모델이 쓴 도구보다 좁아지지 않는다** (`tools.gates.restore_from_history`).
+  Stage 3 가 표면을 굳히기 직전에, 모델이 볼 수 있는 기록의 `tool_use` 마다 — 그 도구가 숨어 있으면
+  연다. 그 도구가 **문**이면 그 가족까지 연다(문을 열어 둔 대화는 방도 열려 있어야 한다).
+- **상태를 따로 저장하지 않는다.** 기록에서 복원하므로 호스트가 레지스트리를 새로 만들든 재사용하든
+  같게 동작한다. 단기 기억 창이 먼 턴의 도구 블록을 떨구면(4.36.0: 가까운 2턴만 도구까지) 다시
+  닫힌다 — 모델이 더는 볼 수 없는 사용을 표면에 붙잡아 두지 않는다.
+- 이번 턴에 등록되지 않은 도구(커넥터가 끊김 등)는 기록에 있어도 열 수 없다 — 없는 것을 만들지 않는다.
+- `tool.surface_restored` 이벤트. 이벤트 카탈로그 v14.
+
+재현 테스트(`tests/test_surface_survives_turns.py`, 4개): 앞 턴에 문→ListDir 를 쓰고 말로 확인을
+물은 대화에서, 새 레지스트리로 시작한 확인 턴의 **첫 요청 도구 목록**에 `mcp_local_Shell` 이 있다 —
+고치기 전 코드에서는 `[Bash, Read, ToolSearch, mcp_local_LocalControl]` 뿐이었다.
+
 ## [4.58.0] — 2026-09-23
 
 ### Fixed — 사람이 거부한 동작을 같은 턴에서 다시 묻는다 (안전)

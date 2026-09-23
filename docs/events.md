@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-09-23.
-> Catalogue version: **13** · events: **138**
+> Catalogue version: **14** · events: **139**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -766,6 +766,14 @@ Enum member: `EventTypes.TOOL_USER_DENIED`
 | Field | Description |
 |---|---|
 | `tools` | list[str] — tools whose call the user refused this round; identical calls are not executed again this turn (stages/s10_tool/denial_guard.py) |
+
+### `tool.surface_restored`
+
+Enum member: `EventTypes.TOOL_SURFACE_RESTORED`
+
+| Field | Description |
+|---|---|
+| `opened` | list[str] — deferred tools re-exposed because the visible history shows the model using them (or their gate) earlier in the conversation (tools.gates.restore_from_history) |
 
 ## Stage 11 — Tool review
 
