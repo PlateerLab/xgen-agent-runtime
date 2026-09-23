@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.54.2] — 2026-09-23
+
+### Changed — edit2docs 0.26.1 (HWP 검토 보완)
+
+- `xgen-edit2docs` 0.26.0 → **0.26.1**.
+  - 복사 방지가 걸린 배포용 hwp 는 DOCX 로 바꾸지 않는다. DOCX 는 글자를 꺼내 쓰는
+    길(Doc* 편집·에이전트 파일 읽기)이라, 0.24.0 까지 모든 배포용 문서를 거부하던 보호를
+    글자에 대해서는 그대로 지킨다(보기는 문서 서비스가 선택·인쇄를 막은 채로).
+  - 스트림당 레코드 수 상한 — 작은 레코드를 수천만 개 늘어놓은 파일이 메모리를 먹지 않게.
+  - HTML 머리말을 구역마다 되풀이하지 않음.
+
 ## [4.54.1] — 2026-09-23
 
 ### Changed — edit2docs 0.26.0 (AGPL 의존 마지막 정리)
