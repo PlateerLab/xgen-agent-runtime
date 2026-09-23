@@ -4,6 +4,53 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.53.0] — 2026-09-23
+
+### Added — 파일시스템 포트: 도구가 파일을 만지는 유일한 입구 (1단계, 동작 변화 없음)
+
+파일 도구는 두 곳에서 돈다 — 호스트가 실행 세션을 붙이면 러너, 아니면 로컬(라이브러리·
+`xgeny-cli`·테스트). 지금까지 **그 선택을 도구가 각자** 했다: 12개 모듈이
+`if context.sandbox is not None:` 을 제각각 구현했고, 같은 이름의 도구가 두 곳에서 다르게
+동작했다.
+
+| | 로컬 | 러너 |
+|---|---|---|
+| 경로 탈출 | `PermissionError` | `SandboxPathError` (`RuntimeError`) |
+| Edit 치환 로직 | 한 벌 | **또 한 벌** |
+| Glob·Grep | `Path.glob` | 셸 `find`/`grep` — 순서·숨김 처리 보장 없음 |
+
+- **`tools/fs.py` — `ToolFileSystem` 포트 + `LocalFS` + `RunnerFS`**. 연산은
+  `resolve / read_bytes / write_bytes / exists / materialize / commit`. 새 의미를 만들지
+  않는다 — `RunnerFS` 는 세션의 1급 연산과 기존 `sandbox_path` 가드를, `LocalFS` 는 기존
+  `resolve_and_validate` 를 그대로 쓴다. 흩어져 있던 것을 한 이름 아래 모은다.
+- **백엔드 선택은 `tool_fs(context)` 한 곳.** 호스트가 `ToolContext.fs` 를 주입했으면
+  그것, 아니면 세션 유무로 러너/로컬. 서버는 세션을 언제나 붙이므로(러너가 죽어도 "미부착
+  세션" — None 이 아니다) 서버 턴이 로컬로 조용히 떨어지는 길은 없다.
+- **탈출 예외를 하나로**: 두 백엔드 모두 `FsAccessError`(`PermissionError` 하위). 기존 로컬
+  호출부가 잡던 `PermissionError` 로도 그대로 잡힌다.
+- **`materialize` 는 러너에서 파드 전용 임시 디렉터리를 쓴다** — 워크스페이스와 같은 경로
+  문자열을 절대 쓰지 않는다. 같은 문자열을 쓰던 시절 지난 턴의 파드 잔재가 러너의 새 파일을
+  조용히 가렸다("방금 고쳤는데 옛날 내용이 나온다"). 그 버그가 구조적으로 불가능해진다.
+
+**만들다가 피한 함정 둘**:
+- `exists` 를 셸(`stat -c`)로 짰다가 되돌렸다. 실제 세션(러너 HTTP 클라이언트·사용자 PC
+  커넥터)은 둘 다 `exists` 를 1급으로 갖고 있고, 셸 `test -f` 는 붙지 않은 세션이 루트를
+  추측해 "없음" 을 답한 프로드 버그의 원인이었다(workflow `sandbox_mount.exists` 주석).
+  커넥터는 맥·윈도우 PC 이기도 해서 리눅스 문법은 통하지도 않는다. 네이티브가 있으면 그것만,
+  없으면 읽어 보기로 판단한다.
+- 첫 구현이 경로를 **먼저** 풀고 세션을 **나중에** 깨웠다. 기존 `sb_read_bytes` 는 반대 —
+  붙지 않은 세션의 `workdir` 은 예상값이라 먼저 풀면 실제 루트와 어긋난다. 순서를 맞추고
+  회귀 테스트로 고정했다.
+
+**이 버전은 어떤 도구도 바꾸지 않는다.** 이관은 모듈 단위로 뒤따른다 — 두 분기를 가진
+도구를 `tool_fs(context)` 한 줄로 접는다.
+
+계약 테스트(`tests/unit/test_tool_fs_contract.py`, 38개): **같은 테스트 11개를 세 백엔드**
+(로컬 / 필수 연산만 가진 러너 세션 / 네이티브 `exists` 를 가진 러너 세션)에 돌린다 — 왕복,
+상위 디렉터리 생성, 상대 경로 해석, 없는 파일, **탈출 예외가 같다**, 빈 경로, exists,
+materialize, commit. 러너 전용 4개(워크스페이스 경로를 쓰지 않는 materialize, 읽기 전용
+트리, 네이티브 exists 는 셸을 안 띄움, 세션을 먼저 깨운다) + 선택 4개.
+
 ## [4.52.0] — 2026-09-23
 
 ### Fixed — LLM 호출 하나가 턴을 무한정 붙잡을 수 있었다 (안정성 감사 F2)
