@@ -33,9 +33,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Set, Tuple
 
-__all__ = ["GATES", "Gate", "family_of", "gate_of", "reachability_fixes", "split_prefix"]
+__all__ = [
+    "GATES",
+    "Gate",
+    "family_of",
+    "gate_of",
+    "reachability_fixes",
+    "restore_from_history",
+    "split_prefix",
+]
 
 #: MCP 를 지나며 붙는 접두 — ``mcp_local_Shell``, ``mcp__connector__Foo``.
 #: (host.tool_exposure 와 같은 정규식 — 표면 판정과 가족 판정이 같은 이름 해석을 쓴다.)
@@ -208,3 +216,58 @@ def reachability_fixes(registered: Iterable[str], is_exposed: Callable[[str], bo
             seen.add(target)
             fixes.append(target)
     return fixes
+
+
+def _used_tool_names(messages: Iterable[Any]) -> List[str]:
+    """대화 기록의 assistant ``tool_use`` 블록에서 도구 이름을 순서대로(중복 없이)."""
+    seen: Dict[str, None] = {}
+    for msg in messages or ():
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        if role != "assistant":
+            continue
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            btype = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+            if btype == "tool_use":
+                raw = block.get("name") if isinstance(block, dict) else getattr(block, "name", "")
+                name = str(raw or "")
+                if name:
+                    seen.setdefault(name, None)
+    return list(seen)
+
+
+def restore_from_history(
+    registered: Iterable[str], is_exposed: Callable[[str], bool], messages: Iterable[Any]
+) -> List[str]:
+    """모델이 **기록에서 볼 수 있는** 도구 사용만큼은 표면을 다시 연다.
+
+    호스트는 턴마다 레지스트리를 새로 만든다(``host.turn_executor``). 그래서 앞 턴에 문을 열어
+    ``mcp_local_Shell`` 을 쓴 대화도 다음 턴에는 Shell 이 다시 숨는다 — 모델은 기록에서 자기가
+    Shell 을 썼다는 걸 보는데 정작 부를 수 없다. 실측(2026-09-23 dev, gpt-4.1): 모델이 말로
+    "정말 삭제할까요?" 를 묻고 사용자가 "좋다" 고 답한 다음 턴에, 모델은 문(LocalControl)을
+    다시 열지 않고 브라우저 안내만 5번 부르다 반복 종료로 끝났다 — 가장 자연스러운 대화
+    흐름에서 실패했다.
+
+    규칙은 하나다: **표면은 기록 속에서 모델이 쓴 도구보다 좁아지지 않는다.** 기록에 보이는
+    도구 호출마다 — 그 도구가 숨어 있으면 연다. 그 도구가 문이면 그 가족까지 연다(문을 열어
+    둔 대화는 방도 열려 있어야 한다).
+
+    기록이 짧아지면(단기 기억 창이 도구 블록을 떨군 먼 턴) 다시 닫힌다 — 모델이 더는 볼 수
+    없는 사용을 표면에 붙잡아 두지 않는다. 상태를 따로 저장하지 않고 기록에서 복원하므로 호스트가
+    무엇이든(레지스트리를 새로 만들든 재사용하든) 같게 동작한다.
+
+    반환값은 열어야 할 이름 목록. 부르는 쪽이 열고 이벤트를 남긴다.
+    """
+    names = list(registered)
+    present: Set[str] = set(names)
+    out: Dict[str, None] = {}
+    for used in _used_tool_names(messages):
+        if used in present and not is_exposed(used):
+            out.setdefault(used, None)
+        if gate_of(used) is not None:
+            for member in family_of(used, names):
+                if not is_exposed(member):
+                    out.setdefault(member, None)
+    return list(out)

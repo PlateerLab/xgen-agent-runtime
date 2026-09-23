@@ -373,9 +373,15 @@ class SystemStage(Stage[Any, Any]):
                 # 검사한다(tools.gates). 어기면 숨기지 않는다 — 최악의 결과를 "도구에 영영 못
                 # 닿음" 에서 "표면이 조금 커짐" 으로 바꾼다. 열었으면 버전이 올라가므로
                 # 아래에서 다시 읽는다.
+                # 앞 턴에 쓴 도구를 먼저 되살린다 — 호스트가 턴마다 레지스트리를 새로 만들어
+                # 열어 둔 가족이 날아간다(tools.gates.restore_from_history).
+                restored = _restore_from_history(self._tool_registry, state.messages)
+                if restored:
+                    state.add_event("tool.surface_restored", {"opened": restored})
                 repaired = _enforce_gate_reachability(self._tool_registry)
                 if repaired:
                     state.add_event("tool.gate_reachability_repaired", {"opened": repaired})
+                if restored or repaired:
                     reg_version = getattr(self._tool_registry, "version", None)
                 try:
                     state.tools = self._tool_registry.to_api_format(exposed_only=True)
@@ -425,3 +431,20 @@ def _enforce_gate_reachability(registry: Any) -> List[str]:
             ", ".join(opened),
         )
     return opened
+
+
+def _restore_from_history(registry: Any, messages: Any) -> List[str]:
+    """기록에서 모델이 쓴 도구를 다시 연다 — 노출 API 가 있는 레지스트리만."""
+    names = getattr(registry, "list_names", None)
+    is_exposed = getattr(registry, "is_exposed", None)
+    activate = getattr(registry, "activate", None)
+    if not (callable(names) and callable(is_exposed) and callable(activate)):
+        return []
+    from xgen_agent_runtime.tools.gates import restore_from_history
+
+    try:
+        wanted = restore_from_history(names(), is_exposed, messages or [])
+    except Exception:  # noqa: BLE001 — 복원이 턴을 막지 않는다
+        logger.debug("surface restore from history failed", exc_info=True)
+        return []
+    return [n for n in wanted if activate(n)]
