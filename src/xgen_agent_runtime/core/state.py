@@ -436,6 +436,9 @@ class PipelineState:
             # 반복 거부 종료(stages/s16_loop/repeat_stop.py) — 거부 수와 진행 기록.
             "tool.refused_calls",
             "loop.repeat_stop",
+            # 사람이 거부한 동작(stages/s10_tool/denial_guard.py) — 그 턴의 답이다. 다음 턴에
+            # 사용자가 허락하면 다시 물을 수 있어야 한다.
+            "tool.denied_calls",
         ):
             self.shared.pop(_k, None)
 

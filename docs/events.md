@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-09-23.
-> Catalogue version: **12** · events: **137**
+> Catalogue version: **13** · events: **138**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -758,6 +758,14 @@ Enum member: `EventTypes.TOOL_GATE_REACHABILITY_REPAIRED`
 | Field | Description |
 |---|---|
 | `opened` | list[str] — tools (or their gates) that were hidden with no visible gate and were exposed instead (tools.gates.reachability_fixes) |
+
+### `tool.user_denied`
+
+Enum member: `EventTypes.TOOL_USER_DENIED`
+
+| Field | Description |
+|---|---|
+| `tools` | list[str] — tools whose call the user refused this round; identical calls are not executed again this turn (stages/s10_tool/denial_guard.py) |
 
 ## Stage 11 — Tool review
 
