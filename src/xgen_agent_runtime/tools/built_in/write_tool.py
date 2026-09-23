@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from xgen_agent_runtime.tools.built_in._file_witness import is_witnessed, refusal
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
 
@@ -54,6 +55,18 @@ class WriteTool(Tool):
             from xgen_agent_runtime.tools._xgeny_sandbox import sb_write_bytes
 
             wd = context.working_dir or "/workspace"
+
+            # 읽지 않은 파일을 말없이 덮어쓰지 않는다 (_file_witness).
+            if not is_witnessed(context.state_view, file_path):
+                from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
+
+                try:
+                    existing = await sb_read_bytes(context.sandbox, file_path, workdir=wd)
+                except Exception:  # noqa: BLE001 — 없는 파일이면 그대로 새로 쓴다
+                    existing = b""
+                if existing:
+                    return ToolResult(content=refusal(file_path), is_error=True)
+
             try:
                 n = await sb_write_bytes(
                     context.sandbox, file_path, content.encode("utf-8"), workdir=wd
@@ -68,6 +81,17 @@ class WriteTool(Tool):
             resolved = resolve_and_validate(file_path, context.working_dir, context.allowed_paths)
         except (PermissionError, ValueError) as e:
             return ToolResult(content=str(e), is_error=True)
+
+        # 읽지 않은 파일을 말없이 덮어쓰지 않는다 (_file_witness). 새 파일은 그대로
+        # 통과한다 — 막으려는 것은 "내용을 모른 채 지우는 일" 뿐이다.
+        if (
+            resolved.exists()
+            and resolved.is_file()
+            and resolved.stat().st_size > 0
+            and not is_witnessed(context.state_view, file_path)
+            and not is_witnessed(context.state_view, str(resolved))
+        ):
+            return ToolResult(content=refusal(str(resolved)), is_error=True)
 
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
