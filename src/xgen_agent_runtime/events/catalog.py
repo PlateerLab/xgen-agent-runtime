@@ -56,7 +56,7 @@ from typing import Any, Dict, List
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
 #: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
 #: v10: + ``loop.repeat_stop`` (4.45.0 end the turn once repeated calls keep getting refused).
-EVENT_CATALOG_VERSION = 12
+EVENT_CATALOG_VERSION = 13
 
 
 class EventTypes(str, Enum):
@@ -203,6 +203,7 @@ class EventTypes(str, Enum):
     # 같은 도구·같은 입력이 같은 결과를 되풀이할 때 (성공 포함, repeat_guard.observe_same).
     TOOL_SAME_RESULT = "tool.same_result"
     TOOL_GATE_REACHABILITY_REPAIRED = "tool.gate_reachability_repaired"
+    TOOL_USER_DENIED = "tool.user_denied"
 
     # ── Stage 11: Tool review ──
     TOOL_REVIEW_FLAG = "tool_review.flag"
@@ -644,6 +645,9 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     EventTypes.TOOL_SAME_RESULT: {
         "tools": "list[{name: str, count: int}] — identical call returned an identical result past the warn threshold",
         "skipped": "list[str] — identical calls answered from the previous result without executing",
+    },
+    EventTypes.TOOL_USER_DENIED: {
+        "tools": "list[str] — tools whose call the user refused this round; identical calls are not executed again this turn (stages/s10_tool/denial_guard.py)",
     },
     EventTypes.TOOL_GATE_REACHABILITY_REPAIRED: {
         "opened": "list[str] — tools (or their gates) that were hidden with no visible gate and were exposed instead (tools.gates.reachability_fixes)",

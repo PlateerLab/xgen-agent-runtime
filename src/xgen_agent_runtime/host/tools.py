@@ -110,6 +110,38 @@ def _opens_family(lc_tool: Any) -> List[str]:
     return [str(n) for n in names] if isinstance(names, (list, tuple)) else []
 
 
+#: 사람이 거부했다는 구조화 코드 — 도구가 던진 예외의 ``code``/``error_code`` 또는 메시지 머리말.
+#: 커넥터·MCP 서버는 이 중 하나로 알려 주면 된다(권장: 예외 ``code="user_denied"``, 또는
+#: 메시지를 ``user_denied:`` 로 시작).
+_DENIAL_CODES = frozenset({"user_denied", "access_denied", "denied_by_user"})
+
+#: ⚠ **임시 호환 — DeX 1.56 의 거부 문구.** 지금 커넥터는 구조화 코드 없이 한국어 문장만 보낸다.
+#: 이 문구를 알아보지 않으면 denial_guard 가 거부를 모르고, 모델은 같은 ``rm -rf`` 를 거부된 뒤에도
+#: 거듭 불러 확인 창을 세 번 띄운다(2026-09-23 dev, trace 46745).
+#: **제거 조건: DeX 가 거부를 ``user_denied`` 코드로 보내기 시작하면 이 튜플을 지운다.**
+_LEGACY_DENIAL_PHRASES = ("사용자가 이 명령의 실행을 거부했습니다",)
+
+_DENIAL_GUIDANCE = (
+    "The user refused this action. It was NOT done. Do not attempt it again in this turn "
+    "(not even with different quoting), and do not reach the same effect another way. "
+    "Tell the user it was not done and ask how to proceed."
+)
+
+
+def _denial_message(exc: BaseException) -> Optional[str]:
+    """사람이 거부한 것이면 그 사유, 아니면 None."""
+    code = getattr(exc, "code", None) or getattr(exc, "error_code", None)
+    msg = str(exc).strip()
+    if isinstance(code, str) and code.strip().lower() in _DENIAL_CODES:
+        return msg or code
+    head = msg.split(":", 1)[0].strip().lower()
+    if head in _DENIAL_CODES:
+        return msg.split(":", 1)[1].strip() if ":" in msg else msg
+    if any(p in msg for p in _LEGACY_DENIAL_PHRASES):
+        return msg
+    return None
+
+
 def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool:
     name = _sanitize_name(getattr(lc_tool, "name", type(lc_tool).__name__))
     description = str(getattr(lc_tool, "description", "") or "")
@@ -119,8 +151,15 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
         try:
             output = await _invoke_langchain(lc_tool, dict(tool_input or {}))
         except Exception as exc:  # noqa: BLE001 - tool errors go back to the model, never crash the loop
-            logger.warning("geny_bridge: tool %s failed: %s", name, exc)
-            text = f"Error: {exc}"
+            denied = _denial_message(exc)
+            if denied is not None:
+                # 사람의 거부는 오류가 아니라 답이다 — 구조화 머리말로 바꿔 Stage 10 이 알아보게
+                # 한다(stages/s10_tool/denial_guard.py: 같은 턴에 같은 동작을 다시 묻지 않는다).
+                logger.info("geny_bridge: tool %s denied by user: %s", name, denied)
+                text = f"ERROR user_denied: {denied}\n{_DENIAL_GUIDANCE}"
+            else:
+                logger.warning("geny_bridge: tool %s failed: %s", name, exc)
+                text = f"Error: {exc}"
             if result_sink is not None:
                 result_sink[name] = text
             return ToolResult(content=text, is_error=True)

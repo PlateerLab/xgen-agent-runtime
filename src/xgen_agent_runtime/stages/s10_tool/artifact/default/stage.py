@@ -314,8 +314,14 @@ class ToolStage(Stage[Any, Any]):
         precomputed: Dict[str, Dict[str, Any]] = {}
         runnable = []
         skipped_same: List[str] = []
+        from xgen_agent_runtime.stages.s10_tool import denial_guard
+
         for tc in tool_calls:
-            blocked = repeat_guard.blocked_result(tc, state.shared)
+            # 사람이 이번 턴에 거부한 동작은 다시 묻지 않는다 — 확인 창이 거듭 뜨면 결국 잘못
+            # 눌린다(denial_guard). 반복 가드보다 먼저 본다: 거부는 첫 번째가 곧 답이다.
+            blocked = denial_guard.refused_result(tc, state.shared)
+            if blocked is None:
+                blocked = repeat_guard.blocked_result(tc, state.shared)
             if blocked is None:
                 blocked = repeat_guard.skip_identical(tc, state.shared)
                 if blocked is not None:
@@ -355,6 +361,9 @@ class ToolStage(Stage[Any, Any]):
             )
         else:
             results = executed
+        newly_denied = denial_guard.observe(tool_calls, results, state.shared)
+        if newly_denied:
+            state.add_event("tool.user_denied", {"tools": sorted(set(newly_denied))})
         flagged = repeat_guard.observe(tool_calls, results, state.shared)
         if flagged:
             state.add_event(
