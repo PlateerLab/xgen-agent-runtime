@@ -119,8 +119,33 @@ class LocalFS:
         target = Path(self.resolve(path, write=True))
 
         def _write() -> int:
+            # **원자적으로** 쓴다 — 같은 디렉터리의 임시 파일에 쓰고 fsync 한 뒤 rename.
+            # 쓰는 도중 프로세스가 죽거나 디스크가 차도 원본은 그대로다. 예전엔
+            # NotebookEdit 로컬 분기만 이렇게 했고 Write·Edit 은 제자리에 덮어썼다.
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                # mkstemp 은 0600 으로 만든다 — 그대로 rename 하면 기존 파일의 권한이 바뀐다
+                # (스크립트가 실행 권한을 잃는다). 있던 파일이면 그 권한을, 새 파일이면
+                # umask 를 따른 기본 권한을 입힌다.
+                try:
+                    mode = target.stat().st_mode & 0o7777
+                except FileNotFoundError:
+                    umask = os.umask(0)
+                    os.umask(umask)
+                    mode = 0o666 & ~umask
+                os.chmod(tmp, mode)
+                os.replace(tmp, target)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
             return len(data)
 
         return await asyncio.to_thread(_write)
@@ -134,6 +159,8 @@ class LocalFS:
         target = Path(self.resolve(path))
         if not target.exists():
             raise FileNotFoundError(str(target))
+        if target.is_dir():
+            raise IsADirectoryError(str(target))
         yield target
 
     async def commit(self, local: Path, path: str) -> int:

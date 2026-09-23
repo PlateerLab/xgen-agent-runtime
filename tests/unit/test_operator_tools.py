@@ -214,3 +214,74 @@ class TestSendUserFile:
         result = await SendUserFileTool().execute({"file_path": "sub"}, ctx)
         assert result.is_error is True
         assert result.content["error"]["code"] == "NOT_A_FILE"
+
+
+# ── SendUserFile 은 파일시스템 포트로 연다 ─────────────────────────────
+
+
+def test_send_user_file_refuses_paths_outside_the_workspace(tmp_path):
+    """예전엔 경로 가드가 없어서 파드의 아무 파일이나(설정·시크릿) 사용자에게 보낼 수 있었다."""
+    import asyncio
+
+    from xgen_agent_runtime.tools.base import ToolContext
+    from xgen_agent_runtime.tools.built_in.operator_tools import SendUserFileTool
+
+    sent = []
+
+    class _Chan:
+        async def send(self, path, **kw):
+            sent.append(path)
+            return "ok"
+
+    ctx = ToolContext(session_id="s", working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    ctx.extras["user_file_channel"] = _Chan()
+    r = asyncio.run(SendUserFileTool().execute({"file_path": "/etc/passwd"}, ctx))
+    assert r.is_error and "ACCESS_DENIED" in str(r.content)
+    assert sent == []
+
+
+def test_send_user_file_delivers_a_runner_file(tmp_path):
+    """서버에서는 에이전트의 파일이 러너에 있다 — 파드 전용 임시 사본으로 가져와 보낸다."""
+    import asyncio
+    from pathlib import Path
+
+    from xgen_agent_runtime.tools.base import ToolContext
+    from xgen_agent_runtime.tools.built_in.operator_tools import SendUserFileTool
+
+    runner_root = tmp_path / "runner"
+    runner_root.mkdir()
+    (runner_root / "보고서.pdf").write_bytes(b"%PDF-1.7")
+
+    class _Session:
+        workdir = str(runner_root)
+        extra_roots: list = []
+        readonly_roots: list = []
+
+        async def ensure(self):
+            return None
+
+        async def read_bytes(self, path):
+            return Path(path).read_bytes()
+
+        async def write_bytes(self, path, data):
+            Path(path).write_bytes(data)
+            return len(data)
+
+        async def exec(self, *a, **k):
+            raise AssertionError("no shell")
+
+    got = {}
+
+    class _Chan:
+        async def send(self, path, **kw):
+            got["bytes"] = Path(path).read_bytes()
+            got["name"] = kw.get("filename")
+            got["path"] = str(path)
+            return "ok"
+
+    ctx = ToolContext(session_id="s", working_dir=str(runner_root), sandbox=_Session())
+    ctx.extras["user_file_channel"] = _Chan()
+    r = asyncio.run(SendUserFileTool().execute({"file_path": "보고서.pdf"}, ctx))
+    assert not r.is_error, r.content
+    assert got["bytes"] == b"%PDF-1.7" and got["name"] == "보고서.pdf"
+    assert not got["path"].startswith(str(runner_root))  # 워크스페이스 경로가 아니라 임시 사본

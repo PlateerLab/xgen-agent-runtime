@@ -229,3 +229,34 @@ class TestSelection:
     def test_both_backends_satisfy_the_protocol(self, tmp_path):
         assert isinstance(LocalFS(str(tmp_path)), ToolFileSystem)
         assert isinstance(RunnerFS(_Session(tmp_path)), ToolFileSystem)
+
+
+# ── 로컬 쓰기는 원자적이고 권한을 지킨다 ─────────────────────────────
+
+
+class TestLocalAtomicWrite:
+    def test_an_existing_files_mode_survives_a_rewrite(self, tmp_path):
+        """mkstemp 은 0600 으로 만든다 — 그대로 rename 하면 스크립트가 실행 권한을 잃는다."""
+        script = tmp_path / "run.sh"
+        script.write_text("echo a")
+        script.chmod(0o755)
+        _run(LocalFS(str(tmp_path)).write_bytes("run.sh", b"echo b"))
+        assert script.stat().st_mode & 0o777 == 0o755
+        assert script.read_text() == "echo b"
+
+    def test_no_temp_file_is_left_behind(self, tmp_path):
+        _run(LocalFS(str(tmp_path)).write_bytes("a.txt", b"x"))
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.txt"]
+
+    def test_a_failed_write_keeps_the_original(self, tmp_path, monkeypatch):
+        target = tmp_path / "keep.txt"
+        target.write_text("original")
+
+        def boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "replace", boom)
+        with pytest.raises(OSError):
+            _run(LocalFS(str(tmp_path)).write_bytes("keep.txt", b"half-written"))
+        assert target.read_text() == "original"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["keep.txt"]

@@ -4,6 +4,38 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.57.0] — 2026-09-23
+
+### Fixed — 파일시스템 포트 마무리: NotebookEdit·SendUserFile 이관 + 직접 파일 I/O 금지 린트 (2c·3단계)
+
+- **직접 파일 I/O 금지 린트** (`tests/unit/test_no_direct_file_io.py`). 내장 도구가 포트
+  (`tools.fs.tool_fs`)를 거치지 않고 파일을 만지면 CI 가 실패한다. 서버에서는 에이전트의 파일이
+  러너에 있으므로, 포트를 우회한 코드는 **파드의 엉뚱한 파일**을 본다 — 그 사고를 규칙으로
+  기억하는 대신 검사한다. 판정은 AST: 포트·세션의 파일 연산은 async 라 `await` 로 불리고,
+  pathlib 의 같은 이름은 sync 다. 그래서 `read_bytes`·`write_text`·`exists` … 는 **await 된
+  호출일 때만** 허용하고, `open()`·`os.remove/rename/…`·`os.path.exists/…`·`shutil.*`(`which`
+  제외)는 위반이다. 허용 목록은 모듈 단위로 **이유와 함께** 두고(작업공간↔러너 전송, 검색 구현,
+  자격 증명 저장소, 파드 거주 문서·음성·SSH — 4단계 대상, 로컬 git worktree), 목록에 있는데 더
+  이상 위반이 없으면 실패한다 — **목록은 줄어들기만 한다.**
+  린트를 고치기 전 코드에 돌리면 NotebookEdit 5곳·SendUserFile 2곳을 정확히 잡는다.
+- **`SendUserFile` — 경로 가드가 없었다.** 파드 로컬 `Path` 를 검사도 없이 채널에 넘겨, 노출되면
+  파드의 아무 파일(설정·시크릿)이나 사용자에게 보낼 수 있었다. 서버에서는 에이전트의 파일이
+  러너에 있으니 엉뚱한 파일을 보기도 했다. 이제 포트로 풀어 허용 트리 밖이면 `ACCESS_DENIED`,
+  러너 파일은 `materialize` 로 파드 전용 임시 사본을 만들어 보낸다. (operator 가족이라 XGeny
+  에는 노출돼 있지 않았다 — 60일 0건. 앞서 손으로 한 배치 감사에서 유일하게 걸린 도구였고,
+  린트가 같은 곳을 자동으로 잡았다.)
+- **`NotebookEdit` 을 포트로 한 벌** — 두 분기의 파싱 오류 문구가 달랐고, 러너 쪽 결과
+  metadata 의 `path` 는 문자열 `"None"` 이었다(`str(resolved)`, 러너에선 resolved 가 None).
+- **로컬 쓰기를 원자적으로** (`LocalFS.write_bytes`): 같은 디렉터리의 임시 파일에 쓰고 fsync 한
+  뒤 rename — 쓰는 도중 죽거나 디스크가 차도 원본이 남는다. 예전엔 NotebookEdit 로컬 분기만
+  이랬고 Write·Edit 은 제자리에 덮어썼다. 그리고 그 NotebookEdit 도 `mkstemp` 의 **0600 권한을
+  그대로 rename 해서** 기존 파일 권한을 바꿔 버렸다 — 이제 있던 파일의 권한을(새 파일은 umask
+  기본값을) 입힌다. 스크립트가 실행 권한을 잃지 않는다.
+- `LocalFS.materialize` 는 디렉터리를 `IsADirectoryError` 로 거절한다(러너와 같은 판정).
+
+테스트: 린트 3(규칙 자체 검증 포함) + 원자적 쓰기 3(권한 유지·임시파일 잔재 없음·실패 시 원본
+유지) + SendUserFile 2(트리 밖 거절·러너 파일 전송). 전체 5,576 통과.
+
 ## [4.56.0] — 2026-09-23
 
 ### Fixed — "문은 보이는데 방이 안 열린다" 를 부류째로 막는다
