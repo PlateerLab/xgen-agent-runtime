@@ -43,7 +43,17 @@ logger = logging.getLogger(__name__)
 #: this in the same result that told it which verb to use, so the two halves of
 #: the instruction ("use DelegateTask" / "DelegateTask is callable now") arrive
 #: together instead of one turn apart.
-_OPENED_TEMPLATE = "\n\nNow callable: {names}."
+#:
+#: The second sentence is for CLI clients. The bridge tells the CLI that its tool
+#: list changed, but the list does not always refresh before the next call
+#: (measured 2026-09-24 against the XGeny turn-1 surface: Claude Code 2.1.236
+#: rejected the just-opened tool with "No such tool available" in 70 of 158 runs,
+#: and Codex 0.156.1 never refreshed within the turn). ToolBatch is on the first
+#: surface and runs any registered tool by name, so the room is reachable either way.
+_OPENED_TEMPLATE = (
+    "\n\nNow callable: {names}. If one is not in your tool list yet, call it through "
+    'ToolBatch(tool="<name>", inputs=[<its input>]).'
+)
 
 
 def open_family(context: Any, names: Iterable[str]) -> List[str]:
