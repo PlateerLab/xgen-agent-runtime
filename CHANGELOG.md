@@ -4,6 +4,44 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.60.0] — 2026-09-24
+
+### Fixed — "도구를 만들어 달라" 가 앱(아티팩트)으로 새던 것
+
+실측(2026-09-24): dev XGeny 의 턴-1 표면(시스템 프롬프트·도구 스키마·숨은 카탈로그·문의 실제 결과)을
+파이프라인에서 그대로 뽑아 MCP 스텁으로 되살리고, claude CLI 에 한국어 요청 15개(도구 10·앱 5)를 넣었다.
+sonnet 은 **도구 요청 19개 중 9개**를 `ArtifactGuide → ArtifactCreate` 로 보냈다 — "요약 도구", "환율 계산
+도구", "주식 시세 툴", "PDF 표 → 엑셀 도구", "계산기 도구". 입구에 선 두 문 중 `ArtifactGuide`(xgen-workflow)
+는 "사람이 OPEN 해서 쓰는 것" 을, `SelfExtendGuide` 는 "extend yourself" 를 말했다. 사람이 쓸 도구는 앞쪽으로
+읽혔다. XGEN 화면에서 "도구" 는 ForgeTool 이 만든 것이다([Agent 생성 도구], 에이전트 [도구] 탭).
+
+- `SelfExtendGuide` 첫 문장이 도구 요청의 주인을 밝힌다: "START HERE when the user asks you to make, build
+  or add a TOOL — a tool here is a script you register with ForgeTool…". 지도(`_MAP`)의 ForgeTool 줄도
+  "make a TOOL … A tool is not an app".
+- `ForgeTool` 설명이 "Make (create, build) a TOOL" 로 시작한다. 예전 "Register a script…" 로는
+  `ToolSearch("create tool")` 이 ForgeTool 대신 ArtifactGuide·ToolBatch·Write 를, `ToolSearch("make tool")`
+  이 "이 능력은 없다" 를 돌려줬다(검색은 모든 낱말이 맞아야 한다).
+- 짝: xgen-workflow 의 `ArtifactGuide` 는 앱·화면·페이지·대시보드·웹사이트 요청만 가져간다.
+
+결과(같은 스텁, 15 요청): 도구 요청이 ForgeTool 경로로 간 비율 — sonnet 10/19 → 14/14(반복 포함),
+haiku 8/10 → 10/10, opus 8/10 → 10/10. 앱 요청은 모든 조건에서 5/5 그대로.
+
+### Fixed — 문이 연 도구를 CLI 클라이언트가 같은 턴에 못 부르던 것
+
+같은 스텁에서, 문(게이트)이 방을 열고 브릿지가 `list_changed` 를 보내도 CLI 가 목록을 제때 갱신하지 않았다.
+Claude Code 2.1.236 은 방금 열린 도구를 "No such tool available" 로 거절한 실행이 158회 중 70회(한 번 더
+돌아 대개 성공), Codex 0.156.1 은 **턴 안에서 목록을 갱신하지 않았다** — codex 로는 도구 요청 10개 중 5개만
+ForgeTool 에 닿았다(나머지는 올바른 문을 열고도 멈춤).
+
+- 문의 "Now callable: …" 줄과 `ToolSearch` 의 활성화 줄에 한 문장: 목록에 아직 없으면
+  `ToolBatch(tool="<name>", inputs=[<its input>])` 로 부르라. ToolBatch 는 첫 턴 표면에 있고 이름으로 숨은
+  도구를 연다.
+- 결과: codex 도구 요청 5/10 → 10/10(전부 ToolBatch 경유). claude 는 첫 호출 거절 빈도 자체는 그대로(CLI
+  갱신 타이밍)이고, 거절 뒤 ToolBatch 로 이어 가는 길이 하나 더 생긴다.
+
+재현 테스트: `tests/unit/test_tool_request_routing.py`(9개 — 문 문장·ForgeTool 첫 말·일상어 ToolSearch·
+ToolBatch 안내). `test_turn_one_surface` 의 예시 식구 이름을 현재 이름(ArtifactCreate)으로.
+
 ## [4.59.0] — 2026-09-23
 
 ### Fixed — 앞 턴에 연 도구가 다음 턴에 다시 숨었다

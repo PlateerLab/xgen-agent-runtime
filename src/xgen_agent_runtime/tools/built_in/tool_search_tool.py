@@ -276,7 +276,9 @@ class ToolSearchTool(Tool):
             lines.append(f"{i}. {name} — {one_liner}{tag}")
         if activated:
             lines.append(
-                "Activated tool schemas become available on your next step — call them then."
+                "Activated tool schemas become available on your next step — call them then. "
+                'If one is still not in your tool list, call it through ToolBatch(tool="<name>", '
+                "inputs=[<its input>])."
             )
 
         return ToolResult(

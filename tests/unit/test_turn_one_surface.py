@@ -25,7 +25,7 @@ def test_패밀리는_문_하나만_내놓는다():
         ("DelegationGuide", "SubAgentSpawn"),
         ("DelegationGuide", "TaskCreate"),
         ("BrowserGuide", "BrowserNavigate"),
-        ("ArtifactGuide", "ArtifactSave"),
+        ("ArtifactGuide", "ArtifactCreate"),
     ):
         assert is_turn_one(gate), gate
         assert not is_turn_one(member), member

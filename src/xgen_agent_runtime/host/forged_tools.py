@@ -595,9 +595,16 @@ class ForgeTool:
         # 짧게 — 턴1 도구라 **모든 모델 호출**에 실린다. 검증 실패 시 이 도구가 실패
         # 출력과 고칠 점을 그대로 돌려주므로, 긴 설명은 여기가 아니라 그 결과가 맡는다.
         # (2026-09-20 실측: 769토큰, 28일간 턴의 1.4% 에서 사용.)
+        #
+        # 첫 문장이 "make a tool" 이어야 하는 이유: 이 설명은 문(SelfExtendGuide) 뒤에서도,
+        # ToolSearch 결과 줄에서도 읽힌다. "Register a script" 로 시작하던 때는
+        # ToolSearch("create tool") 이 이 도구를 못 찾고 ArtifactGuide 를 돌려줬고,
+        # ToolSearch("make tool") 은 "이 능력은 없다" 로 답했다(검색은 모든 낱말이 맞아야 한다).
         return (
-            "Register a script from your workspace as a REUSABLE TOOL that persists across "
-            "sessions. Write the script first. Contract: input arrives as JSON on stdin; print "
+            "Make (create, build) a TOOL — what the user means by making or adding a tool: "
+            "register a script from your workspace as a reusable tool that persists across "
+            "sessions; the user uses it by asking you. Not an app. "
+            "Write the script first. Contract: input arrives as JSON on stdin; print "
             'the result as JSON on stdout ({"error": "..."} for a handled failure). '
             "The tool is verified by running it ONCE with `test_input` and is registered only if "
             "that run succeeds — otherwise this call returns the failure output to fix. Callable "
