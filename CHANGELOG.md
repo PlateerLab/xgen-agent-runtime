@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.62.0] — 2026-09-26
+
+### Fixed — 사용자 PC 가 연결된 대화에서 sandbox 에 없는 파일을 "없다" 고 답하던 것
+
+실측(2026-09-26 dev, gpt-4.1, runtime 4.61.0, trace 46792): DeX 대화에서 "작업 폴더의 dex_note_0926.md 첫 줄이
+뭐야?" → sandbox `Read` 한 번 "File not found" → 사용자 PC 는 보지 않고 "파일이 존재하지 않습니다". 파일은
+PC 작업 폴더에 있었다. 시스템 프롬프트의 "sandbox 에 없다고 없는 게 아니다" 는 이미 들어가 있었다 — 부탁은
+통하지 않았다. 09-24 의 trace 46746(sandbox 에서 `rm -rf` 후 "삭제했다")도 같은 모양이다.
+
+- `stages/s10_tool/second_machine.py`: 이번 턴 도구 목록에 사용자 PC 의 문(`…LocalControl`, 접두 필수)이 있을
+  때만, sandbox 파일 도구(Read·Edit·Write·Glob·NotebookEdit·Bash)의 "없음" 결과(`File not found` ·
+  `No files matching` · `No such file or directory`) 끝에 한 줄 — 여기(sandbox)엔 없다, 없다고 답하기 전에
+  사용자 PC 도 확인하라(문 이름을 댄다). 턴당 2번까지. 작업 공간이 이미 사용자 PC 인 커넥터 로컬 모드에서는
+  붙이지 않는다. 사건 `tool.not_in_sandbox`(이벤트 카탈로그 v15).
+- 로컬 실험실(qwen3.8-27b, 위치를 말하지 않고 파일 이름만 말하는 시나리오 5종 × 4회 + sandbox 작업 회귀 3종):
+  Qwen 은 원래도 sandbox 에서 못 찾으면 PC 를 확인해 결과 차이 없음(상태 20/20 → 20/20), sandbox 코딩 작업
+  회귀 없음. 안내가 모델에게 실제로 전달되는지는 파이프라인 한 턴 테스트로 확인(스트림의 tool.call_complete
+  사건은 안내를 붙이기 전에 나가므로 사건 기록으로는 보이지 않는다).
+
 ## [4.61.0] — 2026-09-25
 
 로컬 실험실(harness-bench/lab: 실제 호스트·파이프라인 + 격리 컨테이너, Harness-Bench 과제를 dev 배포 없이

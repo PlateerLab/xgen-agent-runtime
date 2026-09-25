@@ -56,7 +56,8 @@ from typing import Any, Dict, List
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
 #: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
 #: v10: + ``loop.repeat_stop`` (4.45.0 end the turn once repeated calls keep getting refused).
-EVENT_CATALOG_VERSION = 14
+#: v15: + ``tool.not_in_sandbox`` (second machine not-found redirect).
+EVENT_CATALOG_VERSION = 15
 
 
 class EventTypes(str, Enum):
@@ -205,6 +206,8 @@ class EventTypes(str, Enum):
     TOOL_GATE_REACHABILITY_REPAIRED = "tool.gate_reachability_repaired"
     TOOL_USER_DENIED = "tool.user_denied"
     TOOL_SURFACE_RESTORED = "tool.surface_restored"
+    # 기계가 둘인 대화에서 sandbox 파일 도구가 '없음' → PC 도 확인하라는 안내 (stages/s10_tool/second_machine.py).
+    TOOL_NOT_IN_SANDBOX = "tool.not_in_sandbox"
 
     # ── Stage 11: Tool review ──
     TOOL_REVIEW_FLAG = "tool_review.flag"
@@ -649,6 +652,9 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     },
     EventTypes.TOOL_SURFACE_RESTORED: {
         "opened": "list[str] — deferred tools re-exposed because the visible history shows the model using them (or their gate) earlier in the conversation (tools.gates.restore_from_history)",
+    },
+    EventTypes.TOOL_NOT_IN_SANDBOX: {
+        "count": "int — sandbox file-tool 'not found' results this round that got a 'check the user's computer too' note (stages/s10_tool/second_machine.py)",
     },
     EventTypes.TOOL_USER_DENIED: {
         "tools": "list[str] — tools whose call the user refused this round; identical calls are not executed again this turn (stages/s10_tool/denial_guard.py)",
