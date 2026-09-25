@@ -924,6 +924,45 @@ class AgentTurnExecutor:
                         _codex_wf,
                     )
 
+            # ── 요청에 이름이 나온 작업 폴더 파일 붙이기 (host/referenced_files.py) ──
+            # 파일을 하나씩 Read 하는 왕복을 없앤다. RAG 블록과 같은 자리(사용자 턴)에 싣고,
+            # 예산 맞추기가 함께 자를 수 있게 rag_block 에 합친다. 끝까지 실은 파일은
+            # "읽은 파일" 장부에 올려 바로 Edit/Write 할 수 있게 한다.
+            if _sdk_tools and str(
+                host.setting("GENY_PREFETCH_REFERENCED_FILES", "1")
+            ).strip() not in (
+                "0",
+                "false",
+                "off",
+            ):
+                try:
+                    import asyncio as _asyncio
+
+                    from xgen_agent_runtime.host.referenced_files import collect as _collect_refs
+                    from xgen_agent_runtime.tools.built_in._file_witness import WITNESSED_KEY
+                    from xgen_agent_runtime.tools.fs import LocalFS, RunnerFS
+
+                    _ref_fs = None
+                    if _sandbox is not None:
+                        _ref_fs = RunnerFS(_sandbox, str(getattr(_sandbox, "workdir", "") or ""))
+                    elif getattr(run_tool_context, "working_dir", ""):
+                        _ref_fs = LocalFS(str(run_tool_context.working_dir))
+                    if _ref_fs is not None:
+                        _pre = _asyncio.run(_collect_refs(text, _ref_fs))
+                        if _pre.block:
+                            rag_block = f"{rag_block}\n\n{_pre.block}" if rag_block else _pre.block
+                            if _pre.witnessed:
+                                _book = list(state.shared.get(WITNESSED_KEY) or [])
+                                _book.extend(p for p in _pre.witnessed if p not in _book)
+                                state.shared[WITNESSED_KEY] = _book
+                            logger.info(
+                                "agents/geny: 요청에 나온 파일 %d개 첨부, %d개 이름만",
+                                len(_pre.attached),
+                                len(_pre.skipped),
+                            )
+                except Exception:  # noqa: BLE001 — 붙이기 실패는 턴을 깨지 않는다(모델이 직접 읽으면 된다)
+                    logger.warning("agents/geny: 요청 파일 첨부 실패 (건너뜀)", exc_info=True)
+
             # ── 컨텍스트 예산 (컨텍스트 자동 압축 토글) ─────────────────
             # system_prompt 가 최종형이 된 지점 — 여기서 윈도우를 해석하고,
             # 토글 ON 이면 입력측(text/rag)을 예산 안으로 맞춘 뒤 융합한다.

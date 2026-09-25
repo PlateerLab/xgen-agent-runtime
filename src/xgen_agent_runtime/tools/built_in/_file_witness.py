@@ -20,7 +20,13 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 #: state.shared 키 — 이 세션에서 내용을 확인한 파일 경로들.
-WITNESSED_KEY = "file.witnessed"
+#: ⚠ ``executor.`` 접두어가 **필수**다. Stage 10 은 허용된 이름공간(executor.·memory.·geny.·plugin.)의
+#: 키만 state.shared 에 반영하고 나머지는 경고만 남기고 버린다(stages/s10_tool/state_mutation.py).
+#: 4.51.0~4.59.0 은 ``file.witnessed`` 여서 장부가 **한 번도 기록되지 않았다** — 이미 있는 파일의
+#: Write 는 먼저 읽었든 자기가 방금 썼든 전부 거절됐다(2026-09-24 로컬 벤치 qwen: 실행당 11~19회,
+#: 과제의 약 10%. Read 뒤 Write 도 거절돼 모델은 Bash 로 우회했다). 단위 테스트가 장부를 손으로
+#: 반영해서 못 잡았다 — 이제 테스트는 실제 반영 함수를 거친다.
+WITNESSED_KEY = "executor.file_witnessed"
 
 #: 장부 상한. 넘으면 오래된 것부터 잊는다 — 잊은 파일은 "안 읽은 것" 이 되어
 #: 한 번 더 읽으면 그만이다(데이터를 잃지는 않는다).

@@ -128,18 +128,48 @@ _DENIAL_GUIDANCE = (
 )
 
 
+#: 어댑터가 실패를 **결과 문자열**로 알리는 머리말 — LangChain 도구엔 오류 플래그가 없어서
+#: workflow 커넥터 어댑터는 MCP ``isError=True`` 를 ``"Error: <본문>"`` 으로 돌려준다(예외 아님).
+_ERROR_TEXT_HEAD = re.compile(r"^\s*error\b\s*:?\s*", re.IGNORECASE)
+
+
 def _denial_message(exc: BaseException) -> Optional[str]:
     """사람이 거부한 것이면 그 사유, 아니면 None."""
     code = getattr(exc, "code", None) or getattr(exc, "error_code", None)
-    msg = str(exc).strip()
     if isinstance(code, str) and code.strip().lower() in _DENIAL_CODES:
-        return msg or code
+        return str(exc).strip() or code
+    return _denial_in_text(str(exc))
+
+
+def _denial_in_error_text(text: str) -> Optional[str]:
+    """``"Error: …"`` 로 돌아온 결과가 사람의 거부면 그 사유.
+
+    오류 머리말이 있을 때만 본다 — 성공한 결과가 우연히 거부 문구를 담은 것(파일 내용 등)은
+    거부가 아니다.
+    """
+    m = _ERROR_TEXT_HEAD.match(text or "")
+    return _denial_in_text(text[m.end() :]) if m else None
+
+
+def _denial_in_text(text: str) -> Optional[str]:
+    msg = (text or "").strip()
     head = msg.split(":", 1)[0].strip().lower()
     if head in _DENIAL_CODES:
         return msg.split(":", 1)[1].strip() if ":" in msg else msg
     if any(p in msg for p in _LEGACY_DENIAL_PHRASES):
         return msg
     return None
+
+
+def _denied_result(name: str, denied: str, result_sink: Optional[Dict[str, str]]) -> ToolResult:
+    """사람의 거부는 오류가 아니라 답이다 — 구조화 머리말로 바꿔 Stage 10 이 알아보게 한다
+    (stages/s10_tool/denial_guard.py: 같은 턴에 같은 동작을 다시 묻지 않는다). 예외로 오든
+    ``"Error: …"`` 결과 문자열로 오든 같은 모양으로 모은다."""
+    logger.info("geny_bridge: tool %s denied by user: %s", name, denied)
+    text = f"ERROR user_denied: {denied}\n{_DENIAL_GUIDANCE}"
+    if result_sink is not None:
+        result_sink[name] = text
+    return ToolResult(content=text, is_error=True)
 
 
 def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool:
@@ -153,17 +183,16 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
         except Exception as exc:  # noqa: BLE001 - tool errors go back to the model, never crash the loop
             denied = _denial_message(exc)
             if denied is not None:
-                # 사람의 거부는 오류가 아니라 답이다 — 구조화 머리말로 바꿔 Stage 10 이 알아보게
-                # 한다(stages/s10_tool/denial_guard.py: 같은 턴에 같은 동작을 다시 묻지 않는다).
-                logger.info("geny_bridge: tool %s denied by user: %s", name, denied)
-                text = f"ERROR user_denied: {denied}\n{_DENIAL_GUIDANCE}"
-            else:
-                logger.warning("geny_bridge: tool %s failed: %s", name, exc)
-                text = f"Error: {exc}"
+                return _denied_result(name, denied, result_sink)
+            logger.warning("geny_bridge: tool %s failed: %s", name, exc)
+            text = f"Error: {exc}"
             if result_sink is not None:
                 result_sink[name] = text
             return ToolResult(content=text, is_error=True)
         text = _stringify(output)
+        denied = _denial_in_error_text(text)
+        if denied is not None:
+            return _denied_result(name, denied, result_sink)
         if family:
             # 안내 도구가 가리킨 도구들을 이 턴에 실제로 연다 — 내장 안내 도구와 같은 규약.
             # 안내만 하고 열지 않으면 모델은 부를 수 없는 이름을 받고, 약한 모델은 안내
@@ -200,12 +229,18 @@ def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, st
             if asyncio.iscoroutine(output):
                 output = await output
         except Exception as exc:  # noqa: BLE001
+            denied = _denial_message(exc)
+            if denied is not None:
+                return _denied_result(name, denied, result_sink)
             logger.warning("geny_bridge: tool %s failed: %s", name, exc)
             text = f"Error: {exc}"
             if result_sink is not None:
                 result_sink[name] = text
             return ToolResult(content=text, is_error=True)
         text = _stringify(output)
+        denied = _denial_in_error_text(text)
+        if denied is not None:
+            return _denied_result(name, denied, result_sink)
         if result_sink is not None:
             result_sink[name] = text
         return ToolResult(content=text)

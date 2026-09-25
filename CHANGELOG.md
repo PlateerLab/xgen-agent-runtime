@@ -4,6 +4,47 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.61.0] — 2026-09-25
+
+로컬 실험실(harness-bench/lab: 실제 호스트·파이프라인 + 격리 컨테이너, Harness-Bench 과제를 dev 배포 없이
+실행, 모델 qwen3.8-27b)에서 설계·홀드아웃 과제를 나눠 판정한 묶음이다.
+
+### Fixed — 이미 있는 파일에 대한 Write 가 늘 거절됐다 (4.51.0~4.60.0)
+
+`_file_witness` 장부 키가 `file.witnessed` 였다. Stage 10 은 도구가 제안한 `state_mutations` 중 허용
+이름공간(`executor.`·`memory.`·`geny.`·`plugin.`) 키만 반영하고 나머지는 경고만 남기고 버린다. 그래서 장부가
+한 번도 기록되지 않았고, 이미 있는 파일의 Write 는 먼저 Read 했든 자기가 방금 썼든 전부
+"you have not read it in this session" 으로 거절됐다 — 모델은 안내대로 Read 한 뒤 다시 Write 해도 또 거절돼
+Bash 로 우회했다. 단위 테스트가 장부를 손으로 `shared` 에 넣어 필터를 우회해 못 잡았다.
+
+- 키를 `executor.file_witnessed` 로. 실제 반영 함수·파이프라인 한 턴(Write→Write, Read→Write)을 거치는
+  테스트 추가(옛 키에서 실패 확인).
+- 효과(설계 38과제): Write 거절 실행당 11~19회 → 0, 도구 오류 20~32 → 9, 과제당 호출 10.6 → 9.6.
+
+### Added — 요청에 이름이 나온 작업 폴더 파일을 첫 턴에 붙인다
+
+호출 해부: 과제당 호출 10.8 중 입력 읽기가 4.2회(39%) — 요청에 적힌 파일을 하나씩 따로 읽는 왕복이었다.
+프롬프트의 "한 번에 묶어라" 는 따르지 않았다(ToolBatch 38과제 중 1회).
+
+- `host/referenced_files.py`: 요청의 경로 후보 중 작업 폴더 안에 실제로 있는 텍스트 파일만 붙인다(파일당
+  16KB·합계 48KB·최대 12개). 비밀처럼 보이는 이름 제외, 바이너리는 이름·크기만, 넘치면 앞부분+잘림 표시.
+  끝까지 실은 파일은 읽은 파일 장부에 올린다. 커넥터(사용자 PC) 세션은 건너뛴다.
+- `GENY_PREFETCH_REFERENCED_FILES=0` 으로 끈다.
+- 효과: 설계 38 호출 9.6→7.9(과제 21개가 기준선 4회 모두보다 적음), 홀드아웃 29 호출 9.1~10.0→7.1
+  (중앙 7→5), 점수 0.760~0.784→0.799, 만점 7→10.
+
+### Fixed — 커넥터 거부가 결과 문자열로 오면 사용자 거부로 알아보지 못했다
+
+4.58.0 은 거부를 예외에서만 알아봤다. workflow 커넥터 어댑터는 MCP `isError` 를 `"Error: …"` 문자열로
+돌려준다 — dev 에서 한 번도 걸리지 않아 모델이 "시스템에서 차단되었습니다" 라고 답했고(2026-09-24 trace
+46748·46749), 로컬 재현에서는 거부 뒤 `shutil.rmtree` 로 **우회 삭제**까지 나왔다. 오류 머리말이 있는
+결과 문자열도 같은 판정을 거친다.
+
+### Fixed — ToolSearch 에 정확한 도구 이름을 여럿 적으면 "없음"
+
+`"mcp_local_ListDir mcp_local_ReadFile"` 처럼 이름을 나열하면 AND 규칙 때문에 미스였다(dev 30일 미스 13회 중
+4건). 정확히 일치하는 이름은 각각 돌려준다 — 퍼지가 아니다.
+
 ## [4.60.0] — 2026-09-24
 
 ### Fixed — "도구를 만들어 달라" 가 앱(아티팩트)으로 새던 것
