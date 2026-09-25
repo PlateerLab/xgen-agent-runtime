@@ -19,7 +19,7 @@ from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
 )
 from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
 from xgen_agent_runtime.stages.s10_tool.streaming import StreamingToolExecutor
-from xgen_agent_runtime.stages.s10_tool import repeat_guard
+from xgen_agent_runtime.stages.s10_tool import repeat_guard, second_machine
 
 
 # Default parallel budget when a host doesn't specify one. Matches the
@@ -379,6 +379,19 @@ class ToolStage(Stage[Any, Any]):
                     "skipped": sorted(set(skipped_same)),
                 },
             )
+
+        # 기계가 둘인 대화(사용자 PC 연결)에서 sandbox 가 "없음" 을 돌려주면 PC 도 확인하라고 붙인다.
+        # 작업 공간이 이미 사용자 PC 인 모드(커넥터 로컬 동기화)에서는 기계가 하나다 — 안내하지 않는다.
+        _sb = getattr(getattr(self, "_context", None), "sandbox", None)
+        noted = (
+            0
+            if getattr(_sb, "is_connector_local", False)
+            else second_machine.annotate(
+                tool_calls, results, self._registry.list_names(), state.shared
+            )
+        )
+        if noted:
+            state.add_event("tool.not_in_sandbox", {"count": noted})
 
         state.add_message("user", results)
         state.tool_results = results

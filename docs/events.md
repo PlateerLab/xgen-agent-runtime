@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-23.
-> Catalogue version: **14** · events: **139**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-26.
+> Catalogue version: **15** · events: **140**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -774,6 +774,14 @@ Enum member: `EventTypes.TOOL_SURFACE_RESTORED`
 | Field | Description |
 |---|---|
 | `opened` | list[str] — deferred tools re-exposed because the visible history shows the model using them (or their gate) earlier in the conversation (tools.gates.restore_from_history) |
+
+### `tool.not_in_sandbox`
+
+Enum member: `EventTypes.TOOL_NOT_IN_SANDBOX`
+
+| Field | Description |
+|---|---|
+| `count` | int — sandbox file-tool 'not found' results this round that got a 'check the user's computer too' note (stages/s10_tool/second_machine.py) |
 
 ## Stage 11 — Tool review
 

@@ -429,6 +429,8 @@ class PipelineState:
             "tool.repeat_error_counts",
             "tool.repeat_error_blocked",
             "tool.same_result_counts",
+            # 기계가 둘인 대화의 'sandbox 에 없음' 안내 횟수(stages/s10_tool/second_machine.py).
+            "tool.second_machine_notes",
             # 완료 직전 산출물 대조(stages/s16_loop/completion_review.py)도 턴당 한 번.
             "loop.completion_review",
             # 턴 입력 토큰 예산(stages/s16_loop/turn_budget.py) — 턴마다 새로 센다.
