@@ -300,7 +300,28 @@ class TestContract:
             "file_count": 1,
             "total_bytes": 8,
             "files": [{"path": "out/result.csv", "bytes": 8, "content": "a,b\n1,2\n"}],
+            "skipped": [],
         }
+
+    def test_named_binary_file_is_skipped_not_fatal(self, fs):
+        """이름을 댄 파일이 바이너리여도 읽기 전체가 실패하지 않는다 — 그 파일만 skipped 로.
+        큰 바이너리는 앞부분만 보고 판정하므로 용량 예산도 쓰지 않는다."""
+        _run(fs.write_bytes("out/result.csv", b"a,b\n1,2\n"))
+        _run(fs.write_bytes("out/report.xlsx", b"PK\x03\x04" + b"\x00" * 4096))
+        result = _run(
+            fs.search(
+                {
+                    "op": "read_texts",
+                    "base": fs.resolve("."),
+                    "paths": ["out/report.xlsx", "out/result.csv"],
+                    "max_files": 8,
+                    "max_bytes": 32,
+                }
+            )
+        )
+        assert result["eligible"] is True
+        assert [f["path"] for f in result["files"]] == ["out/result.csv"]
+        assert result["skipped"] == [{"path": "out/report.xlsx", "reason": "non_text_input"}]
 
     def test_bounded_selected_text_read_rejects_workspace_escape(self, fs):
         result = _run(

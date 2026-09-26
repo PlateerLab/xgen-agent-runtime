@@ -303,7 +303,8 @@ class BashTool(Tool):
                     "description": (
                         "Optional deterministic checks run after a command. "
                         "Use workspace-relative paths. The runtime reopens each output "
-                        "with a standard parser before Bash returns."
+                        "with a standard parser before Bash returns. Only JSON, CSV and "
+                        "text outputs are checked; binary files (xlsx, docx, images) are skipped."
                     ),
                     "items": {
                         "type": "object",
@@ -320,7 +321,14 @@ class BashTool(Tool):
                                 },
                             },
                             "unique_by": {"type": "array", "items": {"type": "string"}},
-                            "exact_rows": {"type": "integer", "minimum": 0},
+                            "exact_rows": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": (
+                                    "Only a count the request itself states. A mismatch is "
+                                    "reported as a note, not a failure."
+                                ),
+                            },
                             "min_rows": {"type": "integer", "minimum": 0},
                             "max_rows": {"type": "integer", "minimum": 0},
                             "required_keys": {

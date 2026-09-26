@@ -36,6 +36,20 @@ class ArtifactContractReport:
         }
 
 
+#: 개수(행 수·배열 길이)는 실패로 보지 않고 알리기만 한다. 요청에 개수가 없는데도 모델이 계약에 개수를
+#: 지어 넣고, 불일치가 나면 데이터와 기대 개수를 같이 늘리며 헛돌았다(2026-09-26 dev: 계약서 비교에서 4→9행,
+#: Bash 7회·185초. Codex 실험실에서도 요청에 없던 exact_rows=9). 형식 검사(파싱·헤더·열 수·허용값·중복)는
+#: 객관적이라 그대로 실패로 둔다.
+_COUNT_NOTE = (
+    "Counts are informational: change the data only if the request itself states this count; "
+    "never add or remove rows just to match the contract."
+)
+
+#: BOM(엑셀 호환 CSV 에 흔하다)은 표준 parser 처럼 떼고 본다(utf-8-sig). 예전에는 첫 헤더가 '\ufeff조항'
+#: 이 되어 헤더 불일치로 실패했다.
+_BOM = "\ufeff"
+
+
 def _slash(value: Any) -> str:
     return str(value or "").replace("\\", "/")
 
@@ -108,6 +122,7 @@ def _validate_json(
     content: str,
     contract: Mapping[str, Any],
     errors: list[str],
+    notes: list[str],
 ) -> str:
     try:
         document = json.loads(content, object_pairs_hook=_duplicate_rejecting_object)
@@ -143,8 +158,8 @@ def _validate_json(
             elif not isinstance(value, list):
                 errors.append(f"{path}: JSON Pointer {pointer!r} does not select an array")
             elif len(value) != expected:
-                errors.append(
-                    f"{path}: expected {expected} items at {pointer!r}, found {len(value)}"
+                notes.append(
+                    f"{path}: {len(value)} items at {pointer!r} (contract said {expected}). {_COUNT_NOTE}"
                 )
     return "json"
 
@@ -154,6 +169,7 @@ def _validate_csv(
     content: str,
     contract: Mapping[str, Any],
     errors: list[str],
+    notes: list[str],
 ) -> str:
     try:
         rows = list(csv.reader(io.StringIO(content, newline=""), strict=True))
@@ -223,11 +239,15 @@ def _validate_csv(
     min_rows = contract.get("min_rows")
     max_rows = contract.get("max_rows")
     if isinstance(exact_rows, int) and data_rows != exact_rows:
-        errors.append(f"{path}: expected {exact_rows} data rows, found {data_rows}")
+        notes.append(f"{path}: {data_rows} data rows (contract said {exact_rows}). {_COUNT_NOTE}")
     if isinstance(min_rows, int) and data_rows < min_rows:
-        errors.append(f"{path}: expected at least {min_rows} data rows, found {data_rows}")
+        notes.append(
+            f"{path}: {data_rows} data rows (contract said at least {min_rows}). {_COUNT_NOTE}"
+        )
     if isinstance(max_rows, int) and data_rows > max_rows:
-        errors.append(f"{path}: expected at most {max_rows} data rows, found {data_rows}")
+        notes.append(
+            f"{path}: {data_rows} data rows (contract said at most {max_rows}). {_COUNT_NOTE}"
+        )
     return f"csv, {data_rows} data rows, {width} columns"
 
 
@@ -304,13 +324,26 @@ async def validate_artifact_contracts(
         and isinstance(entry.get("path"), str)
         and isinstance(entry.get("content"), str)
     }
+    skipped = {
+        str(entry.get("path"))
+        for entry in selected.get("skipped", []) or []
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
     checked: list[str] = []
     summaries: list[str] = []
+    notes: list[str] = []
     for contract, path in normalized:
+        if path in skipped:
+            notes.append(
+                f"{path}: not checked — not a text file (contracts check JSON, CSV and text only)"
+            )
+            continue
         content = files.get(path)
         if content is None:
             errors.append(f"{path}: required artifact is missing or is not regular UTF-8 text")
             continue
+        if content.startswith(_BOM):
+            content = content[len(_BOM) :]
 
         checked.append(path)
         before = len(errors)
@@ -318,24 +351,25 @@ async def validate_artifact_contracts(
         artifact_format = str(contract.get("format") or "text").lower()
         summary = "text"
         if artifact_format == "json":
-            summary = _validate_json(path, content, contract, errors)
+            summary = _validate_json(path, content, contract, errors, notes)
         elif artifact_format == "csv":
-            summary = _validate_csv(path, content, contract, errors)
+            summary = _validate_csv(path, content, contract, errors, notes)
         elif artifact_format != "text":
             errors.append(f"{path}: unsupported artifact format: {artifact_format!r}")
         if len(errors) == before:
             summaries.append(f"{path}: {summary}")
 
+    note_lines = "".join(f"\n- note: {item}" for item in notes)
     if errors:
         message = "ARTIFACT VALIDATION FAILED\n" + "\n".join(f"- {item}" for item in errors)
         return ArtifactContractReport(
             ok=False,
-            message=message,
+            message=message + note_lines,
             checked=tuple(checked),
             errors=tuple(errors),
         )
-    message = "ARTIFACT VALIDATION OK\n" + "\n".join(f"- {item}" for item in summaries)
-    return ArtifactContractReport(ok=True, message=message, checked=tuple(checked))
+    message = "ARTIFACT VALIDATION OK" + "".join(f"\n- {item}" for item in summaries)
+    return ArtifactContractReport(ok=True, message=message + note_lines, checked=tuple(checked))
 
 
 __all__ = [
