@@ -84,8 +84,12 @@ class ToolFileSystem(Protocol):
         ...
 
     async def search(self, req: dict) -> dict:
-        """Glob·Grep. ``{"ok": bool, "text": str}`` — 두 백엔드가 **같은 코드**를 돌린다
-        (``tools/built_in/_search.py``)."""
+        """Bounded workspace inspection (Glob/Grep/snapshot).
+
+        Both backends run the same standard-library implementation in
+        ``tools/built_in/_search.py``. Glob/Grep return ``text``; snapshot and
+        read_texts return structured, size-bounded file lists.
+        """
         ...
 
 

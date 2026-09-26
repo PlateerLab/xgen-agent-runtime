@@ -154,12 +154,336 @@ def grep_files(req):
     return {"ok": True, "text": _cap(text)}
 
 
+def snapshot_files(req):
+    """Return a complete, bounded UTF-8 snapshot of a small workspace.
+
+    This is intentionally implemented beside Glob/Grep so local and runner
+    filesystems execute the exact same traversal.  Size and file-count gates
+    are checked *before* file contents are returned; a large workspace cannot
+    become an unbounded host-to-runner transfer.
+    """
+    base = Path(req["base"])
+    roots = req.get("roots") or []
+    max_files = max(0, int(req.get("max_files") or 0))
+    max_bytes = max(0, int(req.get("max_bytes") or 0))
+    max_dirs = max(0, int(req.get("max_dirs") or 0))
+    if not base.is_dir():
+        return {
+            "ok": False,
+            "eligible": False,
+            "reason": "workspace_unavailable",
+            "files": [],
+        }
+    if not _inside(base, roots):
+        return {
+            "ok": False,
+            "eligible": False,
+            "reason": "workspace_outside_allowed_roots",
+            "files": [],
+        }
+
+    paths = []
+    total_bytes = 0
+    directory_count = 0
+    try:
+        # Do not omit directories by name: an infrastructure-looking folder
+        # can still be the user's actual input. Bound traversal structurally
+        # instead, so an eligible result really is a complete snapshot.
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+            dirnames[:] = sorted(dirnames)
+            directory_count += len(dirnames)
+            if directory_count > max_dirs:
+                return {
+                    "ok": True,
+                    "eligible": False,
+                    "reason": "too_many_directories",
+                    "file_count": len(paths),
+                    "total_bytes": total_bytes,
+                    "files": [],
+                }
+            for dirname in dirnames:
+                if (Path(dirpath) / dirname).is_symlink():
+                    return {
+                        "ok": True,
+                        "eligible": False,
+                        "reason": "non_regular_input",
+                        "file_count": len(paths),
+                        "total_bytes": total_bytes,
+                        "files": [],
+                    }
+            for filename in sorted(filenames):
+                path = Path(dirpath) / filename
+                rel = path.relative_to(base)
+                if path.is_symlink():
+                    return {
+                        "ok": True,
+                        "eligible": False,
+                        "reason": "non_regular_input",
+                        "file_count": len(paths),
+                        "total_bytes": total_bytes,
+                        "files": [],
+                    }
+                if not path.is_file() or not _inside(path, roots):
+                    continue
+                size = path.stat().st_size
+                paths.append((path, rel.as_posix(), size))
+                total_bytes += size
+                if len(paths) > max_files:
+                    return {
+                        "ok": True,
+                        "eligible": False,
+                        "reason": "too_many_files",
+                        "file_count": len(paths),
+                        "total_bytes": total_bytes,
+                        "files": [],
+                    }
+                if total_bytes > max_bytes:
+                    return {
+                        "ok": True,
+                        "eligible": False,
+                        "reason": "workspace_over_budget",
+                        "file_count": len(paths),
+                        "total_bytes": total_bytes,
+                        "files": [],
+                    }
+    except OSError:
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "workspace_unreadable",
+            "file_count": len(paths),
+            "total_bytes": total_bytes,
+            "files": [],
+        }
+
+    if not paths:
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "empty_workspace",
+            "file_count": 0,
+            "total_bytes": 0,
+            "files": [],
+        }
+
+    paths.sort(key=lambda item: item[1])
+
+    entries = []
+    actual_total = 0
+    for path, rel, _size in paths:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "workspace_unreadable",
+                "file_count": len(paths),
+                "total_bytes": actual_total,
+                "files": [],
+            }
+        actual_total += len(raw)
+        if actual_total > max_bytes:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "workspace_over_budget",
+                "file_count": len(paths),
+                "total_bytes": actual_total,
+                "files": [],
+            }
+        if b"\x00" in raw:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "non_text_input",
+                "file_count": len(paths),
+                "total_bytes": actual_total,
+                "files": [],
+            }
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "non_text_input",
+                "file_count": len(paths),
+                "total_bytes": actual_total,
+                "files": [],
+            }
+        entries.append({"path": rel, "bytes": len(raw), "content": content})
+
+    result = {
+        "ok": True,
+        "eligible": True,
+        "reason": "eligible",
+        "file_count": len(entries),
+        "total_bytes": actual_total,
+        "files": entries,
+    }
+    # The runner transports this dict as JSON on stdout. UTF-8 byte limits do
+    # not bound JSON expansion (control characters and long paths are escaped),
+    # so guard the actual wire representation before returning any contents.
+    wire_bytes = len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+    if wire_bytes > TEXT_CAP:
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "snapshot_encoding_over_budget",
+            "file_count": len(entries),
+            "total_bytes": actual_total,
+            "files": [],
+        }
+    return result
+
+
+def read_texts(req):
+    """Read only explicitly named UTF-8 files under one bounded workspace."""
+    base = Path(req["base"])
+    roots = req.get("roots") or []
+    requested = req.get("paths") if isinstance(req.get("paths"), list) else []
+    max_files = max(0, int(req.get("max_files") or 0))
+    max_bytes = max(0, int(req.get("max_bytes") or 0))
+    if not base.is_dir() or not _inside(base, roots):
+        return {
+            "ok": False,
+            "eligible": False,
+            "reason": "workspace_unavailable",
+            "files": [],
+        }
+
+    paths = list(dict.fromkeys(str(path) for path in requested if isinstance(path, str)))
+    if not paths:
+        return {"ok": True, "eligible": True, "reason": "eligible", "files": []}
+    if len(paths) > max_files:
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "too_many_files",
+            "file_count": len(paths),
+            "files": [],
+        }
+
+    entries = []
+    total_bytes = 0
+    for relative in paths:
+        target = base / relative
+        try:
+            lexical = target.relative_to(base)
+        except ValueError:
+            lexical = None
+        if (
+            lexical is None
+            or ".." in lexical.parts
+            or target.is_symlink()
+            or not _inside(target, [str(base)])
+        ):
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "path_outside_workspace",
+                "path": relative,
+                "files": [],
+            }
+        try:
+            if not target.is_file():
+                return {
+                    "ok": True,
+                    "eligible": False,
+                    "reason": "file_missing",
+                    "path": relative,
+                    "files": [],
+                }
+            size = target.stat().st_size
+        except OSError:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "file_unreadable",
+                "path": relative,
+                "files": [],
+            }
+        total_bytes += size
+        if total_bytes > max_bytes:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "files_over_budget",
+                "path": relative,
+                "total_bytes": total_bytes,
+                "files": [],
+            }
+        try:
+            raw = target.read_bytes()
+        except OSError:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "file_unreadable",
+                "path": relative,
+                "files": [],
+            }
+        actual_total = sum(entry["bytes"] for entry in entries) + len(raw)
+        if actual_total > max_bytes:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "files_over_budget",
+                "path": relative,
+                "total_bytes": actual_total,
+                "files": [],
+            }
+        if b"\x00" in raw:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "non_text_input",
+                "path": relative,
+                "files": [],
+            }
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return {
+                "ok": True,
+                "eligible": False,
+                "reason": "non_text_input",
+                "path": relative,
+                "files": [],
+            }
+        entries.append({"path": lexical.as_posix(), "bytes": len(raw), "content": content})
+
+    result = {
+        "ok": True,
+        "eligible": True,
+        "reason": "eligible",
+        "file_count": len(entries),
+        "total_bytes": sum(entry["bytes"] for entry in entries),
+        "files": entries,
+    }
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > TEXT_CAP:
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "snapshot_encoding_over_budget",
+            "file_count": len(entries),
+            "total_bytes": result["total_bytes"],
+            "files": [],
+        }
+    return result
+
+
 def run(req):
     op = req.get("op")
     if op == "glob":
         return glob_files(req)
     if op == "grep":
         return grep_files(req)
+    if op == "snapshot":
+        return snapshot_files(req)
+    if op == "read_texts":
+        return read_texts(req)
     return {"ok": False, "text": "unknown search op: %r" % (op,)}
 
 

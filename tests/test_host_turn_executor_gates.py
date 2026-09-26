@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.host import runner as runner_mod
 from xgen_agent_runtime.host._constants import (
     MEMORY_AUTO_PROMPT_BLOCK,
@@ -36,7 +37,9 @@ from xgen_agent_runtime.host.rollouts import (
     rollout_directory,
 )
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor
+from xgen_agent_runtime.host.workspace_fast_path import WORKSPACE_FAST_PATH_SETTING
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
+from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
 
 
 # ── 대역 ──────────────────────────────────────────────────────────────
@@ -226,6 +229,7 @@ def capture(monkeypatch):
     monkeypatch.setattr(runner_mod, "build_pipeline", _fake_build_pipeline)
     def _fake_stream_turn(*args, **kwargs):
         seen["stream_input"] = args[1]
+        seen["stream_state"] = args[2]
         seen["stream_kwargs"] = dict(kwargs)
         return iter([])
 
@@ -306,6 +310,99 @@ def test_openai_content_array_becomes_canonical_image_input(capture) -> None:
         ],
         "metadata": {},
     }
+
+
+def test_opt_in_workspace_fast_path_is_wired_before_the_model_call(
+    capture, tmp_path: Path, monkeypatch
+) -> None:
+    class _FastPathHost(_FakeHost):
+        def setting_truthy(self, name: str) -> bool:
+            if name == WORKSPACE_FAST_PATH_SETTING:
+                return True
+            return super().setting_truthy(name)
+
+        def agent_workspace_dir(self, workflow_id, *, create=True):
+            return str(tmp_path)
+
+        def workspace_storage_root(self, workflow_id):
+            return str(tmp_path.parent)
+
+        def register_builtin_tools(self, registry, **kwargs):
+            registry.register(BashTool(), core=True)
+            return {"tools": ["Bash"], "extras": {}, "families": ["shell"]}
+
+        def build_run_tool_context(self, **kwargs):
+            run_dir = str(kwargs["run_dir"])
+            return ToolContext(
+                session_id="inter-1",
+                working_dir=run_dir,
+                allowed_paths=[run_dir],
+                extras=dict(kwargs.get("extras") or {}),
+            )
+
+    source = tmp_path / "source"
+    source.write_text("alpha", encoding="utf-8")
+    seen = _run(
+        _FastPathHost(delegation_extras={}, memory=False),
+        capture,
+        text=f"Transform {source} and save the requested output",
+    )
+
+    assert "# Complete workspace snapshot" in seen["stream_input"]
+    assert '"content":"alpha"' in seen["stream_input"]
+    witnessed = seen["stream_state"].shared[SharedKeys.FILE_WITNESSED]
+    assert witnessed == ["source", str(source)]
+    assert seen["stream_state"].shared[SharedKeys.WORKSPACE_FAST_PATH] == {
+        "active": True,
+        "reason": "eligible",
+        "file_count": 1,
+        "total_bytes": 5,
+    }
+
+    # If context budgeting would trim the snapshot, retry from the original
+    # request and do not claim the model witnessed any file content.
+    from xgen_agent_runtime.host import context_budget
+    from xgen_agent_runtime.host.context_budget import BudgetFit
+
+    fits = 0
+
+    def _fit(**kwargs):
+        nonlocal fits
+        fits += 1
+        if fits == 1:
+            return BudgetFit(
+                text="partial snapshot",
+                rag_block=kwargs["rag_block"],
+                clamped=True,
+                window=kwargs["window"],
+                budget=1,
+                total_before=999,
+            )
+        return BudgetFit(
+            text=kwargs["text"],
+            rag_block=kwargs["rag_block"],
+            clamped=False,
+            window=kwargs["window"],
+            budget=999,
+            total_before=1,
+        )
+
+    monkeypatch.setattr(context_budget, "fit_input_to_budget", _fit)
+    capture.clear()
+    original = f"Transform {source} and save the requested output"
+    fallback = _run(
+        _FastPathHost(delegation_extras={}, memory=False),
+        capture,
+        text=original,
+        enable_compaction=True,
+        context_window=4096,
+    )
+    assert fits == 2
+    assert fallback["stream_input"] == original
+    assert SharedKeys.FILE_WITNESSED not in fallback["stream_state"].shared
+    assert fallback["stream_state"].shared[SharedKeys.WORKSPACE_FAST_PATH]["reason"] == (
+        "context_budget"
+    )
 
 
 # ── [DELEGATION_GATE] ─────────────────────────────────────────────────

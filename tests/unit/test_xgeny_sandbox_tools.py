@@ -148,6 +148,19 @@ class TestToolsRunInTheSandbox:
         r = await ReadTool().execute({"file_path": "made.txt"}, ctx)
         assert "hi" in str(r.content)
 
+    async def test_bash_artifact_contract_is_enforced_in_the_sandbox(self, ctx):
+        r = await BashTool().execute(
+            {
+                "command": "printf 'a,b\\n1,2,3\\n' > out.csv",
+                "artifact_contracts": [
+                    {"path": "out.csv", "format": "csv", "columns": ["a", "b"]}
+                ],
+            },
+            ctx,
+        )
+        assert r.is_error is True
+        assert "inconsistent column counts at lines 2" in str(r.content)
+
 
 class TestHostIsNotTouched:
     async def test_nothing_lands_on_the_host_cwd(self, ctx, sandbox, tmp_path, monkeypatch):

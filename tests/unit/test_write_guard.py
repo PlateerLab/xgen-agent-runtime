@@ -17,7 +17,8 @@ from types import SimpleNamespace
 
 
 
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.stages.s10_tool.state_mutation import apply_state_mutations
+from xgen_agent_runtime.tools.base import ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in._file_witness import (
     MAX_ENTRIES,
     WITNESSED_KEY,
@@ -41,6 +42,9 @@ def _run(tool, payload, ctx):
 
 
 class TestLedger:
+    def test_uses_an_allowed_executor_namespace(self):
+        assert WITNESSED_KEY == "executor.file_witnessed"
+
     def test_records_both_spellings(self):
         view = SimpleNamespace(shared={})
         mut = witnessed_mutation(view, "a.txt", "/abs/a.txt")
@@ -58,6 +62,23 @@ class TestLedger:
 
     def test_unknown_state_view_is_not_witnessed(self):
         assert is_witnessed(None, "/a") is False
+
+    def test_reads_the_legacy_key_but_migrates_on_write(self):
+        view = SimpleNamespace(shared={"file.witnessed": ["old.txt"]})
+        assert is_witnessed(view, "old.txt") is True
+        mutation = witnessed_mutation(view, "new.txt")
+        assert mutation == {WITNESSED_KEY: ["old.txt", "new.txt"]}
+
+    def test_stage_ten_accepts_the_witness_mutation(self):
+        shared: dict = {}
+        mutation = witnessed_mutation(SimpleNamespace(shared=shared), "a.txt")
+        applied = apply_state_mutations(
+            ToolResult(content="read", state_mutations=mutation),
+            shared,
+            tool_name="Read",
+        )
+        assert applied == {WITNESSED_KEY: ["a.txt"]}
+        assert shared == applied
 
 
 class TestWriteGuard:

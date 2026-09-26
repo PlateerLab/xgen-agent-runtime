@@ -114,6 +114,7 @@ class AgentTurnExecutor:
         )
         from xgen_agent_runtime.host.tools import adapt_tools
         from xgen_agent_runtime import PipelineState
+        from xgen_agent_runtime.core.shared_keys import SharedKeys
 
         turn_input = TurnInput.from_raw(kwargs.get("text"))
         text = turn_input.text
@@ -924,16 +925,76 @@ class AgentTurnExecutor:
                         _codex_wf,
                     )
 
+            # ── 작은 워크스페이스 fast path (관리자/노드 opt-in) ──────────
+            # 전체 입력을 확실히 실을 수 있을 때만 탐색 왕복을 없앤다. 과제명·확장자·
+            # 업무 용어는 보지 않고 크기/파일·디렉터리 수/UTF-8/명시적 경로 참조만 본다.
+            # 실패하거나 애매하면 기존 agent loop 로 돌아가며, CLI 백엔드는 자기
+            # 실행 루프를 소유하므로 이 경로를 타지 않는다.
+            from xgen_agent_runtime.host.workspace_fast_path import (
+                WORKSPACE_FAST_PATH_SETTING,
+                flag_enabled,
+                prepare_workspace_fast_path,
+                register_snapshot_witnesses,
+            )
+
+            _fast_path_requested = flag_enabled(kwargs.get("enable_workspace_fast_path"))
+            if not _fast_path_requested:
+                _fast_path_requested = host.setting_truthy(WORKSPACE_FAST_PATH_SETTING)
+            _fast_path = None
+            _fast_path_original_text = text
+            _fast_path_reason = "disabled"
+            if (
+                _sdk_tools
+                and _fast_path_requested
+                and run_tool_context is not None
+                and registry is not None
+                and registry.get("Bash") is not None
+            ):
+                import asyncio as _asyncio
+
+                try:
+                    _fast_path = _asyncio.run(
+                        prepare_workspace_fast_path(
+                            text,
+                            turn_input.attachments,
+                            run_tool_context,
+                            enabled=True,
+                        )
+                    )
+                    if _fast_path.active:
+                        text = _fast_path.text
+                        _fast_path_reason = "eligible"
+                    else:
+                        _fast_path_reason = _fast_path.reason
+                        logger.info(
+                            "agents/geny: workspace fast path 폴백 (%s)",
+                            _fast_path.reason,
+                        )
+                except Exception:  # noqa: BLE001 — 최적화 실패는 기존 루프로 폴백
+                    _fast_path_reason = "preparation_error"
+                    logger.warning("agents/geny: workspace fast path 준비 실패", exc_info=True)
+            elif _fast_path_requested:
+                if not _sdk_tools:
+                    _fast_path_reason = "unsupported_backend"
+                elif run_tool_context is None:
+                    _fast_path_reason = "workspace_unavailable"
+                else:
+                    _fast_path_reason = "bash_unavailable"
+
             # ── 요청에 이름이 나온 작업 폴더 파일 붙이기 (host/referenced_files.py) ──
             # 파일을 하나씩 Read 하는 왕복을 없앤다. RAG 블록과 같은 자리(사용자 턴)에 싣고,
             # 예산 맞추기가 함께 자를 수 있게 rag_block 에 합친다. 끝까지 실은 파일은
             # "읽은 파일" 장부에 올려 바로 Edit/Write 할 수 있게 한다.
-            if _sdk_tools and str(
-                host.setting("GENY_PREFETCH_REFERENCED_FILES", "1")
-            ).strip() not in (
-                "0",
-                "false",
-                "off",
+            # 빠른 경로가 열리면 작업 폴더 전체가 이미 실렸다 — 따로 붙이지 않는다.
+            if (
+                _sdk_tools
+                and not (_fast_path is not None and _fast_path.active)
+                and str(host.setting("GENY_PREFETCH_REFERENCED_FILES", "1")).strip()
+                not in (
+                    "0",
+                    "false",
+                    "off",
+                )
             ):
                 try:
                     import asyncio as _asyncio
@@ -1001,13 +1062,48 @@ class AgentTurnExecutor:
                         reserved_tokens=3_000 if memory_provider is not None else 0,
                     )
                     if fit.clamped:
-                        text, rag_block, clamped = fit.text, fit.rag_block, True
-                        logger.warning(
-                            "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
-                            fit.window,
-                            fit.budget,
-                            fit.total_before,
-                        )
+                        # A partial snapshot is not a snapshot. If budgeting
+                        # trims any of it, recompute from the original request
+                        # and keep the normal agent loop/witness semantics.
+                        if _fast_path is not None and _fast_path.active:
+                            _fast_path = None
+                            _fast_path_reason = "context_budget"
+                            fit = fit_input_to_budget(
+                                text=_fast_path_original_text,
+                                rag_block=rag_block,
+                                system_prompt=system_prompt,
+                                history=state.messages,
+                                registry=registry,
+                                provider=provider,
+                                model=model,
+                                max_tokens=max_tokens_val,
+                                window=budget_window,
+                                reserved_tokens=(3_000 if memory_provider is not None else 0),
+                            )
+                            logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
+                        text, rag_block, clamped = fit.text, fit.rag_block, fit.clamped
+                        if fit.clamped:
+                            logger.warning(
+                                "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
+                                fit.window,
+                                fit.budget,
+                                fit.total_before,
+                            )
+
+            if _fast_path is not None and _fast_path.active:
+                register_snapshot_witnesses(state, _fast_path)
+                logger.info(
+                    "agents/geny: workspace fast path 활성 (files=%d bytes=%d)",
+                    _fast_path.file_count,
+                    _fast_path.total_bytes,
+                )
+            if _fast_path_requested:
+                state.shared[SharedKeys.WORKSPACE_FAST_PATH] = {
+                    "active": bool(_fast_path is not None and _fast_path.active),
+                    "reason": _fast_path_reason,
+                    "file_count": _fast_path.file_count if _fast_path is not None else 0,
+                    "total_bytes": _fast_path.total_bytes if _fast_path is not None else 0,
+                }
 
             user_text = f"{text}\n\n{rag_block}" if rag_block else text
             # 첨부 경로는 **여기서** 절대 경로가 된다. 파일 도구는 절대 경로를 요구하는데
