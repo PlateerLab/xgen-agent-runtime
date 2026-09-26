@@ -38,6 +38,28 @@ def test_disabled_fast_path_does_not_touch_the_filesystem() -> None:
     assert plan.reason == "disabled"
 
 
+class _UserPcSandbox:
+    """커넥터 로컬 동기화 — 작업 공간이 사용자 PC 다. 건드리면 실패한다."""
+
+    is_connector_local = True
+
+    def __getattr__(self, name):
+        raise AssertionError(f"PC 작업 공간을 건드렸다: {name}")
+
+
+def test_user_pc_workspace_never_takes_the_fast_path(tmp_path) -> None:
+    """PC 모드는 측정하지 않은 경로다 — 스냅샷도 찍지 않고 원래 루프로 간다."""
+    (tmp_path / "notes.md").write_text("x", encoding="utf-8")
+    context = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    context.sandbox = _UserPcSandbox()
+    plan = asyncio.run(
+        prepare_workspace_fast_path(f"{tmp_path}/notes.md 고쳐 줘", (), context, enabled=True)
+    )
+    assert plan.active is False
+    assert plan.reason == "connector_local"
+    assert plan.text == f"{tmp_path}/notes.md 고쳐 줘"
+
+
 def test_small_complete_workspace_with_explicit_root_is_injected(tmp_path) -> None:
     (tmp_path / "INPUT").write_text("alpha", encoding="utf-8")
     (tmp_path / "data.oddity").write_text("beta", encoding="utf-8")

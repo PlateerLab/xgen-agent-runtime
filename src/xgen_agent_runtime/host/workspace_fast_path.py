@@ -154,6 +154,12 @@ async def prepare_workspace_fast_path(
         return WorkspaceFastPath(text=text, active=False, reason="disabled")
     if context is None:
         return WorkspaceFastPath(text=text, active=False, reason="workspace_unavailable")
+    # 작업 공간이 사용자 PC 인 모드(커넥터 로컬 동기화)는 빠른 경로에 넣지 않는다. 이 경로는
+    # 서버 sandbox 에서만 측정했다 — PC 에서는 스냅샷이 원격 왕복(python3 이 PC 에 있어야 한다)이고,
+    # "Bash 한 번에 다 하라" 는 지시가 사용자 PC 에서 돈다. 요청 파일 첨부(referenced_files)도 같은
+    # 이유로 이 모드를 건너뛴다. PC 모드에서 따로 측정하기 전까지는 원래 루프.
+    if getattr(getattr(context, "sandbox", None), "is_connector_local", False):
+        return WorkspaceFastPath(text=text, active=False, reason="connector_local")
 
     fs = tool_fs(context)
     try:
