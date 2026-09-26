@@ -447,6 +447,17 @@ def _schema_instruction(schema: Dict[str, Any]) -> str:
     )
 
 
+def _system_builder(system: str) -> Any:
+    """기본 시스템 프롬프트 + 현재 날짜(volatile)."""
+    from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
+        ComposablePromptBuilder,
+        CustomBlock,
+        DateTimeBlock,
+    )
+
+    return ComposablePromptBuilder(blocks=[CustomBlock("base", system), DateTimeBlock()])
+
+
 def build_pipeline(
     *,
     name: str,
@@ -580,7 +591,10 @@ def build_pipeline(
         # 없음)가 유령 검증에 죽지 않도록 기본 아티팩트로 고정한다.
         .with_artifact("s06_api", "default")
         .with_model(model, **model_opts)
-        .with_system(prompt=system)
+        # 현재 날짜·시각(DateTimeBlock, volatile → 캐시 접두 밖 턴 맥락)을 싣는다. 없으면 모델은 오늘을
+        # 모른 채 "다음 주 화요일" 같은 요청을 받는다(2026-09-26 dev 실사용 점검: 메일 초안이 날짜를 비워
+        # 두고 "6월 12일" 같은 예시를 들었다). 메모리 배선(아래)은 같은 블록을 포함한 빌더로 교체한다.
+        .with_system(prompt=system, builder=_system_builder(system))
         .with_loop(max_turns=int(max_iterations))
     )
     if enable_prompt_cache:
@@ -718,6 +732,7 @@ def build_pipeline(
             from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
                 ComposablePromptBuilder,
                 CustomBlock,
+                DateTimeBlock,
                 PinnedFactsBlock,
                 RetrievedMemoryBlock,
             )
@@ -730,6 +745,7 @@ def build_pipeline(
                     blocks=[
                         CustomBlock("base", system),
                         PinnedFactsBlock(),
+                        DateTimeBlock(),
                         RetrievedMemoryBlock(),
                     ]
                 ),

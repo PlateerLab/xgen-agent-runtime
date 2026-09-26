@@ -338,6 +338,24 @@ def snapshot_files(req):
     return result
 
 
+def _looks_binary(target):
+    """앞 8KiB 로 텍스트가 아닌 파일인지 본다 — NUL 이 있거나 UTF-8 로 풀리지 않으면 바이너리."""
+    import codecs
+
+    try:
+        with open(target, "rb") as stream:
+            head = stream.read(8192)
+    except OSError:
+        return False
+    if b"\x00" in head:
+        return True
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=False)
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
 def read_texts(req):
     """Read only explicitly named UTF-8 files under one bounded workspace."""
     base = Path(req["base"])
@@ -366,6 +384,7 @@ def read_texts(req):
         }
 
     entries = []
+    skipped = []
     total_bytes = 0
     for relative in paths:
         target = base / relative
@@ -404,6 +423,13 @@ def read_texts(req):
                 "path": relative,
                 "files": [],
             }
+        # 텍스트가 아닌 파일(xlsx·docx·이미지 등)은 읽기 전체를 실패시키지 않고 그 파일만 건너뛴다 —
+        # 호출자(산출물 계약)가 "검사 대상 아님" 으로 알린다. 예전에는 xlsx 하나 때문에 같이 적은
+        # CSV 까지 검사되지 않고 실패로 돌아왔다(2026-09-26 dev 실사용 점검). 앞부분만 보고 먼저
+        # 판정하므로 큰 바이너리도 용량 예산을 쓰지 않는다.
+        if _looks_binary(target):
+            skipped.append({"path": lexical.as_posix(), "reason": "non_text_input"})
+            continue
         total_bytes += size
         if total_bytes > max_bytes:
             return {
@@ -434,24 +460,14 @@ def read_texts(req):
                 "total_bytes": actual_total,
                 "files": [],
             }
-        if b"\x00" in raw:
-            return {
-                "ok": True,
-                "eligible": False,
-                "reason": "non_text_input",
-                "path": relative,
-                "files": [],
-            }
         try:
-            content = raw.decode("utf-8")
+            content = raw.decode("utf-8") if b"\x00" not in raw else None
         except UnicodeDecodeError:
-            return {
-                "ok": True,
-                "eligible": False,
-                "reason": "non_text_input",
-                "path": relative,
-                "files": [],
-            }
+            content = None
+        if content is None:
+            skipped.append({"path": lexical.as_posix(), "reason": "non_text_input"})
+            total_bytes -= size
+            continue
         entries.append({"path": lexical.as_posix(), "bytes": len(raw), "content": content})
 
     result = {
@@ -461,6 +477,7 @@ def read_texts(req):
         "file_count": len(entries),
         "total_bytes": sum(entry["bytes"] for entry in entries),
         "files": entries,
+        "skipped": skipped,
     }
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > TEXT_CAP:
         return {
