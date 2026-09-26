@@ -4,6 +4,16 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.63.1] — 2026-09-26
+
+### Fixed — 작업 공간이 사용자 PC 인 모드(커넥터 로컬 동기화)는 빠른 경로에 넣지 않는다
+
+4.63.0 의 작은 작업 폴더 빠른 경로는 서버 sandbox 에서만 측정했다. 커넥터 로컬 동기화 모드에서는 스냅샷이
+사용자 PC 로 가는 원격 실행이고(PC 에 python3 필요), "Bash 한 번에 다 하라" 는 지시가 사용자 PC 에서 돈다.
+요청 파일 첨부(`referenced_files`)도 같은 이유로 이 모드를 건너뛴다. `prepare_workspace_fast_path` 가
+`sandbox.is_connector_local` 이면 파일을 건드리기 전에 `reason="connector_local"` 로 원래 루프에 보낸다.
+PC 모드에서 따로 측정하기 전까지 유지한다.
+
 ## [4.63.0] — 2026-09-26
 
 ### Added — 작은 작업 폴더 빠른 경로 (기본 꺼짐) + Bash 산출물 계약
