@@ -147,6 +147,177 @@ class TestContract:
         _run(fs.commit(produced, "결과물/보고서.pdf"))
         assert _run(fs.read_bytes("결과물/보고서.pdf")) == b"%PDF-1.7"
 
+    def test_bounded_snapshot_returns_the_same_structure(self, fs):
+        _run(fs.write_bytes("in/a", "안녕".encode()))
+        _run(fs.write_bytes("b.odd", b"x,y\n1,2\n"))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 8,
+                    "max_bytes": 32 * 1024,
+                    "max_dirs": 64,
+                }
+            )
+        )
+        assert result == {
+            "ok": True,
+            "eligible": True,
+            "reason": "eligible",
+            "file_count": 2,
+            "total_bytes": 14,
+            "files": [
+                {"path": "b.odd", "bytes": 8, "content": "x,y\n1,2\n"},
+                {"path": "in/a", "bytes": 6, "content": "안녕"},
+            ],
+        }
+
+    def test_bounded_snapshot_rejects_binary_input(self, fs):
+        _run(fs.write_bytes("input", b"a\x00b"))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 8,
+                    "max_bytes": 32 * 1024,
+                    "max_dirs": 64,
+                }
+            )
+        )
+        assert result["eligible"] is False
+        assert result["reason"] == "non_text_input"
+        assert result["files"] == []
+
+    def test_bounded_snapshot_rejects_before_returning_large_content(self, fs):
+        _run(fs.write_bytes("large", b"x" * 33))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 8,
+                    "max_bytes": 32,
+                    "max_dirs": 64,
+                }
+            )
+        )
+        assert result["eligible"] is False
+        assert result["reason"] == "workspace_over_budget"
+        assert result["files"] == []
+
+    def test_bounded_snapshot_rejects_more_than_the_file_cap(self, fs):
+        for index in range(3):
+            _run(fs.write_bytes(str(index), str(index).encode()))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 2,
+                    "max_bytes": 32 * 1024,
+                    "max_dirs": 64,
+                }
+            )
+        )
+        assert result["eligible"] is False
+        assert result["reason"] == "too_many_files"
+        assert result["files"] == []
+
+    def test_bounded_snapshot_does_not_hide_directories_by_name(self, fs):
+        _run(fs.write_bytes("input", b"x"))
+        _run(fs.write_bytes(".git/objects/metadata", b"kept"))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 8,
+                    "max_bytes": 32,
+                    "max_dirs": 64,
+                }
+            )
+        )
+        assert result["eligible"] is True
+        assert result["files"] == [
+            {"path": ".git/objects/metadata", "bytes": 4, "content": "kept"},
+            {"path": "input", "bytes": 1, "content": "x"},
+        ]
+
+    def test_bounded_snapshot_rejects_more_than_the_directory_cap(self, fs):
+        _run(fs.write_bytes("a/b/c/input", b"x"))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 8,
+                    "max_bytes": 32,
+                    "max_dirs": 2,
+                }
+            )
+        )
+        assert result["eligible"] is False
+        assert result["reason"] == "too_many_directories"
+        assert result["files"] == []
+
+    def test_bounded_snapshot_guards_the_serialized_runner_payload(self, fs):
+        _run(fs.write_bytes("control-text", b"\x01" * (32 * 1024)))
+        result = _run(
+            fs.search(
+                {
+                    "op": "snapshot",
+                    "base": fs.resolve("."),
+                    "max_files": 8,
+                    "max_bytes": 32 * 1024,
+                    "max_dirs": 64,
+                }
+            )
+        )
+        assert result["eligible"] is False
+        assert result["reason"] == "snapshot_encoding_over_budget"
+        assert result["files"] == []
+
+    def test_bounded_selected_text_read_ignores_unrelated_binary_files(self, fs):
+        _run(fs.write_bytes("out/result.csv", b"a,b\n1,2\n"))
+        _run(fs.write_bytes("cache/blob", b"\x00" * 1024))
+        result = _run(
+            fs.search(
+                {
+                    "op": "read_texts",
+                    "base": fs.resolve("."),
+                    "paths": ["out/result.csv"],
+                    "max_files": 8,
+                    "max_bytes": 32,
+                }
+            )
+        )
+        assert result == {
+            "ok": True,
+            "eligible": True,
+            "reason": "eligible",
+            "file_count": 1,
+            "total_bytes": 8,
+            "files": [{"path": "out/result.csv", "bytes": 8, "content": "a,b\n1,2\n"}],
+        }
+
+    def test_bounded_selected_text_read_rejects_workspace_escape(self, fs):
+        result = _run(
+            fs.search(
+                {
+                    "op": "read_texts",
+                    "base": fs.resolve("."),
+                    "paths": ["../outside"],
+                    "max_files": 8,
+                    "max_bytes": 32,
+                }
+            )
+        )
+        assert result["eligible"] is False
+        assert result["reason"] == "path_outside_workspace"
+        assert result["files"] == []
+
 
 # ── 러너만의 약속 ────────────────────────────────────────────────────
 
@@ -208,6 +379,31 @@ class TestRunnerOnly:
         assert _run(fs.read_bytes(str(shared / "a.txt"))) == b"x"
         with pytest.raises(FsAccessError):
             _run(fs.write_bytes(str(shared / "a.txt"), b"y"))
+
+
+def test_selected_text_does_not_follow_a_workspace_symlink_into_an_extra_root(tmp_path):
+    workspace = tmp_path / "workspace"
+    extra = tmp_path / "extra"
+    workspace.mkdir()
+    extra.mkdir()
+    (extra / "secret.txt").write_text("secret", encoding="utf-8")
+    (workspace / "linked").symlink_to(extra, target_is_directory=True)
+    fs = LocalFS(str(workspace), allowed_paths=[str(workspace), str(extra)])
+
+    result = _run(
+        fs.search(
+            {
+                "op": "read_texts",
+                "base": fs.resolve("."),
+                "paths": ["linked/secret.txt"],
+                "max_files": 8,
+                "max_bytes": 32,
+            }
+        )
+    )
+
+    assert result["eligible"] is False
+    assert result["reason"] == "path_outside_workspace"
 
 
 # ── 백엔드 선택은 한 곳 ──────────────────────────────────────────────

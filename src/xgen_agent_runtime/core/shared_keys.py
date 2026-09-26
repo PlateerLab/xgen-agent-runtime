@@ -52,6 +52,18 @@ class SharedKeys:
     """Map of ``(tool_name, input_hash) → PermissionDecision`` to avoid
     re-checking the matrix for identical inputs in the same turn."""
 
+    FILE_WITNESSED: Final = "executor.file_witnessed"
+    """Paths whose contents the agent has observed in this session.
+
+    File tools use this ledger to refuse blind overwrites of existing
+    content. It is executor state because Stage 10 owns applying tool
+    mutations; the canonical namespace prevents the mutation filter from
+    silently dropping it.
+    """
+
+    WORKSPACE_FAST_PATH: Final = "executor.workspace_fast_path"
+    """Latest small-workspace routing decision and structural metrics."""
+
     TOOL_REVIEW_FLAGS: Final = "executor.tool_review_flags"
     """List of annotations emitted by Stage 11 Tool Review (Phase 9)."""
 

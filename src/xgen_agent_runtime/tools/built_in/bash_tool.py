@@ -198,6 +198,58 @@ _MAX_TIMEOUT_MS = 600_000  # 10 minutes
 _MAX_OUTPUT = 100_000  # characters
 
 
+async def _finish_result(
+    *,
+    stdout: str,
+    stderr: str,
+    exit_code: int,
+    sandboxed: bool,
+    input: Dict[str, Any],
+    context: ToolContext,
+    stdout_total_bytes: int | None = None,
+    stderr_total_bytes: int | None = None,
+) -> ToolResult:
+    """Shape command output and enforce an optional artifact contract."""
+    if len(stdout) > _MAX_OUTPUT:
+        suffix = f", {stdout_total_bytes} bytes total" if stdout_total_bytes is not None else ""
+        stdout = stdout[:_MAX_OUTPUT] + f"\n\n... (truncated{suffix})"
+    if len(stderr) > _MAX_OUTPUT:
+        suffix = f", {stderr_total_bytes} bytes total" if stderr_total_bytes is not None else ""
+        stderr = stderr[:_MAX_OUTPUT] + f"\n\n... (truncated{suffix})"
+    parts = []
+    if stdout:
+        parts.append(stdout)
+    if stderr:
+        parts.append(f"STDERR:\n{stderr}")
+    if exit_code != 0:
+        parts.append(f"Exit code: {exit_code}")
+
+    metadata: Dict[str, Any] = {"exit_code": exit_code, "sandboxed": sandboxed}
+    if not sandboxed:
+        metadata["execution_environment"] = "host"
+    validation_failed = False
+    contracts = input.get("artifact_contracts")
+    if isinstance(contracts, list) and contracts:
+        from xgen_agent_runtime.tools.built_in._artifact_contract import (
+            validate_artifact_contracts,
+        )
+
+        report = await validate_artifact_contracts(contracts, context)
+        parts.append(report.message)
+        metadata["artifact_validation"] = report.metadata()
+        validation_failed = not report.ok
+
+    artifacts: Dict[str, Any] = {}
+    if "artifact_validation" in metadata:
+        artifacts["validated"] = metadata["artifact_validation"].get("checked", [])
+    return ToolResult(
+        content="\n".join(parts) if parts else "(no output)",
+        is_error=exit_code != 0 or validation_failed,
+        metadata=metadata,
+        artifacts=artifacts,
+    )
+
+
 class BashTool(Tool):
     """Execute a bash command and return stdout/stderr.
 
@@ -245,6 +297,56 @@ class BashTool(Tool):
                     "minimum": 1000,
                     "maximum": _MAX_TIMEOUT_MS,
                 },
+                "artifact_contracts": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "description": (
+                        "Optional deterministic checks run after a command. "
+                        "Use workspace-relative paths. The runtime reopens each output "
+                        "with a standard parser before Bash returns."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "path": {"type": "string"},
+                            "format": {"type": "string", "enum": ["text", "json", "csv"]},
+                            "columns": {"type": "array", "items": {"type": "string"}},
+                            "allowed_values": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "unique_by": {"type": "array", "items": {"type": "string"}},
+                            "exact_rows": {"type": "integer", "minimum": 0},
+                            "min_rows": {"type": "integer", "minimum": 0},
+                            "max_rows": {"type": "integer", "minimum": 0},
+                            "required_keys": {
+                                "type": "array",
+                                "description": (
+                                    "Keys required on a top-level JSON object or on every "
+                                    "object in a top-level JSON array."
+                                ),
+                                "items": {"type": "string"},
+                            },
+                            "array_lengths": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer", "minimum": 0},
+                            },
+                            "required_strings": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "forbidden_strings": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["path", "format"],
+                    },
+                },
             },
             "required": ["command"],
         }
@@ -279,21 +381,13 @@ class BashTool(Tool):
                 return ToolResult(content=f"Command timed out after {timeout_ms}ms", is_error=True)
             except Exception as e:  # noqa: BLE001
                 return ToolResult(content=f"Sandbox exec failed: {e}", is_error=True)
-            if len(stdout) > _MAX_OUTPUT:
-                stdout = stdout[:_MAX_OUTPUT] + "\n\n... (truncated)"
-            if len(stderr) > _MAX_OUTPUT:
-                stderr = stderr[:_MAX_OUTPUT] + "\n\n... (truncated)"
-            parts = []
-            if stdout:
-                parts.append(stdout)
-            if stderr:
-                parts.append(f"STDERR:\n{stderr}")
-            if exit_code != 0:
-                parts.append(f"Exit code: {exit_code}")
-            return ToolResult(
-                content="\n".join(parts) if parts else "(no output)",
-                is_error=exit_code != 0,
-                metadata={"exit_code": exit_code, "sandboxed": True},
+            return await _finish_result(
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=exit_code,
+                sandboxed=True,
+                input=input,
+                context=context,
             )
 
         # No sandbox attached — which of two very different situations is this?
@@ -368,24 +462,13 @@ class BashTool(Tool):
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         exit_code = proc.returncode or 0
 
-        # Truncate very large output
-        if len(stdout) > _MAX_OUTPUT:
-            stdout = stdout[:_MAX_OUTPUT] + f"\n\n... (truncated, {len(stdout_bytes)} bytes total)"
-        if len(stderr) > _MAX_OUTPUT:
-            stderr = stderr[:_MAX_OUTPUT] + f"\n\n... (truncated, {len(stderr_bytes)} bytes total)"
-
-        parts = []
-        if stdout:
-            parts.append(stdout)
-        if stderr:
-            parts.append(f"STDERR:\n{stderr}")
-        if exit_code != 0:
-            parts.append(f"Exit code: {exit_code}")
-
-        output = "\n".join(parts) if parts else "(no output)"
-
-        return ToolResult(
-            content=output,
-            is_error=exit_code != 0,
-            metadata={"exit_code": exit_code, "sandboxed": False, "execution_environment": "host"},
+        return await _finish_result(
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            sandboxed=False,
+            input=input,
+            context=context,
+            stdout_total_bytes=len(stdout_bytes),
+            stderr_total_bytes=len(stderr_bytes),
         )
