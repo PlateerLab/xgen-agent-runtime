@@ -1097,6 +1097,8 @@ class AgentTurnExecutor:
                     _fast_path.file_count,
                     _fast_path.total_bytes,
                 )
+            # 켜지 않은 턴은 판정을 지운다 — 재사용된 state 에 앞 턴 값이 남지 않게.
+            state.shared.pop(SharedKeys.WORKSPACE_FAST_PATH, None)
             if _fast_path_requested:
                 state.shared[SharedKeys.WORKSPACE_FAST_PATH] = {
                     "active": bool(_fast_path is not None and _fast_path.active),

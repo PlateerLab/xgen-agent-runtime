@@ -1002,7 +1002,10 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
 
         {"input_tokens": int, "output_tokens": int,
          "cache_read_tokens": int|None, "cache_creation_tokens": int|None,
-         "total_cost_usd": float|None, "model": str|None, "provider": str|None}
+         "total_cost_usd": float|None, "model": str|None, "provider": str|None,
+         "calls": int, "first_call_prompt_tokens": int, "max_call_prompt_tokens": int,
+         "harness": {"components": {name: int}, "fast_path": {...}}  # 있을 때만
+        }
 
     사용량이 전혀 기록되지 않은 턴(API 호출 0회 — 가드 거절·즉시 오류)은
     ``None`` — 호출자는 이때 usage 청크를 내지 않는다.
@@ -1046,7 +1049,9 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
         for u in calls
         if isinstance(u, TokenUsage)
     ]
-    return {
+    from xgen_agent_runtime.host.harness_components import harness_summary
+
+    usage: Dict[str, Any] = {
         "input_tokens": int(total.input_tokens),
         "output_tokens": int(total.output_tokens),
         "cache_read_tokens": int(total.cache_read_input_tokens),
@@ -1060,6 +1065,12 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
         "first_call_prompt_tokens": per_call_prompt[0] if per_call_prompt else 0,
         "max_call_prompt_tokens": max(per_call_prompt) if per_call_prompt else 0,
     }
+    # 이번 턴에 작동한 하네스 장치·빠른 경로 판정(있을 때만) — 호스트가 트레이스에 남겨
+    # 장치별 실사용 빈도를 기록만으로 센다.
+    harness = harness_summary(state)
+    if harness:
+        usage["harness"] = harness
+    return usage
 
 
 def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) -> bool:
