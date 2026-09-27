@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import xgen_agent_runtime.tools._xgeny_sandbox as sb_mod
+import xgen_agent_runtime.tools._geny_sandbox as sb_mod
 from xgen_agent_runtime.stages.s01_input.artifact.default.normalizers import MultimodalNormalizer
 from xgen_agent_runtime.tools.built_in.workspace_tools import (
     SandboxFetchTool,

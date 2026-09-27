@@ -105,7 +105,7 @@ async def hydrate_sandbox_images(
     import os
     import tempfile
 
-    from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
+    from xgen_agent_runtime.tools._geny_sandbox import sb_read_bytes
 
     if sandbox is None:
         return list(attachments or [])

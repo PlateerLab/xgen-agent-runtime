@@ -233,7 +233,7 @@ class ToolStage(Stage[Any, Any]):
             # so the built-in ``env`` tool reaches it through real dispatch
             # (not just direct calls). Without this it would see ``None``.
             environment=getattr(self._context, "environment", None),
-            # The agent's XGeny sandbox session. THIS is what makes Bash /
+            # The agent's Geny sandbox session. THIS is what makes Bash /
             # Read / Write / Edit / Glob / Grep run inside the agent's own
             # isolated sandbox instead of on the serving pod. The host
             # attaches it via ``attach_runtime(tool_context=...)``; if it is

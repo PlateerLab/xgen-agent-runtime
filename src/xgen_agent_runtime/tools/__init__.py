@@ -24,16 +24,16 @@ from xgen_agent_runtime.tools.providers import AdhocToolProvider
 from xgen_agent_runtime.tools.scope import ToolScope, ToolScopeRule, ToolScopeManager
 from xgen_agent_runtime.tools.sandbox import ToolSandbox, SandboxConfig, SandboxPolicy
 
-# XGeny sandbox primitives — the session an agent's code runs in. Public so
-# hosts can build sandboxed tools. ``_xgeny_sandbox`` only depends on stdlib, so
+# Geny sandbox primitives — the session an agent's code runs in. Public so
+# hosts can build sandboxed tools. ``_geny_sandbox`` only depends on stdlib, so
 # this import is cycle-safe (unlike importing the built_in package here).
 # ``SandboxExecTool`` itself lives in ``xgen_agent_runtime.tools.built_in`` to keep
 # this module free of the built-in import cycle.
-from xgen_agent_runtime.tools._xgeny_sandbox import (
+from xgen_agent_runtime.tools._geny_sandbox import (
     ExecResult,
     SandboxError,
     SandboxPathError,
-    XgenySandbox,
+    GenySandbox,
     sandbox_path,
     sandbox_readonly_roots,
     sandbox_root,
@@ -41,6 +41,9 @@ from xgen_agent_runtime.tools._xgeny_sandbox import (
     sb_run,
     sb_write_bytes,
 )
+
+#: 개명 전 이름(XGeny → Geny, 4.65.0). 호스트가 옛 이름으로 import 해도 같은 프로토콜이다.
+XgenySandbox = GenySandbox
 from xgen_agent_runtime.tools.plugin import (
     TOOL_ENTRY_POINT_GROUP,
     ToolPluginRegistry,
@@ -80,10 +83,11 @@ __all__ = [
     "ToolSandbox",
     "SandboxConfig",
     "SandboxPolicy",
-    # XGeny sandbox session — for sandboxed tools
+    # Geny sandbox session — for sandboxed tools
     "ExecResult",
     "SandboxError",
     "SandboxPathError",
+    "GenySandbox",
     "XgenySandbox",
     "sandbox_path",
     "sandbox_readonly_roots",

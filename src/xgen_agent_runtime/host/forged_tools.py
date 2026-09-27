@@ -227,7 +227,7 @@ def validate_spec(
 # 없으므로, 파드 로컬 JSON 이면 파드 A 에서 만든 도구가 파드 B 에서 보이지
 # 않는다 — 라운드로빈이라 **호출할 때마다 있다 없다 한다.**
 #
-# 테이블은 xgen-core 가 소유한다 (``xgeny_tool_specs``, APPLICATION_MODELS
+# 테이블은 xgen-core 가 소유한다 (``geny_tool_specs``, APPLICATION_MODELS
 # 단일 등록소). 여기서는 읽고 쓰기만 한다.
 
 # ── 실행 도구 ─────────────────────────────────────────────────────────
@@ -441,7 +441,7 @@ async def _run_in_sandbox(sandbox: Any, spec: "ForgedToolSpec", payload: bytes) 
     위치가 러너의 기본값에 달리고, 그 기본값이 바뀌는 날 "도구는 등록됐는데
     스크립트를 못 찾는다"가 된다 — 아무 로그도 그 이유를 말해 주지 않는다.
     """
-    from xgen_agent_runtime.tools._xgeny_sandbox import _cwd
+    from xgen_agent_runtime.tools._geny_sandbox import _cwd
 
     kwargs: Dict[str, Any] = {
         "stdin": payload,

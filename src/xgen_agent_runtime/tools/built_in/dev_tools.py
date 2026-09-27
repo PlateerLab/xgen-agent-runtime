@@ -148,7 +148,7 @@ class REPLTool(Tool):
         # its Bash uses). NEVER on the serving pod — that would run arbitrary
         # Python with the backend's full secret-bearing env.
         if context.sandbox is not None:
-            from xgen_agent_runtime.tools._xgeny_sandbox import sb_run
+            from xgen_agent_runtime.tools._geny_sandbox import sb_run
 
             command = f"python3 -c {shlex.quote(expr)}"
             try:

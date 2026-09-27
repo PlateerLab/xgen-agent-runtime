@@ -4,6 +4,21 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.65.0] — 2026-09-28
+
+### Changed — XGeny → Geny 개명(이름만, 옛 이름은 계속 쓸 수 있다)
+
+에이전트 이름을 Agent-Geny 로 통일한다. 문서·주석·로그·도구 설명의 "XGeny" 는 "Geny" 가 됐고, 코드 이름도 따라 바뀌었다.
+
+- `tools._xgeny_sandbox` → `tools._geny_sandbox`, `XgenySandbox` → `GenySandbox`.
+  옛 경로·이름은 **같은 모듈·같은 클래스를 가리키는 별칭**으로 남는다(호스트가 핀을 올리기 전에도 돈다).
+- 이미지 첨부 예산 env: `GENY_IMAGE_MAX_BYTES`·`GENY_TURN_IMAGE_MAX_BYTES`. 없으면 옛 `XGENY_*` 를 읽는다.
+- **바꾸지 않은 것**(데이터가 사는 주소): 워크스페이스 루트 `/xgeny/workspace`, 선언 파일 `.xgeny/python-env.json`.
+  기존 대화 기록·데스크톱 앱·인프라 마운트가 그 문자열로 찾아간다.
+
+검증
+- 새 테스트 3개(옛 모듈 경로가 같은 모듈, 옛 프로토콜 이름, 옛 env 이름).
+
 ## [4.64.0] — 2026-09-28
 
 ### Added — 턴 usage 에 하네스 장치 작동 요약(`harness`) — 장치별 실사용 빈도·빠른 경로 판정을 기록만으로

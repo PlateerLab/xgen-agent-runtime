@@ -3,7 +3,7 @@
 왜 필요한가
 -----------
 파일 도구는 두 곳에서 돈다. 호스트가 실행 세션(``ToolContext.sandbox``)을
-붙이면 **러너**에서, 아니면(라이브러리·``xgeny-cli``·테스트) **로컬**에서. 지금까지
+붙이면 **러너**에서, 아니면(라이브러리·``geny-cli``·테스트) **로컬**에서. 지금까지
 그 선택을 도구가 **각자** 했다 — 12개 모듈이 ``if context.sandbox is not None:``
 분기를 제각각 구현했고, 그 결과 같은 이름의 도구가 두 곳에서 다르게 동작했다:
 
@@ -190,10 +190,10 @@ class LocalFS:
 
 
 class RunnerFS:
-    """실행 세션(``XgenySandbox``) 위의 파일시스템.
+    """실행 세션(``GenySandbox``) 위의 파일시스템.
 
     읽기·쓰기는 세션의 1급 연산(``read_bytes``/``write_bytes``)을, 경로 가드는
-    :func:`~xgen_agent_runtime.tools._xgeny_sandbox.sandbox_path` 를 그대로 쓴다 —
+    :func:`~xgen_agent_runtime.tools._geny_sandbox.sandbox_path` 를 그대로 쓴다 —
     새 의미를 만들지 않고 흩어져 있던 것을 한 이름 아래 모은다. 커넥터(사용자 PC)도
     같은 프로토콜로 붙으므로 여기를 지난다.
     """
@@ -205,7 +205,7 @@ class RunnerFS:
         self.working_dir = working_dir or ""
 
     def resolve(self, path: str, *, write: bool = False) -> str:
-        from xgen_agent_runtime.tools._xgeny_sandbox import SandboxPathError, sandbox_path
+        from xgen_agent_runtime.tools._geny_sandbox import SandboxPathError, sandbox_path
 
         if not path:
             raise ValueError("file_path must not be empty")
@@ -269,7 +269,7 @@ class RunnerFS:
         """
         import json
 
-        from xgen_agent_runtime.tools._xgeny_sandbox import (
+        from xgen_agent_runtime.tools._geny_sandbox import (
             sandbox_extra_roots,
             sandbox_root,
         )
