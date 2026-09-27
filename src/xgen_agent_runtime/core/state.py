@@ -301,6 +301,9 @@ class PipelineState:
     _checkpoint_id: Optional[str] = field(default=None, repr=False)
     _is_continuation_slice: bool = field(default=False, repr=False)
     _accounted_turn_cost_usd: float = field(default=0.0, repr=False)
+    # 턴 단위 사건 수(type → 횟수). events 는 연속 슬라이스마다 비워지므로 턴 전체에서
+    # 하네스 장치가 몇 번 작동했는지는 여기서 센다 (host/harness_components.py).
+    _turn_event_counts: Dict[str, int] = field(default_factory=dict, repr=False)
     _context_compactor: Optional[Any] = field(default=None, repr=False, compare=False)
     _context_memory_provider: Optional[Any] = field(default=None, repr=False, compare=False)
 
@@ -396,6 +399,7 @@ class PipelineState:
         # into session_cost_usd at turn end by the pipeline.
         self.turn_token_usage = []
         self.total_cost_usd = 0.0
+        self._turn_event_counts = {}
         # Event log — per-turn to bound growth (run_stream re-emits
         # everything live; PipelineResult.events carries this turn's).
         self.events = []
@@ -504,6 +508,7 @@ class PipelineState:
             "data": data or {},
         }
         self.events.append(event_dict)
+        self._turn_event_counts[event_type] = self._turn_event_counts.get(event_type, 0) + 1
         self.updated_at = datetime.now(timezone.utc)
 
         # Forward into the pipeline event channel (2.2.0 unification).
