@@ -42,14 +42,15 @@ from xgen_agent_runtime.tools._geny_sandbox import (
     sb_write_bytes,
 )
 
-#: 개명 전 이름(XGeny → Geny, 4.65.0). 호스트가 옛 이름으로 import 해도 같은 프로토콜이다.
-XgenySandbox = GenySandbox
 from xgen_agent_runtime.tools.plugin import (
     TOOL_ENTRY_POINT_GROUP,
     ToolPluginRegistry,
     discover_tool_plugins,
     register_tool_plugins,
 )
+
+#: 개명 전 이름(XGeny → Geny, 4.65.0). 호스트가 옛 이름으로 import 해도 같은 프로토콜이다.
+XgenySandbox = GenySandbox
 
 __all__ = [
     # Base
