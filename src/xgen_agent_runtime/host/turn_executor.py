@@ -30,6 +30,7 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
+
 def _env_bytes(name: str, default: int) -> int:
     """``GENY_*`` 를 읽고, 없으면 개명 전 이름(``XGENY_*``)을 읽는다 — 배포에 남은 옛 설정을 살린다.
 
