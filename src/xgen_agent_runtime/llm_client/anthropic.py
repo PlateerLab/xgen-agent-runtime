@@ -600,11 +600,27 @@ class AnthropicClient(BaseClient):
                     )
                 )
             elif block.type == "thinking":
+                # 서명까지 그대로 되돌려 보내야 한다 — Anthropic 은 도구 루프에서 직전 assistant 의
+                # thinking 블록을 **수정 없이**(signature 포함) 요구한다. 빠뜨리면 다음 호출이
+                # 400 "thinking.signature: Field required" 로 거절돼 턴이 첫 도구 호출 뒤에 끝났다
+                # (dev 09-08~ claude-sonnet-5·opus-5 도구 턴 전부 모델 호출 1회·답 없음).
+                raw_thinking = {"type": "thinking", "thinking": block.thinking}
+                signature = getattr(block, "signature", None)
+                if signature:
+                    raw_thinking["signature"] = signature
                 content_blocks.append(
                     ContentBlock(
                         type="thinking",
                         thinking_text=block.thinking,
-                        raw={"type": "thinking", "thinking": block.thinking},
+                        raw=raw_thinking,
+                    )
+                )
+            elif block.type == "redacted_thinking":
+                # 안전상 가려진 추론 — 내용은 없지만 같은 이유로 그대로 되돌려 보내야 한다.
+                content_blocks.append(
+                    ContentBlock(
+                        type="redacted_thinking",
+                        raw={"type": "redacted_thinking", "data": getattr(block, "data", "")},
                     )
                 )
 
