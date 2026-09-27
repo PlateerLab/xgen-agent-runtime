@@ -4,6 +4,7 @@ from xgen_agent_runtime.session.session import Session
 from xgen_agent_runtime.session.manager import SessionManager
 from xgen_agent_runtime.session.freshness import FreshnessPolicy, FreshnessStatus
 from xgen_agent_runtime.session.persistence import FileSessionPersistence
+from xgen_agent_runtime.session.identity import CanonicalSessionIdentity, PlatformType
 
 __all__ = [
     "Session",
@@ -11,4 +12,6 @@ __all__ = [
     "FreshnessPolicy",
     "FreshnessStatus",
     "FileSessionPersistence",
+    "CanonicalSessionIdentity",
+    "PlatformType",
 ]
