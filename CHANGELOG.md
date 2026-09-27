@@ -4,6 +4,26 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.64.0] — 2026-09-28
+
+### Added — 턴 usage 에 하네스 장치 작동 요약(`harness`) — 장치별 실사용 빈도·빠른 경로 판정을 기록만으로
+
+가드·복구·검증·맥락 장치는 단계 코드에 흩어져 있어 "이 장치가 실사용에서 얼마나 자주 켜지나" 를 볼 곳이 없었고,
+작업 폴더 빠른 경로 판정은 `state.shared` 에만 있어 dev 에서 몇 턴이 탔는지 셀 수 없었다.
+
+- `host/harness_components.py` — 장치 10개(repeat_guard·second_machine·user_denied·message_repair·api_retry·
+  repeat_stop·turn_budget·completion_review·context_prune·context_compact)를 **이미 내는 사건**으로 묶은 목록.
+- `turn_usage()` 가 `harness: {"components": {이름: 횟수}, "fast_path": {active, reason, file_count, total_bytes}}` 를
+  싣는다(작동한 것만, 없으면 키 자체가 없다 — 기존 usage 소비자 shape 유지).
+- 사건 수는 `PipelineState._turn_event_counts`(비공개): `events` 는 연속 슬라이스마다 비워져 턴 전체를 못 센다.
+- 빠른 경로를 켜지 않은 턴은 판정 키를 지워 재사용 state 에 앞 턴 값이 남지 않게.
+
+검증
+- 새 테스트 4개(사건 목록 일치·슬라이스 넘어 턴 단위·빠른 경로 판정·usage 에 있을 때만). 전체 5690 통과.
+- 로컬 벤치(qwen3.8-27b, 69과제 ×2)·실사용 로컬 12과제 ×4 기록에 실제로 남는 것 확인
+  (예: 080 repeat_guard 6·repeat_stop 2·context_compact 1 / 실사용 빠른 경로 6/12 `eligible`).
+- 호스트(xgen-workflow)가 `agent_traces.metadata.harness` 에 기록한다(별도 MR).
+
 ## [4.63.2] — 2026-09-26
 
 ### Fixed — 산출물 계약이 헛돌게 만들던 세 가지 + 에이전트 턴이 오늘 날짜를 모르던 것
