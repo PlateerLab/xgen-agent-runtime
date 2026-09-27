@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from xgen_agent_runtime.session.identity import CanonicalSessionIdentity
+
 
 # ─────────────────────────────────────────────────────────────────
 # Capability + Permission primitives (new)
@@ -118,6 +120,8 @@ class ToolContext:
 
     Attributes:
         session_id: Unique session identifier.
+        canonical_identity: Server-issued account and Agent Session identity,
+            supplied only after host-side principal and ownership checks.
         working_dir: Working directory for file operations. Tools should
             resolve relative paths against this directory.
         storage_path: Session-specific storage directory (e.g. for logs,
@@ -181,6 +185,11 @@ class ToolContext:
     # Typed ``Any`` to avoid importing the registry from this base module.
     tool_registry: Optional[Any] = None
     extras: Dict[str, Any] = field(default_factory=dict)
+    # Appended to preserve positional construction of older ToolContext fields.
+    # Keep this separate from the local execution ID and model-facing bags.
+    canonical_identity: Optional[CanonicalSessionIdentity] = field(
+        default=None, repr=False, compare=False
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
