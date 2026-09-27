@@ -103,6 +103,10 @@ def _validate_text_constraints(
 def _json_pointer(document: Any, pointer: str) -> tuple[bool, Any]:
     if pointer == "":
         return True, document
+    # RFC 6901 에서 "/" 는 루트 객체의 "" 키다. 그런 키가 없으면 모델이 뜻한 것은 루트다 —
+    # 로컬 벤치 521실행 중 10과제 43실행이 루트 배열 개수를 "/" 로 적어 멀쩡한 산출물이 FAILED 였다.
+    if pointer == "/" and not (isinstance(document, dict) and "" in document):
+        return True, document
     if not pointer.startswith("/"):
         return False, None
     current = document
@@ -134,7 +138,17 @@ def _validate_json(
     if required_keys:
         if isinstance(document, dict):
             missing = [key for key in required_keys if key not in document]
-            if missing:
+            records = list(document.values())
+            if missing and records and all(isinstance(item, dict) for item in records):
+                # 이름 → 레코드 객체({"East": {...}, "West": {...}})도 레코드 모음이다 — 배열과 같이
+                # 레코드마다 본다. 최상위에서만 찾으면 키를 다 갖춘 산출물이 FAILED 였다(4과제 19실행).
+                for name, item in document.items():
+                    lacking = [key for key in required_keys if key not in item]
+                    if lacking:
+                        errors.append(
+                            f"{path}: JSON entry {name!r} is missing keys: {', '.join(lacking)}"
+                        )
+            elif missing:
                 errors.append(f"{path}: missing top-level JSON keys: {', '.join(missing)}")
         elif isinstance(document, list) and all(isinstance(item, dict) for item in document):
             for index, item in enumerate(document):
@@ -155,9 +169,10 @@ def _validate_json(
             found, value = _json_pointer(document, pointer)
             if not found:
                 errors.append(f"{path}: JSON Pointer not found: {pointer!r}")
-            elif not isinstance(value, list):
+            elif not isinstance(value, (list, dict)):
                 errors.append(f"{path}: JSON Pointer {pointer!r} does not select an array")
             elif len(value) != expected:
+                # 객체는 항목 수로 센다 — id → 값 매핑의 개수를 적는 경우가 흔하다(6과제).
                 notes.append(
                     f"{path}: {len(value)} items at {pointer!r} (contract said {expected}). {_COUNT_NOTE}"
                 )
