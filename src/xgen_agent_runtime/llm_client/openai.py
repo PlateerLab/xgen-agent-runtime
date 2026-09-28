@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
@@ -85,6 +86,28 @@ def _model_rejects_sampling_params(model: str) -> bool:
     ``temperature``/``top_p`` (same prefix table as the
     ``max_completion_tokens`` rename — the two quirks ship together)."""
     return _model_requires_max_completion_tokens(model)
+
+
+def _response_format_to_openai(rf: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """표준 response_format → OpenAI Chat Completions 형식.
+
+    표준형은 ``json_schema`` 에 스키마 자체를 담고(CLI 백엔드 계약과 같다), OpenAI 형식은
+    ``{"name": ..., "schema": ...}`` 로 감싼다. 이미 감싼 형태는 그대로 둔다. ``strict`` 는 넣지
+    않는다 — OpenAI 의 strict 는 모든 속성을 required 로 요구해 선택 필드가 있는 스키마를 거절한다.
+    """
+    kind = rf.get("type")
+    if kind == "json_object":
+        return {"type": "json_object"}
+    if kind != "json_schema":
+        return None
+    body = rf.get("json_schema")
+    if not isinstance(body, dict) or not body:
+        return None
+    if isinstance(body.get("schema"), dict) and body.get("name"):
+        return {"type": "json_schema", "json_schema": dict(body)}
+    name = str(body.get("title") or "response")
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64] or "response"
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": body}}
 
 
 class OpenAIClient(BaseClient):
@@ -416,6 +439,14 @@ class OpenAIClient(BaseClient):
             effort = canonical_thinking_to_openai(request.thinking)
             if effort:
                 kwargs["reasoning_effort"] = effort
+
+        # 구조화 출력 — 표준 요청({"type": "json_schema", "json_schema": <스키마>})을 OpenAI 전송 형식으로.
+        # 예전엔 전달하지 않아 스키마가 지시문에만 있었고, Qwen(vLLM) 은 키를 지어내 메모리 사실 추출이
+        # 매번 schema_mismatch 로 버려졌다(dev 60일: 메모리가 쌓인 Qwen 에이전트 59개 중 사실 장부 0개).
+        if request.response_format and self.capabilities.supports_structured_output:
+            wire = _response_format_to_openai(request.response_format)
+            if wire is not None:
+                kwargs["response_format"] = wire
 
         return kwargs
 
