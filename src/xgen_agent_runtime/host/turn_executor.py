@@ -27,6 +27,7 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
     default_prompt,
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
+from xgen_agent_runtime.host import local_folders as _local_folders
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
@@ -107,6 +108,17 @@ def _memory_block_for(host: Any, workflow_id: str, *, write_available: Optional[
         except Exception:  # noqa: BLE001 — 훅 실패는 예전 동작(쓰기 블록)
             write_available = True
     return MEMORY_PROMPT_BLOCK if write_available else MEMORY_READONLY_PROMPT_BLOCK
+
+
+def _local_device_platform(host: Any) -> Optional[str]:
+    """이번 턴 기기의 OS — 호스트가 알면(OPTIONAL 훅). 모르면 None(안내는 "device")."""
+    probe = getattr(host, "local_device_platform", None)
+    if not callable(probe):
+        return None
+    try:
+        return str(probe() or "") or None
+    except Exception:  # noqa: BLE001 — 이름 하나 때문에 턴을 깨지 않는다
+        return None
 
 
 class AgentTurnExecutor:
@@ -207,34 +219,62 @@ class AgentTurnExecutor:
                 registry = adapt_tools(
                     embedded_tools, result_sink=result_sink, registry=registry, core=True
                 )
-            # Connector-hosted Local MCP 도구 자동 주입 — 실행자(user_id)의 데스크톱 커넥터가
-            # 로컬 MCP 서버 도구를 노출하고 있으면 registry 에 core 로 합산한다(그래프 노드
-            # 없이 실행 시점 자동). 커넥터 미연결 시 빈 리스트 → no-op.
-            # ⚠ CLI 백엔드는 이 registry 를 못 본다 — 서버 CLI 브릿지가 자기 조립으로
-            # 커넥터 도구를 따로 광고한다.
-            if _sdk_tools:
-                try:
-                    # client_surface 게이트(host 내부): 대화 출처가 데스크톱 커넥터일
-                    # 때만 로컬 도구를 주입한다 (web 대화엔 커넥터가 연결돼 있어도 no-op).
-                    connector_tools = host.build_connector_mcp_tools(
-                        kwargs.get("user_id"), kwargs.get("client_surface")
+            # 사용자 기기(데스크톱·모바일 앱)가 올린 기기 도구 — 실행자(user_id)의 앱이
+            # 연결돼 있으면 그 카탈로그를 이번 턴 도구로 합산한다(그래프 노드 없이 실행 시점
+            # 자동). 앱 미연결 시 빈 리스트 → no-op.
+            #
+            # 폴더는 **대화에 붙는다**(local_folders). 새 앱은 매 턴 이 대화에 연결된 폴더를
+            # 보내고, 폴더 도구(파일·셸·열기…)는 폴더가 있을 때만 보인다 — 규칙은
+            # host.local_folders 한 곳이고 CLI 브리지(workflow)도 같은 함수를 쓴다.
+            # 옛 앱·웹(None)은 예전 규칙 그대로다.
+            #
+            # CLI 백엔드는 이 registry 를 못 본다(서버 CLI 브리지가 따로 광고한다) — 그래도
+            # 카탈로그는 읽는다: 이번 턴 안내가 "도구가 실제로 있는가" 를 알아야 한다.
+            _folders = _local_folders.parse_local_folders(kwargs.get("local_folders"))
+            _device_tool_names: List[str] = []
+            try:
+                # client_surface 게이트(host 내부): 대화 출처가 앱일 때만 기기 도구를
+                # 준다 (web 대화엔 앱이 연결돼 있어도 no-op).
+                connector_tools = host.build_connector_mcp_tools(
+                    kwargs.get("user_id"), kwargs.get("client_surface")
+                )
+                connector_tools = _local_folders.filter_device_tools(
+                    connector_tools or [], _folders
+                )
+                _device_tool_names = [getattr(t, "name", "") or "" for t in connector_tools]
+                if connector_tools and _sdk_tools:
+                    # 기기 도구도 계층을 지킨다 — 브라우저 조작 6종은 BrowserGuide 뒤에
+                    # 두고 기본 동사만 남긴다. 폴더가 연결된 대화의 폴더 도구는 첫 화면에
+                    # 바로 나간다(사용자가 폴더를 붙인 것 자체가 "내 파일을 다뤄라" 다).
+                    registry = adapt_tools(
+                        connector_tools,
+                        result_sink=result_sink,
+                        registry=registry,
+                        core=lambda name: (
+                            _turn_one(name)
+                            or _local_folders.folder_tool_is_turn_one(name, _folders)
+                        ),
                     )
-                    if connector_tools:
-                        # 커넥터 도구도 계층을 지킨다 — 브라우저 조작 6종은
-                        # BrowserGuide 뒤에 두고, 로컬 셸 같은 기본 동사만 남긴다.
-                        # (예전엔 전부 core 였다: 커넥터를 연결하는 순간 첫 턴
-                        #  표면이 두 배가 됐다.)
-                        registry = adapt_tools(
-                            connector_tools,
-                            result_sink=result_sink,
-                            registry=registry,
-                            core=_turn_one,
-                        )
-                        logger.info(
-                            "agents/geny: Connector MCP 도구 %d개 자동 주입", len(connector_tools)
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("agents/geny: Connector MCP 도구 주입 실패 (무시): %s", exc)
+                    logger.info(
+                        "agents/geny: 기기 도구 %d개 자동 주입 (연결 폴더 %s)",
+                        len(connector_tools),
+                        "-" if _folders is None else len(_folders),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("agents/geny: 기기 도구 주입 실패 (무시): %s", exc)
+            #: 이번 턴에 폴더 도구가 하나도 없는가 — 그러면 기록 속 옛 폴더 도구 호출을
+            #: 요청 사본에서 평문으로 바꾼다(없는 도구를 다시 부르거나 옛 경로를 믿지 않게).
+            _retire_device_calls = not any(
+                _local_folders.is_folder_tool(n) for n in _device_tool_names
+            )
+            _turn_notes: List[str] = []
+            _folder_note = _local_folders.turn_note(
+                _folders,
+                available_tools=_device_tool_names,
+                platform=_local_device_platform(host) if _folders is not None else None,
+            )
+            if _folder_note:
+                _turn_notes.append(_folder_note)
             if registry:
                 logger.info(
                     "agents/geny: %d tool(s) registered (%d deferred) from Tools/Context ports",
@@ -248,6 +288,10 @@ class AgentTurnExecutor:
             # text/rag 를 따로 잘라야 한다 (사용자 텍스트 최후 보존 원칙).
 
             state = PipelineState(session_id=interaction_id)
+            if _turn_notes:
+                state.shared[SharedKeys.TURN_NOTES] = _turn_notes
+            if _retire_device_calls:
+                state.shared[SharedKeys.RETIRED_TOOL_CALLS] = _local_folders.retired_calls_spec()
             history = history_messages(kwargs.get("memory"))
             if history:
                 state.messages = history
