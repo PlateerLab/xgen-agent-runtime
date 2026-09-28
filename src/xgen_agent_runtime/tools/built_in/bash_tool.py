@@ -166,8 +166,8 @@ _DEFAULT_TIMEOUT_MS = 120_000  # 2 minutes
 # session's shell isolation reaps the whole process namespace when the
 # command exits. Before this guard the agent would run
 # ``nohup npx serve … &``, wait out the timeout, and get a bare failure
-# (2026-09-18). The right door for a long-running server is the artifact
-# skill (ArtifactCreate/ArtifactPublish — the runner supervises the
+# (2026-09-18). The right door for a long-running server is the app
+# skill (AppCreate/AppPublish — the runner supervises the
 # process); for long batch work, run it in the foreground with a larger
 # timeout or use the job skill.
 _DETACH_RE = re.compile(
@@ -186,8 +186,8 @@ def _detached_process_reason(command: str) -> Optional[str]:
         "command: exec is request/response and the process namespace is reaped "
         "when the command exits, so the server or job would die immediately "
         "while this call waits out its timeout.\n"
-        "- To serve an application: use the artifact skill — ArtifactGuide, then "
-        "ArtifactCreate / ArtifactPublish. The runner supervises that process and "
+        "- To serve an application: use the app skill — AppGuide, then "
+        "AppCreate / AppPublish. The runner supervises that process and "
         "gives it an address.\n"
         "- To run long work: run it in the foreground with a larger `timeout`, or "
         "use the job skill (JobGuide) for work that must outlive this turn."

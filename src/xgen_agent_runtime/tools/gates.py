@@ -22,8 +22,9 @@ LangChain 도구는 ``metadata["opens_family"]`` 를 달아야 했다. 빠뜨려
 가족은 이름 규칙이다
 --------------------
 목록을 두 저장소에 나눠 적지 않으려고, 가족은 대부분 **이름 규칙**으로 적는다
-(``Browser*``, ``Doc*``, ``Job*`` …). workflow 가 가진 가족(작업·아티팩트)도 이름 규칙이라
-여기서 따로 목록을 들고 있을 필요가 없다. 그리고 문과 방은 **같은 MCP 접두**를 가져야 같은
+(``Browser*``, ``Doc*``, ``Job*`` …). workflow 가 가진 작업 가족도 이름 규칙이라
+여기서 따로 목록을 들고 있을 필요가 없다. 앱 가족(``App*``)은 **이름 목록**으로 적는다 —
+``App`` 으로 시작하는 이름은 사용자가 만든 도구(``AppendRows`` 같은)와 너무 쉽게 겹친다. 그리고 문과 방은 **같은 MCP 접두**를 가져야 같은
 가족이다 — 커넥터의 ``mcp_local_BrowserGuide`` 는 ``mcp_local_Browser*`` 를 열고, 내장
 ``BrowserGuide`` 는 접두 없는 ``Browser*`` 를 연다. 남의 MCP 서버 도구가 우리 규칙에
 우연히 맞아도 접두가 달라 섞이지 않는다.
@@ -105,7 +106,9 @@ GATES: Dict[str, Gate] = {
     for g in (
         Gate("BrowserGuide", _starts("Browser", "BrowserGuide")),
         Gate("JobGuide", _starts("Job", "JobGuide")),
-        Gate("ArtifactGuide", _starts("Artifact", "ArtifactGuide")),
+        # 앱(에이전트가 만들어 띄우는 웹 앱) — 2026-09-28 Artifact* 에서 이름을 바꿨다.
+        # 옛 이름으로 부르면 tools.renamed 가 새 이름으로 보낸다.
+        Gate("AppGuide", _named("AppCreate", "AppPublish", "AppStatus", "AppList", "AppDelete")),
         Gate("SshListServers", _named("SshRun", "SshUpload", "SshDownload")),
         Gate(
             "DelegationGuide",

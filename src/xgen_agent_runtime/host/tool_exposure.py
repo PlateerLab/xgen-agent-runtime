@@ -101,12 +101,12 @@ TURN_ONE_TOOLS = frozenset(
         "memory_categories",
         # 4. 영구 작업 — JobSchedule/JobList/JobCancel 은 이 문 뒤에.
         "JobGuide",
-        # 4-b. 아티팩트(사용자가 여는 앱·화면) — ArtifactCreate/Publish/Status/List/Delete
+        # 4-b. 앱(사용자가 여는 웹 앱) — AppCreate/Publish/Status/List/Delete
         #      는 이 문 뒤에. 만든 것을 대화에 찍는 대신 화면으로 내놓는 길이라, 문이
         #      안 보이면 그런 길이 있다는 것 자체를 모른다. "도구를 만들어 달라" 는 이
         #      문이 아니라 6(SelfExtendGuide → ForgeTool)의 몫이다 — 두 문의 설명이 그
         #      경계를 말한다(tests/unit/test_tool_request_routing.py).
-        "ArtifactGuide",
+        "AppGuide",
         # 5. 위임 — DelegateTask/SubAgent*/Task* 는 이 문 뒤에.
         "DelegationGuide",
         # 6. 자기확장 — 제작(ForgeTool·ListForgedTools·DeleteForgedTool)·환경

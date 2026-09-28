@@ -598,7 +598,7 @@ class ForgeTool:
         #
         # 첫 문장이 "make a tool" 이어야 하는 이유: 이 설명은 문(SelfExtendGuide) 뒤에서도,
         # ToolSearch 결과 줄에서도 읽힌다. "Register a script" 로 시작하던 때는
-        # ToolSearch("create tool") 이 이 도구를 못 찾고 ArtifactGuide 를 돌려줬고,
+        # ToolSearch("create tool") 이 이 도구를 못 찾고 ArtifactGuide(지금의 AppGuide)를 돌려줬고,
         # ToolSearch("make tool") 은 "이 능력은 없다" 로 답했다(검색은 모든 낱말이 맞아야 한다).
         return (
             "Make (create, build) a TOOL — what the user means by making or adding a tool: "

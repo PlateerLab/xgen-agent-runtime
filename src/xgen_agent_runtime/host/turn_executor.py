@@ -353,7 +353,7 @@ class AgentTurnExecutor:
             kwargs["_job_tools"] = _job_tools
             if _job_tools:
                 system_prompt = system_prompt + "\n\n" + host.jobs_prompt_block()
-            # 호스트가 소유한 스킬 도구들(아티팩트 등). Jobs 처럼 스킬이 늘 때마다
+            # 호스트가 소유한 스킬 도구들(앱 등). Jobs 처럼 스킬이 늘 때마다
             # 프로토콜을 넓히지 않으려고 일반 훅 하나로 받는다 — 계층 판정은
             # 여기서 이름으로만 한다(TURN_ONE_TOOLS).
             _host_skill_tools: list = []
@@ -503,7 +503,7 @@ class AgentTurnExecutor:
                     for _jt in list(_job_tools) + list(_host_skill_tools):
                         if registry.get(_jt.name) is None:
                             # 게이트웨이만 첫 턴에 선다 — 멤버는 그 문 뒤다
-                            # (JobGuide→Job*, ArtifactGuide→Artifact*).
+                            # (JobGuide→Job*, AppGuide→App*).
                             registry.register(_jt, core=_turn_one(_jt.name))
                     if bt_summary["tools"]:
                         # 영속 workspace (Drive형 동기화의 전제): workflow(에이전트)

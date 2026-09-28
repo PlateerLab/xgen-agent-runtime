@@ -2,14 +2,14 @@
 
 무엇이 있었나 (2026-09-09 실측)
 --------------------------------
-에이전트가 아티팩트를 만들다가 CLI **번들 스킬**(dataviz)을 열었다. 그 스킬은
+에이전트가 앱을 만들다가 CLI **번들 스킬**(dataviz)을 열었다. 그 스킬은
 "차트를 그리기 전에 references/palette.md 를 먼저 읽어라" 고 말했고, 그 파일은
 **CLI 가 도는 파드의 /tmp** 에 있었다. 우리 Read 는 러너 샌드박스로 가므로 닿을
 수 없었고, 경로 가드가 정확히 막았다.
 
 파일 실패는 첫 증상일 뿐이었다. 그 스킬들은 **다른 제품**을 설명한다 — Claude
-Code 의 Artifact(HTML·window.claude.*·cdnjs). 우리 아티팩트는 React +
-ArtifactSave + xgen.file() 이다. 즉 에이전트가 없는 시스템의 사용법을 따랐다.
+Code 의 Artifact(HTML·window.claude.*·cdnjs). 우리 것은 AppCreate/AppPublish 로
+세우는 FastAPI + React 앱이다. 즉 에이전트가 없는 시스템의 사용법을 따랐다.
 
 왜 새고 있었나
 --------------

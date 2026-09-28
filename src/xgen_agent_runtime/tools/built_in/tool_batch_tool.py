@@ -33,6 +33,7 @@ import uuid
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.renamed import current_name
 
 TOOL_BATCH_NAME = "ToolBatch"
 
@@ -134,6 +135,11 @@ class ToolBatchTool(Tool):
                 content="ERROR unavailable: no tool registry bound to this call.", is_error=True
             )
         target = registry.get(tool_name)
+        if target is None:
+            # 이름을 바꾼 도구의 옛 이름이면 지금 이름으로(tools.renamed).
+            renamed = current_name(tool_name, lambda n: registry.get(n) is not None)
+            if renamed:
+                tool_name, target = renamed, registry.get(renamed)
         if target is None:
             return ToolResult(
                 content=f"ERROR unknown_tool: '{tool_name}' is not registered. Use ToolSearch to find the exact name.",

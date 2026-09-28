@@ -31,6 +31,7 @@ from xgen_agent_runtime.tools.errors import (
     validate_input,
 )
 from xgen_agent_runtime.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.renamed import current_name
 from xgen_agent_runtime.stages.s10_tool.interface import ToolRouter
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,11 @@ class RegistryRouter(ToolRouter):
         self, tool_name: str, tool_input: Dict[str, Any], context: ToolContext
     ) -> ToolResult:
         tool = self._registry.get(tool_name)
+        if tool is None:
+            # 이름을 바꾼 도구를 옛 이름으로 불렀으면 지금 이름으로 보낸다(tools.renamed).
+            renamed = current_name(tool_name, lambda n: self._registry.get(n) is not None)
+            if renamed:
+                tool_name, tool = renamed, self._registry.get(renamed)
         if tool is None:
             return make_error_result(
                 ToolError.unknown_tool(tool_name, known=self._registry.list_names())
