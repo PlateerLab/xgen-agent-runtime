@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.66.0] — 2026-09-28
+
+### Changed — 아티팩트 → 앱 (도구 이름·안내)
+
+에이전트가 만들어 띄우는 웹 앱 기능의 이름을 "앱" 으로 통일한다(xgen-workflow 가 도구를 정의한다).
+
+- 문 `ArtifactGuide` → `AppGuide`, 가족 `AppCreate`·`AppPublish`·`AppStatus`·`AppList`·`AppDelete`.
+  턴-1 목록·Bash 백그라운드 안내·SelfExtendGuide 안내가 새 이름을 말한다.
+- 문의 가족을 **이름 목록**으로 적는다(`_named`). 예전 규칙 `startswith("Artifact")` 를 그대로 `App` 으로 옮기면
+  사용자가 만든 `AppendRows` 같은 도구가 앱 가족으로 끌려 들어간다.
+- `tools.renamed`: 옛 이름(`ArtifactCreate` 등, MCP 접두 포함)으로 부르면 라우터와 ToolBatch 가 지금 이름의 도구를
+  돌린다. 표면(도구 목록)에는 새 이름만 있다. 되풀이되는 기록·에이전트 기억이 옛 이름을 부르는 경우를 위한 것이다.
+
+검증
+- 새 테스트 `tests/unit/test_app_rename.py` 6개(문의 가족, 접두, 옛 이름 전달, 라우터·ToolBatch).
+
 ## [4.65.1] — 2026-09-28
 
 ### Fixed — Claude 5 계열(SDK 경로)이 도구 한 번 뒤 끝나거나 빈 턴으로 끝나던 것

@@ -1,8 +1,8 @@
-"""'도구를 만들어 달라' 는 요청은 ForgeTool 로 간다 — 앱(아티팩트)으로 새지 않는다.
+"""'도구를 만들어 달라' 는 요청은 ForgeTool 로 간다 — 앱으로 새지 않는다.
 
 실측(2026-09-24, dev 턴-1 표면을 그대로 재현한 claude CLI + MCP 스텁, sonnet):
 "요약 도구", "환율 계산 도구", "주식 시세 툴", "PDF 표 → 엑셀 도구" 처럼 **사람이 쓸 도구**를
-시키면 도구 요청 10개 중 5개가 ArtifactGuide → ArtifactCreate 로 갔다. 입구에 선 두 문 중
+시키면 도구 요청 10개 중 5개가 ArtifactGuide → ArtifactCreate(지금의 AppGuide → AppCreate)로 갔다. 입구에 선 두 문 중
 ArtifactGuide 는 "사람이 OPEN 해서 쓰는 것" 을, SelfExtendGuide 는 "extend yourself" 를
 말했다. 사람이 쓸 도구는 앞쪽으로 읽혔다.
 

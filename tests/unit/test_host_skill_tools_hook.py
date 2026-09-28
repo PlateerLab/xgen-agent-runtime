@@ -18,6 +18,6 @@ def test_기본_구현은_빈_목록이다():
 def test_호스트가_얹으면_그대로_온다():
     class _NewHost:
         def build_host_skill_tools(self, **kwargs):
-            return [("ArtifactGuide", kwargs.get("workflow_id"))]
+            return [("AppGuide", kwargs.get("workflow_id"))]
 
-    assert _NewHost().build_host_skill_tools(workflow_id="wf-1") == [("ArtifactGuide", "wf-1")]
+    assert _NewHost().build_host_skill_tools(workflow_id="wf-1") == [("AppGuide", "wf-1")]

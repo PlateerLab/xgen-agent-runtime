@@ -129,11 +129,11 @@ _CLI_SESSION_SCHED_TOOLS = ("CronCreate", "CronDelete", "CronList", "ScheduleWak
 #: 그중 12종만 막고 있었다. 15종이 새고 있었고, 우리 목록의 6종은 이미 없는
 #: 이름이었다(죽은 항목).
 #:
-#: 그 15종 중 하나가 ``Skill`` 이다. 에이전트가 아티팩트를 만들다 CLI 번들 스킬
+#: 그 15종 중 하나가 ``Skill`` 이다. 에이전트가 앱을 만들다 CLI 번들 스킬
 #: (dataviz)을 열었고, 그 스킬이 가리킨 파일은 **워크플로우 파드의 /tmp** 에 있는데
 #: Read 는 러너 샌드박스로 가므로 닿을 수 없었다. 더 나쁜 것은 그 스킬이 **다른
 #: 제품**(Claude Code 의 Artifact)을 설명한다는 것이다 — HTML·window.claude.*·
-#: cdnjs 로드. 우리 아티팩트는 React + ArtifactSave + xgen.file() 이다.
+#: cdnjs 로드. 우리 앱은 AppCreate/AppPublish 로 세우는 FastAPI + React 앱이다.
 #:
 #: 그래서 규칙을 바꾼다: **지금 아는 것을 막는다** 가 아니라 **알던 것을 전부 막고,
 #: 새로 나타나면 알린다**(:func:`native_tool_leaks`). 모르는 이름을 넣는 것은
@@ -175,7 +175,7 @@ CLI_NATIVE_TOOLS_DENY = (
     "Skill",
     "SlashCommand",
     # ── 다른 제품의 표면 — 우리 것과 이름이 같거나 겹친다.
-    #    Artifact: claude.ai 게시. 우리 아티팩트는 ArtifactSave(React) 다.
+    #    Artifact: claude.ai 게시. 우리 것은 앱(AppCreate/AppPublish)이다.
     #    ToolSearch: 우리 것과 **이름이 같다** — 어느 쪽이 돌았는지 사후에
     #                구분되지 않는다.
     "Artifact",
