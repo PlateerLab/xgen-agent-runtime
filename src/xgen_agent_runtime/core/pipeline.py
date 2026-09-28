@@ -919,7 +919,7 @@ class Pipeline:
             False  # flips once run()/run_stream() begins; gates attach_runtime
         )
         self._attached_llm_client: Any = None  # set by attach_runtime; propagated in _init_state
-        # XgenySandbox — the session the agent's TOOLS execute in (ctx.sandbox).
+        # GenySandbox — the session the agent's TOOLS execute in (ctx.sandbox).
         # It never wraps the LLM client: the CLI keeps running here and reaches
         # the sandbox through its tools, like every other provider.
         self._attached_sandbox: Any = None
@@ -2104,7 +2104,7 @@ class Pipeline:
             self._warm_llm_client = None
 
         if sandbox is not None:
-            # An XgenySandbox (``workdir`` + async ``ensure()``/``exec()``) —
+            # A GenySandbox (``workdir`` + async ``ensure()``/``exec()``) —
             # where this agent's code runs. Bump the generation so reused
             # states pick it up on the next turn.
             self._attached_sandbox = sandbox

@@ -1,6 +1,6 @@
 """SandboxExecTool — 에이전트가 작성한 스크립트를 자기 샌드박스 세션에서 돌린다.
 
-샌드박스는 가짜다 — :class:`XgenySandbox` 모양을 그대로 만족하는 객체 하나.
+샌드박스는 가짜다 — :class:`GenySandbox` 모양을 그대로 만족하는 객체 하나.
 monkeypatch 가 필요 없다는 점이 중요하다: 프로토콜이 좁으면 테스트가 실제
 계약(도구↔스크립트 JSON 규약과 실패 경로)만 검증하게 된다.
 """
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from xgen_agent_runtime.tools._xgeny_sandbox import ExecResult
+from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.built_in.sandbox_exec_tool import SandboxExecTool
 
@@ -139,9 +139,9 @@ def test_capabilities_reflect_spec() -> None:
 
 @pytest.mark.asyncio
 async def test_exposed_from_public_packages() -> None:
-    # built_in package export + XGeny sandbox primitives on the tools package.
+    # built_in package export + Geny sandbox primitives on the tools package.
     from xgen_agent_runtime.tools.built_in import SandboxExecTool as A
-    from xgen_agent_runtime.tools import XgenySandbox, SandboxError, sb_run  # noqa: F401
+    from xgen_agent_runtime.tools import GenySandbox, SandboxError, sb_run  # noqa: F401
     from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
 
     assert A is SandboxExecTool

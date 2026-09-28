@@ -30,12 +30,24 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
-#: 세션에서 읽어 오는 이미지 첨부의 예산 — 워크스페이스 첨부(workflow 쪽 XGENY_IMAGE_*)와
+
+def _env_bytes(name: str, default: int) -> int:
+    """``GENY_*`` 를 읽고, 없으면 개명 전 이름(``XGENY_*``)을 읽는다 — 배포에 남은 옛 설정을 살린다.
+
+    뜻은 예전 그대로다: 없으면 기본값, 빈 값이면 0.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        raw = os.getenv("X" + name)
+    if raw is None:
+        return default
+    return int(raw or 0)
+
+
+#: 세션에서 읽어 오는 이미지 첨부의 예산 — 워크스페이스 첨부(workflow 쪽 GENY_IMAGE_*)와
 #: 같은 값. 한 장과 한 턴 합계 둘 다 본다.
-_ATTACH_IMAGE_MAX_BYTES = int(os.getenv("XGENY_IMAGE_MAX_BYTES", str(20 * 1024 * 1024)) or 0)
-_ATTACH_TURN_IMAGE_MAX_BYTES = int(
-    os.getenv("XGENY_TURN_IMAGE_MAX_BYTES", str(40 * 1024 * 1024)) or 0
-)
+_ATTACH_IMAGE_MAX_BYTES = _env_bytes("GENY_IMAGE_MAX_BYTES", 20 * 1024 * 1024)
+_ATTACH_TURN_IMAGE_MAX_BYTES = _env_bytes("GENY_TURN_IMAGE_MAX_BYTES", 40 * 1024 * 1024)
 
 logger = logging.getLogger("editor.nodes.xgen.agent.agent_geny")
 
@@ -283,7 +295,7 @@ class AgentTurnExecutor:
             #
             # 데스크톱 커넥터 대화이고 이 에이전트의 워크스페이스가 사용자 PC 로
             # 동기화되고 있으면, 파일/셸 도구는 sandbox 가 아니라 **사용자 PC**
-            # 에서 돈다 (ConnectorLocalSandbox — 같은 XgenySandbox 프로토콜,
+            # 에서 돈다 (ConnectorLocalSandbox — 같은 GenySandbox 프로토콜,
             # 도구 표면은 동일). 실패/미지원은 전부 None = 조용한 sandbox 폴백.
             #
             # claude_code CLI 도 로컬 실행한다 — 도구는 ToolContext.sandbox 하나로
@@ -309,7 +321,7 @@ class AgentTurnExecutor:
             #
             # 안 쓰기로 했다면 관리자 설정에서 끄면 된다 (그때는 None 이 온다).
             # 실행 환경: 커넥터 로컬(사용자 PC) 또는 러너 세션 — host 가 분기를
-            # 캡슐화한다(같은 XgenySandbox 프로토콜). 커넥터 로컬은 attach/publish
+            # 캡슐화한다(같은 GenySandbox 프로토콜). 커넥터 로컬은 attach/publish
             # 를 하지 않는다: 진실은 사용자 PC 폴더이고 인덱스 반영은 커넥터 동기화
             # 엔진이 한다(이중 기록 금지).
             _sandbox = host.make_sandbox(

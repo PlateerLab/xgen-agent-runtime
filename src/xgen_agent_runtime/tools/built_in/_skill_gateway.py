@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 #:
 #: The second sentence is for CLI clients. The bridge tells the CLI that its tool
 #: list changed, but the list does not always refresh before the next call
-#: (measured 2026-09-24 against the XGeny turn-1 surface: Claude Code 2.1.236
+#: (measured 2026-09-24 against the Geny turn-1 surface: Claude Code 2.1.236
 #: rejected the just-opened tool with "No such tool available" in 70 of 158 runs,
 #: and Codex 0.156.1 never refreshed within the turn). ToolBatch is on the first
 #: surface and runs any registered tool by name, so the room is reachable either way.

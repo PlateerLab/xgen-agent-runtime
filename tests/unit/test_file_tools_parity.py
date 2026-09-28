@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from xgen_agent_runtime.tools._xgeny_sandbox import ExecResult
+from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.built_in.edit_tool import EditTool
 from xgen_agent_runtime.tools.built_in.read_tool import ReadTool

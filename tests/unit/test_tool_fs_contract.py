@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from xgen_agent_runtime.tools._xgeny_sandbox import ExecResult
+from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.fs import (
     FsAccessError,
@@ -25,7 +25,7 @@ from xgen_agent_runtime.tools.fs import (
 
 
 class _Session:
-    """디렉터리 하나를 세션으로 삼는 XgenySandbox (test_xgeny_sandbox_tools 와 같은 모양)."""
+    """디렉터리 하나를 세션으로 삼는 GenySandbox (test_geny_sandbox_tools 와 같은 모양)."""
 
     def __init__(self, root: Path, extra_roots=(), readonly_roots=()) -> None:
         self.workdir = str(root)

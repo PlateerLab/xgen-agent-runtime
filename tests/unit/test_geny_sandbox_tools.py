@@ -1,7 +1,7 @@
 """``ToolContext.sandbox`` 가 설정되면 파일/셸 도구가 **거기서** 동작한다.
 
 GAPT 시절의 docker-exec 흉내 대신, 프로토콜을 그대로 만족하는 로컬 구현
-하나로 검증한다. 그게 요점이다 — 런타임은 :class:`XgenySandbox` 만 알고
+하나로 검증한다. 그게 요점이다 — 런타임은 :class:`GenySandbox` 만 알고
 그 뒤가 무엇인지 모른다. 프로덕션에서는 HTTP 클라이언트가 같은 자리에 들어간다.
 """
 
@@ -16,10 +16,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 
-from xgen_agent_runtime.tools._xgeny_sandbox import (
+from xgen_agent_runtime.tools._geny_sandbox import (
     ExecResult,
     SandboxPathError,
-    XgenySandbox,
+    GenySandbox,
     sandbox_path,
     sb_read_bytes,
     sb_run,
@@ -35,7 +35,7 @@ from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
 
 
 class LocalSandbox:
-    """디렉터리 하나를 세션으로 삼는 :class:`XgenySandbox` 구현."""
+    """디렉터리 하나를 세션으로 삼는 :class:`GenySandbox` 구현."""
 
     def __init__(self, root: Path, extra_roots=(), readonly_roots=()) -> None:
         self.workdir = str(root)
@@ -92,7 +92,7 @@ def ctx(sandbox, tmp_path):
 class TestProtocolIsHonoured:
     def test_a_plain_object_satisfies_the_protocol(self, sandbox):
         """구현체가 상속을 요구받지 않는다 — 호스트가 자기 클래스를 낸다."""
-        assert isinstance(sandbox, XgenySandbox)
+        assert isinstance(sandbox, GenySandbox)
 
     async def test_helpers_wake_the_session_first(self, sandbox):
         await sb_write_bytes(sandbox, "a.txt", b"x")

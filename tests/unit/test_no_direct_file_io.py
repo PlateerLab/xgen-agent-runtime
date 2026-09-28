@@ -37,7 +37,7 @@ ALLOWED: Dict[str, str] = {
     "ssh_tools.py": "파드 거주 가족(paramiko) — 4단계에서 materialize/commit 으로",
     "audio_tools.py": "파드 거주 가족(STT 어댑터) — 4단계에서 materialize/commit 으로",
     "doc_tools.py": "파드 거주 가족(edit2docs) — 4단계에서 materialize/commit 으로",
-    "worktree_tools.py": "로컬 git 체크아웃 전용(xgeny-cli). XGeny 서버 표면에 노출되지 않는다",
+    "worktree_tools.py": "로컬 git 체크아웃 전용(geny-cli). Geny 서버 표면에 노출되지 않는다",
 }
 
 _PATH_METHODS = {

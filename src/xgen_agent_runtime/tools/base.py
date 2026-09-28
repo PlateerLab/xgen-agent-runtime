@@ -161,8 +161,8 @@ class ToolContext:
     # behaves exactly as it did pre-Phase-7. Typed as ``Any`` to avoid
     # a hard import dependency on the permission subsystem.
     permission_rules: List[Any] = field(default_factory=list)
-    # The agent's XGeny sandbox session (``xgen_agent_runtime.tools.
-    # _xgeny_sandbox.XgenySandbox``: ``workdir`` + async ``ensure``/``exec``/
+    # The agent's Geny sandbox session (``xgen_agent_runtime.tools.
+    # _geny_sandbox.GenySandbox``: ``workdir`` + async ``ensure``/``exec``/
     # ``read_bytes``/``write_bytes``). When set, the built-in fs/shell tools
     # (bash/read/write/edit/grep/glob/ls) do their I/O *there* instead of on
     # this host. ``None`` (default) = host execution. Typed ``Any`` so this

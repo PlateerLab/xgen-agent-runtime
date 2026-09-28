@@ -3,7 +3,7 @@
 서버·커넥터 공용. ``_self_evolution_policy`` 는 관리자 설정 판정을 host.setting
 으로 주입받는다(서버=config DB→env, 커넥터=env) — SDK/CLI/웹/커넥터가 **같은
 판정**을 써야 하는 보안 계약(deploy/guest 차단)이 갈라지지 않게. 관련:
-``xgeny-shared-host-extraction``.
+``geny-shared-host-extraction``.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ a session is two different agents wearing one name, and every capability had to
 be built twice.
 
 Method groups map 1:1 to the dependency categories established in the extraction
-survey (see memory ``xgeny-shared-host-extraction``):
+survey (see memory ``geny-shared-host-extraction``):
 
   B/C/E-abstract → injected here (③ "needs abstraction").
   D/E-server, workspace store, sandbox runner → ④ "server-resident": the server
@@ -51,7 +51,7 @@ from typing import (
 if TYPE_CHECKING:
     # Import only for typing — keeps import-time deps to xgen_agent_runtime.
     from xgen_agent_runtime.tools import ToolRegistry
-    from xgen_agent_runtime.tools._xgeny_sandbox import XgenySandbox
+    from xgen_agent_runtime.tools._geny_sandbox import GenySandbox
 
 #: Result of a built provider LLM client + its per-run cleanup callback.
 CliRuntime = Tuple[Any, Optional[Any]]
@@ -76,12 +76,12 @@ class HostServices(Protocol):
     ) -> Optional[Dict[str, Any]]: ...
 
     # ── B. execution host: sandbox + workspace ───────────────────────────
-    # The one seam the runtime already models (ToolContext.sandbox / XgenySandbox).
+    # The one seam the runtime already models (ToolContext.sandbox / GenySandbox).
     # An agent turn ALWAYS runs in its own runner session — that is the whole
     # point of the session. ``None`` means an operator explicitly disabled the
     # runner for this deployment; anything else raises rather than silently
     # falling back to the serving pod.
-    def make_sandbox(self, workflow_id: str, user_id: Any) -> Optional["XgenySandbox"]: ...
+    def make_sandbox(self, workflow_id: str, user_id: Any) -> Optional["GenySandbox"]: ...
     def agent_workspace_dir(self, workflow_id: str, *, create: bool = True) -> str: ...
     def workspace_storage_root(self, workflow_id: str) -> str: ...
     #: Restore the persistent workspace from the source of truth into ``run_dir``

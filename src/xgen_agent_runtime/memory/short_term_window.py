@@ -2,7 +2,7 @@
 
 ## 왜 바꿨나
 
-이력을 preload 하지 않는 호스트(XGEN 의 DB Memory 노드 없는 XGeny)는 지난 턴을 Stage 2 의
+이력을 preload 하지 않는 호스트(XGEN 의 DB Memory 노드 없는 Geny)는 지난 턴을 Stage 2 의
 ``# Relevant Knowledge`` 불릿(``[short_term] recent_turns: …``)으로만 봤다. 그러면 모델은 자기가
 지난 턴에 한 말을 **대화 기록이 아니라 확인해야 할 지식**으로 읽고, 매 단계 "지난 대화를
 보니까…" 를 다시 쓴다(2026-09-21 관측: 같은 서술이 24단계 내내 반복). 레퍼런스(OpenAI Agents
