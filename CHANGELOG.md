@@ -4,6 +4,30 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.65.1] — 2026-09-28
+
+### Fixed — Claude 5 계열(SDK 경로)이 도구 한 번 뒤 끝나거나 빈 턴으로 끝나던 것
+
+같은 하네스에 모델만 바꿔 돌린 로컬 벤치(claude-sonnet-5, 70과제)에서 드러났다. 모두 `anthropic` 제공자(SDK 경로)만
+해당하고, `claude_code`(CLI)는 무관하다.
+
+- **thinking 서명 누락** — 응답의 thinking 블록에서 `signature` 를 버려, 도구 루프 다음 요청이 400
+  `messages.1.content.0.thinking.signature: Field required` 로 거절됐다. 기본으로 생각하는 claude-sonnet-5·opus-5 에서
+  dev(09-08~) Geny 도구 턴이 전부 모델 호출 1회·최종 답 없음, 로컬 벤치 70과제도 전부 호출 1회(0.578).
+  `signature` 와 `redacted_thinking`(`data`)을 그대로 되돌려 보낸다(파서 두 곳).
+- **temperature 거부** — opus-4-8·opus-5·sonnet-5·fable-5 는 temperature 를 400 으로 거부한다(09-28 실제 API 확인;
+  sonnet-4-6·opus-4-6·haiku-4-5 는 받음). 목록에 없어 매 호출이 400 을 한 번 맞고 치유 경로로 다시 보내졌다 → 목록에 추가.
+- **출력 한도에서 빈 턴** — Claude 5 는 thinking 도 max_tokens 안에서 쓴다. 노드 기본값 8192 로 생각만 하다 한도에 닿아
+  텍스트·도구 호출 없이 끝났다(70과제 중 8, 출력 정확히 8192). 이 경우에만(텍스트가 아직 안 나갔을 때) 한도를 올려
+  한 번 더 부른다(스트리밍 32000·비스트리밍 16000, 실패하면 원래 응답).
+- **생각하는 동안 첫 응답 감시에 걸림** — 기본으로 생각하는 모델은 thinking 표시 기본값이 "omitted" 라 생각하는 동안
+  빈 조각만 온다. 사용자에겐 긴 멈춤이고 스테이지의 첫 내용 감시(180초)는 멈춘 줄 안다. thinking 을 안 보낸 요청에
+  `{"type": "adaptive", "display": "summarized"}` 를 넣는다(Sonnet 4.6 까지의 기본 동작과 같음, 호출자가 정한 display 는 유지).
+
+검증
+- 빈 턴 8과제 재실행: 0.24·0.10·0.13·0.09·0.03·0.17·0.00·0.19 → 0.91·0.98·1.00·0.98·1.00·0.76·0.91·0.92
+- 새 테스트 17개(서명·redacted 왕복, temperature 계열, 한도 재호출 조건 5종, display 3종). 전체 5711 통과
+
 ## [4.65.0] — 2026-09-28
 
 ### Changed — XGeny → Geny 개명(이름만, 옛 이름은 계속 쓸 수 있다)

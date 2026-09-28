@@ -100,7 +100,62 @@ _THINKING_INCOMPATIBLE_SAMPLING_KEYS: tuple[str, ...] = (
 # env that never sees Opus in its config can still hit this code
 # path indirectly. The drop has to live at the boundary, not the
 # router.
-_TEMPERATURE_DEPRECATED_PREFIXES: tuple[str, ...] = ("claude-opus-4-7",)
+#
+# 2026-09-28 live API 확인(temperature=0.7): opus-4-8·opus-5·sonnet-5·fable-5 도 400
+# "`temperature` is deprecated for this model." — 목록에 없어서 매 호출이 400 을 한 번 맞고
+# 치유 경로(_heal_request_kwargs)로 다시 보내졌다. sonnet-4-6·opus-4-6·haiku-4-5 는 받는다.
+# "claude-opus-5" 는 opus-5-5, "claude-fable-5" 는 fable-5-1 까지 덮는다(같은 계열 문서 기준).
+_TEMPERATURE_DEPRECATED_PREFIXES: tuple[str, ...] = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos",
+)
+
+# ── 출력 한도에 걸려 쓸 수 있는 출력이 하나도 없을 때 ──────────────────
+#
+# Claude 5 계열은 기본으로 adaptive thinking 을 하고, thinking 도 max_tokens 안에서 쓴다.
+# 노드 기본값(8192)으로는 생각만 하다 한도에 닿아 텍스트도 도구 호출도 없이 끝나는 경우가
+# 있었다(로컬 벤치 claude-sonnet-5 70과제 중 8과제 — 출력 정확히 8192, 답 없음).
+# 그 경우에만 한도를 올려 한 번 더 부른다. 텍스트가 이미 사용자에게 나갔으면 다시 부르지
+# 않는다(중복). 다시 부른 호출이 실패하면 원래 응답을 그대로 돌려준다.
+_TRUNCATION_RETRY_MAX_TOKENS_STREAM = 32000
+#: 비스트리밍은 SDK HTTP 타임아웃 때문에 더 낮게.
+_TRUNCATION_RETRY_MAX_TOKENS_SEND = 16000
+
+
+#: thinking 파라미터 없이도 adaptive 로 생각하는 계열(Anthropic 문서: Sonnet 5·Opus 5·Opus 5.5·
+#: Fable 5/5.1·Mythos). Opus 4.7/4.8 은 생략하면 생각하지 않는다 — 넣지 않는다.
+_THINKS_BY_DEFAULT_PREFIXES: tuple[str, ...] = (
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-fable-5",
+    "claude-mythos",
+)
+
+
+def _model_thinks_by_default(model: str) -> bool:
+    return any(model.startswith(prefix) for prefix in _THINKS_BY_DEFAULT_PREFIXES)
+
+
+def _truncated_without_output(message: Any) -> bool:
+    """출력 한도로 멈췄고 쓸 수 있는 출력(텍스트)이 없다. 한도에서 끊긴 tool_use 는 입력이
+    잘렸을 수 있어 실행하면 안 되므로 출력으로 치지 않는다."""
+    if getattr(message, "stop_reason", "") != "max_tokens":
+        return False
+    for block in getattr(message, "content", None) or []:
+        if getattr(block, "type", "") == "text" and (getattr(block, "text", "") or "").strip():
+            return False
+    return True
+
+
+def _with_more_room(kwargs: Dict[str, Any], ceiling: int) -> Optional[Dict[str, Any]]:
+    current = int(kwargs.get("max_tokens") or 0)
+    if current >= ceiling:
+        return None
+    return {**kwargs, "max_tokens": ceiling}
 
 
 def _model_rejects_sampling_params(model: str) -> bool:
@@ -379,6 +434,27 @@ class AnthropicClient(BaseClient):
         raw_response = await self._invoke_with_heal(
             client.messages.create, kwargs, purpose=purpose or "messages.create"
         )
+        roomier = (
+            _with_more_room(kwargs, _TRUNCATION_RETRY_MAX_TOKENS_SEND)
+            if _truncated_without_output(raw_response)
+            else None
+        )
+        if roomier is not None:
+            try:
+                retried = await self._invoke_with_heal(
+                    client.messages.create, roomier, purpose=purpose or "messages.create"
+                )
+                logger.warning(
+                    "anthropic: output hit max_tokens=%s with nothing usable — retried once with %s",
+                    kwargs.get("max_tokens"),
+                    roomier["max_tokens"],
+                )
+                raw_response = retried
+            except Exception:  # noqa: BLE001 — 더 부른 호출이 실패하면 원래 응답
+                logger.warning(
+                    "anthropic: max_tokens retry failed; keeping the truncated response",
+                    exc_info=True,
+                )
         return self._parse_response(raw_response)
 
     async def create_message_stream(
@@ -434,17 +510,42 @@ class AnthropicClient(BaseClient):
             return None
 
         try:
+            text_emitted = False
             async with client.messages.stream(**kwargs) as stream:
                 async for event in stream:
                     chunk = _canonical_chunk(event)
                     if chunk is not None:
+                        text_emitted = text_emitted or chunk.get("type") == "text_delta"
                         yield chunk
 
                 final = await stream.get_final_message()
-                yield {
-                    "type": "message_complete",
-                    "response": self._parse_response(final),
-                }
+            roomier = (
+                _with_more_room(kwargs, _TRUNCATION_RETRY_MAX_TOKENS_STREAM)
+                if not text_emitted and _truncated_without_output(final)
+                else None
+            )
+            if roomier is not None:
+                logger.warning(
+                    "anthropic: output hit max_tokens=%s with nothing usable — retrying once with %s",
+                    kwargs.get("max_tokens"),
+                    roomier["max_tokens"],
+                )
+                try:
+                    async with client.messages.stream(**roomier) as stream:
+                        async for event in stream:
+                            chunk = _canonical_chunk(event)
+                            if chunk is not None:
+                                yield chunk
+                        final = await stream.get_final_message()
+                except Exception:  # noqa: BLE001 — 더 부른 호출이 실패하면 원래 응답
+                    logger.warning(
+                        "anthropic: max_tokens retry failed; keeping the truncated response",
+                        exc_info=True,
+                    )
+            yield {
+                "type": "message_complete",
+                "response": self._parse_response(final),
+            }
         except Exception as e:
             # Same retry-on-heal safety net as ``_send``, routed through
             # the BaseClient hook. The SDK validates kwargs eagerly
@@ -570,6 +671,24 @@ class AnthropicClient(BaseClient):
                 before.get("budget_tokens"),
             )
 
+        # 기본으로 생각하는 모델(Claude 5 계열)은 thinking 을 안 보내도 adaptive 로 생각하고,
+        # 표시 기본값이 "omitted" 라 생각하는 동안 빈 thinking 만 흘러온다. 그러면 사용자에게는
+        # 긴 멈춤이고, 스테이지의 첫 내용 감시(180초)는 모델이 멈춘 줄 안다 — 출력 한도로 한 번
+        # 더 부른 호출이 이 감시에 걸려 끝났다(로컬 벤치 5과제). 요약을 흘려보내게 한다(4.6 까지의
+        # 기본 동작과 같다). 호출자가 display 를 정했으면 그대로 둔다.
+        if _model_thinks_by_default(resolved_model):
+            thinking = kwargs.get("thinking")
+            if not thinking:
+                kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+            elif (
+                isinstance(thinking, dict)
+                and thinking.get("type") == "adaptive"
+                and "display" not in thinking
+            ):
+                kwargs["thinking"] = {**thinking, "display": "summarized"}
+            for key in _THINKING_INCOMPATIBLE_SAMPLING_KEYS:
+                kwargs.pop(key, None)
+
         return kwargs
 
     def _parse_response(self, raw: Any) -> APIResponse:
@@ -600,11 +719,27 @@ class AnthropicClient(BaseClient):
                     )
                 )
             elif block.type == "thinking":
+                # 서명까지 그대로 되돌려 보내야 한다 — Anthropic 은 도구 루프에서 직전 assistant 의
+                # thinking 블록을 **수정 없이**(signature 포함) 요구한다. 빠뜨리면 다음 호출이
+                # 400 "thinking.signature: Field required" 로 거절돼 턴이 첫 도구 호출 뒤에 끝났다
+                # (dev 09-08~ claude-sonnet-5·opus-5 도구 턴 전부 모델 호출 1회·답 없음).
+                raw_thinking = {"type": "thinking", "thinking": block.thinking}
+                signature = getattr(block, "signature", None)
+                if signature:
+                    raw_thinking["signature"] = signature
                 content_blocks.append(
                     ContentBlock(
                         type="thinking",
                         thinking_text=block.thinking,
-                        raw={"type": "thinking", "thinking": block.thinking},
+                        raw=raw_thinking,
+                    )
+                )
+            elif block.type == "redacted_thinking":
+                # 안전상 가려진 추론 — 내용은 없지만 같은 이유로 그대로 되돌려 보내야 한다.
+                content_blocks.append(
+                    ContentBlock(
+                        type="redacted_thinking",
+                        raw={"type": "redacted_thinking", "data": getattr(block, "data", "")},
                     )
                 )
 
