@@ -40,6 +40,8 @@ ROLLUP_TIMEOUT_S = 180.0
 
 #: 워크플로우당 in-flight 증류 1개 (연타 coalesce).
 _inflight: set = set()
+#: 도는 중에 들어온 요청 — 워크플로우당 마지막 것 하나. 끝나면 한 번 더 돈다.
+_pending: Dict[str, "DistillSpec"] = {}
 _inflight_lock = threading.Lock()
 
 
@@ -238,24 +240,27 @@ def run_distillation(spec: DistillSpec, llm: Any = None) -> Optional[Dict[str, A
 def launch_distillation(spec: DistillSpec) -> bool:
     """백그라운드 데몬 스레드로 증류 발사 (fire-and-forget).
 
-    같은 워크플로우의 증류가 이미 도는 중이면 스킵(coalesce) — 다음 턴이
-    어차피 그 사이 STM 을 커서 기준으로 이어서 증류한다. 반환값은 발사 여부.
+    같은 워크플로우의 증류가 이미 도는 중이면 **맡겨 두고** 끝난 뒤 한 번 더 돈다(마지막 요청만
+    유지). 예전엔 그냥 건너뛰고 "다음 턴이 이어서 증류한다" 고 믿었는데, 최근 대화(STM)는 세션별이라
+    세션 마지막 턴(대개 사용자의 교정·지시)이 앞 턴의 증류가 도는 사이에 끝나면 **영영 추출되지
+    않았다**(로컬 실험: 교정 턴이 몇 초 만에 끝나 사실 장부가 계속 비어 있음). 반환값은 새로 발사했는지.
     """
     wf = spec.workflow_id
     with _inflight_lock:
         if wf in _inflight:
-            logger.debug("distill: already in flight (workflow=%s) — coalesced", wf)
+            _pending[wf] = spec
+            logger.debug("distill: in flight (workflow=%s) — queued one trailing pass", wf)
             return False
         _inflight.add(wf)
 
-    def _worker() -> None:
-        state = _load_state(wf, spec.host)
+    def _run_once(current: DistillSpec) -> None:
+        state = _load_state(wf, current.host)
         state["last_launch"] = datetime.now().isoformat(timespec="seconds")
         state["last_status"] = "running"
-        _save_state(wf, state, spec.host)
+        _save_state(wf, state, current.host)
         try:
-            report = run_distillation(spec)
-            state = _load_state(wf, spec.host)
+            report = run_distillation(current)
+            state = _load_state(wf, current.host)
             if report:
                 state["last_status"] = "ok"
                 state["last_error"] = None
@@ -272,16 +277,27 @@ def launch_distillation(spec: DistillSpec) -> bool:
                 # LLM 구성 불가(claude_code 구독 등) / provider 실패 — 스킵 기록
                 state["last_status"] = "skipped"
                 state["last_error"] = "llm_or_provider_unavailable"
-            _save_state(wf, state, spec.host)
+            _save_state(wf, state, current.host)
         except Exception as exc:  # noqa: BLE001 — 백그라운드; 절대 전파 금지
             logger.warning("distill: background pass failed (workflow=%s)", wf, exc_info=True)
-            state = _load_state(wf, spec.host)
+            state = _load_state(wf, current.host)
             state["last_status"] = "error"
             state["last_error"] = f"{type(exc).__name__}: {exc}"[:500]
-            _save_state(wf, state, spec.host)
-        finally:
-            with _inflight_lock:
-                _inflight.discard(wf)
+            _save_state(wf, state, current.host)
+
+    def _worker() -> None:
+        current = spec
+        while True:
+            try:
+                _run_once(current)
+            finally:
+                with _inflight_lock:
+                    nxt = _pending.pop(wf, None)
+                    if nxt is None:
+                        _inflight.discard(wf)
+            if nxt is None:
+                return
+            current = nxt
 
     threading.Thread(target=_worker, name=f"geny-distill-{wf[:8]}", daemon=True).start()
     return True

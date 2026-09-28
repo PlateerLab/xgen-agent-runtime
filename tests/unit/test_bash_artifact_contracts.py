@@ -287,3 +287,57 @@ async def test_binary_skip_does_not_hide_a_real_csv_failure(tmp_path) -> None:
     assert result.is_error is True
     assert "inconsistent column counts" in result.content
     assert "note: report.xlsx: not checked" in result.content
+
+
+# ── 헛실패 3유형 (로컬 벤치 521실행 중 64실행, 계약 FAILED 의 22%) ─────────────
+
+
+async def _json_contract(tmp_path, document: str, contract: dict):
+    (tmp_path / "out.json").write_text(document, encoding="utf-8")
+    return await BashTool().execute(
+        {"command": "true", "artifact_contracts": [{"path": "out.json", "format": "json", **contract}]},
+        _context(tmp_path),
+    )
+
+
+async def test_slash_pointer_means_the_root_array(tmp_path) -> None:
+    result = await _json_contract(tmp_path, '[{"id": 1}, {"id": 2}]', {"array_lengths": {"/": 2}})
+    assert result.is_error is False, result.content
+    assert "ARTIFACT VALIDATION OK" in result.content
+
+
+async def test_slash_pointer_still_selects_an_empty_key_when_present(tmp_path) -> None:
+    result = await _json_contract(tmp_path, '{"": [1, 2, 3]}', {"array_lengths": {"/": 2}})
+    assert result.is_error is False
+    assert "3 items at '/'" in result.content
+
+
+async def test_required_keys_apply_to_each_record_of_a_name_to_record_object(tmp_path) -> None:
+    ok = await _json_contract(
+        tmp_path,
+        '{"East": {"count": 1, "revenue": 2.0}, "West": {"count": 3, "revenue": 4.0}}',
+        {"required_keys": ["count", "revenue"]},
+    )
+    assert ok.is_error is False, ok.content
+
+    bad = await _json_contract(
+        tmp_path,
+        '{"East": {"count": 1, "revenue": 2.0}, "West": {"count": 3}}',
+        {"required_keys": ["count", "revenue"]},
+    )
+    assert bad.is_error is True
+    assert "JSON entry 'West' is missing keys: revenue" in bad.content
+
+
+async def test_missing_top_level_keys_still_fail_for_a_plain_object(tmp_path) -> None:
+    result = await _json_contract(tmp_path, '{"count": 1, "note": "x"}', {"required_keys": ["count", "revenue"]})
+    assert result.is_error is True
+    assert "missing top-level JSON keys: revenue" in result.content
+
+
+async def test_array_lengths_counts_the_entries_of_an_object(tmp_path) -> None:
+    result = await _json_contract(
+        tmp_path, '{"status_by_id": {"A": "ok", "B": "ok", "C": "late"}}', {"array_lengths": {"/status_by_id": 2}}
+    )
+    assert result.is_error is False, result.content
+    assert "3 items at '/status_by_id'" in result.content
