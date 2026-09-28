@@ -200,6 +200,15 @@ def test_model_rejects_sampling_params_for_dated_opus_4_7_variant():
 
 @pytest.mark.parametrize(
     "model",
+    # 2026-09-28 live API: temperature=0.7 → 400 "`temperature` is deprecated for this model."
+    ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-fable-5", "claude-fable-5-1"],
+)
+def test_model_rejects_sampling_params_for_claude_5_family(model: str) -> None:
+    assert _model_rejects_sampling_params(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
     ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
 )
 def test_model_rejects_sampling_params_false_for_non_opus_4_7(model: str) -> None:
@@ -453,3 +462,26 @@ def test_retry_kwargs_returns_none_when_thinking_already_adaptive() -> None:
 
     kwargs = {"model": "claude-x", "thinking": {"type": "adaptive"}, "max_tokens": 100}
     assert _retry_kwargs_after_deprecation(kwargs, _Fake400()) is None
+
+
+# ── 2026-09-28 — 기본으로 생각하는 모델(Claude 5)은 요약을 흘려보낸다 ─────────
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"])
+def test_think_by_default_models_stream_summarized_thinking(model: str) -> None:
+    kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(_req(model=model, temperature=0.7))
+    assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "temperature" not in kwargs
+
+
+def test_caller_chosen_display_is_kept() -> None:
+    kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(
+        _req(model="claude-sonnet-5", thinking={"type": "adaptive", "display": "omitted"})
+    )
+    assert kwargs["thinking"] == {"type": "adaptive", "display": "omitted"}
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"])
+def test_models_that_do_not_think_by_default_get_no_thinking(model: str) -> None:
+    kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(_req(model=model))
+    assert "thinking" not in kwargs
