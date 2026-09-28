@@ -4,6 +4,35 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.67.0] — 2026-09-28
+
+### Added — 대화에 연결된 기기 폴더 (앱 전용)
+
+데스크톱 앱의 설정 [로컬 컨트롤] 탭(전역 스위치 하나로 모든 대화에 PC 도구가 붙던 것)을 없애고, 채팅 헤더의
+[폴더 연결]로 **대화마다** 사용자 기기의 폴더를 붙이는 방식으로 바꾼다. 모바일 앱도 OS 폴더(Android 저장소 접근,
+iOS 폴더 선택)를 같은 방식으로 붙인다. 웹에는 없다. 이 런타임은 무엇을 보여 주고 무엇을 말할지를 정한다 —
+판정의 정본은 기기다(호출마다 그 대화의 폴더인지 다시 확인한다).
+
+- `host/local_folders.py`(신규) — 규칙 한 곳. 서버 SDK 경로와 CLI 브리지(xgen-workflow)가 같은 함수를 쓴다.
+  - 요청 필드 `local_folders`: `None`(옛 앱·웹) = 예전 규칙 그대로, `[]` = 폴더 도구 없음, `[..]` = 폴더 도구를
+    첫 화면에 바로(옛 입구 `LocalControl` 은 뺀다).
+  - 폴더 도구는 앱마다 다르다: 데스크톱(`mcp_local_*`) 파일·셸·열기·클립보드·알림, 모바일(`mcp_mobile_*`)
+    파일·검색·열기·사진. 브라우저·로컬 MCP 관리·휴대폰 알림/위치 같은 다른 기기 도구는 각자 설정이 정한다.
+- 턴 안내 — `TurnNotesBlock`(volatile, `SharedKeys.TURN_NOTES`)이 이번 턴의 연결 상태를 최신 사용자 메시지 옆에
+  붙인다: 연결된 폴더 목록과 "기기에서 돌고 서버 sandbox 가 아니다", 연결 없음, 앱이 지금 닿지 않음. 기록에 남지
+  않아 옛 상태가 쌓이지 않는다. 기본 빌더와 메모리 빌더 둘 다에 들어간다.
+- 혼동 방지 — 이번 턴에 폴더 도구가 없으면 기록 속 옛 호출·결과를 요청 사본에서 평문 한 줄로 바꾼다
+  (`core.message_repair.retire_tool_calls`, `SharedKeys.RETIRED_TOOL_CALLS` → Stage 6). 기록 자체는 그대로다.
+  이전에는 없어진 도구의 `tool_use` 가 원형으로 되풀이돼 모델이 없는 도구를 다시 불렀다.
+- 기억 — 사실 추출·요약 지침이 기기 폴더 경로를 오래 갈 사실로 남기지 않는다("일을 기억하고 기기 경로는 남기지
+  않는다"). 도구 입출력은 원래 증류에 들어가지 않는다(텍스트 블록만 읽는다).
+- 실행기 — 호스트의 OPTIONAL 훅 `local_device_platform()`(Mac·Windows·Linux·Android·iPhone)으로 안내의 기기 이름을
+  정한다(훅이 없으면 "device"). CLI 백엔드도 카탈로그를 읽어 같은 안내를 받는다(도구는 브리지가 광고한다).
+
+검증
+- 새 테스트 `tests/unit/test_local_folders.py` 19개(요청 필드 세대, 이름 규칙, 표면, 안내, 기록 정리, Stage 6,
+  블록 위치)와 `tests/test_host_local_folders.py` 7개(옛 클라이언트·폴더 없음·연결·앱 오프라인·CLI·훅 없는 호스트·모바일).
+
 ## [4.66.0] — 2026-09-28
 
 ### Changed — 아티팩트 → 앱 (도구 이름·안내)

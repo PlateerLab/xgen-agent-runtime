@@ -448,14 +448,17 @@ def _schema_instruction(schema: Dict[str, Any]) -> str:
 
 
 def _system_builder(system: str) -> Any:
-    """기본 시스템 프롬프트 + 현재 날짜(volatile)."""
+    """기본 시스템 프롬프트 + 현재 날짜(volatile) + 이번 턴 안내(volatile)."""
     from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
         ComposablePromptBuilder,
         CustomBlock,
         DateTimeBlock,
+        TurnNotesBlock,
     )
 
-    return ComposablePromptBuilder(blocks=[CustomBlock("base", system), DateTimeBlock()])
+    return ComposablePromptBuilder(
+        blocks=[CustomBlock("base", system), DateTimeBlock(), TurnNotesBlock()]
+    )
 
 
 def build_pipeline(
@@ -735,6 +738,7 @@ def build_pipeline(
                 DateTimeBlock,
                 PinnedFactsBlock,
                 RetrievedMemoryBlock,
+                TurnNotesBlock,
             )
 
             pipeline._memory_provider = memory_provider
@@ -747,6 +751,7 @@ def build_pipeline(
                         PinnedFactsBlock(),
                         DateTimeBlock(),
                         RetrievedMemoryBlock(),
+                        TurnNotesBlock(),
                     ]
                 ),
             )

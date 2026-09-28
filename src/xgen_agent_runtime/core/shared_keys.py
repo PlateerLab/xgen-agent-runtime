@@ -97,6 +97,28 @@ class SharedKeys:
     MEMORY_NEEDS_REFLECTION: Final = "memory.needs_reflection"
     """Boolean flag for deferred reflection — legacy Geny path."""
 
+    TURN_NOTES: Final = "executor.turn_notes"
+    """Host-written notes about THIS turn's situation (list of strings).
+
+    Rendered by TurnNotesBlock into the volatile tail of the system
+    prompt, so with the default turn_context placement they ride next
+    to the latest user message and are never persisted to history. Use it
+    for state that can change between turns of one conversation (e.g. the
+    folders on the user's device connected to this conversation): a stale
+    copy in history would contradict the current state."""
+
+    RETIRED_TOOL_CALLS: Final = "executor.retired_tool_calls"
+    """Tools absent this turn whose earlier calls must not look callable.
+
+    ``{"names": [...], "reason": str}``. Stage 6 rewrites matching
+    ``tool_use``/``tool_result`` pairs in the request copy into one
+    plain-text line each (``core.message_repair.retire_tool_calls``), so the
+    model neither calls a tool that is gone nor trusts its old results as
+    current. History itself is untouched.
+
+    The host sets it for the device folder tools when this conversation
+    has no folder connected (``host.local_folders``)."""
+
     # ── Geny (host plugin) -------------------------------------------
 
     GENY_CREATURE_STATE: Final = "geny.creature_state"

@@ -323,6 +323,34 @@ class ToolInstructionsBlock(PromptBlock):
         return ""
 
 
+class TurnNotesBlock(PromptBlock):
+    """Host notes about this turn's situation (state.shared[TURN_NOTES]).
+
+    Volatile: the host rewrites them every turn from the current state (for
+    example which folders on the user's device this conversation is
+    connected to). In the volatile tail they never enter history, so a note
+    from an earlier turn cannot contradict the current one.
+    """
+
+    @property
+    def name(self) -> str:
+        return "turn_notes"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        from xgen_agent_runtime.core.shared_keys import SharedKeys
+
+        notes = state.shared.get(SharedKeys.TURN_NOTES)
+        if isinstance(notes, str):
+            notes = [notes]
+        if not isinstance(notes, (list, tuple)):
+            return ""
+        return "\n\n".join(str(n).strip() for n in notes if str(n or "").strip())
+
+
 class CustomBlock(PromptBlock):
     """User-defined custom block."""
 

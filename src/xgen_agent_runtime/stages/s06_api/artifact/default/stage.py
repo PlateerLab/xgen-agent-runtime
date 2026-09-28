@@ -21,7 +21,11 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
-from xgen_agent_runtime.core.message_repair import normalize_messages_for_request
+from xgen_agent_runtime.core.message_repair import (
+    normalize_messages_for_request,
+    retire_tool_calls_by_name,
+)
+from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
@@ -647,6 +651,10 @@ class APIStage(Stage[Any, APIResponse]):
         # exchange rides AFTER the state history for this call only —
         # state.messages stays untouched until the loop commits it.
         messages = list(state.messages)
+        retired = state.shared.get(SharedKeys.RETIRED_TOOL_CALLS)
+        if retired:
+            # 이번 턴에 없는 도구의 옛 호출은 평문으로 — 기록은 그대로, 요청 사본만.
+            messages = retire_tool_calls_by_name(messages, retired)
         turn_context = state.shared.get("turn_context_text")
         if isinstance(turn_context, str) and turn_context:
             messages = self._inject_turn_context(messages, turn_context)

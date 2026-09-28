@@ -143,7 +143,9 @@ def render_evergreen(data: Dict[str, Any]) -> str:
 #: the things a digest must carry forward — verbatim where wording matters.
 PRESERVE_CLAUSE = (
     "ALWAYS PRESERVE (never drop; keep verbatim where exact wording matters):\n"
-    "- concrete facts, figures, identifiers, file paths\n"
+    "- concrete facts, figures, identifiers, file paths (except paths on the user's own\n"
+    "  device from folders connected to one conversation: they stop being reachable when the\n"
+    "  folder is disconnected, so keep the work, not the device path)\n"
     "- decisions made and their rationale\n"
     "- named entities (people, projects, tools, places)\n"
     "- the user's stated preferences, instructions, and commitments\n"

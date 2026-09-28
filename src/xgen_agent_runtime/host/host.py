@@ -257,3 +257,9 @@ class HostServices(Protocol):
     #: run ctx will actually be bound (a workspace dir, and either built-in tools
     #: or self-evolution).
     def cli_bridge_available(self, provider: str) -> bool: ...
+
+    #: **OPTIONAL** — the OS of the user's device whose tools ride this turn
+    #: (``darwin``/``win32``/``linux``/``android``/``ios``, "" when unknown).
+    #: Only names the device in the per-turn folder note ("the user's Mac").
+    #: Absent method → the note says "device".
+    def local_device_platform(self) -> str: ...
