@@ -110,6 +110,22 @@ def _memory_block_for(host: Any, workflow_id: str, *, write_available: Optional[
     return MEMORY_PROMPT_BLOCK if write_available else MEMORY_READONLY_PROMPT_BLOCK
 
 
+def _folder_device_info(host: Any) -> Dict[str, Any]:
+    """이 대화의 폴더가 있는 기기 — 호스트가 알면(OPTIONAL 훅). 모르면 빈 dict.
+
+    폴더는 대화에 붙고 물리적으로는 기기 하나에 있다. 턴을 보낸 화면(웹·휴대폰·다른 PC)과
+    그 기기가 다를 수 있다 — 안내가 기기 이름과 그 사실을 말한다.
+    """
+    probe = getattr(host, "folder_device_info", None)
+    if not callable(probe):
+        return {}
+    try:
+        info = probe()
+    except Exception:  # noqa: BLE001 — 안내 한 줄 때문에 턴을 깨지 않는다
+        return {}
+    return dict(info) if isinstance(info, dict) else {}
+
+
 def _local_device_platform(host: Any) -> Optional[str]:
     """이번 턴 기기의 OS — 호스트가 알면(OPTIONAL 훅). 모르면 None(안내는 "device")."""
     probe = getattr(host, "local_device_platform", None)
@@ -268,10 +284,13 @@ class AgentTurnExecutor:
                 _local_folders.is_folder_tool(n) for n in _device_tool_names
             )
             _turn_notes: List[str] = []
+            _folder_info = _folder_device_info(host) if _folders else {}
             _folder_note = _local_folders.turn_note(
                 _folders,
                 available_tools=_device_tool_names,
                 platform=_local_device_platform(host) if _folders is not None else None,
+                device_name=str(_folder_info.get("name") or "") or None,
+                remote=bool(_folder_info.get("remote")),
             )
             if _folder_note:
                 _turn_notes.append(_folder_note)

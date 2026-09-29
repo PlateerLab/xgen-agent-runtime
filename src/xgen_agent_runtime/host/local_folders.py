@@ -260,15 +260,23 @@ def turn_note(
     *,
     available_tools: Iterable[str] = (),
     platform: Optional[str] = None,
+    device_name: Optional[str] = None,
+    remote: bool = False,
 ) -> str:
     """이번 턴의 폴더 연결 상태 — 매 턴 새로 쓰는 한 블록. 옛 클라이언트(None)면 빈 문자열.
 
     ``available_tools`` 는 이번 턴에 실제로 보이는 기기 도구 이름(접두 무관)이다.
-    폴더는 연결돼 있는데 폴더 도구가 하나도 없으면 앱이 지금 서버에 닿지 않는 것이다.
+    폴더는 연결돼 있는데 폴더 도구가 하나도 없으면 그 기기가 지금 서버에 닿지 않는 것이다.
+
+    ``device_name`` 은 폴더가 있는 기기의 이름(사용자가 부르는 이름, 예: "사무실 PC").
+    ``remote`` 면 사용자는 그 기기가 아닌 다른 화면(웹·휴대폰·다른 PC)에서 말하고 있다 — 도구는
+    여전히 그 기기에서 돌고, 그 앞에 사람이 있어야 하는 일(창 열기 등)은 하지 않는다.
     """
     if folders is None:
         return ""
     device = device_label(platform)
+    if device_name:
+        device = f'{device} "{device_name}"'
     found = [d for d in (device_tool(n) for n in available_tools) if d]
     folder_found = [(s, t) for s, t in found if t in FOLDER_TOOLS_BY_SERVER.get(s, ())]
     head = "# Folders on the user's device"
@@ -283,8 +291,25 @@ def turn_note(
         )
     lines = [head, f"This conversation is connected to these folders on the user's {device}:"]
     lines += [f"- {f.name}: {f.path}" for f in folders]
+    if remote:
+        lines.append(
+            f"The user is talking to you from another screen, not from that {device_label(platform)}. "
+            "The folder tools still run on it; do not try to open windows or apps there."
+        )
     if not folder_found:
-        if str(platform or "").strip().lower() == "web":
+        if remote and str(platform or "").strip().lower() not in ("web", "android", "ios"):
+            lines.append(
+                f"That {device_label(platform)} is not connected right now, so its folders are unavailable "
+                "this turn. Tell the user to turn it on and keep XGEN Dex open and signed in there, then "
+                "try again; do not guess file contents."
+            )
+        elif remote and str(platform or "").strip().lower() == "web":
+            lines.append(
+                "That web browser is not connected right now, so its folders are unavailable this turn. "
+                "Tell the user to open this conversation in XGEN in that browser and allow access to the "
+                "folder, then try again; do not guess file contents."
+            )
+        elif str(platform or "").strip().lower() == "web":
             lines.append(
                 "The browser is not reachable right now, so the device tools are unavailable "
                 "this turn. Tell the user to keep this XGEN page open in the browser and allow "
