@@ -4,6 +4,18 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.68.0] — 2026-09-29
+
+### Added — 웹 브라우저도 대화에 폴더를 연결한다 (`web` 기기)
+
+- 웹 채팅의 [폴더] 로 브라우저(File System Access)에서 고른 폴더를 대화에 붙인다. 브라우저는
+  MCP 서버 이름 `web` 으로 파일 도구 다섯(`ReadFile`·`WriteFile`·`ListDir`·`DeleteFile`·`Search`)을
+  올리고, 모델에게는 `mcp_web_<Tool>` 로 보인다. 터미널은 없다.
+- `FOLDER_TOOLS_BY_SERVER["web"]` — 폴더 없는 대화에서는 빠지고 기록 속 옛 호출은 평문으로 바뀐다
+  (데스크톱·모바일과 같은 규칙).
+- 턴 안내: 기기 이름 "web browser", 터미널 없음, 닿지 않을 때는 "XGEN 화면을 열어 두고 폴더 접근을
+  허용" 하라고 말한다. 폴더가 없을 때 안내하는 단추 이름을 [폴더] 로(데스크톱·웹 헤더와 같게).
+
 ## [4.67.1] — 2026-09-29
 
 ### Fixed — Qwen 에이전트의 메모리 사실 추출이 한 번도 되지 않던 것 + 산출물 계약 헛실패 3유형

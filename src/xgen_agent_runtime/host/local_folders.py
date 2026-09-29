@@ -1,14 +1,15 @@
 """대화에 연결된 **사용자 기기의 폴더** — 기기 도구의 표면과 안내를 정하는 한 곳.
 
-사용자는 앱(데스크톱·모바일)의 채팅 헤더 [폴더 연결] 로 이 대화에 폴더를 붙인다. 폴더는
-**대화에 붙는다**: 연결된 폴더가 있는 대화에서만 폴더 도구(파일·셸·열기…)가 보이고,
-해제하면 다음 턴부터 사라진다. 웹에는 폴더가 없다(앱 전용 기능).
+사용자는 채팅 헤더의 [폴더] 로 이 대화에 폴더를 붙인다(데스크톱·모바일 앱, 그리고 웹
+브라우저). 폴더는 **대화에 붙는다**: 연결된 폴더가 있는 대화에서만 폴더 도구(파일·셸·
+열기…)가 보이고, 해제하면 다음 턴부터 사라진다.
 
-앱은 자기 도구를 MCP 서버 이름 하나로 올린다 — 데스크톱은 ``local``(모델에게
-``mcp_local_<Tool>``), 모바일은 ``mobile``(``mcp_mobile_<Tool>``). 폴더에 묶이는 도구는
-앱마다 다르다(:data:`FOLDER_TOOLS_BY_SERVER`): 데스크톱은 PC 조작 전부가 폴더 연결로
-열리고, 모바일은 파일을 다루는 도구만 폴더에 묶인다(알림·위치 같은 휴대폰 기능은 모바일
-설정의 도구 그룹이 따로 정한다).
+기기는 자기 도구를 MCP 서버 이름 하나로 올린다 — 데스크톱은 ``local``(모델에게
+``mcp_local_<Tool>``), 모바일은 ``mobile``(``mcp_mobile_<Tool>``), 웹 브라우저는 ``web``
+(``mcp_web_<Tool>``). 폴더에 묶이는 도구는 기기마다 다르다(:data:`FOLDER_TOOLS_BY_SERVER`):
+데스크톱은 PC 조작 전부가 폴더 연결로 열리고, 모바일은 파일을 다루는 도구만 폴더에 묶인다
+(알림·위치 같은 휴대폰 기능은 모바일 설정의 도구 그룹이 따로 정한다). 웹 브라우저는 사용자가
+고른 폴더의 파일 도구만 있다 — 터미널이 없고, 그 XGEN 화면이 열려 있는 동안만 닿는다.
 
 여기서 정하는 것은 둘이다.
 
@@ -69,7 +70,20 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "TakePhoto",
         }
     ),
+    # 웹 브라우저: 사용자가 고른 폴더(File System Access)의 파일 도구만. 터미널은 없다.
+    "web": frozenset(
+        {
+            "ReadFile",
+            "WriteFile",
+            "ListDir",
+            "DeleteFile",
+            "Search",
+        }
+    ),
 }
+
+#: 터미널이 없는 기기 — 턴 안내가 파일 도구만 쓰라고 말한다.
+_NO_TERMINAL_SERVERS = frozenset({"mobile", "web"})
 
 #: 앱 도구 서버 이름들.
 DEVICE_SERVERS = tuple(FOLDER_TOOLS_BY_SERVER)
@@ -232,6 +246,7 @@ _PLATFORM_LABEL = {
     "linux": "Linux PC",
     "android": "Android phone",
     "ios": "iPhone",
+    "web": "web browser",
 }
 
 
@@ -264,16 +279,23 @@ def turn_note(
             "are no device file or shell tools this turn. Anything earlier turns read or "
             "wrote on the device is history only — it is not reachable now. If the task "
             "needs the user's own files, ask the user to connect a folder with the "
-            "[폴더 연결] button in the chat header of the app."
+            "[폴더] button in the chat header."
         )
     lines = [head, f"This conversation is connected to these folders on the user's {device}:"]
     lines += [f"- {f.name}: {f.path}" for f in folders]
     if not folder_found:
-        lines.append(
-            "The app is not reachable right now, so the device tools are unavailable this "
-            "turn. Tell the user to open the app (it must stay open and signed in) and try "
-            "again; do not guess file contents."
-        )
+        if str(platform or "").strip().lower() == "web":
+            lines.append(
+                "The browser is not reachable right now, so the device tools are unavailable "
+                "this turn. Tell the user to keep this XGEN page open in the browser and allow "
+                "access to the folder, then try again; do not guess file contents."
+            )
+        else:
+            lines.append(
+                "The app is not reachable right now, so the device tools are unavailable this "
+                "turn. Tell the user to open the app (it must stay open and signed in) and try "
+                "again; do not guess file contents."
+            )
         return "\n".join(lines)
     prefixes = sorted({f"mcp_{s}_*" for s, _ in folder_found})
     lines.append(
@@ -286,7 +308,7 @@ def turn_note(
             "Shell and ShellJob run terminal commands with the working directory inside a "
             "connected folder."
         )
-    elif any(s == "mobile" for s, _ in folder_found):
+    elif any(s in _NO_TERMINAL_SERVERS for s, _ in folder_found):
         lines.append("This device has no terminal; use the file tools.")
     lines.append(
         "Paths from earlier turns that are not under these folders are history only — they "
