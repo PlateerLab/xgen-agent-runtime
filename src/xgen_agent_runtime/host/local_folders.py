@@ -276,7 +276,7 @@ def turn_note(
         return ""
     device = device_label(platform)
     if device_name:
-        device = f"{device} \"{device_name}\""
+        device = f'{device} "{device_name}"'
     found = [d for d in (device_tool(n) for n in available_tools) if d]
     folder_found = [(s, t) for s, t in found if t in FOLDER_TOOLS_BY_SERVER.get(s, ())]
     head = "# Folders on the user's device"
