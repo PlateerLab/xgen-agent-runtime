@@ -4,6 +4,18 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.69.0] — 2026-09-29
+
+### Added — 폴더가 있는 기기와 말하는 화면이 달라도 (`folder_device_info` 훅)
+
+- 대화의 폴더는 이제 어느 화면에서 보낸 턴이든 그 폴더가 있는 기기의 것이다(서버가 사본을 들고
+  폴더 기기의 도구를 붙인다 — xgen-workflow). 턴 안내가 그 사실을 말한다:
+  - 기기 이름을 함께 부른다: `the user's Windows PC "사무실 PC"`.
+  - 다른 화면(웹·휴대폰·다른 PC)에서 보냈으면 그렇다고 말하고, 그 기기에서 창·앱을 열지 말라고 한다.
+  - 그 기기가 꺼져 있으면: PC 는 "켜고 XGEN Dex 를 열어 둔 채 다시", 브라우저는 "그 브라우저에서
+    이 대화를 열고 폴더 접근을 허용" 하라고 안내한다.
+- 호스트 OPTIONAL 훅 `folder_device_info()` → `{name, platform, online, remote}`. 없으면 예전 안내 그대로.
+
 ## [4.68.0] — 2026-09-29
 
 ### Added — 웹 브라우저도 대화에 폴더를 연결한다 (`web` 기기)

@@ -284,3 +284,40 @@ def test_default_system_builder_puts_turn_notes_in_the_volatile_tail():
     assert notes and notes[0]["volatile"] is True
     assert "- p: /p" in notes[0]["text"]
     assert parts[0]["volatile"] is False  # base 는 캐시 접두에 남는다
+
+
+# ── 폴더 기기가 다른 화면일 때 ────────────────────────────────────
+
+
+def test_the_note_names_the_folder_device():
+    folders = [lf.LocalFolder(id="f", name="report", path="C:\\Users\\u\\report")]
+    note = lf.turn_note(
+        folders, available_tools=["mcp_local_ReadFile"], platform="win32", device_name="사무실 PC",
+    )
+    assert 'Windows PC "사무실 PC"' in note
+    assert "another screen" not in note
+
+
+def test_a_turn_from_another_screen_says_so_and_keeps_the_tools_on_the_device():
+    folders = [lf.LocalFolder(id="f", name="report", path="/Users/u/report")]
+    note = lf.turn_note(
+        folders, available_tools=["mcp_local_ReadFile", "mcp_local_Shell"], platform="darwin",
+        device_name="집 맥", remote=True,
+    )
+    assert "another screen" in note
+    assert "do not try to open windows" in note
+    assert "Device tools (mcp_local_*)" in note
+
+
+def test_a_remote_pc_that_is_off_asks_to_turn_it_on():
+    folders = [lf.LocalFolder(id="f", name="report", path="C:\\report")]
+    note = lf.turn_note(folders, available_tools=[], platform="win32", device_name="사무실 PC", remote=True)
+    assert "not connected right now" in note
+    assert "XGEN Dex" in note
+    assert "do not guess" in note
+
+
+def test_a_remote_browser_that_is_closed_asks_to_reopen_it_there():
+    folders = [lf.LocalFolder(id="f", name="docs", path="/docs")]
+    note = lf.turn_note(folders, available_tools=[], platform="web", device_name="웹 브라우저 · Chrome", remote=True)
+    assert "in that browser" in note

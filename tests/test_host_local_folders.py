@@ -170,3 +170,22 @@ def test_mobile_catalog_follows_the_mobile_folder_set(capture) -> None:
     names = _registry_names(capture)
     assert "mcp_mobile_ReadFile" not in names
     assert {"mcp_mobile_Notify", "mcp_mobile_Location"} <= set(names)
+
+
+class _FolderDeviceHost(_DeviceHost):
+    """폴더가 다른 기기(사무실 PC)에 있다 — 웹에서 보낸 턴."""
+
+    def folder_device_info(self) -> Dict[str, Any]:
+        return {"name": "사무실 PC", "platform": "win32", "online": True, "remote": True}
+
+
+def test_a_turn_from_another_screen_names_the_folder_pc(capture) -> None:
+    _run(
+        _FolderDeviceHost(catalog=["mcp_local_ReadFile", "mcp_local_Shell"], platform="win32"),
+        capture,
+        local_folders=[{"id": "1", "name": "report", "path": "C:\\report"}],
+    )
+    note = "\n".join(_state(capture).shared[SharedKeys.TURN_NOTES])
+    assert 'Windows PC "사무실 PC"' in note
+    assert "another screen" in note
+    assert "- report: C:\\report" in note
