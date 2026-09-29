@@ -44,6 +44,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from xgen_agent_runtime.core.file_blocks import file_pointers
 from xgen_agent_runtime.core.message_repair import (
     repair_dangling_tool_calls,
     strip_leading_orphan_tool_results,
@@ -229,6 +230,11 @@ def _dialogue_messages(
                 continue
             if not user_text:
                 user_text = _text_of(content)
+                # 첨부는 텍스트가 아니라 버려졌다 — 긴 턴 뒤 첫 지시가 대화로 강등되면 파일 경로가
+                # 사라져 모델이 "원문을 다시 못 연다" 고 했다(2026-09-29). 경로 한 줄은 남긴다.
+                pointers = file_pointers(content)
+                if pointers:
+                    user_text = "\n".join([*pointers, user_text]).strip()
         elif role == "assistant":
             t = _text_of(content)
             if t:
@@ -409,11 +415,63 @@ def build_window(
         else:
             break  # T-1 하나만 남았고 최소까지 줄였다 — 그대로 둔다(턴을 버리지 않는다)
         msgs = _assemble()
+    msgs = _carry_dropped_attachments(msgs, turns, kept=[*dialogue, *full])
     report.turns = len(full) + len(dialogue)
     report.full = len(full)
     report.dialogue = len(dialogue)
     report.chars = _size(msgs)
     return msgs, report
+
+
+#: 창 밖으로 밀려난 턴에서 넘겨 줄 첨부 포인터 상한(줄).
+MAX_CARRIED_ATTACHMENTS = 10
+
+
+def _turn_pointers(turn: LogicalTurn) -> List[str]:
+    out: List[str] = []
+    for m in turn.messages:
+        content = _msg_content(m)
+        if _msg_role(m) == "user" and not _is_tool_result_only(content):
+            out.extend(file_pointers(content))
+    return out
+
+
+def _carry_dropped_attachments(
+    msgs: List[Dict[str, Any]], turns: Sequence[Any], *, kept: Sequence[LogicalTurn]
+) -> List[Dict[str, Any]]:
+    """창에 못 들어간 턴의 첨부 포인터를 창 첫 사용자 메시지 앞에 붙인다.
+
+    턴이 예산·턴 수 때문에 빠져도 그 첨부 파일은 작업 폴더에 남아 있다. 이 세션의 대화 노트는
+    검색 층에서 빠지므로(창과 중복) 여기서 넘기지 않으면 자리를 알 길이 없다 — 2026-09-29 dev 에서
+    첫 턴 첨부가 네 번째 턴 창에서 통째로 빠졌다. 포인터(파일당 한 줄)만 넘기고 내용은 넘기지 않는다.
+    """
+    if not msgs:
+        return msgs
+    # 논리 턴은 STM 행 객체를 그대로 묶는다 — 창에 남은 턴은 첫 행의 정체로 가린다.
+    kept_rows = {id(m) for t in kept for m in t.messages}
+    carried: List[str] = []
+    for turn in group_logical_turns(turns, len(turns) or 1):
+        if turn.messages and id(turn.messages[0]) in kept_rows:
+            continue
+        for line in _turn_pointers(turn):
+            if line not in carried:
+                carried.append(line)
+    carried = carried[-MAX_CARRIED_ATTACHMENTS:]
+    if not carried:
+        return msgs
+    note = "[Earlier in this conversation]\n" + "\n".join(carried)
+    for i, m in enumerate(msgs):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            msgs[i] = {**m, "content": f"{note}\n\n{content}"}
+        elif isinstance(content, list) and not _is_tool_result_only(content):
+            msgs[i] = {**m, "content": [{"type": "text", "text": note}, *content]}
+        else:
+            continue
+        break
+    return msgs
 
 
 def _turn_starts(rows: Sequence[Any]) -> int:

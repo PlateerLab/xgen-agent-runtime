@@ -27,6 +27,7 @@ import uuid
 from datetime import datetime
 from typing import Any, List, Tuple
 
+from xgen_agent_runtime.core.file_blocks import POINTER_PREFIX, file_pointers
 from xgen_agent_runtime.memory.provider import Importance, NoteDraft, NotePatch
 from xgen_agent_runtime.memory.strategy import ProviderDrivenStrategy
 
@@ -54,6 +55,9 @@ def _block_text(content: Any) -> str:
         return content.strip()
     parts: List[str] = []
     if isinstance(content, list):
+        # 첨부는 경로 한 줄로 남긴다 — 파일은 작업 폴더에 계속 있고, 새 대화는 이 노트로만
+        # 그 자리를 안다(2026-09-29: 경로를 몰라 엉뚱한 저장소 검색을 붙였다).
+        parts.extend(file_pointers(content))
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
                 text = str(block.get("text") or "").strip()
@@ -187,6 +191,13 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
         body_block = "\n\n".join(blocks)
 
         first_user = next((t for r, t in fresh if r == "user"), fresh[0][1])
+        # 제목·파일명은 사람의 말로 — 첨부 포인터 줄은 뺀다.
+        first_user = (
+            "\n".join(
+                ln for ln in first_user.splitlines() if not ln.startswith(POINTER_PREFIX)
+            ).strip()
+            or first_user
+        )
         filename, existing = await self._resolve_filename(provider, state, first_user)
         notes = provider.notes()
         if existing is None:
