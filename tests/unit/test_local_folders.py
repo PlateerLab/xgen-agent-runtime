@@ -70,6 +70,10 @@ def test_only_folder_tools_are_folder_bound_per_app():
     assert lf.is_folder_tool("mcp_mobile_DeleteFile")
     assert not lf.is_folder_tool("mcp_mobile_Notify")  # 모바일 알림은 도구 그룹이 정한다
     assert not lf.is_folder_tool("mcp_mobile_Shell")  # 휴대폰엔 터미널이 없다
+    assert lf.is_folder_tool("mcp_web_ReadFile")
+    assert lf.is_folder_tool("mcp__connector__mcp_web_Search")
+    assert not lf.is_folder_tool("mcp_web_Shell")  # 브라우저엔 터미널이 없다
+    assert not lf.is_folder_tool("mcp_web_TakePhoto")
     assert not lf.is_folder_tool("mcp_local_BrowserNavigate")
     assert not lf.is_folder_tool("mcp_local_McpAddServer")
     assert not lf.is_folder_tool("mcp_local_LocalControl")  # 옛 입구는 따로
@@ -124,7 +128,7 @@ def test_no_folder_note_says_there_are_no_device_tools_and_how_to_connect():
     note = lf.turn_note([])
     assert "No folder on the user's device is connected" in note
     assert "history only" in note
-    assert "[폴더 연결]" in note
+    assert "[폴더]" in note
 
 
 def test_connected_note_lists_folders_and_the_terminal_on_desktop():
@@ -147,6 +151,31 @@ def test_mobile_note_says_there_is_no_terminal():
     assert "Android phone" in note
     assert "mcp_mobile_*" in note
     assert "no terminal" in note
+
+
+def test_web_note_names_the_browser_and_says_there_is_no_terminal():
+    folders = lf.parse_local_folders([{"name": "report", "path": "/report"}])
+    note = lf.turn_note(
+        folders, available_tools=["mcp_web_ReadFile", "mcp_web_ListDir"], platform="web"
+    )
+    assert "user's web browser" in note
+    assert "mcp_web_*" in note
+    assert "no terminal" in note
+
+
+def test_unreachable_browser_asks_to_keep_the_page_open():
+    folders = lf.parse_local_folders([{"name": "report", "path": "/report"}])
+    note = lf.turn_note(folders, available_tools=[], platform="web")
+    assert "not reachable right now" in note
+    assert "keep this XGEN page open" in note
+
+
+def test_web_catalog_without_folders_hides_its_file_tools():
+    tools = [{"name": "mcp_web_ReadFile"}, {"name": "mcp_web_Search"}]
+    assert lf.filter_device_tools(tools, []) == []
+    folders = lf.parse_local_folders([{"name": "r", "path": "/r"}])
+    assert lf.filter_device_tools(tools, folders) == tools
+    assert "mcp_web_ReadFile" in lf.retired_device_tool_names()
 
 
 def test_connected_but_unreachable_app_is_said_plainly():
