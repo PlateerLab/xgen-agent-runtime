@@ -251,3 +251,12 @@ class HostServices(Protocol):
     #: Only names the device in the per-turn folder note ("the user's Mac").
     #: Absent method → the note says "device".
     def local_device_platform(self) -> str: ...
+
+    #: **OPTIONAL**: host notes about THIS turn (list of strings, "" items
+    #: dropped). They join ``SharedKeys.TURN_NOTES`` after the executor's own
+    #: folder note, so they ride the volatile tail next to the latest user
+    #: message and never enter history, fact extraction or the memory search
+    #: query. Use it for per-turn text that must not read as the user's words
+    #: (e.g. what the agent's memory chose for this question). Absent method
+    #: or an exception → no host notes.
+    def turn_notes(self) -> List[str]: ...

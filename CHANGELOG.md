@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added: 호스트가 이번 턴 안내를 턴 노트로 넘기는 선택 훅 `turn_notes()`
+
+호스트가 턴마다 바뀌는 글(예: 에이전트 기억이 이번 질문에 고른 답·지도)을 넘길 자리가 Context 포트뿐이었다.
+그 길은 사용자 메시지 본문이 되어 대화 기록·대화 노트·실행 카드·사실 추출·기억 검색어에 사용자 말로 남는다.
+`HostServices.turn_notes()`(OPTIONAL)가 돌려준 문자열을 실행기의 폴더 안내 뒤에 `SharedKeys.TURN_NOTES` 로 붙인다.
+폴더 안내와 같이 요청 사본에만 실리고 기록에는 남지 않는다. 훅이 없거나 실패하면 예전과 같다(안내 없음).
+
+검증: 새 단위 테스트 6건(요청 본문 비오염·훅 없음·실패·문자열 하나·폴더 안내 순서·CLI 백엔드)과 기존 폴더 안내 8건 통과.
+전체 테스트의 실패 목록은 origin/main 과 같다(Windows 경로·하위 프로세스 실패, 흔들리는 임시 파일 테스트 1건).
 ## [4.75.0] — 2026-10-01
 
 ### Added — 생각(thinking·reasoning) 조절을 한 값으로 (`llm_client.thinking`)

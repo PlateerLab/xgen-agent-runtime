@@ -166,6 +166,23 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
     return result_filter if callable(result_filter) else None
 
 
+def _host_turn_notes(host: Any) -> List[str]:
+    """호스트가 이번 턴에 덧붙이는 안내(OPTIONAL 훅 ``turn_notes``). 없거나 실패하면 빈 목록."""
+    probe = getattr(host, "turn_notes", None)
+    if not callable(probe):
+        return []
+    try:
+        notes = probe()
+    except Exception:  # noqa: BLE001 - 안내 때문에 턴을 깨지 않는다
+        logger.warning("agents/geny: 호스트 턴 안내 실패 (무시)", exc_info=True)
+        return []
+    if isinstance(notes, str):
+        notes = [notes]
+    if not isinstance(notes, (list, tuple)):
+        return []
+    return [str(n).strip() for n in notes if str(n or "").strip()]
+
+
 class AgentTurnExecutor:
     """execute() 의 host-무관 판. 서버·커넥터가 같은 run() 을 돈다."""
 
@@ -347,6 +364,9 @@ class AgentTurnExecutor:
             )
             if _folder_note:
                 _turn_notes.append(_folder_note)
+            # 호스트의 이번 턴 안내(예: 기억이 고른 문맥). 사용자 메시지에 섞으면 기록·사실 추출·
+            # 기억 검색어에 남으니, 폴더 안내처럼 요청 사본에만 싣는다.
+            _turn_notes.extend(_host_turn_notes(host))
             if registry:
                 logger.info(
                     "agents/geny: %d tool(s) registered (%d deferred) from Tools/Context ports",
