@@ -22,6 +22,8 @@ from PIL import Image, ImageOps
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from xgen_agent_runtime.core.file_blocks import file_block_pointer
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Stop Reason Mapping
@@ -287,26 +289,10 @@ def _image_block_to_google_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 def _file_block_to_text_fallback(block: Dict[str, Any]) -> str:
-    """Tell the agent which current-turn file it can read, **by absolute path**.
-
-    ``path`` is the session absolute path when the host knew the working folder
-    (:mod:`xgen_agent_runtime.host.attachment_paths`); only then does the agent
-    need no base of its own. Without it we fall back to the workspace-relative
-    form and say what it is relative to — never a bare path with no stated base,
-    which is what made the model invent a wrong root (2026-09-21).
-    """
-    name = block.get("name") or "unnamed"
-    mime = block.get("mime_type") or "application/octet-stream"
-    absolute = block.get("path")
-    if absolute and str(absolute).startswith("/"):
-        return f"[Current-turn attachment: {name} ({mime}). Read it at: {absolute}]"
-    relative = block.get("workspace_path") or absolute
-    if relative:
-        return (
-            f"[Current-turn attachment: {name} ({mime}). Read it at: {relative} "
-            "(relative to your working folder)]"
-        )
-    return f"[Current-turn attachment: {name} ({mime})]"
+    """Tell the agent where an attached file is, **by path** — see
+    :func:`xgen_agent_runtime.core.file_blocks.file_block_pointer` (one wording for every
+    backend, the short-term window and the conversation archive)."""
+    return file_block_pointer(block)
 
 
 def _user_content_to_openai_parts(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
