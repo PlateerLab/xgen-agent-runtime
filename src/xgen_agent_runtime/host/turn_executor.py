@@ -163,8 +163,8 @@ class AgentTurnExecutor:
         response_io_id = kwargs.get("response_io_id")
 
         try:
-            # host(HostServices)는 run() 인자로 받는다 — 서버는 ServerHostServices,
-            # 커넥터는 LocalHostServices. 본체는 인프라에 오직 host.* 로만 닿는다.
+            # host(HostServices)는 run() 인자로 받는다 — 서버는 ServerHostServices.
+            # 본체는 인프라에 오직 host.* 로만 닿는다.
             provider = (kwargs.get("provider") or "openai").strip()
 
             # provider별 파라미터 사전 검증 — 허용 범위 밖이면 실행 전 정확한 메시지로 차단.
@@ -345,48 +345,18 @@ class AgentTurnExecutor:
             if system_prompt is None:
                 system_prompt = default_prompt
 
-            # ── 연결된 사용자 클라우드 ─────────────────────────────────
-            #
-            # **한 번만** 준비한다. 준비는 곧 복원(hydrate)이라, 백엔드마다 따로
-            # 부르면 같은 트리를 두 번 내려받는다.
-            #
-            # 그리고 **반드시 알려 준다.** 경로만 열어 두면 에이전트는 그곳이
-            # 있는 줄 모르고 자기 workspace 만 뒤진 뒤 "클라우드에는 이 파일
-            # 하나뿐" 이라고 답한다 — 실제로 그랬다. 열어 주는 것과 알려 주는
-            # 것은 다른 일이다.
-            # ── 커넥터 로컬 워크스페이스 프로브 ──────────────────────
-            #
-            # 데스크톱 커넥터 대화이고 이 에이전트의 워크스페이스가 사용자 PC 로
-            # 동기화되고 있으면, 파일/셸 도구는 sandbox 가 아니라 **사용자 PC**
-            # 에서 돈다 (ConnectorLocalSandbox — 같은 GenySandbox 프로토콜,
-            # 도구 표면은 동일). 실패/미지원은 전부 None = 조용한 sandbox 폴백.
-            #
-            # claude_code CLI 도 로컬 실행한다 — 도구는 ToolContext.sandbox 하나로
-            # 라우팅되므로 그 값이 ConnectorLocalSandbox 면 CLI 의
-            # mcp__connector__Bash/Read/Write 도 사용자 PC 에서 돈다. 단 CLI
-            # run-ctx 의 working_dir 을 가상 /ws 로 맞춰야 한다(_build_cli_runtime
-            # 에서 처리 — 안 그러면 sandbox_path 가드가 전부 거절).
-            #
-            # codex 만 제외: 자체 OS 샌드박스라 파일/셸을 ToolContext.sandbox 로
-            # 돌릴 표면이 없다.
-            # (ambient 클라우드 마운트/프롬프트/FileCloud 스킬은 제거됐다 —
-            #  에이전트는 노드가 도구를 제공할 때만 저장소를 안다. 파일 저장소는
-            #  file_system/filestore_search 노드가 담당한다.)
             # ── 코드 실행 기반 (xgen-workflow-sandbox) ─────────────────
             #
             # 켜져 있으면 파일/셸 도구는 **이 파드가 아니라** 러너 세션에서
-            # 돈다. 준비가 곧 복원이라 여기서 한 번만 붙인다 (클라우드와 같은
-            # 규약). 실패하면 붙이지 않는다 — 반쯤 붙은 상태가 제일 나쁘다.
+            # 돈다. 준비가 곧 복원이라 여기서 한 번만 붙인다.
+            # 실패하면 붙이지 않는다 — 반쯤 붙은 상태가 제일 나쁘다.
             # 실패해도 계속 진행하지 **않는다.** 세션 없이 가면 도구가 이 파드
             # 에서 돌고, 그건 이 기능이 없애려던 바로 그 상태다 — 게다가 조용히
             # 그렇게 되면 격리가 사라진 줄 아무도 모른 채 무거운 도구 하나가
             # 같은 파드의 다른 대화를 함께 느리게 만든다.
             #
             # 안 쓰기로 했다면 관리자 설정에서 끄면 된다 (그때는 None 이 온다).
-            # 실행 환경: 커넥터 로컬(사용자 PC) 또는 러너 세션 — host 가 분기를
-            # 캡슐화한다(같은 GenySandbox 프로토콜). 커넥터 로컬은 attach/publish
-            # 를 하지 않는다: 진실은 사용자 PC 폴더이고 인덱스 반영은 커넥터 동기화
-            # 엔진이 한다(이중 기록 금지).
+            # 러너 세션은 host 가 붙인다(GenySandbox 프로토콜).
             _sandbox = host.make_sandbox(
                 str(kwargs.get("workflow_id") or ""),
                 kwargs.get("user_id"),
@@ -425,9 +395,9 @@ class AgentTurnExecutor:
             except Exception as _hexc:  # noqa: BLE001
                 logger.warning("agents/geny: 호스트 스킬 도구 실패 (스킵): %s", _hexc)
             kwargs["_host_skill_tools"] = _host_skill_tools
-            # 실행 환경 안내 — 도구가 어디서 도는지 host 가 설명한다(서버: 러너/
-            # 커넥터 로컬 sandbox, 커넥터 사이드카: 이 PC). 안 알려 주면 에이전트는
-            # 자기 코드가 어디서 도는지 모른 채 /tmp 에 쓰고 다음 턴에 잃는다.
+            # 실행 환경 안내 — 도구가 어디서 도는지 host 가 설명한다(러너 sandbox).
+            # 안 알려 주면 에이전트는 자기 코드가 어디서 도는지 모른 채 /tmp 에 쓰고
+            # 다음 턴에 잃는다.
             _env_block = host.environment_prompt(_sandbox, provider)
             if _env_block:
                 system_prompt = system_prompt + "\n\n" + _env_block
@@ -490,7 +460,7 @@ class AgentTurnExecutor:
                     str(kwargs.get("workflow_id") or ""), interaction_id
                 )
                 if memory_provider is not None and provider in _CLI_BACKENDS and not _cli_bridge_ok:
-                    # 브릿지 없는 CLI(데스크톱 사이드카): 도구는 없고 자동 계층(Stage 2
+                    # 브릿지 없는 CLI: 도구는 없고 자동 계층(Stage 2
                     # 주입 + Stage 15 기록)만 돈다 — 그 사실만 알리고 도구는 광고 안 함.
                     system_prompt = system_prompt + MEMORY_AUTO_PROMPT_BLOCK
                     logger.info(
@@ -685,9 +655,9 @@ class AgentTurnExecutor:
                         user_id=kwargs.get("user_id"),
                         workflow_name=str(kwargs.get("workflow_name") or ""),
                     )
-                    # 프롬프트 블록은 도구가 **실제로 등록된** 경우에만 — 호스트가 미제공
-                    # (데스크톱 사이드카 v1: WorkflowSelf 없음)이면 "그래프를 영구 편집할 수
-                    # 있다"고 말해 놓고 도구가 없는 유령 안내가 된다.
+                    # 프롬프트 블록은 도구가 **실제로 등록된** 경우에만 — 호스트가
+                    # WorkflowSelf 를 주지 않았으면 "그래프를 영구 편집할 수 있다"고 말해
+                    # 놓고 도구가 없는 유령 안내가 된다.
                     if registry.get("WorkflowSelf") is not None:
                         system_prompt = system_prompt + SELF_EVOLUTION_PROMPT_BLOCK
                         if provider in _CLI_BACKENDS:
@@ -805,7 +775,7 @@ class AgentTurnExecutor:
                         pass  # 위에서 판정·로그 끝 — 미보고 완료분 주입만 계속
                     elif not _delegation_wired(delegation_extras):
                         # host 가 위임 백엔드(subagent_manager/task_runner/task_registry)
-                        # 를 주지 않았다(데스크톱 사이드카 v1: {}). 이때 SDK 패밀리
+                        # 를 주지 않았다({}). 이때 SDK 패밀리
                         # (SubAgent*/Task*)를 등록하면 도구는 보이는데 extras 가 비어
                         # 매 호출이 NO_SUBAGENT_MANAGER 로 죽는 유령 도구가 된다 —
                         # WorkflowSelf 와 같은 원칙으로 등록·노트 모두 생략.
@@ -1317,8 +1287,8 @@ class AgentTurnExecutor:
             err = f"[ERROR] geny agent could not start: {exc}"
             return iter([err]) if streaming else err
 
-        # 호스트가 턴 단위 취소 훅을 줄 수 있다(사이드카 데몬: 같은 interaction 의
-        # 다음 턴을 오염시키지 않는 per-turn Event). 없으면 interaction 스코프 레지스트리.
+        # 호스트가 턴 단위 취소 훅을 줄 수 있다(같은 interaction 의 다음 턴을
+        # 오염시키지 않는 per-turn Event). 없으면 interaction 스코프 레지스트리.
         _extra_cancel = kwargs.get("cancel_check")
         if not callable(_extra_cancel):
             _extra_cancel = None
@@ -1337,9 +1307,7 @@ class AgentTurnExecutor:
             #
             # delete_missing 은 **hydrate 가 성공한 턴에서만** 켠다: 복원에
             # 실패한 빈 캐시로 삭제를 전파하면 원본이 통째로 날아간다.
-            # 턴이 만진 파일을 원본에 반영한다 — 3-way(커넥터로컬 flush / 러너
-            # publish / 파드 publish) + 클라우드/공유. host 가 캡슐화한다: 서버는
-            # 실제 반영, 커넥터 사이드카는 자기 동기화 엔진으로 flush. delete_missing
+            # 러너 publish / 파드 publish 는 host 가 캡슐화한다. delete_missing
             # 은 hydrate 성공 턴에서만(빈 캐시 삭제 전파 방지) — host 가 판정한다.
             host.finalize_turn(
                 sandbox=_sandbox,

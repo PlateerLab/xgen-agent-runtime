@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.69.2] — 2026-09-30
+
+### Removed — 커넥터 로컬 실행·동기화의 남은 자리
+
+PC 에서 턴을 돌리던 사이드카와 PC↔서버 파일 동기화는 이미 없어졌다. 모든 턴은 러너 세션 하나에서 돈다.
+
+- `is_connector_local` 분기 셋 — 요청 파일 미리 붙이기(`host/referenced_files.py`), 작업 폴더 빠른 경로
+  (`host/workspace_fast_path.py`, reason `connector_local`), 도구 단계의 "PC 도 확인하라" 안내 생략
+  (`stages/s10_tool/artifact/default/stage.py`). 그 속성을 켜던 sandbox(ConnectorLocalSandbox)를 만드는 곳이
+  없어 늘 거짓이었다.
+- `[project.scripts] xgen-agent-sidecar` — 가리키던 `host.sidecar` 모듈이 없다.
+- `HostServices`·`AgentTurnExecutor`·`host/__init__` 주석의 LocalHostServices·커넥터 동기화 flush·
+  ConnectorLocalSandbox·사이드카 설명을 지금 구조(서버 호스트 하나)에 맞게 고침.
+
+동작 변화 없음.
+
 ## [4.69.1] — 2026-09-29
 
 ### Fixed — 첨부 파일이 작업 폴더에 있는데 에이전트가 자리를 잃던 것

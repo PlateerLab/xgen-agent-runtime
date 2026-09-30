@@ -6,9 +6,9 @@ Anthropic 형태의 ``{"role", "content"}`` 딕셔너리 리스트를 쓰므로 
 변환한다. System 메시지는 파이프라인이 시스템 프롬프트를 따로 관리하므로
 걸러낸다 (agent_xgen 의 prepare_chat_history 와 동일한 규칙).
 
-커넥터 로컬 턴은 서버가 이력을 **이미 Anthropic 형태의 평문 dict** 리스트
-(``[{"role": "user"|"assistant", "content": str}, …]``, 옵션 키 ``memory``)로 실어
-보내므로 같은 함수가 그 모양도 받는다 — 객체/dict 가 섞여 있어도 항목별로 처리한다.
+이력이 **이미 Anthropic 형태의 평문 dict** 리스트
+(``[{"role": "user"|"assistant", "content": str}, …]``)로 올 수도 있어 같은 함수가
+그 모양도 받는다 — 객체/dict 가 섞여 있어도 항목별로 처리한다.
 """
 
 from __future__ import annotations
@@ -41,8 +41,7 @@ def history_messages(memory_value: Any) -> List[Dict[str, Any]]:
 
     Accepts ``List[BaseMessage]`` (duck-typed on ``.type``/``.content``) **or**
     plain dicts ``{"role": "user"|"assistant", "content": ...}`` (already
-    Anthropic-shaped — the server ships these for connector-local turns;
-    unknown roles / empty content are dropped), tolerates the raw
+    Anthropic-shaped; unknown roles / empty content are dropped), tolerates the raw
     ``(messages, context_str)`` tuple shape of the memory node's execute(),
     and returns ``[]`` for anything unusable.
     """
