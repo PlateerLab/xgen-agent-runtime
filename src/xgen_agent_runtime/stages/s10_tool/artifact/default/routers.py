@@ -264,6 +264,9 @@ class RegistryRouter(ToolRouter):
                 )
 
         result = await self._dispatch_with_lifecycle(tool, tool_input, context)
+        # 호스트 결과 필터 — 도구가 돈 직후, 파일 저장·미리보기·이벤트·반복 가드보다 먼저.
+        # SDK 루프와 CLI 도구 표면이 모두 여기를 지나므로 두 경로가 같은 결과를 본다.
+        result = await _apply_result_filter(tool, result, context)
         result = self._open_gate_family(tool_name, result, context)
         return _with_repair_notes(result, repair_notes)
 
@@ -425,7 +428,7 @@ class RegistryRouter(ToolRouter):
 
         # Per-tool timeout (audit R3): a hung network tool / MCP adapter
         # would otherwise wedge the whole turn forever with no recovery.
-        # 0 = no timeout (long-running tools like agent delegation).
+        # 0 = no timeout (tools whose work legitimately runs long).
         try:
             timeout_s = float(getattr(tool.capabilities(tool_input), "timeout_s", 0.0) or 0.0)
         except Exception:  # noqa: BLE001 — capabilities must never block dispatch
@@ -492,6 +495,40 @@ class RegistryRouter(ToolRouter):
             output_preview=_preview_result(result),
         )
         return result
+
+
+async def _apply_result_filter(tool: Tool, result: ToolResult, context: ToolContext) -> ToolResult:
+    """``context.result_filter`` 를 한 번 적용한다 — 실패하면 원래 결과(fail-open).
+
+    필터는 호스트 정책(예: 외부 데이터 도구 결과의 개인정보 가림)이다. 필터가 고장 나도
+    도구 호출 자체를 깨지 않는다 — 경고를 남기고 원래 결과를 쓴다. ``None`` 을 돌려주면
+    "손대지 않음" 으로 본다. 오류 결과도 그대로 넘긴다 — 무엇을 가릴지는 호스트가 정한다.
+    """
+    result_filter = getattr(context, "result_filter", None)
+    if result_filter is None:
+        return result
+    try:
+        filtered = result_filter(tool, result)
+        if _is_awaitable(filtered):
+            filtered = await filtered
+    except Exception:  # noqa: BLE001 — fail-open: 필터 고장이 도구 호출을 깨지 않는다
+        logger.warning(
+            "tool result filter failed for %s — using the unfiltered result",
+            tool.name,
+            exc_info=True,
+        )
+        return result
+    if filtered is None:
+        return result
+    if not isinstance(filtered, ToolResult):
+        logger.warning(
+            "tool result filter returned %s for %s (expected ToolResult) — "
+            "using the unfiltered result",
+            type(filtered).__name__,
+            tool.name,
+        )
+        return result
+    return filtered
 
 
 def _preview_result(result: ToolResult, *, max_chars: int = 500) -> str:

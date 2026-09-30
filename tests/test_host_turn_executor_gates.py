@@ -791,3 +791,81 @@ def test_codex_gets_every_tool_up_front_and_claude_keeps_the_hierarchy(capture) 
     _run(claude_host, capture, provider="claude_code", tools=[_GraphTool()])
     claude_reg = claude_host.cli_params["_tool_surface"].registry
     assert not claude_reg.is_exposed("jira_search"), "Claude Code 는 목록을 다시 읽으므로 계층을 지킨다"
+
+
+# ── [RESULT_FILTER] 호스트의 도구 결과 필터 (4.71.0) ─────────────────────────
+#
+# 호스트(xgen-workflow)는 관리자 정책에 따라 외부 데이터 도구 결과의 개인정보·금칙어를 가린다.
+# 필터는 턴마다 한 번 받아 SDK 파이프라인과 CLI 도구 표면의 **같은** 도구 컨텍스트에 싣는다 —
+# 적용은 Stage 10 라우터 한 곳이라 두 경로가 같은 결과를 본다. 훅이 없는 옛 호스트는 그대로 돈다.
+
+
+async def _mask_filter(tool, result):  # noqa: ANN001
+    return result
+
+
+class _BuiltinToolsHost(_FakeHost):
+    """내장 도구가 있어 run_tool_context 가 만들어지는 턴."""
+
+    def register_builtin_tools(self, registry, **kwargs):
+        registry.register(BashTool(), core=True)
+        return {"tools": ["Bash"], "extras": {}, "families": ["shell"]}
+
+    def build_run_tool_context(self, **kwargs):
+        run_dir = str(kwargs["run_dir"])
+        return ToolContext(session_id="inter-1", working_dir=run_dir, allowed_paths=[run_dir])
+
+
+def test_host_protocol_declares_optional_tool_result_filter() -> None:
+    fn = getattr(HostServices, "tool_result_filter", None)
+    assert fn is not None
+    assert [p for p in inspect.signature(fn).parameters if p != "self"] == []
+    # 기본 구현은 필터 없음 — 프로토콜을 상속한 호스트가 구현을 빠뜨려도 결과는 그대로.
+    assert HostServices.tool_result_filter(object()) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("host_cls", [_FakeHost, _BuiltinToolsHost])
+def test_result_filter_reaches_the_sdk_tool_stage(capture, host_cls) -> None:
+    host = host_cls()
+    host.tool_result_filter = lambda: _mask_filter  # type: ignore[attr-defined]
+    seen = _run(host, capture, provider="openai", tools=[_GraphTool()])
+    assert seen["tool_result_filter"] is _mask_filter
+    if seen.get("tool_context") is not None:
+        assert seen["tool_context"].result_filter is _mask_filter
+
+
+@pytest.mark.parametrize("host_cls", [_FakeHost, _BuiltinToolsHost])
+@pytest.mark.parametrize("provider", ["claude_code", "codex"])
+def test_result_filter_reaches_the_cli_tool_surface(capture, host_cls, provider) -> None:
+    host = host_cls()
+    host.tool_result_filter = lambda: _mask_filter  # type: ignore[attr-defined]
+    seen = _run(host, capture, provider=provider, tools=[_GraphTool()])
+    surface = host.cli_params["_tool_surface"]
+    assert surface.tool_context.result_filter is _mask_filter
+    # 표면의 Stage 10 은 그 컨텍스트를 그대로 쓴다 — 실행 컨텍스트에도 실린다.
+    ctx = surface._stage.build_dispatch_context(surface.state)
+    assert ctx.result_filter is _mask_filter
+    # CLI 턴은 파이프라인 Stage 10 이 돌지 않는다.
+    assert seen["tool_result_filter"] is None
+
+
+@pytest.mark.parametrize("provider", ["openai", "claude_code"])
+def test_host_without_the_hook_runs_unfiltered(capture, provider) -> None:
+    host = _FakeHost()
+    seen = _run(host, capture, provider=provider, tools=[_GraphTool()])
+    assert seen["tool_result_filter"] is None
+    if provider == "claude_code":
+        assert host.cli_params["_tool_surface"].tool_context.result_filter is None
+
+
+def test_a_failing_hook_runs_unfiltered(capture, caplog) -> None:
+    host = _FakeHost()
+
+    def _boom():
+        raise RuntimeError("policy store down")
+
+    host.tool_result_filter = _boom  # type: ignore[attr-defined]
+    with caplog.at_level(logging.WARNING):
+        seen = _run(host, capture, provider="openai", tools=[_GraphTool()])
+    assert seen["tool_result_filter"] is None
+    assert "tool_result_filter" in caplog.text

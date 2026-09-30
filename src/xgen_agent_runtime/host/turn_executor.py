@@ -143,6 +143,23 @@ def _local_device_platform(host: Any) -> Optional[str]:
         return None
 
 
+def _tool_result_filter(host: Any) -> Optional[Any]:
+    """이 턴의 도구 결과 필터 — 호스트가 주면(OPTIONAL 훅 ``tool_result_filter``). 없으면 None.
+
+    턴마다 한 번 묻는다. 훅이 없거나 실패하면 필터 없이 돈다(결과 그대로) — 필터 하나 때문에
+    턴을 깨지 않는다. 받은 필터는 SDK·CLI 두 경로의 도구 컨텍스트에 똑같이 실린다.
+    """
+    probe = getattr(host, "tool_result_filter", None)
+    if not callable(probe):
+        return None
+    try:
+        result_filter = probe()
+    except Exception:  # noqa: BLE001 — 훅 실패는 필터 없음
+        logger.warning("agents/geny: tool_result_filter 훅 실패 — 필터 없이 진행", exc_info=True)
+        return None
+    return result_filter if callable(result_filter) else None
+
+
 class AgentTurnExecutor:
     """execute() 의 host-무관 판. 서버·커넥터가 같은 run() 을 돈다."""
 
@@ -700,6 +717,12 @@ class AgentTurnExecutor:
                     host=host,
                 )
 
+            # 호스트의 도구 결과 필터(선택 훅) — 턴마다 한 번 받아 SDK·CLI 두 경로의 도구
+            # 컨텍스트에 똑같이 싣는다. 적용은 Stage 10 라우터 한 곳(RegistryRouter.route)이다.
+            _result_filter = _tool_result_filter(host)
+            if _result_filter is not None and run_tool_context is not None:
+                run_tool_context.result_filter = _result_filter
+
             llm_client = None
             cli_cleanup = None
             #: CLI 턴의 도구 표면 — 호스트의 MCP 브릿지가 광고·실행한다(host.tool_surface).
@@ -718,6 +741,9 @@ class AgentTurnExecutor:
                         state=state,
                         server_name=_cli_mcp_server,
                     )
+                    if _result_filter is not None:
+                        # run_tool_context 가 없으면 표면이 제 컨텍스트를 만든다 — 거기에도 싣는다.
+                        _tool_surface.tool_context.result_filter = _result_filter
                     kwargs["_tool_surface"] = _tool_surface
                     # 숨김 목록 — SDK 는 Stage 3 이 붙이는 글을 같은 함수로 만들어 붙인다.
                     _catalog = deferred_catalog_text(registry)
@@ -1028,6 +1054,8 @@ class AgentTurnExecutor:
                 memory_provider=memory_provider,
                 memory_distill_spec=memory_distill_spec,
                 tool_context=None if _is_cli else run_tool_context,
+                # run_tool_context 가 없는 턴(내장 도구 없음)에도 Stage 10 에 필터가 실리게.
+                tool_result_filter=None if _is_cli else _result_filter,
                 # 모델의 실제 윈도우 — 압축 임계(80%)·guard·루프 토큰-비 정지의
                 # 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
                 context_window_budget=budget_window,

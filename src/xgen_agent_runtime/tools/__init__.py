@@ -7,6 +7,7 @@ from xgen_agent_runtime.tools.base import (
     ToolCapabilities,
     PermissionDecision,
     build_tool,
+    tool_origin,
 )
 from xgen_agent_runtime.tools.registry import ToolRegistry
 from xgen_agent_runtime.tools.adhoc import (
@@ -60,6 +61,7 @@ __all__ = [
     "ToolCapabilities",
     "PermissionDecision",
     "build_tool",
+    "tool_origin",
     "ToolRegistry",
     # Ad-hoc
     "AdhocTool",

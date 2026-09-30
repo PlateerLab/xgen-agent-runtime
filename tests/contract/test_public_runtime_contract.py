@@ -151,8 +151,6 @@ def test_pipeline_state_public_fields_are_stable() -> None:
         "pending_tool_calls",
         "tool_results",
         "tool_dispatcher",
-        "delegate_requests",
-        "agent_results",
         "evaluation_score",
         "evaluation_feedback",
         "final_text",
@@ -165,7 +163,6 @@ def test_pipeline_state_public_fields_are_stable() -> None:
         "events",
         "llm_client",
         "credentials",
-        "subagent_registry",
         "session_runtime",
     ]
 

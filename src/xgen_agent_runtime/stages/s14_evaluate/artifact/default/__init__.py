@@ -1,10 +1,9 @@
-"""Default artifact for Stage 12: Evaluate."""
+"""Default artifact for Stage 14: Evaluate."""
 
 from xgen_agent_runtime.stages.s14_evaluate.artifact.default.stage import EvaluateStage
 from xgen_agent_runtime.stages.s14_evaluate.artifact.default.strategies import (
     SignalBasedEvaluation,
     CriteriaBasedEvaluation,
-    AgentEvaluation,
     NoScorer,
     WeightedScorer,
 )
@@ -16,7 +15,6 @@ __all__ = [
     "EvaluateStage",
     "SignalBasedEvaluation",
     "CriteriaBasedEvaluation",
-    "AgentEvaluation",
     "NoScorer",
     "WeightedScorer",
 ]

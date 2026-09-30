@@ -102,7 +102,7 @@ class CredentialBundle:
     """Bundle of per-provider credentials.
 
     The host (Geny) builds one bundle per session and passes it to
-    ``Pipeline.from_manifest_async``. Stages and sub-pipelines look up the
+    ``Pipeline.from_manifest_async``. Stages look up the
     needed provider by name.
 
     Honesty note (audit §2.6): this bundle is the *intended* single

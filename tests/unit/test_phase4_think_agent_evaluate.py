@@ -1,4 +1,7 @@
-"""Phase 4 tests — Think, Agent, Evaluate stages."""
+"""Phase 4 tests — Think, Evaluate stages.
+
+(The Stage 12 Agent tests went with the stage — retired in 4.71.0.)
+"""
 
 import sys
 import os
@@ -22,14 +25,6 @@ from xgen_agent_runtime.stages.s08_think import (
     ThinkingFilterProcessor,
     ThinkingBlock,
     ThinkingResult,
-)
-
-# Agent imports
-from xgen_agent_runtime.stages.s12_agent import (
-    AgentStage,
-    SingleAgentOrchestrator,
-    DelegateOrchestrator,
-    DefaultSubPipelineFactory,
 )
 
 # Evaluate imports
@@ -128,100 +123,6 @@ async def test_think_filter_processor():
     result = await processor.process(blocks, state)
     assert len(result) == 2
     assert all("SECRET" not in b.text for b in result)
-
-
-# ── Agent Stage ──
-
-
-@pytest.mark.asyncio
-async def test_agent_single_orchestrator_bypass():
-    """SingleAgentOrchestrator bypasses with no delegates."""
-    stage = AgentStage(orchestrator=SingleAgentOrchestrator())
-    state = PipelineState()
-    assert stage.should_bypass(state) is True
-
-
-@pytest.mark.asyncio
-async def test_agent_single_orchestrator_no_delegation():
-    """SingleAgentOrchestrator returns no delegation."""
-    orchestrator = SingleAgentOrchestrator()
-    state = PipelineState()
-    result = await orchestrator.orchestrate(state)
-    assert result.delegated is False
-    assert result.sub_results == []
-
-
-@pytest.mark.asyncio
-async def test_agent_delegate_orchestrator():
-    """DelegateOrchestrator delegates to sub-pipeline."""
-    # Create a sub-pipeline factory
-    factory = DefaultSubPipelineFactory()
-
-    def create_sub():
-        p = Pipeline(PipelineConfig(name="sub"))
-        p.register_stage(InputStage())
-        p.register_stage(
-            APIStage(provider=MockProvider(default_text="Sub result"), retry=NoRetry())
-        )
-        p.register_stage(ParseStage())
-        p.register_stage(YieldStage())
-        return p
-
-    factory.register("researcher", create_sub)
-
-    orchestrator = DelegateOrchestrator(factory=factory)
-    state = PipelineState(session_id="main")
-    state.delegate_requests = [
-        {"agent_type": "researcher", "task": "Find information about X"},
-    ]
-
-    result = await orchestrator.orchestrate(state)
-    assert result.delegated is True
-    assert len(result.sub_results) == 1
-    assert result.sub_results[0]["success"] is True
-    assert result.sub_results[0]["text"] == "Sub result"
-
-
-@pytest.mark.asyncio
-async def test_agent_delegate_unknown_type():
-    """DelegateOrchestrator handles unknown agent type."""
-    factory = DefaultSubPipelineFactory()
-    orchestrator = DelegateOrchestrator(factory=factory)
-    state = PipelineState()
-    state.delegate_requests = [
-        {"agent_type": "unknown", "task": "Do something"},
-    ]
-
-    result = await orchestrator.orchestrate(state)
-    assert result.delegated is True
-    assert result.sub_results[0]["success"] is False
-    assert "Unknown agent type" in result.sub_results[0]["error"]
-
-
-@pytest.mark.asyncio
-async def test_agent_stage_integrates_results():
-    """AgentStage integrates sub-agent results into state."""
-    factory = DefaultSubPipelineFactory()
-
-    def create_sub():
-        p = Pipeline(PipelineConfig(name="sub"))
-        p.register_stage(InputStage())
-        p.register_stage(APIStage(provider=MockProvider(default_text="Done"), retry=NoRetry()))
-        p.register_stage(ParseStage())
-        p.register_stage(YieldStage())
-        return p
-
-    factory.register("helper", create_sub)
-
-    stage = AgentStage(orchestrator=DelegateOrchestrator(factory=factory))
-    state = PipelineState(session_id="test")
-    state.delegate_requests = [
-        {"agent_type": "helper", "task": "Help me"},
-    ]
-
-    await stage.execute(None, state)
-    assert len(state.agent_results) == 1
-    assert state.agent_results[0]["success"] is True
 
 
 # ── Evaluate Stage ──

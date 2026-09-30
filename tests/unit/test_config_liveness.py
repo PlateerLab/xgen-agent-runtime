@@ -343,49 +343,6 @@ async def _probe_s06_timeout_ms() -> None:
         raise AssertionError("timeout_ms did not bound a stream that never started")
 
 
-class _RecordingOrchestrator:
-    """AgentOrchestrator double that always wants to delegate."""
-
-    name = "recording"
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def configure(self, config):  # noqa: ANN001 — Strategy surface
-        pass
-
-    async def orchestrate(self, state):  # noqa: ANN001
-        from xgen_agent_runtime.stages.s12_agent.types import AgentResult
-
-        self.calls += 1
-        return AgentResult(
-            delegated=True,
-            sub_results=[{"agent_type": "probe", "success": True, "text": "hi"}],
-        )
-
-
-async def _probe_s12_max_delegations() -> None:
-    """max_delegations truncates delegate_requests before dispatch; cap=0
-    refuses delegation outright and announces agent.delegations_capped."""
-    from xgen_agent_runtime.stages.s12_agent import AgentStage
-
-    orchestrator = _RecordingOrchestrator()
-    stage = AgentStage(orchestrator=orchestrator)
-    stage.update_config({"max_delegations": 0})
-    state = PipelineState(session_id="delegation-cap")
-    state.delegate_requests = [{"agent_type": "probe", "task": "x"}]
-
-    await stage.execute("in", state)
-
-    assert state.agent_results == [], (
-        "max_delegations=0 must refuse delegation — sub-agent results "
-        "were appended anyway"
-    )
-    assert orchestrator.calls == 0, "orchestrator dispatched despite cap=0"
-    capped = [e for e in state.events if e["type"] == "agent.delegations_capped"]
-    assert [e["data"] for e in capped] == [{"requested": 1, "cap": 0}]
-
-
 async def _probe_s16_max_turns() -> None:
     """max_turns caps the loop ahead of state.max_iterations."""
     from xgen_agent_runtime.stages.s16_loop import LoopStage
@@ -483,7 +440,6 @@ LIVENESS: Dict[Tuple[int, str], Entry] = {
     (6, "stream"): Probe(_probe_s06_stream),
     (6, "timeout_ms"): Probe(_probe_s06_timeout_ms),
     (10, "max_concurrency"): CoveredBy("tests/unit/test_tool_stage_max_concurrency.py"),
-    (12, "max_delegations"): Probe(_probe_s12_max_delegations),
     (16, "max_turns"): Probe(_probe_s16_max_turns),
     (16, "early_stop_on"): Probe(_probe_s16_early_stop_on),
     (18, "stateless"): Probe(_probe_s18_stateless),

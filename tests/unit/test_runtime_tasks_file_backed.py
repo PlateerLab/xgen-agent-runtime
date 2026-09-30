@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from xgen_agent_runtime.stages.s13_task_registry import (
+from xgen_agent_runtime.runtime.tasks import (
     FileBackedRegistry,
     TaskFilter,
     TaskRecord,

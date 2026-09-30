@@ -1,9 +1,8 @@
-"""Default artifact strategies for Stage 12: Evaluate."""
+"""Default artifact strategies for Stage 14: Evaluate."""
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Dict, List, Optional, Type
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
@@ -61,13 +60,6 @@ class SignalBasedEvaluation(EvaluationStrategy):
                 score=0.0,
                 decision="error",
                 feedback=state.completion_detail or "Error encountered.",
-            )
-
-        if signal == "delegate":
-            return EvaluationResult(
-                passed=True,
-                decision="continue",
-                feedback=f"Delegated to: {state.completion_detail or 'unknown'}",
             )
 
         return EvaluationResult(
@@ -171,48 +163,6 @@ class CriteriaBasedEvaluation(EvaluationStrategy):
         )
 
 
-class AgentEvaluation(EvaluationStrategy):
-    """Use evaluator agent results from Stage 11."""
-
-    @property
-    def name(self) -> str:
-        return "agent_evaluation"
-
-    async def evaluate(self, state: PipelineState) -> EvaluationResult:
-        eval_input = state.metadata.get("evaluation_input")
-        if not eval_input:
-            return EvaluationResult(passed=True, decision="complete")
-
-        if not eval_input.get("evaluator_success", False):
-            return EvaluationResult(
-                passed=True,
-                decision="complete",
-                feedback="Evaluator failed; accepting response as-is.",
-                metadata=eval_input,
-            )
-
-        evaluator_text = eval_input.get("evaluator_response", "")
-        score = self._extract_score(evaluator_text)
-
-        return EvaluationResult(
-            passed=score is None or score >= 0.6,
-            score=score,
-            decision="complete" if (score is None or score >= 0.6) else "retry",
-            feedback=evaluator_text[:500],
-            metadata=eval_input,
-        )
-
-    def _extract_score(self, text: str) -> Optional[float]:
-        match = re.search(r"[Ss]core[:\s]+(\d+(?:\.\d+)?)\s*/\s*100", text)
-        if match:
-            return float(match.group(1)) / 100.0
-        match = re.search(r"[Ss]core[:\s]+(\d+(?:\.\d+)?)", text)
-        if match:
-            val = float(match.group(1))
-            return val / 100.0 if val > 1.0 else val
-        return None
-
-
 class NoScorer(QualityScorer):
     """No scoring — always returns 1.0."""
 
@@ -304,13 +254,13 @@ class EvaluationChain(EvaluationStrategy):
     Failure isolation: an evaluator that raises is logged at WARNING
     and skipped. The chain marches on rather than blowing up the
     whole evaluation pass — matches the fail-open semantics the rest
-    of Stage 12 already follows.
+    of Stage 14 already follows.
 
     Use cases:
         * **Layered policy**: ``[SignalBasedEvaluation(),
-          CriteriaBasedEvaluation(...), AgentEvaluation()]`` — cheap
-          checks first, expensive evaluator-LLM only when nothing
-          earlier said anything definitive.
+          CriteriaBasedEvaluation(...), BinaryClassifyEvaluation()]``
+          — cheap checks first, the heavier evaluator only when
+          nothing earlier said anything definitive.
         * **Multiple criteria packs** (``CriteriaBasedEvaluation``
           for safety, then for quality, then for length) without
           having to merge their criteria lists.
@@ -492,7 +442,6 @@ def _build_evaluator_registry() -> Dict[str, Type[EvaluationStrategy]]:
     return {
         "signal_based": SignalBasedEvaluation,
         "criteria_based": CriteriaBasedEvaluation,
-        "agent_evaluation": AgentEvaluation,
         "binary_classify": BinaryClassifyEvaluation,
         "evaluation_chain": EvaluationChain,
     }

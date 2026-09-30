@@ -25,6 +25,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.host.local_folders import device_tool_name, model_tool_name
 from xgen_agent_runtime.tools import Tool, ToolResult, build_tool
+from xgen_agent_runtime.tools.base import with_origin
 
 logger = logging.getLogger("xgen_agent_runtime.host.device_tools")
 
@@ -174,11 +175,15 @@ def build_device_tool(
             return ToolResult(content=f"Error: {exc}", is_error=True)
         return to_tool_result(name, payload)
 
-    return build_tool(
-        name=name,
-        description=str(description or f"Device tool {tool} on {server}"),
-        input_schema=schema,
-        execute=_execute,
+    # 종류 표지 — 이름 접두는 MCP 노드 도구와 겹칠 수 있다(결과 필터가 종류로 판정한다).
+    return with_origin(
+        build_tool(
+            name=name,
+            description=str(description or f"Device tool {tool} on {server}"),
+            input_schema=schema,
+            execute=_execute,
+        ),
+        "device",
     )
 
 
@@ -192,11 +197,14 @@ def build_device_guide(*, name: str, description: str, text: str) -> Tool:
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         return ToolResult(content=text)
 
-    return build_tool(
-        name=name,
-        description=description,
-        input_schema={"type": "object", "properties": {}},
-        execute=_execute,
+    return with_origin(
+        build_tool(
+            name=name,
+            description=description,
+            input_schema={"type": "object", "properties": {}},
+            execute=_execute,
+        ),
+        "device",
     )
 
 

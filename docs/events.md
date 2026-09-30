@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-26.
-> Catalogue version: **15** · events: **140**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-30.
+> Catalogue version: **16** · events: **140**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -16,6 +16,8 @@ statement):
 - **Payloads may gain fields** in minor releases; existing fields keep
   their meaning. Field docs below are descriptive, not strict schemas.
 - `…?` marks fields present only in some emissions of the event.
+- **Retired** events (`RETIRED_EVENT_TYPES`) are still valid names but
+  are no longer emitted; they leave the catalogue at the next major version.
 
 Consume via `pipeline.on(event_type, handler)`, `pipeline.run_stream(...)`,
 or the multi-subscriber tap `pipeline.events(replay_from=...)` (2.2.0).
@@ -815,11 +817,13 @@ Enum member: `EventTypes.TOOL_REVIEW_REVIEWER_ERROR`
 | `reviewer` | str |
 | `error` | str |
 
-## Stage 12 — Agent
+## Stage 12 — Agent (retired 4.71.0)
 
 ### `agent.orchestrate_start`
 
 Enum member: `EventTypes.AGENT_ORCHESTRATE_START`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -830,6 +834,8 @@ Enum member: `EventTypes.AGENT_ORCHESTRATE_START`
 
 Enum member: `EventTypes.AGENT_ORCHESTRATE_COMPLETE`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `delegated` | bool |
@@ -839,16 +845,20 @@ Enum member: `EventTypes.AGENT_ORCHESTRATE_COMPLETE`
 
 Enum member: `EventTypes.AGENT_DELEGATIONS_CAPPED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `requested` | int — delegate requests queued this turn |
 | `cap` | int — the max_delegations limit that truncated them |
 
-## `subagent.*`
+## Persistent sub-agents (retired 4.71.0)
 
 ### `subagent.spawned`
 
 Enum member: `EventTypes.SUBAGENT_SPAWNED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -861,6 +871,8 @@ Enum member: `EventTypes.SUBAGENT_SPAWNED`
 
 Enum member: `EventTypes.SUBAGENT_ASSIGNED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `assignment_id` | str |
@@ -870,6 +882,8 @@ Enum member: `EventTypes.SUBAGENT_ASSIGNED`
 ### `subagent.completed`
 
 Enum member: `EventTypes.SUBAGENT_COMPLETED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -883,6 +897,8 @@ Enum member: `EventTypes.SUBAGENT_COMPLETED`
 
 Enum member: `EventTypes.SUBAGENT_FAILED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `assignment_id` | str |
@@ -894,15 +910,19 @@ Enum member: `EventTypes.SUBAGENT_FAILED`
 
 Enum member: `EventTypes.SUBAGENT_STOPPED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `sub_agent_id` | str |
 
-## Stage 13 — Task registry
+## Stage 13 — Task registry (retired 4.71.0)
 
 ### `task.registered`
 
 Enum member: `EventTypes.TASK_REGISTERED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -914,6 +934,8 @@ Enum member: `EventTypes.TASK_REGISTERED`
 
 Enum member: `EventTypes.TASK_DONE`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `task_id` | str |
@@ -922,6 +944,8 @@ Enum member: `EventTypes.TASK_DONE`
 ### `task.failed`
 
 Enum member: `EventTypes.TASK_FAILED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -933,6 +957,8 @@ Enum member: `EventTypes.TASK_FAILED`
 
 Enum member: `EventTypes.TASK_TIMEOUT`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `task_id` | str |
@@ -942,6 +968,8 @@ Enum member: `EventTypes.TASK_TIMEOUT`
 ### `task_registry.synced`
 
 Enum member: `EventTypes.TASK_REGISTRY_SYNCED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -953,6 +981,8 @@ Enum member: `EventTypes.TASK_REGISTRY_SYNCED`
 
 Enum member: `EventTypes.TASK_REGISTRY_INVALID_PAYLOAD`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `payload_repr` | str — repr of the rejected payload, truncated |
@@ -960,6 +990,8 @@ Enum member: `EventTypes.TASK_REGISTRY_INVALID_PAYLOAD`
 ### `task_registry.policy_error`
 
 Enum member: `EventTypes.TASK_REGISTRY_POLICY_ERROR`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|

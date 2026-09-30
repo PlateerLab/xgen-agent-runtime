@@ -8,13 +8,11 @@ and output persistence; the executor owns the actual work.
 Built-in executors:
 
 * :class:`LocalBashExecutor` — runs ``payload['command']`` via shell.
-* :class:`LocalAgentExecutor` — runs a subagent type registered on a
-  :class:`SubagentTypeOrchestrator`. Yields the orchestrator's
-  serialized result as a single chunk on completion (the runner
-  persists per-step output via separate event hooks if needed).
 
-Hosts that need additional task kinds (``remote_agent``,
-``monitor_mcp``, ``in_process_teammate``) implement
+(``LocalAgentExecutor`` — a sub-agent run as a background task — was
+removed in 4.71.0 together with sub-agent orchestration.)
+
+Hosts that need additional task kinds implement
 :class:`BackgroundTaskExecutor` and pass their executor map to
 :class:`BackgroundTaskRunner`.
 """
@@ -22,11 +20,10 @@ Hosts that need additional task kinds (``remote_agent``,
 from __future__ import annotations
 
 import asyncio
-import json
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Callable
+from typing import AsyncIterator
 
-from xgen_agent_runtime.stages.s13_task_registry.types import TaskRecord
+from xgen_agent_runtime.runtime.tasks import TaskRecord
 
 
 class BackgroundTaskExecutor(ABC):
@@ -100,59 +97,7 @@ class LocalBashExecutor(BackgroundTaskExecutor):
             raise RuntimeError(f"local_bash exited rc={rc}")
 
 
-class LocalAgentExecutor(BackgroundTaskExecutor):
-    """Runs a subagent type via :class:`SubagentTypeOrchestrator`.
-
-    Required ``record.payload`` keys:
-        ``subagent_type``: registered descriptor id
-        ``prompt``: initial prompt for the sub-pipeline
-
-    Optional:
-        ``model``: per-call model override
-
-    The executor delegates to ``orchestrator_factory()`` so the host
-    can build a fresh orchestrator per task (avoids leaking session
-    state across background runs).
-    """
-
-    def __init__(self, orchestrator_factory: Callable[[], Any]) -> None:
-        self._factory = orchestrator_factory
-
-    async def execute(self, record: TaskRecord) -> AsyncIterator[bytes]:
-        subagent_type = record.payload.get("subagent_type")
-        prompt = record.payload.get("prompt")
-        if not subagent_type:
-            raise ValueError("local_agent task requires payload['subagent_type']")
-        if prompt is None:
-            raise ValueError("local_agent task requires payload['prompt']")
-
-        orch = self._factory()
-        # SubagentTypeOrchestrator API: spawn(...) returns AgentResult-like.
-        # We dispatch via a generic ``run_subagent`` shim so the runtime
-        # remains decoupled from the orchestrator's exact method names.
-        runner = getattr(orch, "run_subagent", None) or getattr(orch, "spawn", None)
-        if runner is None:
-            raise RuntimeError(
-                "orchestrator_factory() returned an object without run_subagent / spawn"
-            )
-        result = await runner(
-            subagent_type,
-            prompt,
-            model=record.payload.get("model"),
-        )
-        # Serialize the result so callers reading via stream_output see
-        # something meaningful. Hosts that want richer streaming can
-        # supply their own executor.
-        if isinstance(result, (bytes, bytearray)):
-            yield bytes(result)
-        elif isinstance(result, str):
-            yield result.encode("utf-8")
-        else:
-            yield json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
-
-
 __all__ = [
     "BackgroundTaskExecutor",
-    "LocalAgentExecutor",
     "LocalBashExecutor",
 ]

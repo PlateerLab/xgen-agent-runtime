@@ -21,6 +21,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.tools import Tool, ToolRegistry, ToolResult, build_tool
+from xgen_agent_runtime.tools.base import with_origin
 
 logger = logging.getLogger("editor.geny_bridge.tools")
 
@@ -222,11 +223,15 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: 
             result_sink[name] = text
         return ToolResult(content=text)
 
-    return build_tool(
-        name=name,
-        description=description,
-        input_schema=_json_schema_of(lc_tool),
-        execute=_execute,
+    # 종류 표지 — 연결된 노드의 도구(MCP 노드 포함). 기기 도구와 이름 접두가 겹칠 수 있다.
+    return with_origin(
+        build_tool(
+            name=name,
+            description=description,
+            input_schema=_json_schema_of(lc_tool),
+            execute=_execute,
+        ),
+        "adapted",
     )
 
 
@@ -262,8 +267,9 @@ def _wrap_callable_dict(
             result_sink[name] = text
         return ToolResult(content=text)
 
-    return build_tool(
-        name=name, description=description, input_schema=input_schema, execute=_execute
+    return with_origin(
+        build_tool(name=name, description=description, input_schema=input_schema, execute=_execute),
+        "adapted",
     )
 
 

@@ -4,7 +4,7 @@ Originally all five stages were pure pass-throughs. Sub-phase 9b
 promotes them one at a time:
 
   * S9b.1 — tool_review (chain of reviewers)
-  * S9b.2 — task_registry (registry + policy slots)
+  * S9b.2 — task_registry (registry + policy slots) — retired in 4.71.0
   * S9b.3+ — hitl / summarize / persist still pass-through-ish
 
 The metadata + ``execute`` round-trip checks below skip the stages
@@ -17,16 +17,14 @@ import pytest
 
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.stages.s11_tool_review import ToolReviewStage
-from xgen_agent_runtime.stages.s13_task_registry import TaskRegistryStage
 from xgen_agent_runtime.stages.s15_hitl import HITLStage
 from xgen_agent_runtime.stages.s19_summarize import SummarizeStage
 from xgen_agent_runtime.stages.s20_persist import PersistStage
 
 
-# All five still report the same identity; only the bodies have grown.
+# The live scaffolds still report the same identity; only the bodies have grown.
 IDENTITY_CASES = [
     (ToolReviewStage, "tool_review", 11, "review"),
-    (TaskRegistryStage, "task_registry", 13, "orchestration"),
     (HITLStage, "hitl", 15, "gate"),
     (SummarizeStage, "summarize", 19, "finalize"),
     (PersistStage, "persist", 20, "finalize"),
@@ -60,13 +58,14 @@ class TestHITLBypass:
 class TestRegistration:
     """Sanity: S9a.3 wired the scaffolds into STAGE_MODULES."""
 
-    def test_stage_modules_now_21_entries(self):
-        from xgen_agent_runtime.core.artifact import STAGE_MODULES
+    def test_stage_modules_cover_21_slots_minus_retired(self):
+        from xgen_agent_runtime.core.artifact import RETIRED_STAGE_ORDERS, STAGE_MODULES
 
-        assert len(STAGE_MODULES) == 21
+        # 21 slots; 12 / 13 retired in 4.71.0 (reserved, not renumbered).
+        assert len(STAGE_MODULES) + len(RETIRED_STAGE_ORDERS) == 21
         # Each new order points at its scaffolding module.
         assert STAGE_MODULES[11] == "s11_tool_review"
-        assert STAGE_MODULES[13] == "s13_task_registry"
+        assert 13 not in STAGE_MODULES
         assert STAGE_MODULES[15] == "s15_hitl"
         assert STAGE_MODULES[19] == "s19_summarize"
         assert STAGE_MODULES[20] == "s20_persist"

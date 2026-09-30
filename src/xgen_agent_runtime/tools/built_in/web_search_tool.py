@@ -65,7 +65,7 @@ _HARD_MAX_RESULTS = 30
 #: engine already down, the whole call fails (dev 2026-09-22: 22 of 50
 #: WebSearch calls in one session). The cap lives in the tool, not the
 #: executor, so it holds on every path — Stage 10 parallel batches, ToolBatch,
-#: sub-agents sharing the process. Two keeps a pair of queries in flight
+#: concurrent sessions sharing the process. Two keeps a pair of queries in flight
 #: without tripping the free backends.
 _MAX_CONCURRENT_SEARCHES = 2
 _search_semaphores: Dict[int, asyncio.Semaphore] = {}

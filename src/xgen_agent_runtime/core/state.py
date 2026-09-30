@@ -89,7 +89,7 @@ class PipelineState:
     ``loop_decision``, ``completion_signal``, ``completion_detail``, and
     the private slice outcome backing ``run_status`` / ``resumable``,
     ``final_text``, ``final_output``, ``pending_tool_calls``,
-    ``tool_results``, ``delegate_requests``, ``agent_results``,
+    ``tool_results``,
     ``evaluation_score``, ``evaluation_feedback``, ``events``,
     ``turn_token_usage``, ``total_cost_usd``, ``last_api_response``.
     Earlier releases never reset these, so a long-lived state carried a
@@ -104,7 +104,7 @@ class PipelineState:
     ``session_id``, ``pipeline_id``, ``system``, ``messages``,
     ``shared``, ``metadata``, ``memory_refs``, ``thinking_history``,
     ``cache_metrics``, ``llm_client``, ``credentials``,
-    ``subagent_registry``, ``session_runtime``, ``tools``,
+    ``session_runtime``, ``tools``,
     ``tool_choice``, and every model/limit knob stomped by
     ``PipelineConfig.apply_to_state`` at each run start (``model``,
     ``max_tokens``, ``temperature``, …, ``max_iterations``,
@@ -220,10 +220,6 @@ class PipelineState:
     # run only); never serialized.
     tool_dispatcher: Optional[Any] = field(default=None, repr=False, compare=False)
 
-    # ── Agent orchestration ──
-    delegate_requests: List[Dict[str, Any]] = field(default_factory=list)
-    agent_results: List[Dict[str, Any]] = field(default_factory=list)
-
     # ── Evaluation ──
     evaluation_score: Optional[float] = None
     evaluation_feedback: Optional[str] = None
@@ -326,12 +322,6 @@ class PipelineState:
     # ``from_manifest`` (manual ``register_stage`` style). ──
     credentials: Optional[Any] = field(default=None, repr=False)
 
-    # ── Sub-agent registry (set by Pipeline._init_state from the value
-    # passed to ``Pipeline.attach_runtime(subagent_registry=...)``). The
-    # Stage 12 ``subagent_type`` orchestrator consumes this; factories
-    # may also reach it for nested wiring (intentionally rare). ──
-    subagent_registry: Optional[Any] = field(default=None, repr=False)
-
     # ── Plugin-supplied session runtime container (v0.30.0) ──
     # Free-shape carrier for host-side session-scoped objects (e.g.
     # creature state, persona providers, emitter chains). The executor
@@ -383,14 +373,12 @@ class PipelineState:
         self.final_text = ""
         self.final_output = None
         self.last_api_response = None
-        # In-flight tool / agent work. Stale pending_tool_calls from a
+        # In-flight tool work. Stale pending_tool_calls from a
         # turn that died mid-loop would otherwise be re-executed by
         # Stage 10 at the start of the next turn — a silent replay of
         # side-effectful tools.
         self.pending_tool_calls = []
         self.tool_results = []
-        self.delegate_requests = []
-        self.agent_results = []
         # Per-turn judgments
         self.evaluation_score = None
         self.evaluation_feedback = None
@@ -471,8 +459,6 @@ class PipelineState:
         self.last_api_response = None
         self.pending_tool_calls = []
         self.tool_results = []
-        self.delegate_requests = []
-        self.agent_results = []
         self.evaluation_score = None
         self.evaluation_feedback = None
         self.events = []

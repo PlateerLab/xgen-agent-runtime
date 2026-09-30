@@ -55,8 +55,6 @@ def test_begin_turn_resets_per_turn_fields():
     state.last_api_response = object()
     state.pending_tool_calls = [{"id": "stale"}]
     state.tool_results = [{"type": "tool_result"}]
-    state.delegate_requests = [{"agent": "x"}]
-    state.agent_results = [{"ok": True}]
     state.evaluation_score = 0.4
     state.evaluation_feedback = "meh"
     state.events = [{"type": "old.event"}]
@@ -76,8 +74,6 @@ def test_begin_turn_resets_per_turn_fields():
     assert state.last_api_response is None
     assert state.pending_tool_calls == []
     assert state.tool_results == []
-    assert state.delegate_requests == []
-    assert state.agent_results == []
     assert state.evaluation_score is None
     assert state.evaluation_feedback is None
     assert state.events == []

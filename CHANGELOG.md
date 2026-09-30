@@ -4,6 +4,75 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.71.0] — 2026-09-30
+
+### Removed — Stage 12(agent)·Stage 13(task_registry)와 하위 에이전트 라이브러리
+
+4.70.0 에서 위임 도구를 없앤 데 이어, 하위 에이전트만을 위해 있던 단계와 라이브러리를 걷어 낸다. 플랫폼 결정:
+하위 에이전트 오케스트레이션은 다시 들이지 않는다(호스트의 Job/Trigger/Cron 스케줄링은 별개로 그대로다).
+
+- `stages/s12_agent` 전부 — `AgentStage`, `SubagentType*`(descriptor·registry·orchestrator·`compile_subagent_descriptors`·
+  `resolve_subagent_provider`·`ManifestSubagentPipelineFactory`·`SubAgentBuildContext`), persistent sub-agent 매니저,
+  sub-agent 카탈로그, orchestrators. 패키지 루트의 같은 export 도 없앴다.
+- `stages/s13_task_registry` 의 **단계** — `TaskRegistryStage` 와 정책(`FireAndForget`/`EagerWait`/`TimedWait`).
+- `PipelineBuilder.with_agent()` / `.with_task_registry()`, 프리셋의 `.with_task_registry()`, `build_manifest` 프리셋의
+  order 12/13 항목(`tests/_fixtures/geny_manifest_layout.json` 도 같이 — 의도한 레이아웃 변경).
+- `Pipeline.from_manifest(_async)(subagent_registry=, subagent_env_resolver=)`, `attach_runtime/refresh_runtime(subagent_registry=)`,
+  `_wire_subagent_orchestrator`, `PipelineState.delegate_requests / agent_results / subagent_registry`.
+- 매니페스트 `subagents` 섹션과 그 검사(`subagent.*` issue 코드), `EnvironmentManifest.subagents` 필드.
+- `SharedKeys.PRIMARY_PROVIDER` 생산(읽는 곳이 하위 에이전트뿐이었다). 상수 자체와 `TASKS_*` 상수는 안정 문자열 계약에 따라
+  남기고 "retired" 로 표시했다.
+- s09 `CompletionSignal.DELEGATE`, s14 의 `delegate` 분기와 `AgentEvaluation`(`agent_evaluation` — Stage 12 평가 오케스트레이터
+  출력만 읽었다), s20 기본 significant 이벤트의 `task.failed`, `LocalAgentExecutor`.
+- `host.runner.build_cli_client(disallow_tools_extra=)` — 부르는 곳이 없다. CLI 자체 하위 에이전트(`Task`·`Agent`·`TaskOutput`)는
+  네이티브 차단 목록이 그대로 막는다.
+
+**번호는 다시 매기지 않는다.** 12·13 은 예약된 빈 자리다(`RETIRED_STAGE_ORDERS = {12: "agent", 13: "task_registry"}`,
+패키지 루트 export). `STAGE_MODULES`·`introspect_all()`·`blank_manifest()`·스냅샷은 두 자리를 건너뛰고, `Pipeline.describe()`
+와 bypass 이벤트는 1..21 을 그대로 걷는다. `create_stage("agent")` 등은 "retired" 를 말하는 `ValueError`.
+
+**저장된 매니페스트는 계속 읽힌다.** `EnvironmentManifest.from_dict` 와 `Pipeline.from_manifest` 가 `agent`/`task_registry`
+항목·`subagents` 섹션을 경고 한 줄과 함께 빼고(빈 `subagents: []` 는 조용히), s14 의 `agent_evaluation` 선택은 `signal_based`
+로, `evaluation_chain` 의 그 항목은 뺀다(`drop_retired_manifest_declarations`). `validate_manifest` 는 남은 항목을
+`stage.retired` 경고로 알린다. v2→v3 이전은 order 13 을 더는 채우지 않는다.
+
+이벤트 카탈로그는 추가만 한다는 규칙에 따라 `agent.*`·`subagent.*`·`task.*`·`task_registry.*` 를 지우지 않고
+`RETIRED_EVENT_TYPES` 로 표시했다(더는 내지 않음, 다음 메이저에서 제거). `EVENT_CATALOG_VERSION` 16, `docs/events.md` 재생성.
+
+### Changed — 작업 레코드·레지스트리는 `xgen_agent_runtime.runtime.tasks` 로
+
+`TaskRecord`·`TaskStatus`·`TaskFilter`·`TaskRegistry`·`InMemoryRegistry`·`FileBackedRegistry` 가 없어진 Stage 13 에서
+`runtime/tasks.py` 로 옮겨 왔다(`xgen_agent_runtime.runtime` 에서도 export). `BackgroundTaskRunner`·`LocalBashExecutor`·
+cron 데몬·`/tasks` 슬래시 명령은 그대로 동작한다. `TaskRegistry` 는 이제 Stage `Strategy` 가 아닌 평범한 ABC 이고
+`name`/`description` 은 기본값이 있는 속성이다.
+
+### Added — 호스트의 도구 결과 필터 (SDK·CLI 같은 후처리)
+
+관리자 정책으로 외부 데이터 도구 결과의 개인정보·금칙어를 가리려면, 결과가 모델·기록·화면으로 가기 전 한 곳에서
+걸러야 한다. 그 한 곳이 Stage 10 라우터다 — SDK 파이프라인·Stage 6 내부 디스패처·CLI 도구 표면(`TurnToolSurface`)·
+ToolBatch 항목이 모두 지난다.
+
+- `ToolContext.result_filter: Optional[Callable[[Tool, ToolResult], Awaitable[ToolResult]]]` — `RegistryRouter.route` 가 도구가
+  돈 직후(큰 결과 파일 저장·미리보기·이벤트·반복 가드보다 먼저) 한 번 부른다. 필터는 **실행된 Tool 인스턴스**와 가공 전
+  결과(오류 결과·이미지 블록 포함)를 받는다. 예외·엉뚱한 반환이면 경고를 남기고 원래 결과(fail-open), `None` 은 "그대로".
+  `build_dispatch_context` 가 싣고 `dataclasses.replace` 로 파생된 컨텍스트에도 따라간다.
+- `HostServices.tool_result_filter()` (선택 훅, 기본 None) — `AgentTurnExecutor` 가 턴마다 한 번 받아 run 도구 컨텍스트,
+  CLI 도구 표면 컨텍스트, `build_pipeline(tool_result_filter=)`(내장 도구가 없어 run 컨텍스트가 없는 SDK 턴)에 싣는다.
+  훅이 없거나 실패하면 필터 없이 돈다.
+- `tools.tool_origin(tool)` / `TOOL_ORIGIN_ATTR` — 이름 접두가 겹쳐도 종류로 판정하도록 런타임 빌더가 표지를 단다:
+  `device`(기기 도구·기기 문), `memory`(기억 도구), `adapted`(연결된 노드의 도구, MCP 노드 포함). 표지가 없으면
+  `mcp`(런타임 MCP 어댑터)·`builtin`(`tools.built_in` 클래스)을 추론한다.
+
+### Fixed — codex 스트림이 경고 줄 하나로 턴을 죽이던 것
+
+codex 는 치명적이지 않은 경고도 `{"type":"error"}` 줄로 낸다(실측 codex-cli 0.159.2: "Model metadata for `gpt-5.3-codex`
+not found. Defaulting to fallback metadata …"). 스트림 경로는 줄마다 바로 `APIError` 를 올려 턴이 죽었고, 같은 출력을
+one-shot 은 성공으로 읽었다. 이제 스트림도 one-shot 처럼 끝에서 판정한다.
+
+- 인증 실패 문구는 여전히 즉시 `CLI_AUTH_FAILED`, `turn.failed` 는 여전히 실패(자기 메시지 또는 앞서 모은 오류 메시지).
+- 그 밖의 오류 줄(`type: error`·오류 item·`msg.type == error`)은 경고 로그로 모은다. 스트림이 끝났을 때 어시스턴트 출력
+  (텍스트·도구 호출)이 있으면 정상 완료, 없으면 마지막 오류 메시지로 `CLI_PROTOCOL_ERROR`. 비정상 종료 코드는 예전처럼 실패.
+
 ## [4.70.0] — 2026-09-30
 
 ### Changed — 도구 표면은 provider 와 무관하게 하나다

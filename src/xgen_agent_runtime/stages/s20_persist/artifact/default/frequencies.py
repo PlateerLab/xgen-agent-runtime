@@ -90,7 +90,6 @@ _DEFAULT_SIGNIFICANT_EVENTS: Tuple[str, ...] = (
     "tool_review.flag",
     "memory.insight_recorded",
     "summary.written",
-    "task.failed",
 )
 
 

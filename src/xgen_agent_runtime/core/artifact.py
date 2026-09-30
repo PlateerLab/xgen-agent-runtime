@@ -50,6 +50,11 @@ ARTIFACT_META_ATTR = "ARTIFACT_META"
 # 20) point at the scaffolding stages added in S9a.2; their bodies are
 # pass-throughs / bypass for now and Sub-phase 9b replaces them with
 # real implementations.
+#
+# 4.71.0: orders 12 (agent) and 13 (task_registry) are retired — see
+# :data:`RETIRED_STAGE_ORDERS`. They are *absent* from this map (there
+# is no module to load) but the numbering is not compacted: 14–21 keep
+# their orders so stored manifests, snapshots and UIs stay aligned.
 STAGE_MODULES: Dict[int, str] = {
     1: "s01_input",
     2: "s02_context",
@@ -62,8 +67,6 @@ STAGE_MODULES: Dict[int, str] = {
     9: "s09_parse",
     10: "s10_tool",
     11: "s11_tool_review",
-    12: "s12_agent",
-    13: "s13_task_registry",
     14: "s14_evaluate",
     15: "s15_hitl",
     16: "s16_loop",
@@ -90,8 +93,6 @@ STAGE_ALIASES: Dict[str, str] = {
     "parse": "s09_parse",
     "tool": "s10_tool",
     "tool_review": "s11_tool_review",
-    "agent": "s12_agent",
-    "task_registry": "s13_task_registry",
     "evaluate": "s14_evaluate",
     "hitl": "s15_hitl",
     "loop": "s16_loop",
@@ -103,11 +104,50 @@ STAGE_ALIASES: Dict[str, str] = {
 }
 
 
+# Retired stage slots (order -> former short name). Sub-agent
+# orchestration (Stage 12 ``agent``) and the task-registry stage
+# (Stage 13 ``task_registry``) were removed in 4.71.0. The orders stay
+# reserved — never reused, never renumbered — so a 1..21 walk (describe,
+# bypass events, stored manifests) keeps its shape; unregistered orders
+# are skipped at run time. Stored manifests that still carry these
+# entries load with the entries dropped (see
+# ``EnvironmentManifest.from_dict`` / ``Pipeline.from_manifest``).
+RETIRED_STAGE_ORDERS: Dict[int, str] = {
+    12: "agent",
+    13: "task_registry",
+}
+
+# Former module names of the retired slots (manifest entries may carry
+# either the short name or the module name).
+_RETIRED_STAGE_MODULES: Dict[int, str] = {
+    12: "s12_agent",
+    13: "s13_task_registry",
+}
+
+
+def is_retired_stage(stage: Any) -> bool:
+    """True when *stage* names a retired slot (order, short or module name)."""
+    if isinstance(stage, bool):
+        return False
+    if isinstance(stage, int):
+        return stage in RETIRED_STAGE_ORDERS
+    text = str(stage or "").strip()
+    if text.isdigit():
+        return int(text) in RETIRED_STAGE_ORDERS
+    return text in RETIRED_STAGE_ORDERS.values() or text in _RETIRED_STAGE_MODULES.values()
+
+
 def _resolve_stage_module(stage: str) -> str:
     """Resolve a stage identifier to its canonical module name.
 
     Accepts: "s01_input", "input", "1", 1
     """
+    if is_retired_stage(stage):
+        raise ValueError(
+            f"Stage {stage!r} was retired in 4.71.0 (orders 12 'agent' / 13 "
+            "'task_registry' — sub-agent orchestration was removed); it has no "
+            "implementation to load."
+        )
     if isinstance(stage, int) or stage.isdigit():
         order = int(stage)
         if order not in STAGE_MODULES:

@@ -70,12 +70,16 @@ Phase A — Setup (턴마다 1회)
 
 Phase B — Generate + Dispatch (loop)
   6: API  →  7: Token  →  8: Think  →  9: Parse
-  → 10: Tool  →  11: ToolReview  →  12: Agent  →  13: TaskRegistry
+  → 10: Tool  →  11: ToolReview
   → 14: Evaluate  →  15: HITL  →  16: Loop
 
 Phase C — Surface (1회)
   17: Emit  →  18: Memory  →  19: Summarize  →  20: Persist  →  21: Yield
 ```
+
+12(Agent)·13(TaskRegistry) 단계는 4.71.0 에서 하위 에이전트 기능과 함께 없앴다.
+번호는 그대로 둔다(다시 매기지 않음). 저장된 매니페스트에 두 단계가 남아 있어도
+그 항목만 빼고 읽는다.
 
 각 stage의 strategy 옵션을 포함한 전체 리스트는 [`docs/architecture.md`](docs/architecture.md) 참조.
 
@@ -427,13 +431,12 @@ xgen-agent-runtime/
 │   ├── __init__.py          # Public API
 │   ├── py.typed             # PEP 561 type marker
 │   ├── core/                # Pipeline engine, errors, manifest, mutation, snapshot
-│   ├── stages/              # 21단계 (s01–s21)
+│   ├── stages/              # 파이프라인 단계 s01–s21 (12·13 은 폐기)
 │   ├── llm_client/          # 5 provider + ClientRegistry + CredentialBundle + CLI runtime
 │   ├── tools/               # Tool ABC, registry, router, MCP 통합
 │   ├── hooks/               # PRE/POST tool-use lifecycle hooks
 │   ├── memory/              # Memory v2 retrieval, vault map, vector store
 │   ├── skills/              # SkillProvider + skill loading
-│   ├── subagents/           # Stage 12 sub-agent orchestration
 │   ├── permission/          # RegistryRouter가 평가하는 per-tool ACL
 │   ├── channels/            # Output channel adapter (text, callback, TTS, …)
 │   ├── cron/                # Scheduled trigger
