@@ -4,6 +4,28 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.74.0] — 2026-09-30
+
+### Removed — 문서 편집 도구(edit2docs 기반 Doc*)
+
+`DocGuide` 와 그 가족(`DocAnalyze`·`DocApplyEdits`·`DocArrange`·`DocBuild`·`DocEdit`·`DocGenerate`·`DocRender`·
+`DocXmlEdit`·`DocXmlRead`), `documents` 가족, `DocGuide` 문(gates), `xgen-edit2docs` 의존을 걷어 냈다. 에이전트는
+문서를 **읽기만** 한다.
+
+### Added — `ParseDocument` (가족 `parsing`)
+
+xgen-doc2chunk 의 **추출 단계**(`DocumentProcessor.extract_text`, 청크로 자르지 않는다)로 PDF·Word·PowerPoint·Excel·
+HWP/HWPX·RTF·CSV·HTML 등에서 글 위주의 요소를 뽑는다: 본문 글, 페이지·슬라이드·시트 표식, 글로 옮긴 표, 차트 글,
+`[Image]` 자리표시, 문서 메타데이터. **원본의 전체 구조가 아니다**(글꼴·서식·위치·레이아웃·도형·그림 없음) — 설명과
+결과 첫 줄이 그렇게 말한다. 파일은 `tool_fs` 로 읽는다(샌드박스·로컬 같은 길), 긴 결과는 `offset`·`limit` 로 나눠
+준다, OCR·LLM·네트워크는 쓰지 않는다. `Read` 가 문서 파일을 만나면 이 도구를 가리킨다.
+
+### Changed — 의존성을 정확한 버전으로
+
+필수 의존성을 소비 서비스(xgen-workflow)가 지금 설치하는 정확한 버전으로 고정했다(범위 없음). 우리 라이브러리는
+`xgen-doc2chunk==0.4.2`, `xgen-pdf` 0.1.2 wheel 로 정확히 참조한다. 라이브러리 릴리스가 dev·stage·prod 를 한꺼번에
+바꾸지 않게 하는 XGEN 전체 작업의 일부.
+
 ## [4.73.0] — 2026-09-30
 
 ### Fixed — API 클라이언트가 SDK 연결 풀을 닫는다 (`BaseClient.aclose`)

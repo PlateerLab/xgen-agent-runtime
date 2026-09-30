@@ -501,11 +501,10 @@ class AgentTurnExecutor:
                             "agents/geny: 메모리 도구 등록 실패 (자동 계층만 동작): %s", exc
                         )
 
-            # ── built-in 도구 패밀리 (web/documents/ssh/workflow/filesystem/shell) ──
+            # ── built-in 도구 패밀리 (web/parsing/ssh/workflow/filesystem/shell) ──
             # 모든 provider 가 **같은 조립**을 지난다. CLI 네이티브 도구는 전면 차단이므로 파일/셸도
-            # 여기서 나온 우리 도구가 유일한 경로다. 파일 도구는 workspace 에 격리되고
-            # (path guard), 문서 산출물은 사용자 스토리지 '결과물' 폴더로 업로드되어
-            # 다운로드 버튼으로 나타난다. 관리자 차단: GENY_TOOLS_*_ENABLED.
+            # 여기서 나온 우리 도구가 유일한 경로다. 파일 도구는 workspace 에 격리된다(path guard).
+            # 관리자 차단: GENY_TOOLS_*_ENABLED.
             run_tool_context = None
             run_dir_cleanup = None
             # 턴 종료 시 원본(MinIO+DB)에 반영할 workspace. hydrate 가 **성공한**

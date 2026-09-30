@@ -4,7 +4,7 @@
 
 Our tool surface is hierarchical: basic verbs are visible from turn 1, and
 everything else sits behind **one door per family** (``JobGuide``,
-``AppGuide``, ``SelfExtendGuide``, ``DocGuide``). ``tool_exposure`` states it
+``AppGuide``, ``SelfExtendGuide``). ``tool_exposure`` states it
 plainly — "JobSchedule/JobList/JobCancel 은 이 문 뒤에".
 
 Behind the door only works if opening it *lets you in*. It did not. A guide

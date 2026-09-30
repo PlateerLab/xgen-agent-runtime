@@ -8,7 +8,7 @@ SDK 경로는 Stage 3 이 시스템 프롬프트에 붙이고, CLI 경로(claude
 ----
 * 문(Guide) 뒤의 도구는 **문 이름 한 줄**로 묶는다: ``- JobGuide opens: JobSchedule, JobList, JobCancel``.
   문은 첫 화면에 서 있고 자기 설명이 방을 말하므로, 도구마다 한 줄씩 적는 것은 같은 말을 두 번 하는 것이다.
-* 문이 없는(또는 숨은 문 DocGuide 의) 도구는 한 줄 설명: ``- DocRender — Render a document: …``.
+* 문이 없는(또는 숨은 문의) 도구는 한 줄 설명: ``- ParseDocument — Extract the TEXT of a document file …``.
 * 전체가 :data:`CATALOG_MAX_CHARS` 를 넘으면 한 줄 설명을 이름으로 줄인다(문 줄은 그대로).
 
 예전 모양(도구마다 한 줄, 넘치면 **전부** 이름만)은 조건에 따라 뒤집혔다: 기본 웹 턴은 한 줄 설명형이었다가
