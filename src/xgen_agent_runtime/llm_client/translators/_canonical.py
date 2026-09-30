@@ -574,8 +574,14 @@ def canonical_messages_to_google(
       - tool_use blocks → functionCall parts
       - tool_result blocks → functionResponse parts
       - text blocks → text parts
+
+    Gemini names a ``functionResponse`` by the function, not by the call id. A canonical
+    ``tool_result`` carries only ``tool_use_id`` (the agent loop and every host build it
+    that way), so the name comes from the earlier ``tool_use`` with the same id — without
+    it every tool result went out with an empty name.
     """
     contents: List[Dict[str, Any]] = []
+    call_names: Dict[str, str] = {}
 
     for msg in messages:
         role = msg.get("role", "user")
@@ -607,6 +613,8 @@ def canonical_messages_to_google(
                     # TODO: PDF 등 Gemini fileData 직접 매핑. 지금은 text fallback.
                     parts.append({"text": _file_block_to_text_fallback(block)})
                 elif btype == "tool_use":
+                    if block.get("id") and block.get("name"):
+                        call_names[str(block["id"])] = str(block["name"])
                     parts.append(
                         {
                             "functionCall": {
@@ -621,7 +629,8 @@ def canonical_messages_to_google(
                     parts.append(
                         {
                             "functionResponse": {
-                                "name": block.get("name", ""),
+                                "name": block.get("name")
+                                or call_names.get(str(block.get("tool_use_id", "")), ""),
                                 "id": block.get("tool_use_id", ""),
                                 "response": {"result": tr_text},
                             }
