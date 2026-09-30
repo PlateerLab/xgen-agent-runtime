@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.74.1] — 2026-09-30
+
+### Fixed — Gemini 로 가는 도구 결과의 이름
+
+`canonical_messages_to_google` 이 `functionResponse.name` 을 `tool_result.name` 에서만 읽었다. 정규 `tool_result` 는
+`tool_use_id` 만 싣기 때문에(에이전트 루프·호스트 모두) Gemini·Vertex 로 가는 도구 결과는 늘 **빈 이름**이었다.
+이제 앞선 `tool_use` 의 같은 id 에서 함수 이름을 찾는다(`name` 이 실려 오면 그것이 먼저). 앱 LLM 의 OpenAI 호환 길
+(도구 결과 왕복) 검증에서 드러났다.
+
 ## [4.74.0] — 2026-09-30
 
 ### Removed — 문서 편집 도구(edit2docs 기반 Doc*)
