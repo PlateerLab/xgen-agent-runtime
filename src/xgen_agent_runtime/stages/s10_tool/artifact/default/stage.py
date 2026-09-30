@@ -197,6 +197,7 @@ class ToolStage(Stage[Any, Any]):
 
         ctx = ToolContext(
             session_id=state.session_id,
+            canonical_identity=getattr(self._context, "canonical_identity", None),
             working_dir=self._context.working_dir,
             storage_path=self._context.storage_path,
             env_vars=self._context.env_vars,
