@@ -20,21 +20,9 @@ subset without hardcoding tool names.
 from typing import Dict, Iterable, List, Optional, Tuple, Type
 
 from xgen_agent_runtime.tools.base import Tool
-from xgen_agent_runtime.tools.built_in.agent_tool import AgentTool
 from xgen_agent_runtime.tools.built_in.self_extend_guide_tool import (
     SELF_EXTEND_FAMILY,
     SelfExtendGuideTool,
-)
-from xgen_agent_runtime.tools.built_in.delegation_guide_tool import (
-    DELEGATION_FAMILY,
-    DelegationGuideTool,
-)
-from xgen_agent_runtime.tools.built_in.subagent_tools import (
-    SubAgentAssignTool,
-    SubAgentInboxReadTool,
-    SubAgentListTool,
-    SubAgentSpawnTool,
-    SubAgentStopTool,
 )
 from xgen_agent_runtime.tools.built_in.ask_user_question_tool import (
     AskUserQuestionTool,
@@ -76,14 +64,6 @@ from xgen_agent_runtime.tools.built_in.worktree_tools import (
     EnterWorktreeTool,
     ExitWorktreeTool,
 )
-from xgen_agent_runtime.tools.built_in.task_tools import (
-    TaskCreateTool,
-    TaskGetTool,
-    TaskListTool,
-    TaskOutputTool,
-    TaskStopTool,
-    TaskUpdateTool,
-)
 from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
 from xgen_agent_runtime.tools.built_in.edit_tool import EditTool
 from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
@@ -110,21 +90,6 @@ from xgen_agent_runtime.tools.built_in.google_tools import GOOGLE_TOOL_CLASSES
 # ``ctx.extras['atlassian']``; gated via required_config_keys → hidden until
 # the host marks ``feature:atlassian_connected`` satisfied.
 from xgen_agent_runtime.tools.built_in.atlassian_tools import ATLASSIAN_TOOL_CLASSES
-
-# Browser — AI-native web exploration on the an-web engine (semantic snapshots,
-# per-session tabs, embedded V8; no Chromium). an-web itself imports lazily —
-# 'pip install xgen-agent-runtime[browser]' (Python >= 3.12).
-from xgen_agent_runtime.tools.built_in.browser_tools import (
-    BROWSER_FAMILY,
-    BROWSER_TOOL_CLASSES,
-    BrowserActTool,
-    BrowserBackTool,
-    BrowserCloseTool,
-    BrowserEvalTool,
-    BrowserExtractTool,
-    BrowserNavigateTool,
-    BrowserSnapshotTool,
-)
 
 # Doc — office documents (docx/xlsx/pptx) on the edit2docs engine: addressable
 # outlines, deterministic edits, generation. Lazy import — 'pip install
@@ -177,7 +142,6 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     "ToolSearch": ToolSearchTool,
     "EnterPlanMode": EnterPlanModeTool,
     "ExitPlanMode": ExitPlanModeTool,
-    "Agent": AgentTool,
     "AskUserQuestion": AskUserQuestionTool,
     "PushNotification": PushNotificationTool,
     "MCP": MCPTool,
@@ -200,20 +164,6 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     "CronCreate": CronCreateTool,
     "CronDelete": CronDeleteTool,
     "CronList": CronListTool,
-    "TaskCreate": TaskCreateTool,
-    "TaskGet": TaskGetTool,
-    "TaskList": TaskListTool,
-    "TaskUpdate": TaskUpdateTool,
-    "TaskOutput": TaskOutputTool,
-    "TaskStop": TaskStopTool,
-    "SubAgentSpawn": SubAgentSpawnTool,
-    "SubAgentAssign": SubAgentAssignTool,
-    "SubAgentList": SubAgentListTool,
-    "SubAgentStop": SubAgentStopTool,
-    "SubAgentInboxRead": SubAgentInboxReadTool,
-    # Delegation gateway — the skill guide across DelegateTask/SubAgent*/Task*
-    # (Guide + compact members, DocGuide 동형 점진공개).
-    "DelegationGuide": DelegationGuideTool,
     # Self-extension gateway — ForgeTool/PythonEnv/SystemPackages/WorkflowSelf
     # 의 문. 여섯 스키마(프리픽스의 33%) 대신 문 하나가 턴 1에 선다.
     "SelfExtendGuide": SelfExtendGuideTool,
@@ -226,9 +176,6 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     # Atlassian (gated on feature:atlassian_connected — hidden until the host
     # injects a site URL + API token and marks Atlassian connected).
     **ATLASSIAN_TOOL_CLASSES,
-    # Browser (an-web) — semantic web exploration; degrades to an install-hint
-    # error when the optional an-web dependency is absent.
-    **BROWSER_TOOL_CLASSES,
     # Doc (edit2docs) — office document engine; same lazy-import contract.
     **DOC_TOOL_CLASSES,
     # SSH — command/SFTP on the session's configured servers (gated on
@@ -246,9 +193,9 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
 #: 스킬 게이트웨이 — ``{문 이름: 그 문이 여는 방}``.
 #:
 #: 계층 표면의 규약은 두 줄이다: 기본 명령은 턴 1에 바로 서고, 나머지는 **문
-#: 하나**만 서서 부르면 그 방이 열린다. 그 두 번째 줄이 네 모듈에 흩어진 습관으로
-#: 남아 있는 동안, 문 하나(DelegationGuide)는 지도만 돌려주고 방을 잠가 둔 채였다
-#: — 가이드가 "DelegateTask 를 써라" 고 말해 놓고 그 이름은 부를 수 없었다.
+#: 하나**만 서서 부르면 그 방이 열린다. 그 두 번째 줄이 모듈마다 흩어진 습관으로
+#: 남아 있는 동안, 문 하나는 지도만 돌려주고 방을 잠가 둔 채였다 — 가이드가 부르라고
+#: 말한 이름을 부를 수 없었다.
 #:
 #: 여기 선언하면 규약이 검사 대상이 된다(tests/unit/test_skill_gateways.py):
 #: 표에 있는 문은 실제로 자기 방을 열어야 하고, 여는 이름은 자기 설명이 약속한
@@ -258,8 +205,6 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
 #: ``JobGuide`` 는 xgen-workflow 에 산다(서버 스케줄러에 묶여 있다) — 같은 규약을
 #: 그쪽 테스트가 고정한다.
 SKILL_GATEWAYS: Dict[str, Tuple[str, ...]] = {
-    "DelegationGuide": DELEGATION_FAMILY,
-    "BrowserGuide": BROWSER_FAMILY,
     "DocGuide": DOC_FAMILY,
     # 목록 도구가 곧 문이다 — SshRun 이 받는 서버 '이름' 의 유일한 출처다.
     "SshListServers": SSH_FAMILY,
@@ -271,27 +216,11 @@ BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
     "filesystem": ["Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"],
     "shell": ["Bash"],
     "web": ["WebFetch", "WebSearch"],
-    # Interactive web exploration (an-web engine) — JS-rendered pages,
-    # per-session tabs, semantic snapshots. Distinct from "web" (one-shot
-    # fetch/search) so hosts can enable them independently.
-    "browser": list(BROWSER_TOOL_CLASSES.keys()),
     # Office documents (edit2docs engine) — outline/edit/preview/generate.
     "documents": list(DOC_TOOL_CLASSES.keys()),
     # ToolBatch — 같은 도구를 입력 목록으로 한 왕복에 실행 (목록 작업의 왕복 수를 N → 1).
     "workflow": ["TodoWrite", "ToolBatch"],
     "meta": ["ToolSearch", "SelfExtendGuide", "EnterPlanMode", "ExitPlanMode"],
-    "agent": ["Agent"],
-    "subagent": [
-        # 게이트웨이 먼저 — 위임 3표면(DelegateTask/SubAgent*/Task*)의 결정
-        # 지도를 요청 시 공개한다 (Guide + 컴팩트 멤버 규약).
-        "DelegationGuide",
-        "SubAgentSpawn",
-        "SubAgentAssign",
-        "SubAgentList",
-        "SubAgentStop",
-        "SubAgentInboxRead",
-    ],
-    "tasks": ["TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop"],
     "interaction": ["AskUserQuestion"],
     "notification": ["PushNotification"],
     "mcp": ["MCP", "ListMcpResources", "ReadMcpResource", "McpAuth"],
@@ -369,9 +298,7 @@ def get_builtin_tools(
 
 __all__ = [
     "SKILL_GATEWAYS",
-    "AgentTool",
     "ATLASSIAN_TOOL_CLASSES",
-    "BROWSER_TOOL_CLASSES",
     "DOC_TOOL_CLASSES",
     "SSH_TOOL_CLASSES",
     "AUDIO_TOOL_CLASSES",
@@ -389,18 +316,6 @@ __all__ = [
     "DocRenderTool",
     "DocXmlEditTool",
     "DocXmlReadTool",
-    "BrowserActTool",
-    "BrowserBackTool",
-    "BrowserCloseTool",
-    "BrowserEvalTool",
-    "BrowserExtractTool",
-    "BrowserNavigateTool",
-    "BrowserSnapshotTool",
-    "SubAgentSpawnTool",
-    "SubAgentAssignTool",
-    "SubAgentListTool",
-    "SubAgentStopTool",
-    "SubAgentInboxReadTool",
     "AskUserQuestionTool",
     "BriefTool",
     "ConfigTool",
@@ -421,12 +336,6 @@ __all__ = [
     "QuestionCancelled",
     "ReadMcpResourceTool",
     "ReadTool",
-    "TaskCreateTool",
-    "TaskGetTool",
-    "TaskListTool",
-    "TaskOutputTool",
-    "TaskStopTool",
-    "TaskUpdateTool",
     "WriteTool",
     "EditTool",
     "BashTool",

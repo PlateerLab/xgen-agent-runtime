@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
@@ -272,45 +272,11 @@ class SystemStage(Stage[Any, Any]):
     # stays intact. Rebuilt only when the registry version moves
     # (register/unregister/MCP re-seed), the same trigger that already
     # rebuilds ``state.tools``.
-    _CATALOG_ONE_LINER_CHARS = 72
-    _CATALOG_MAX_CHARS = 4_000
-
     def _deferred_catalog_text(self) -> str:
-        registry = self._tool_registry
-        if registry is None:
-            return ""
-        is_core = getattr(registry, "is_core", None)
-        get = getattr(registry, "get", None)
-        list_names = getattr(registry, "list_names", None)
-        if not (callable(is_core) and callable(get) and callable(list_names)):
-            return ""
-        entries: List[Tuple[str, str]] = []
-        for name in sorted(list_names()):
-            try:
-                if is_core(name):
-                    continue
-                tool = get(name)
-                desc = str(getattr(tool, "description", "") or "").strip()
-                line = desc.splitlines()[0] if desc else ""
-                if len(line) > self._CATALOG_ONE_LINER_CHARS:
-                    line = line[: self._CATALOG_ONE_LINER_CHARS - 1] + "…"
-                entries.append((name, line))
-            except Exception:  # noqa: BLE001 — a broken tool never breaks the prompt
-                continue
-        if not entries:
-            return ""
-        header = (
-            "## Additional tools (hidden — not in your tool list)\n"
-            f"{len(entries)} more tools exist. To use one, call "
-            'ToolSearch("<keyword or exact name>") — its schema arrives on '
-            "your next step. ToolSearch with no query browses this catalog."
-        )
-        lines = [f"- {n} — {d}" if d else f"- {n}" for n, d in entries]
-        body = "\n".join(lines)
-        if len(header) + len(body) > self._CATALOG_MAX_CHARS:
-            # Degrade gracefully: names only on one wrapped line.
-            body = ", ".join(n for n, _ in entries)[: self._CATALOG_MAX_CHARS]
-        return header + "\n" + body
+        # 글은 한 곳(tools.catalog)에서 만든다 — CLI 경로도 같은 함수로 같은 글을 받는다.
+        from xgen_agent_runtime.tools.catalog import deferred_catalog_text
+
+        return deferred_catalog_text(self._tool_registry)
 
     async def execute(self, input: Any, state: PipelineState) -> Any:
         # Build system prompt (stable prefix + volatile tail separation)

@@ -3,17 +3,17 @@
 ## The contract
 
 Our tool surface is hierarchical: basic verbs are visible from turn 1, and
-everything else sits behind **one door per family** (``DelegationGuide``,
-``JobGuide``, ``BrowserGuide``, ``DocGuide``). ``tool_exposure`` states it
-plainly — "DelegateTask/SubAgent*/Task* 는 이 문 뒤에".
+everything else sits behind **one door per family** (``JobGuide``,
+``AppGuide``, ``SelfExtendGuide``, ``DocGuide``). ``tool_exposure`` states it
+plainly — "JobSchedule/JobList/JobCancel 은 이 문 뒤에".
 
 Behind the door only works if opening it *lets you in*. It did not. A guide
 returned its map and nothing else, so the family stayed deferred and the only
 thing that could actually expose a member was ``ToolSearch`` — which no guide
 ever mentions. The result was a surface that contradicted its own instructions:
 
-    DelegationGuide  ->  "1. DelegateTask(task)  ONE VERB, the default."
-    DelegateTask     ->  Error: No such tool available
+    JobGuide     ->  "JobSchedule(tool=..., cron_expr=...) — schedule it."
+    JobSchedule  ->  Error: No such tool available
 
 The model did exactly what it was told and hit a wall. Worse, the failure is
 client-side on CLI backends (Claude Code rejects unknown names locally), so no
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 #: Appended to a guide's answer when it just opened its family. The model reads
 #: this in the same result that told it which verb to use, so the two halves of
-#: the instruction ("use DelegateTask" / "DelegateTask is callable now") arrive
+#: the instruction ("use JobSchedule" / "JobSchedule is callable now") arrive
 #: together instead of one turn apart.
 #:
 #: The second sentence is for CLI clients. The bridge tells the CLI that its tool

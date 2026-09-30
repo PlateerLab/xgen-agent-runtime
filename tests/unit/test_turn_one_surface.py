@@ -22,13 +22,17 @@ def test_패밀리는_문_하나만_내놓는다():
     # 문은 보이고, 그 뒤의 식구들은 보이지 않는다.
     for gate, member in (
         ("JobGuide", "JobSchedule"),
-        ("DelegationGuide", "SubAgentSpawn"),
-        ("DelegationGuide", "TaskCreate"),
         ("BrowserGuide", "BrowserNavigate"),
         ("AppGuide", "AppCreate"),
     ):
         assert is_turn_one(gate), gate
         assert not is_turn_one(member), member
+
+
+def test_위임_도구는_첫_화면에_없다():
+    # 하위 에이전트 위임은 제거됐다(4.70.0) — 이름이 다시 생겨도 첫 화면에 서지 않는다.
+    for name in ("DelegationGuide", "DelegateTask", "SubAgentSpawn", "TaskCreate", "Agent"):
+        assert not is_turn_one(name), name
 
 
 def test_문서편집은_검색해야_나온다():

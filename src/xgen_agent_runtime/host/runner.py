@@ -260,6 +260,9 @@ _CLI_AUTH_MODES = ("api_key", "setup_token", "oauth", "auto")
 CLI_QUIET_ENV: Dict[str, str] = {
     "DISABLE_AUTOUPDATER": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    # MCP 도구 결과 한도(토큰). 결과 크기는 우리 Stage 10 이 정한다(10만 자를 넘는 결과는 파일로 옮기고
+    # 짧은 안내를 준다). Claude Code 기본(2만 5천 토큰)이 그보다 작아, 같은 결과가 CLI 에서만 잘렸다.
+    "MAX_MCP_OUTPUT_TOKENS": "150000",
 }
 
 
@@ -366,11 +369,15 @@ def build_cli_client(
         kwargs["settings_path"] = settings_path
     if allow_tools:
         kwargs["allow_tools"] = tuple(allow_tools)
-    if extra_args:
-        # 그대로 argv 뒤에 붙는다. 지금 쓰는 곳은 `--add-dir <연결된 클라우드>`
-        # 하나뿐이다 — CLI 네이티브 도구(Read/Glob/Bash)가 cwd 밖을 못 보므로,
-        # 이게 없으면 연결해 둔 클라우드가 CLI 에게는 존재하지 않는다.
-        kwargs["extra_args"] = tuple(str(a) for a in extra_args)
+    _extra = [str(a) for a in (extra_args or ())]
+    if not allow_local_tools and "--tools" not in _extra:
+        # 네이티브 도구 **전부**를 끈다(CLI 의 내장 도구 집합을 비운다). 위의 이름 차단 목록은
+        # "알던 것" 을 막고, 이 한 줄은 CLI 가 새로 늘린 것까지 막는다 — 새 버전이 도구를 더해도
+        # 우리 표면(MCP 브릿지)만 남는다. 2026-09-30 실측(2.1.280): 이 플래그로 네이티브 0개,
+        # MCP 도구는 그대로.
+        _extra += ["--tools", ""]
+    if _extra:
+        kwargs["extra_args"] = tuple(_extra)
     if extra_env:
         # 병합 — setup_token 의 CLAUDE_CODE_OAUTH_TOKEN 등 기존 값을 덮지 않는다.
         merged = dict(kwargs["env_extras"])
@@ -397,13 +404,17 @@ def build_codex_cli_client(
     extra_args: Any = (),
     env_extras: Optional[Dict[str, str]] = None,
     sandbox_mode: str = "workspace-write",
+    host_tools_only: bool = True,
 ) -> Any:
     """xgen 설정으로 ``CodexCLIClient`` 를 구성한다 (claude 의 build_cli_client 짝).
 
-    ``sandbox_mode`` — codex 자체 OS 샌드박스 모드. 러너 세션이 붙은 실행에서는
-    ``"read-only"`` 를 준다: codex 는 claude 처럼 네이티브 도구를 개별 차단할 수
-    없으므로, 자기 셸이 **이 파드에 쓰지 못하게** 막아 모든 쓰기가 브릿지 도구
-    (=러너 세션)로만 일어나게 한다. 러너가 없는 배포에서만 workspace-write.
+    ``host_tools_only`` (기본) — codex 네이티브 도구(셸·이미지 보기·하위 에이전트·웹 검색 등)와 codex
+    쪽 지시(권한·환경·스킬·협업 모드)를 끄고, codex 기본 지시를 우리 시스템 프롬프트로 바꾼다. 모델이
+    보는 도구는 호스트 MCP 브릿지(=SDK 경로와 같은 레지스트리)뿐이다(claude 의 ``--tools ""`` 짝).
+
+    ``sandbox_mode`` — codex 자체 OS 샌드박스 모드. ``host_tools_only`` 면 codex 셸이 꺼져
+    있어 의미가 없지만, 끄는 설정을 모르는 codex 버전을 위한 이중 잠금으로 ``"read-only"`` 를
+    준다(러너 세션이 붙은 실행). 러너가 없는 배포에서만 workspace-write.
 
     인증 채널 배타 계약은 런타임이 집행한다: api_key 모드만 OPENAI_API_KEY 를
     subprocess 환경에 주입하고, oauth(ChatGPT 구독) 모드는 절대 키를 흘리지
@@ -435,6 +446,7 @@ def build_codex_cli_client(
         kwargs["env_extras"] = {str(k): str(v) for k, v in env_extras.items()}
     if sandbox_mode:
         kwargs["sandbox_mode"] = str(sandbox_mode)
+    kwargs["host_tools_only"] = bool(host_tools_only)
     return CodexCLIClient(**kwargs)
 
 
@@ -459,6 +471,30 @@ def _system_builder(system: str) -> Any:
     return ComposablePromptBuilder(
         blocks=[CustomBlock("base", system), DateTimeBlock(), TurnNotesBlock()]
     )
+
+
+def ensure_surface_entrances(registry: Optional[ToolRegistry]) -> None:
+    """숨긴 도구로 가는 입구를 세운다 — 파이프라인(SDK)과 CLI 표면이 **같은 함수**를 부른다.
+
+    * 숨긴 도구가 하나라도 있으면 ``ToolSearch`` (없으면 숨김이 곧 삭제다).
+    * 자기확장 도구(ForgeTool/PythonEnv/WorkflowSelf…)가 하나라도 있으면 그 문 ``SelfExtendGuide``.
+      문이 없으면 그 도구들은 카탈로그에만 있어 모델이 능력 자체를 모른다(2026-08-18 회귀). 예전엔
+      이 둘을 파이프라인 조립이 세워서, 파이프라인에 레지스트리를 넘기지 않는 CLI 경로에는 문이 없었다.
+
+    이미 있으면 그대로 둔다(여러 번 불러도 같다).
+    """
+    if registry is None:
+        return
+    if registry.list_deferred():
+        from xgen_agent_runtime.tools.built_in import ToolSearchTool
+
+        if registry.get("ToolSearch") is None:
+            registry.register(ToolSearchTool(), core=True)
+    if registry.get("SelfExtendGuide") is None:
+        from xgen_agent_runtime.tools.built_in import SELF_EXTEND_FAMILY, SelfExtendGuideTool
+
+        if any(registry.get(n) is not None for n in SELF_EXTEND_FAMILY):
+            registry.register(SelfExtendGuideTool(), core=True)
 
 
 def build_pipeline(
@@ -556,20 +592,7 @@ def build_pipeline(
     정상적으로 끝난 긴 작업이라 기본값으로 자르지 않는다 — 비용에 민감한
     에이전트는 노드 파라미터로 낮춘다.
     """
-    if registry is not None and registry.list_deferred():
-        from xgen_agent_runtime.tools.built_in import ToolSearchTool
-
-        if registry.get("ToolSearch") is None:
-            registry.register(ToolSearchTool(), core=True)
-    if registry is not None and registry.get("SelfExtendGuide") is None:
-        # 방이 있으면 문도 있어야 한다 — 자기확장 도구(ForgeTool/PythonEnv/WorkflowSelf…)가
-        # 하나라도 등록돼 있고 문이 없으면 여기서 세운다. 호스트가 어떤 내장 패밀리를
-        # 켰든(``meta`` 를 안 켜도) 문은 선다. 문이 없으면 그 도구들은 카탈로그에만
-        # 있어 모델이 능력 자체를 모른다(2026-08-18 회귀의 원인).
-        from xgen_agent_runtime.tools.built_in import SELF_EXTEND_FAMILY, SelfExtendGuideTool
-
-        if any(registry.get(n) is not None for n in SELF_EXTEND_FAMILY):
-            registry.register(SelfExtendGuideTool(), core=True)
+    ensure_surface_entrances(registry)
 
     system = system_prompt or ""
     if output_schema:
@@ -818,6 +841,16 @@ class _CancelRequested(Exception):
 #: 대기 중 정지를 확인하는 주기(초). 짧을수록 빨리 멈추고, 짧아도 비용은
 #: "아무 일도 없을 때 깨어나기" 뿐이다.
 _CANCEL_POLL_S = 0.2
+
+
+def _notify_loop(on_loop: Optional[Callable[[Any], None]], loop: Any) -> None:
+    """턴 루프가 열리고 닫힐 때 알린다. 알림 실패가 턴을 깨지 않는다."""
+    if on_loop is None:
+        return
+    try:
+        on_loop(loop)
+    except Exception:  # noqa: BLE001
+        logger.warning("geny_bridge: on_loop 콜백 실패 (무시)", exc_info=True)
 
 
 def _next_event(loop: Any, agen: Any, cancel_check: Optional[Callable[[], bool]]) -> Any:
@@ -1307,6 +1340,7 @@ def stream_turn(
     rollout_path: Optional[str | os.PathLike[str]] = None,
     max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
     usage_sink: Optional[Dict[str, Any]] = None,
+    on_loop: Optional[Callable[[Any], None]] = None,
 ) -> Iterator[Union[str, Dict[str, Any]]]:
     """Drive ``run_stream`` from a sync generator.
 
@@ -1344,6 +1378,8 @@ def stream_turn(
     모두 끝나며, public Pipeline 입력/출력 타입은 바뀌지 않는다.
     """
     loop = asyncio.new_event_loop()
+    # 턴 루프를 알린다 — CLI 백엔드의 도구 표면(host.tool_surface)이 브릿지 호출을 이 루프에서 돌린다.
+    _notify_loop(on_loop, loop)
     agen: Any = None
     rollout_recorder: Any = None
     original_runtime: Any = state.session_runtime
@@ -1556,6 +1592,7 @@ def stream_turn(
             loop.run_until_complete(pipeline.aclose())
         except Exception:  # noqa: BLE001
             pass
+        _notify_loop(on_loop, None)
         if rollout_recorder is not None and rollout_path is not None:
             _close_rollout_recorder(rollout_recorder, rollout_path, loop)
             state.session_runtime = original_runtime
@@ -1602,6 +1639,7 @@ def run_turn(
     usage_sink: Optional[Dict[str, Any]] = None,
     rollout_path: Optional[str | os.PathLike[str]] = None,
     max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
+    on_loop: Optional[Callable[[Any], None]] = None,
 ) -> str:
     """Run one turn to completion and return the final text (non-streaming).
 
@@ -1612,6 +1650,7 @@ def run_turn(
     ``rollout_path`` 는 stream_turn 과 같은 opt-in host-owned 기록 경로다.
     """
     loop = asyncio.new_event_loop()
+    _notify_loop(on_loop, loop)
     rollout_recorder: Any = None
     original_runtime: Any = state.session_runtime
     turn_started = time.monotonic()
@@ -1666,6 +1705,7 @@ def run_turn(
             loop.run_until_complete(pipeline.aclose())
         except Exception:  # noqa: BLE001
             pass
+        _notify_loop(on_loop, None)
         if rollout_recorder is not None and rollout_path is not None:
             _close_rollout_recorder(rollout_recorder, rollout_path, loop)
             state.session_runtime = original_runtime

@@ -103,3 +103,48 @@ def test_the_model_actually_receives_the_note_in_a_real_turn(tmp_path):
     runner.run_turn(pipe, "dex_note_0926.md 첫 줄?", PipelineState(session_id="t", model="m"))
     seen = str(client.requests[1].messages[-1])
     assert "File not found" in seen and "[Not in your sandbox]" in seen and "mcp_local_LocalControl" in seen
+
+
+# ── 폴더가 연결된 대화(지금 앱) ──────────────────────────────────────
+
+FOLDER = ["Read", "Bash", "Glob", "Grep", "mcp_local_ReadFile", "mcp_local_ListDir",
+          "mcp_local_SearchFiles", "mcp_local_Shell"]
+FACTS = {"geny.device_folders": {"device": "Mac", "folders": [{"name": "proj", "path": "/Users/u/proj"}]}}
+
+
+def _run_input(name, tool_input, text, names=FOLDER, shared=None, is_error=True):
+    shared = dict(FACTS) if shared is None else shared
+    r = {"tool_use_id": "t1", "content": text, "is_error": is_error}
+    n = sm.annotate([{"tool_use_id": "t1", "tool_name": name, "tool_input": tool_input}], [r], names, shared)
+    return n, r["content"], shared
+
+
+def test_folder_turn_miss_points_to_the_device_tools():
+    """옛 입구가 없는 지금 앱에서도 안내가 붙는다 — 예전엔 LocalControl 이 없어서 한 번도 안 붙었다."""
+    n, out, _ = _run_input("Read", {"file_path": "notes.md"}, "File not found: /ws/notes.md")
+    assert n == 1 and "[Not in your sandbox]" in out
+    assert "mcp_local_ListDir" in out and "mcp_local_ReadFile" in out and "proj (/Users/u/proj)" in out
+
+
+def test_device_path_given_to_a_sandbox_tool_is_named_wrong_machine():
+    n, out, _ = _run_input("Read", {"file_path": "/Users/u/proj/a.md"},
+                           "Access denied: /Users/u/proj/a.md is outside allowed directories (/ws)")
+    assert n == 1 and "[Wrong machine]" in out and "/Users/u/proj/a.md" in out and "Mac" in out
+
+
+def test_bash_command_on_a_device_folder_is_named_wrong_machine():
+    n, out, _ = _run_input("Bash", {"command": "cat /Users/u/proj/a.md"},
+                           "cat: /Users/u/proj/a.md: No such file or directory\nExit code: 1")
+    assert n == 1 and "[Wrong machine]" in out
+
+
+def test_wrong_machine_is_not_rate_limited():
+    shared = dict(FACTS)
+    counts = [_run_input("Read", {"file_path": "/Users/u/proj/a.md"}, "File not found", shared=shared)[0]
+              for _ in range(4)]
+    assert sum(counts) == 4
+
+
+def test_grep_missing_path_is_annotated_but_a_content_miss_is_not():
+    assert _run_input("Grep", {"pattern": "x", "path": "src"}, "Path not found: /ws/src", is_error=False)[0] == 1
+    assert _run_input("Grep", {"pattern": "x"}, "No matches for 'x'", is_error=False)[0] == 0

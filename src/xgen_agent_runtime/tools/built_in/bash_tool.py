@@ -264,22 +264,12 @@ class BashTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a shell command in your execution host — the place where "
-            "all your work runs. Depending on how this turn is executed that "
-            "is either your own isolated sandbox session on the server, or "
-            "the user's PC itself — directly inside the synchronized workspace "
-            "folder — when the turn runs locally; the environment section of "
-            "your prompt says which. Either way you "
-            "have read/write access to your working directory and can install "
-            "the dependencies you need (for example `pip install ...`, "
-            "`uv pip install ...`, `npm install ...`) into that environment — "
-            "be mindful that on a local PC this touches the user's real "
-            "machine. Returns stdout, stderr, and exit code. Commands run in "
-            "your working directory with a configurable timeout. Shell: on "
-            "Linux/macOS (server sandbox, or a local Unix PC) commands run in a "
-            "POSIX shell — use bash/sh syntax. On a local Windows PC they run in "
-            "PowerShell — use PowerShell syntax (e.g. `Get-ChildItem`, `$env:VAR`, "
-            "`;` to chain) rather than bash-isms."
+            "Run a shell command in your sandbox — your own isolated workspace on the "
+            "server, where all your work runs. Commands start in your working folder; you "
+            "can read and write there and install what you need (`pip install ...`, "
+            "`npm install ...`). It is a Linux shell: use bash/sh syntax. It cannot reach "
+            "the user's own devices — for folders the user connected, use the device tools. "
+            "Returns stdout, stderr, and exit code; a configurable timeout applies."
         )
 
     @property

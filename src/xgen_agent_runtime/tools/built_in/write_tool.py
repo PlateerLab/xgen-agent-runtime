@@ -26,7 +26,7 @@ class WriteTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Write content to a file. Creates parent directories if needed. "
+            "Write a file in your sandbox. Creates parent directories if needed. "
             "Overwrites existing files. For partial edits, use the Edit tool."
         )
 

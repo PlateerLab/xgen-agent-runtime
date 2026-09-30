@@ -22,7 +22,7 @@ class GrepTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search file contents with regex. Supports filtering by glob pattern. "
+            "Search file contents in your sandbox with regex. Supports filtering by glob pattern. "
             "Output modes: 'content' (matching lines), 'files' (file paths only), 'count' (match counts)."
         )
 

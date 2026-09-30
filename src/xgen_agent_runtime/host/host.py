@@ -105,9 +105,10 @@ class HostServices(Protocol):
     def jobs_prompt_block(self) -> str: ...
 
     # ── E. server-owned tool families ────────────────────────────────────
-    # Injected as tools into the runtime ToolRegistry (SDK path) or advertised
-    # via the connector MCP bridge (CLI path). Each returns tools/None or
-    # registers into the passed registry.
+    # Injected as tools into the turn's ToolRegistry. The same registry serves
+    # every provider: the SDK pipeline uses it directly, and CLI providers get it
+    # through ``params["_tool_surface"]`` (host.tool_surface) for the MCP bridge.
+    # Each returns tools/None or registers into the passed registry.
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]: ...
 
     def build_host_skill_tools(self, **kwargs: Any) -> List[Any]:
@@ -140,33 +141,6 @@ class HostServices(Protocol):
         user_id: Any,
         workflow_name: str,
     ) -> None: ...
-    #: Build the per-turn delegation extras (sub-pipeline factory + report sink).
-    #: ``spec_fields`` is a plain dict of the turn's LLM/run fields — the server
-    #: impl constructs its SubPipelineSpec from it (the spec type is server-owned,
-    #: so it never appears in the shared executor).
-    def build_turn_delegation(
-        self,
-        *,
-        workflow_id: str,
-        interaction_id: str,
-        user_id: Any,
-        spec_fields: Mapping[str, Any],
-    ) -> Dict[str, Any]: ...
-    #: True iff this turn's text is a delegation report (recursion guard). Server
-    #: consults its delegation module.
-    def is_report_turn(self, text: str) -> bool: ...
-    #: Server-owned delegation tool classes (name → class) to register into the
-    #: SDK registry.
-    def delegation_extra_tool_classes(self) -> Dict[str, type]: ...
-    #: Filesystem root for a workflow's delegation run when no sandbox is present.
-    #: Server → local pod path.
-    def delegation_workspace(self, workflow_id: str) -> str: ...
-    #: Claim & format any unreported delegation completions to inject into this
-    #: turn (alarm/pod-restart fallback). Server → the report block.
-    def drain_pending_reports(self, workflow_id: str, interaction_id: str) -> str: ...
-    def make_sub_cli_client_factory(
-        self, params: Mapping[str, Any], workflow_id: str
-    ) -> Optional[Any]: ...
     def register_forged_tools(
         self,
         registry: "ToolRegistry",
@@ -228,23 +202,21 @@ class HostServices(Protocol):
 
     # ── F. CLI provider runtime (process spawn + connector MCP bridge) ────
     # Builds the claude_code / codex subprocess client. The process runs on the
-    # serving pod, but its tools come from the MCP bridge and execute in the
-    # agent's runner session — natives are denied on both backends.
+    # serving pod; its tools are ``params["_tool_surface"]`` (a
+    # :class:`~xgen_agent_runtime.host.tool_surface.TurnToolSurface`) served by the
+    # host's MCP bridge — the same registry, tool context and turn state the SDK
+    # path uses — and execute in the agent's runner session. Natives are off on
+    # both backends.
     def build_cli_runtime(
         self,
         provider: str,
         params: Mapping[str, Any],
     ) -> CliRuntime: ...
 
-    #: **OPTIONAL** — does this host advertise the turn's non-native tool surface
-    #: (memory_* / WorkflowSelf / DelegateTask… as ``mcp__connector__*``) to the
-    #: CLI backend ``provider`` (claude_code/codex) through an MCP bridge?
-    #: The executor only appends the CLI-only prompt notes (memory tool names,
-    #: self-evolution block, delegation note) when this returns True — a note
-    #: about tools the CLI cannot see is a ghost promise (audit #25). Absent
-    #: method → treated as True (legacy behaviour). Server: True iff the bridge
-    #: run ctx will actually be bound (a workspace dir, and either built-in tools
-    #: or self-evolution).
+    #: **OPTIONAL** — can this host serve the turn's tool surface to the CLI
+    #: backend ``provider`` (claude_code/codex) through an MCP bridge? When False
+    #: the executor registers no tools and promises none in the prompt — a tool
+    #: the CLI cannot see is a ghost promise (audit #25). Absent method → True.
     def cli_bridge_available(self, provider: str) -> bool: ...
 
     #: **OPTIONAL** — the OS of the user's device whose tools ride this turn

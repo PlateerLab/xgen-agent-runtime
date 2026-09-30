@@ -144,7 +144,7 @@ class NotebookEditTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Edit cells in a Jupyter (.ipynb) notebook. Supports "
+            "Edit cells in a Jupyter (.ipynb) notebook in your sandbox. Supports "
             "'replace' (overwrite source), 'insert' (add a new code / "
             "markdown / raw cell), and 'delete'. Operations apply in "
             "order — an earlier delete shifts indices that come after."

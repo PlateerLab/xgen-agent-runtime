@@ -299,6 +299,17 @@ class ToolSearchTool(Tool):
             if registry is not None:
                 tag = " [activated]" if name in activated else " [available]"
             lines.append(f"{i}. {name} — {one_liner}{tag}")
+        if named and registry is not None:
+            # 정확한 이름으로 찾은 도구의 정의가 CLI 한도 때문에 줄었으면 원문을 여기 싣는다 — 줄인 정의가
+            # "전체는 ToolSearch 로" 라고 가리키는 곳이 여기다(tools.definition).
+            from xgen_agent_runtime.tools.definition import full_reference
+
+            for _, desc in top:
+                tool = registry.get(str(desc.get("name", ""))) if hasattr(registry, "get") else None
+                ref = full_reference(tool) if tool is not None else None
+                if ref:
+                    lines.append("")
+                    lines.append(ref)
         if activated:
             lines.append(
                 "Activated tool schemas become available on your next step — call them then. "

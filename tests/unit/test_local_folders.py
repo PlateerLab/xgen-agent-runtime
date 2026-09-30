@@ -71,7 +71,8 @@ def test_only_folder_tools_are_folder_bound_per_app():
     assert not lf.is_folder_tool("mcp_mobile_Notify")  # 모바일 알림은 도구 그룹이 정한다
     assert not lf.is_folder_tool("mcp_mobile_Shell")  # 휴대폰엔 터미널이 없다
     assert lf.is_folder_tool("mcp_web_ReadFile")
-    assert lf.is_folder_tool("mcp__connector__mcp_web_Search")
+    assert lf.is_folder_tool("mcp__connector__mcp_web_Search")  # 별칭 전 이름
+    assert lf.is_folder_tool("mcp__connector__mcp_web_SearchFiles")
     assert not lf.is_folder_tool("mcp_web_Shell")  # 브라우저엔 터미널이 없다
     assert not lf.is_folder_tool("mcp_web_TakePhoto")
     assert not lf.is_folder_tool("mcp_local_BrowserNavigate")
@@ -140,7 +141,8 @@ def test_connected_note_lists_folders_and_the_terminal_on_desktop():
     assert "user's Mac" in note
     assert "mcp_local_*" in note
     assert "Shell and ShellJob" in note
-    assert "not in your server sandbox" in note
+    assert "Two machines this turn" in note
+    assert "act only on your sandbox" in note
 
 
 def test_mobile_note_says_there_is_no_terminal():
@@ -306,7 +308,7 @@ def test_a_turn_from_another_screen_says_so_and_keeps_the_tools_on_the_device():
     )
     assert "another screen" in note
     assert "do not try to open windows" in note
-    assert "Device tools (mcp_local_*)" in note
+    assert "The device tools (mcp_local_*)" in note
 
 
 def test_a_remote_pc_that_is_off_asks_to_turn_it_on():
@@ -321,3 +323,14 @@ def test_a_remote_browser_that_is_closed_asks_to_reopen_it_there():
     folders = [lf.LocalFolder(id="f", name="docs", path="/docs")]
     note = lf.turn_note(folders, available_tools=[], platform="web", device_name="웹 브라우저 · Chrome", remote=True)
     assert "in that browser" in note
+
+
+def test_search_is_renamed_for_the_model_and_back_for_the_device():
+    """기기의 ``Search`` 는 모델에게 ``SearchFiles`` 다 — WebSearch·ToolSearch 와 구분된다."""
+    assert lf.model_tool_name("local", "Search") == "mcp_local_SearchFiles"
+    assert lf.model_tool_name("web", "Search") == "mcp_web_SearchFiles"
+    assert lf.device_tool_name("local", "SearchFiles") == "Search"
+    # 사용자가 붙인 MCP 서버의 이름은 건드리지 않는다.
+    assert lf.model_tool_name("github", "Search") == "mcp_github_Search"
+    assert lf.device_tool_name("github", "SearchFiles") == "SearchFiles"
+    assert "mcp_local_Search" in lf.retired_device_tool_names()

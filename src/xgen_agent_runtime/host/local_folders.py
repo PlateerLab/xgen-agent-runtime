@@ -6,7 +6,8 @@
 
 기기는 자기 도구를 MCP 서버 이름 하나로 올린다 — 데스크톱은 ``local``(모델에게
 ``mcp_local_<Tool>``), 모바일은 ``mobile``(``mcp_mobile_<Tool>``), 웹 브라우저는 ``web``
-(``mcp_web_<Tool>``). 폴더에 묶이는 도구는 기기마다 다르다(:data:`FOLDER_TOOLS_BY_SERVER`):
+(``mcp_web_<Tool>``). 모델이 보는 이름은 :func:`model_tool_name` 한 곳에서 만든다 — 기기가 올린
+이름이 다른 도구와 헷갈리면 여기서 바꿔 부른다(:data:`DEVICE_TOOL_ALIASES`). 폴더에 묶이는 도구는 기기마다 다르다(:data:`FOLDER_TOOLS_BY_SERVER`):
 데스크톱은 PC 조작 전부가 폴더 연결로 열리고, 모바일은 파일을 다루는 도구만 폴더에 묶인다
 (알림·위치 같은 휴대폰 기능은 모바일 설정의 도구 그룹이 따로 정한다). 웹 브라우저는 사용자가
 고른 폴더의 파일 도구만 있다 — 터미널이 없고, 그 XGEN 화면이 열려 있는 동안만 닿는다.
@@ -50,7 +51,7 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "ReadFile",
             "WriteFile",
             "ListDir",
-            "Search",
+            "SearchFiles",
             "Shell",
             "ShellJob",
             "Open",
@@ -65,7 +66,7 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "WriteFile",
             "ListDir",
             "DeleteFile",
-            "Search",
+            "SearchFiles",
             "OpenFile",
             "TakePhoto",
         }
@@ -77,10 +78,62 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "WriteFile",
             "ListDir",
             "DeleteFile",
-            "Search",
+            "SearchFiles",
         }
     ),
 }
+
+#: 기기가 올린 이름 → 모델이 보는 이름. 기기 앱을 새로 내지 않고 서버가 이름만 바꿔 부른다.
+#:
+#: ``Search`` 는 WebSearch·ToolSearch·memory_search 와 동사가 같아 무엇을 찾는지 이름에 없다. 실제로는
+#: 연결 폴더 안 텍스트 파일에서 문자열을 찾는 도구다(sandbox 의 Grep 과 같은 일을 사용자 기기에서).
+#: 호출은 기기가 아는 원래 이름으로 간다(:func:`device_tool_name`).
+DEVICE_TOOL_ALIASES: Dict[str, str] = {"Search": "SearchFiles"}
+_ALIAS_BACK: Dict[str, str] = {v: k for k, v in DEVICE_TOOL_ALIASES.items()}
+
+_NAME_SANITIZE = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
+def model_tool_name(server: str, tool: str) -> str:
+    """기기 카탈로그의 (서버, 도구) → 모델이 보는 이름 ``mcp_<서버>_<도구>``.
+
+    우리 기기 이름공간(``local``·``mobile``·``web``)의 도구만 :data:`DEVICE_TOOL_ALIASES` 로 바꾼다.
+    사용자가 붙인 MCP 서버의 도구 이름은 그대로 둔다.
+    """
+    server = str(server or "").strip() or "server"
+    tool = str(tool or "").strip()
+    if server in FOLDER_TOOLS_BY_SERVER:
+        tool = DEVICE_TOOL_ALIASES.get(tool, tool)
+    name = _NAME_SANITIZE.sub("_", f"mcp_{server}_{tool}").strip("_")
+    from xgen_agent_runtime.tools.definition import cap_tool_name
+
+    # 사용자가 붙인 로컬 MCP 서버의 긴 이름도 CLI(``mcp__connector__`` + 이름 ≤ 64자)에 닿게 줄인다.
+    return cap_tool_name(name) or "mcp_tool"
+
+
+def device_tool_name(server: str, model_tool: str) -> str:
+    """모델이 부른 이름의 도구 부분 → 기기가 아는 원래 이름 (:func:`model_tool_name` 의 역)."""
+    if str(server or "") in FOLDER_TOOLS_BY_SERVER:
+        return _ALIAS_BACK.get(model_tool, model_tool)
+    return model_tool
+
+
+#: ``state.shared`` 키 — 이번 턴에 연결된 기기 폴더와 그 기기 이름. sandbox 도구가 기기 경로를 받거나
+#: "없음" 을 돌려줄 때 기기 도구를 가리키는 안내(stages/s10_tool/second_machine)가 읽는다.
+SHARED_FOLDERS_KEY = "geny.device_folders"
+
+
+def shared_folder_facts(
+    folders: Optional[Sequence["LocalFolder"]], *, device: str
+) -> Optional[Dict[str, Any]]:
+    """:data:`SHARED_FOLDERS_KEY` 값. 폴더가 없으면 None(키를 두지 않는다)."""
+    if not folders:
+        return None
+    return {
+        "device": device,
+        "folders": [{"name": f.name, "path": f.path} for f in folders],
+    }
+
 
 #: 터미널이 없는 기기 — 턴 안내가 파일 도구만 쓰라고 말한다.
 _NO_TERMINAL_SERVERS = frozenset({"mobile", "web"})
@@ -167,9 +220,13 @@ def is_legacy_gate(name: str) -> bool:
 
 
 def is_folder_tool(name: str) -> bool:
-    """폴더에 묶이는 기기 도구인가 (옛 입구 제외)."""
+    """폴더에 묶이는 기기 도구인가 (옛 입구 제외). 별칭 전 이름(``mcp_web_Search``)도 같다."""
     found = device_tool(name)
-    return bool(found) and found[1] in FOLDER_TOOLS_BY_SERVER.get(found[0], ())
+    if not found:
+        return False
+    server, tool = found
+    bound = FOLDER_TOOLS_BY_SERVER.get(server, ())
+    return tool in bound or DEVICE_TOOL_ALIASES.get(tool, tool) in bound
 
 
 def _tool_name(tool: Any) -> str:
@@ -219,6 +276,13 @@ def retired_device_tool_names() -> List[str]:
         f"mcp_{server}_{tool}" for server, tools in FOLDER_TOOLS_BY_SERVER.items() for tool in tools
     }
     names |= {f"mcp_{server}_{gate}" for server, gate in LEGACY_GATES.items()}
+    # 별칭 전 이름(기록 속 옛 호출 — 예: mcp_local_Search)도 같이 평문으로 바꾼다.
+    names |= {
+        f"mcp_{server}_{raw}"
+        for server in FOLDER_TOOLS_BY_SERVER
+        for raw, alias in DEVICE_TOOL_ALIASES.items()
+        if alias in FOLDER_TOOLS_BY_SERVER[server]
+    }
     return sorted(names)
 
 
@@ -278,7 +342,7 @@ def turn_note(
     if device_name:
         device = f'{device} "{device_name}"'
     found = [d for d in (device_tool(n) for n in available_tools) if d]
-    folder_found = [(s, t) for s, t in found if t in FOLDER_TOOLS_BY_SERVER.get(s, ())]
+    folder_found = [(s, t) for s, t in found if is_folder_tool(f"mcp_{s}_{t}")]
     head = "# Folders on the user's device"
     if not folders:
         return (
@@ -324,9 +388,12 @@ def turn_note(
         return "\n".join(lines)
     prefixes = sorted({f"mcp_{s}_*" for s, _ in folder_found})
     lines.append(
-        f"Device tools ({', '.join(prefixes)}) work only inside these folders. They run on "
-        f"the user's {device}, not in your server sandbox: the sandbox cannot see these files "
-        "and the device cannot see the sandbox. Use paths under the folders above."
+        f"Two machines this turn. Your own tools (Bash, Read, Write, Edit, Glob, Grep) act only on "
+        f"your sandbox, which cannot see these folders. The device tools ({', '.join(prefixes)}) act "
+        f"only on these folders on the user's {device}, which cannot see your sandbox. Pick the tool "
+        "by where the file is: a path under the folders above belongs to the device tools, a path in "
+        "your sandbox to your own tools. Nothing moves between the two by itself — to bring a file "
+        "across, read it with one side's tool and write it with the other's."
     )
     if any(t == "Shell" for _, t in folder_found):
         lines.append(
@@ -344,6 +411,11 @@ def turn_note(
 
 __all__ = [
     "DEVICE_SERVERS",
+    "DEVICE_TOOL_ALIASES",
+    "SHARED_FOLDERS_KEY",
+    "device_tool_name",
+    "model_tool_name",
+    "shared_folder_facts",
     "FOLDER_TOOLS_BY_SERVER",
     "LEGACY_GATES",
     "LocalFolder",
