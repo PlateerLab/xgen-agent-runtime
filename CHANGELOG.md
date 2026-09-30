@@ -4,6 +4,21 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.73.0] — 2026-09-30
+
+### Fixed — API 클라이언트가 SDK 연결 풀을 닫는다 (`BaseClient.aclose`)
+
+OpenAI·Anthropic·Bedrock·Azure·Gemini·Vertex 클라이언트에는 `aclose()` 가 없어서 `Pipeline.aclose` 가 턴 끝에
+불러도 아무 일이 없었다 — 벤더 SDK 클라이언트(httpx 연결 풀)는 닫히지 않고 버려져 가비지 컬렉터가 **나중에** 닫았다.
+그 사이 다른 연결이 같은 소켓 번호를 받으면 옛 연결을 닫는 일이 새 연결을 닫아, 새 호출이 연결 단계에서 연결
+상한(10초)까지 멈추고 `Request timed out` 으로 끝난다. xgen-workflow 앱 LLM 에서 실측했다(httpcore 로그: 새
+`connect_tcp.started` 직후 옛 연결 `close`, 10초 뒤 `ConnectTimeout`). 턴은 턴마다 루프를 새로 만들고 닫으므로 같은
+위험을 안고 있었다.
+
+`BaseClient.aclose()` 가 `self._client` 의 SDK 클라이언트를 닫는다(`close()`, google-genai 는 `aio.aclose()`).
+여러 번 불러도 되고, 닫은 뒤 다시 쓰면 SDK 클라이언트를 새로 만든다. Claude Code CLI 클라이언트는 자기 `aclose`
+(예비 프로세스 정리)를 그대로 쓴다.
+
 ## [4.72.0] — 2026-09-30
 
 ### Fixed — Gemini·Vertex 가 구조화 출력을 실제로 요청에 싣는다
