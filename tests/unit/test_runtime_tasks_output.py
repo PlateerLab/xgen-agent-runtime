@@ -1,6 +1,6 @@
 """Output-streaming + filtering tests for TaskRegistry (PR-A.1.1).
 
-Augments ``test_s9b2_task_registry.py`` with the new TaskFilter +
+Augments ``test_runtime_tasks.py`` with the TaskFilter +
 output streaming surface introduced by the new-executor-uplift cycle A.
 """
 
@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from xgen_agent_runtime.stages.s13_task_registry import (
+from xgen_agent_runtime.runtime.tasks import (
     InMemoryRegistry,
     TaskFilter,
     TaskRecord,

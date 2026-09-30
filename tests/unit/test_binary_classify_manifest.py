@@ -121,7 +121,6 @@ def test_default_evaluate_registry_still_has_other_strategies():
     assert set(available) == {
         "signal_based",
         "criteria_based",
-        "agent_evaluation",
         "binary_classify",
         "evaluation_chain",
     }

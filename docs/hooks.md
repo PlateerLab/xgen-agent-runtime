@@ -92,10 +92,6 @@ async def inject_session_id(event):
 
 A `POST_TOOL_USE` hook reads `event.duration_ms` and `event.result.content` length, emits to Datadog / Prometheus / whatever. The pipeline's own event bus carries the same data — pick the surface that fits your observability stack.
 
-### Sub-worker delegation tracking
-
-Geny tracks which session triggered a `send_direct_message_internal` from inside a `POST_TOOL_USE` hook so the runtime can correlate VTuber ↔ Sub-Worker pairs without the LLM ever seeing the linked session id.
-
 ## When NOT to use a hook
 
 | Don't | Do |

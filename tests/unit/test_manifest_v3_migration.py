@@ -55,37 +55,45 @@ class TestVersionDetection:
         }
         m = EnvironmentManifest.from_dict(v1)
         assert m.version == MANIFEST_VERSION
-        # 1 from v1 + 5 v3 pads.
-        assert len(m.stages) == 6
+        # 1 from v1 + 4 v3 pads (order 13 task_registry is retired since
+        # 4.71.0 and no longer padded).
+        assert len(m.stages) == 5
 
 
 # ── Padding behaviour ──────────────────────────────────────────────────
 
 
 class TestPadding:
-    def test_pads_all_five_new_orders_when_missing(self):
+    def test_pads_all_live_new_orders_when_missing(self):
         m = EnvironmentManifest.from_dict(_v2_payload())
         orders = {int(s["order"]) for s in m.stages}
-        for order in (11, 13, 15, 19, 20):
+        for order in (11, 15, 19, 20):
             assert order in orders
+        # 13 (task_registry) was the fifth new order — retired in 4.71.0.
+        assert 13 not in orders
+
+    def test_v2_payload_carrying_task_registry_drops_it(self):
+        payload = _v2_payload()
+        payload["stages"].append({"order": 13, "name": "task_registry", "active": True})
+        m = EnvironmentManifest.from_dict(payload)
+        assert 13 not in {int(s["order"]) for s in m.stages}
 
     def test_padded_entries_inactive_by_default(self):
         m = EnvironmentManifest.from_dict(_v2_payload())
         by_order = {int(s["order"]): s for s in m.stages}
-        for order in (11, 13, 15, 19, 20):
+        for order in (11, 15, 19, 20):
             assert by_order[order]["active"] is False
 
     def test_padded_entries_use_default_artifact(self):
         m = EnvironmentManifest.from_dict(_v2_payload())
         by_order = {int(s["order"]): s for s in m.stages}
-        for order in (11, 13, 15, 19, 20):
+        for order in (11, 15, 19, 20):
             assert by_order[order]["artifact"] == "default"
 
     def test_padded_entry_names(self):
         m = EnvironmentManifest.from_dict(_v2_payload())
         by_order = {int(s["order"]): s for s in m.stages}
         assert by_order[11]["name"] == "tool_review"
-        assert by_order[13]["name"] == "task_registry"
         assert by_order[15]["name"] == "hitl"
         assert by_order[19]["name"] == "summarize"
         assert by_order[20]["name"] == "persist"

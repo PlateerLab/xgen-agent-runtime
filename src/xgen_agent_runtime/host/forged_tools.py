@@ -384,9 +384,9 @@ class ForgedScriptTool:
     def _record(self, error: Optional[str]) -> None:
         """호출 통계 기록 (동기 DB UPDATE).
 
-        이 도구의 execute 는 CLI 브릿지 경유 시 **서빙 루프**, sub-agent 경유
-        시 **공유 위임 루프**에서 돈다 — 루프가 감지되면 워커로 보내고 결과는
-        기다리지 않는다 (통계는 유실보다 루프 정지가 훨씬 비싸다).
+        이 도구의 execute 는 CLI 브릿지 경유 시 **서빙 루프**에서 돈다 — 루프가
+        감지되면 워커로 보내고 결과는 기다리지 않는다 (통계는 유실보다 루프
+        정지가 훨씬 비싸다).
         """
         if self._store is None:
             return

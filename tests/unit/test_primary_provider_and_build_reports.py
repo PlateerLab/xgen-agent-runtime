@@ -1,8 +1,8 @@
 """2.2.0 small lifecycle items (audit §2.8 / §1-1 / §2.1):
 
-* ``_init_state`` writes the resolved Stage 6 provider into
-  ``state.shared[SharedKeys.PRIMARY_PROVIDER]`` — the sub-agent
-  inheritance contract finally gets its producer;
+* ``SharedKeys.PRIMARY_PROVIDER`` — its only reader was sub-agent
+  inheritance; with sub-agents gone (4.71.0) the executor stops
+  writing it, the constant stays (stable-string contract);
 * lenient ``from_manifest`` records construction-failed stages on
   ``pipeline.dropped_stages`` (and warns) instead of a bare continue;
 * ``PipelineMutator.restore(snapshot, report=True)`` returns a
@@ -15,7 +15,7 @@ import logging
 
 import pytest
 
-from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineMutator, PipelineState
+from xgen_agent_runtime import Pipeline, PipelineConfig, PipelineMutator
 from xgen_agent_runtime.core.environment import (
     EnvironmentManifest,
     EnvironmentMetadata,
@@ -62,42 +62,12 @@ def test_shared_keys_primary_provider_is_legacy_bare_string():
     assert SharedKeys.PRIMARY_PROVIDER == "primary_provider"
 
 
-def test_init_state_writes_primary_provider_from_stage6():
+def test_init_state_no_longer_writes_primary_provider():
+    """Retired in 4.71.0 — the key had no reader left once sub-agent
+    orchestration (its only consumer) was removed."""
     pipeline = _make_pipeline()
-    state = pipeline._init_state(None)
-    # MockProvider-backed APIStage reports its provider name ("mock").
-    assert state.shared[SharedKeys.PRIMARY_PROVIDER] == "mock"
-
-
-def test_init_state_primary_provider_prefers_live_client():
-    """The live client's provider attribute is ground truth — it covers
-    attached/override clients that contradict the stage declaration."""
-    pipeline = _make_pipeline()
-
-    class _Client:
-        provider = "anthropic"
-
-    state = PipelineState(session_id="s")
-    state.llm_client = _Client()
-    out = pipeline._init_state(state)
-    assert out.shared[SharedKeys.PRIMARY_PROVIDER] == "anthropic"
-
-
-def test_init_state_no_api_stage_writes_nothing():
-    pipeline = Pipeline(PipelineConfig(name="no-api"))
-    pipeline.register_stage(InputStage())
     state = pipeline._init_state(None)
     assert SharedKeys.PRIMARY_PROVIDER not in state.shared
-
-
-@pytest.mark.asyncio
-async def test_primary_provider_refreshed_every_run():
-    """Written at every run start, so a between-turn provider change is
-    visible to the next turn's sub-agent factories."""
-    pipeline = _make_pipeline()
-    state = PipelineState(session_id="s")
-    await pipeline.run("turn", state)
-    assert state.shared[SharedKeys.PRIMARY_PROVIDER] == "mock"
 
 
 # ── dropped_stages (lenient from_manifest) ───────────────────────────

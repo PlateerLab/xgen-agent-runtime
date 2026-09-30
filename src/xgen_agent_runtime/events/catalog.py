@@ -15,7 +15,10 @@ Contract rules
   — the enum is a *names registry*, not a rename. Existing consumers
   matching raw strings keep working forever.
 * **Append-only.** New events may be added in minor releases; renaming
-  or removing a member is a major-version change.
+  or removing a member is a major-version change. A member whose
+  emitter is removed in a minor release stays in the enum and is listed
+  in :data:`RETIRED_EVENT_TYPES` ("no longer emitted") until the next
+  major version drops it.
 * **Payloads may gain fields** in minor releases; existing fields keep
   their meaning. :data:`PAYLOADS` documents the fields each event
   carries today (descriptions, not strict schemas — events are
@@ -42,7 +45,7 @@ other half of the unpublished contract.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, List
 
 #: Bumped when the catalogue gains members (append-only). Hosts can pin
 #: a minimum version to assert the names they consume exist.
@@ -57,7 +60,11 @@ from typing import Any, Dict, List
 #: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
 #: v10: + ``loop.repeat_stop`` (4.45.0 end the turn once repeated calls keep getting refused).
 #: v15: + ``tool.not_in_sandbox`` (second machine not-found redirect).
-EVENT_CATALOG_VERSION = 15
+#: v16: ``agent.*`` / ``subagent.*`` / ``task.*`` / ``task_registry.*`` retired
+#: (4.71.0 — Stage 12/13 and sub-agent orchestration removed). The members
+#: stay (removal is a major-version change) but nothing emits them any more;
+#: see :data:`RETIRED_EVENT_TYPES`.
+EVENT_CATALOG_VERSION = 16
 
 
 class EventTypes(str, Enum):
@@ -214,19 +221,19 @@ class EventTypes(str, Enum):
     TOOL_REVIEW_COMPLETED = "tool_review.completed"
     TOOL_REVIEW_REVIEWER_ERROR = "tool_review.reviewer_error"
 
-    # ── Stage 12: Agent ──
+    # ── Stage 12: Agent — RETIRED 4.71.0 (no longer emitted) ──
     AGENT_ORCHESTRATE_START = "agent.orchestrate_start"
     AGENT_ORCHESTRATE_COMPLETE = "agent.orchestrate_complete"
     AGENT_DELEGATIONS_CAPPED = "agent.delegations_capped"
 
-    # ── Persistent sub-agents (2.7.0) ──
+    # ── Persistent sub-agents (2.7.0) — RETIRED 4.71.0 (no longer emitted) ──
     SUBAGENT_SPAWNED = "subagent.spawned"
     SUBAGENT_ASSIGNED = "subagent.assigned"
     SUBAGENT_COMPLETED = "subagent.completed"
     SUBAGENT_FAILED = "subagent.failed"
     SUBAGENT_STOPPED = "subagent.stopped"
 
-    # ── Stage 13: Task registry ──
+    # ── Stage 13: Task registry — RETIRED 4.71.0 (no longer emitted) ──
     TASK_REGISTERED = "task.registered"
     TASK_DONE = "task.done"
     TASK_FAILED = "task.failed"
@@ -974,8 +981,37 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
 }
 
 
+#: Members kept for the append-only contract whose emitters are gone.
+#: 4.71.0 removed Stage 12 (agent orchestration), Stage 13 (task registry)
+#: and the persistent sub-agent manager, so nothing in the engine emits
+#: these any more. They leave the enum at the next major version.
+RETIRED_EVENT_TYPES: FrozenSet[EventTypes] = frozenset(
+    {
+        EventTypes.AGENT_ORCHESTRATE_START,
+        EventTypes.AGENT_ORCHESTRATE_COMPLETE,
+        EventTypes.AGENT_DELEGATIONS_CAPPED,
+        EventTypes.SUBAGENT_SPAWNED,
+        EventTypes.SUBAGENT_ASSIGNED,
+        EventTypes.SUBAGENT_COMPLETED,
+        EventTypes.SUBAGENT_FAILED,
+        EventTypes.SUBAGENT_STOPPED,
+        EventTypes.TASK_REGISTERED,
+        EventTypes.TASK_DONE,
+        EventTypes.TASK_FAILED,
+        EventTypes.TASK_TIMEOUT,
+        EventTypes.TASK_REGISTRY_SYNCED,
+        EventTypes.TASK_REGISTRY_INVALID_PAYLOAD,
+        EventTypes.TASK_REGISTRY_POLICY_ERROR,
+    }
+)
+
+
 def known_event_types() -> List[str]:
-    """All catalogued wire strings, sorted — UI/validation accessor."""
+    """All catalogued wire strings, sorted — UI/validation accessor.
+
+    Includes :data:`RETIRED_EVENT_TYPES` (still valid names, never
+    emitted); filter them out when building "what can I receive" UIs.
+    """
     return sorted(e.value for e in EventTypes)
 
 
@@ -983,6 +1019,7 @@ __all__ = [
     "EVENT_CATALOG_VERSION",
     "EventTypes",
     "PAYLOADS",
+    "RETIRED_EVENT_TYPES",
     "known_event_types",
 ]
 

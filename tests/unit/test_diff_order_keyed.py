@@ -85,8 +85,9 @@ class TestOrderKeyedDiff:
 class TestSixteenVsTwentyOne:
     def test_stored_16_slot_manifest_diffs_meaningfully_against_canon(self):
         """The audit's motivating case: a pre-9a 16-slot manifest vs the
-        21-slot canonical layout must name the five missing orders, not
-        emit one giant blob."""
+        21-slot canonical layout must name the missing orders, not emit
+        one giant blob. (Order 13 was one of them; it is retired since
+        4.71.0, so the canon no longer carries it.)"""
         canon = build_manifest("worker_adaptive", provider="anthropic").to_dict()
         stored = build_manifest("worker_adaptive", provider="anthropic").to_dict()
         stored["stages"] = [
@@ -96,7 +97,6 @@ class TestSixteenVsTwentyOne:
         added_paths = {e.path for e in diff.filter_by_type("added").entries}
         assert added_paths == {
             "stages[order=11]",
-            "stages[order=13]",
             "stages[order=15]",
             "stages[order=19]",
             "stages[order=20]",

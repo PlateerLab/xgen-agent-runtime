@@ -7,13 +7,14 @@ import pytest
 from xgen_agent_runtime.core.builder import PipelineBuilder
 from xgen_agent_runtime.core.presets import PipelinePresets
 from xgen_agent_runtime.stages.s11_tool_review import ToolReviewStage
-from xgen_agent_runtime.stages.s13_task_registry import TaskRegistryStage
 from xgen_agent_runtime.stages.s15_hitl import HITLStage
 from xgen_agent_runtime.stages.s19_summarize import SummarizeStage
 from xgen_agent_runtime.stages.s20_persist import PersistStage
 
 
-SCAFFOLD_ORDERS = (11, 13, 15, 19, 20)
+# Order 13 (task_registry) was one of the five scaffolds; it was retired
+# in 4.71.0 together with sub-agent orchestration.
+SCAFFOLD_ORDERS = (11, 15, 19, 20)
 
 
 # ── Builder method round-trip ──────────────────────────────────────────
@@ -23,10 +24,6 @@ class TestBuilderScaffoldMethods:
     def test_with_tool_review_registers_stage(self):
         p = PipelineBuilder("t", api_key="k").with_tool_review().build()
         assert isinstance(p.get_stage(11), ToolReviewStage)
-
-    def test_with_task_registry_registers_stage(self):
-        p = PipelineBuilder("t", api_key="k").with_task_registry().build()
-        assert isinstance(p.get_stage(13), TaskRegistryStage)
 
     def test_with_hitl_registers_stage(self):
         p = PipelineBuilder("t", api_key="k").with_hitl().build()
@@ -121,3 +118,5 @@ class TestDescribeReports21:
         # full-blown presets.
         for order in SCAFFOLD_ORDERS:
             assert order in active_orders
+        # The retired slots still render (shape-stable) but never run.
+        assert not active_orders & {12, 13}

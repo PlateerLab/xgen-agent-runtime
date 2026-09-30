@@ -21,17 +21,20 @@ import pytest
 
 
 CYCLE_A_EXPORTS: Tuple[Tuple[str, str], ...] = (
-    # P0.1 task lifecycle
-    ("xgen_agent_runtime.stages.s13_task_registry", "TaskRegistry"),
-    ("xgen_agent_runtime.stages.s13_task_registry", "TaskRecord"),
-    ("xgen_agent_runtime.stages.s13_task_registry", "TaskFilter"),
-    ("xgen_agent_runtime.stages.s13_task_registry", "TaskStatus"),
-    ("xgen_agent_runtime.stages.s13_task_registry", "InMemoryRegistry"),
-    ("xgen_agent_runtime.stages.s13_task_registry", "FileBackedRegistry"),
+    # P0.1 task lifecycle — the record model + registries moved from the
+    # retired Stage 13 (``stages.s13_task_registry``) to ``runtime.tasks``
+    # in 4.71.0; ``LocalAgentExecutor`` went with sub-agent orchestration.
+    ("xgen_agent_runtime.runtime.tasks", "TaskRegistry"),
+    ("xgen_agent_runtime.runtime.tasks", "TaskRecord"),
+    ("xgen_agent_runtime.runtime.tasks", "TaskFilter"),
+    ("xgen_agent_runtime.runtime.tasks", "TaskStatus"),
+    ("xgen_agent_runtime.runtime.tasks", "InMemoryRegistry"),
+    ("xgen_agent_runtime.runtime.tasks", "FileBackedRegistry"),
+    ("xgen_agent_runtime.runtime", "TaskRecord"),
+    ("xgen_agent_runtime.runtime", "InMemoryRegistry"),
     ("xgen_agent_runtime.runtime", "BackgroundTaskRunner"),
     ("xgen_agent_runtime.runtime", "BackgroundTaskExecutor"),
     ("xgen_agent_runtime.runtime", "LocalBashExecutor"),
-    ("xgen_agent_runtime.runtime", "LocalAgentExecutor"),
     # AgentTool·Task*Tool(하위 에이전트 위임)은 4.70.0 에서 제거됐다.
     # P0.2 slash commands
     ("xgen_agent_runtime.slash_commands", "SlashCommand"),

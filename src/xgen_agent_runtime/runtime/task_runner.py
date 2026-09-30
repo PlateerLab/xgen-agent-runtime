@@ -12,8 +12,7 @@ Usage:
     runner = BackgroundTaskRunner(
         registry=registry,
         executors={
-            "local_bash":  LocalBashExecutor(),
-            "local_agent": LocalAgentExecutor(orchestrator_factory),
+            "local_bash": LocalBashExecutor(),
         },
         max_concurrent=8,
     )
@@ -35,10 +34,10 @@ import logging
 from typing import Dict
 
 from xgen_agent_runtime.runtime.task_executors import BackgroundTaskExecutor
-from xgen_agent_runtime.stages.s13_task_registry.interface import TaskRegistry
-from xgen_agent_runtime.stages.s13_task_registry.types import (
+from xgen_agent_runtime.runtime.tasks import (
     TaskFilter,
     TaskRecord,
+    TaskRegistry,
     TaskStatus,
 )
 

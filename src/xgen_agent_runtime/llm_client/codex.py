@@ -425,15 +425,27 @@ class CodexCLIClient(BaseClient):
                 category=ErrorCategory.CLI_PROTOCOL_ERROR,
             )
 
-    def _raise_on_wire_error(self, line_obj: Dict[str, Any]) -> None:
-        """Surface CLI-side error frames as APIError before accumulation."""
+    @staticmethod
+    def _wire_error(line_obj: Dict[str, Any]) -> Optional[tuple[bool, str]]:
+        """Classify a CLI-side error frame: ``(fatal, message)`` or None.
+
+        ``fatal`` is True only for ``turn.failed`` — the CLI's own verdict
+        that the turn is over. Its message may be empty (the reason usually
+        rode on an earlier ``error`` frame). Every other error frame
+        (``type: error``, an ``error`` item, legacy ``msg.type == error``)
+        is NOT fatal by itself: codex emits non-fatal warnings on the same
+        channel (2026-09-30, codex-cli 0.159.2: "Model metadata for
+        `gpt-5.3-codex` not found. Defaulting to fallback metadata …").
+        """
         etype = str(line_obj.get("type") or "")
+        if etype == "turn.failed":
+            err = line_obj.get("error")
+            if isinstance(err, dict):
+                return True, str(err.get("message") or "")
+            return True, str(err or "")
         message = ""
         if etype == "error":
             message = str(line_obj.get("message") or line_obj)
-        elif etype == "turn.failed":
-            err = line_obj.get("error")
-            message = str((err or {}).get("message") if isinstance(err, dict) else err or line_obj)
         elif etype == "item.completed":
             item = line_obj.get("item")
             if (
@@ -445,10 +457,10 @@ class CodexCLIClient(BaseClient):
             msg = line_obj.get("msg")
             if isinstance(msg, dict) and str(msg.get("type") or "") == "error":
                 message = str(msg.get("message") or msg)
-        if not message:
-            return
-        lowered = message.lower()
-        if any(p in lowered for p in _AUTH_FAILURE_PHRASES):
+        return (False, message) if message else None
+
+    def _raise_if_auth_failure(self, message: str) -> None:
+        if any(p in message.lower() for p in _AUTH_FAILURE_PHRASES):
             raise APIError(
                 self._with_version(
                     "Codex CLI is not authenticated: run `codex login` on the "
@@ -456,7 +468,9 @@ class CodexCLIClient(BaseClient):
                 ),
                 category=ErrorCategory.CLI_AUTH_FAILED,
             )
-        raise APIError(
+
+    def _reported_error(self, message: str) -> APIError:
+        return APIError(
             self._with_version(f"Codex CLI reported error: {message[:300]}"),
             category=ErrorCategory.CLI_PROTOCOL_ERROR,
         )
@@ -554,6 +568,10 @@ class CodexCLIClient(BaseClient):
         )
         stdin = self._build_stdin(request)
         accum = CodexEventAccumulator(model=model_config.model, cli_version=cli_version)
+        # 오류 줄은 모아 두고 끝에서 판정한다 — one-shot(_send)과 같은 결론이 나게.
+        # codex 는 치명적이지 않은 경고도 error 줄로 낸다; 줄마다 바로 올리면 경고 하나가 턴을 죽였다.
+        last_error = ""
+        produced = False  # 어시스턴트 출력(텍스트·도구 호출)이 하나라도 나왔나
 
         try:
             async with aclosing(runner.stream(argv, stdin_iter=aiter_bytes(stdin))) as lines:
@@ -561,10 +579,26 @@ class CodexCLIClient(BaseClient):
                     line_obj = parse_stream_json_line(raw)
                     if line_obj is None:
                         continue
-                    self._raise_on_wire_error(line_obj)
+                    wire_error = self._wire_error(line_obj)
+                    if wire_error is not None:
+                        fatal, message = wire_error
+                        # 인증 실패는 기다릴 이유가 없다 — 바로 올린다.
+                        self._raise_if_auth_failure(message)
+                        if fatal:
+                            raise self._reported_error(
+                                message or last_error or "turn failed (no reason given)"
+                            )
+                        logger.warning("codex: CLI error frame (continuing): %s", message[:300])
+                        last_error = message
                     for event in accum.feed(line_obj):
+                        etype = event.get("type")
+                        if etype == "tool_use" or (etype == "text_delta" and event.get("text")):
+                            produced = True
                         yield event
 
+            if last_error and not produced:
+                # 경고가 아니었다 — 아무 출력 없이 끝났으니 CLI 가 말한 이유로 실패시킨다.
+                raise self._reported_error(last_error)
             self._report_unknown_wire(accum)
             response = self._attach_cli_version(accum.finalize())
             self._capture_session(response)

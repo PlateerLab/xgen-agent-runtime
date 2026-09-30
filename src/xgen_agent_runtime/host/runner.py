@@ -163,7 +163,8 @@ CLI_NATIVE_TOOLS_DENY = (
     "CronDelete",
     "CronList",
     "ScheduleWakeup",
-    # ── CLI 내부 위임 — 우리 매니저·작업 내역·완료 트리거를 통째로 우회한다.
+    # ── CLI 자체 하위 에이전트 — 플랫폼에는 하위 에이전트가 없다(4.71.0 에서 제거).
+    #    CLI 가 제 안에서 띄우면 우리 도구 표면·기록·권한을 통째로 우회한다.
     "Task",
     "Agent",
     "ListAgents",
@@ -281,7 +282,6 @@ def build_cli_client(
     settings_path: str = "",
     allow_tools: Any = (),
     extra_env: Optional[Dict[str, str]] = None,
-    disallow_tools_extra: Any = (),
     extra_args: Any = (),
     prewarm_spawn: Optional[bool] = None,
 ) -> Any:
@@ -336,7 +336,7 @@ def build_cli_client(
         kwargs["workspace_dir"] = workspace_dir
     if max_budget_usd and float(max_budget_usd) > 0:
         kwargs["max_budget_usd"] = float(max_budget_usd)
-    # 차단 목록 = (네이티브 차단 시 **카탈로그 전부**) + 호출자 추가분.
+    # 차단 목록 = (네이티브 차단 시 **카탈로그 전부**) + 세션 한정 스케줄 도구.
     #
     # ⚠ 예전엔 여기서 _CLI_LOCAL_TOOLS(fs/셸 9종)만 막아, allow_local_tools=False
     # 인데도 WebSearch·WebFetch·TodoWrite 세 네이티브가 살아남았다(실측). 우리 규약은
@@ -344,15 +344,10 @@ def build_cli_client(
     # 전체**를 막는다 — Bash 를 포함한 같은 능력은 런타임 레지스트리가 MCP 로 제공한다
     # (서버=샌드박스 라우팅, 로컬=이 PC 실행. 도구 클래스는 양쪽 동일).
     #
-    # disallow_tools_extra: agent_geny 가 위임 배선 시 CLI 의 자체 서브에이전트
-    # 도구(Task/Agent)를 차단하는 데 쓴다 — CLI 내부 위임은 우리 매니저/작업
-    # 내역/완료 트리거를 전부 우회하므로(추적 불가), 위임은 반드시
-    # mcp__connector__* 표면으로만 흐르게 강제한다.
+    # (예전 ``disallow_tools_extra`` — 위임 배선 시 CLI 의 Task/Agent 를 더 막던
+    # 호출자 추가분 — 은 4.71.0 에서 없앴다. 그 도구들은 위 카탈로그에 이미 있다.)
     disallowed = list(CLI_NATIVE_TOOL_CATALOG) if not allow_local_tools else []
     disallowed.extend(t for t in _CLI_SESSION_SCHED_TOOLS if t not in disallowed)
-    for name in tuple(disallow_tools_extra or ()):
-        if name and name not in disallowed:
-            disallowed.append(str(name))
     # 유지/제거된 네이티브 도구 리포트 (사용자 요구: 선택/제거 도구 각각 출력).
     _log_native_tool_report(disallowed)
     if disallowed:
@@ -515,6 +510,7 @@ def build_pipeline(
     memory_provider: Optional[Any] = None,
     memory_distill_spec: Optional[Any] = None,
     tool_context: Optional[Any] = None,
+    tool_result_filter: Optional[Any] = None,
     context_window_budget: int = 0,
     enable_compaction: bool = True,
     credentials: Optional[Dict[str, Any]] = None,
@@ -576,6 +572,10 @@ def build_pipeline(
     반복 실패 차단)이 이만큼 쌓이면 "도구 없이 보고하라" 를 붙이고 다음 응답으로 끝낸다.
     근거: 벤치 033·087·086 에서 건너뛴 호출 95·94·32회, 각 입력 300만 토큰(예산 종료).
     같은 기간 실사용 0건. None/0 이면 끔.
+
+    ``tool_result_filter`` — 호스트의 도구 결과 필터(4.71.0, ``ToolContext.result_filter``).
+    Stage 10 의 도구 컨텍스트에 싣는다 — ``tool_context`` 를 넘기면 그 객체에, 없으면 스테이지
+    기본 컨텍스트에. ``None`` 이면 손대지 않는다(넘긴 ``tool_context`` 에 이미 있으면 그대로).
 
     ``enable_deliverable_review`` — 완료 직전 산출물 대조(4.30.0,
     stages/s16_loop/completion_review.py). ``tool_context`` 가 있을 때만
@@ -716,6 +716,13 @@ def build_pipeline(
                 loop_stage.add_completion_reviewer(  # type: ignore[union-attr]
                     DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
                 )
+
+    if tool_result_filter is not None:
+        # attach_runtime(tool_context=) 뒤라야 한다 — 그 호출이 스테이지 컨텍스트를 갈아 끼운다.
+        _tool_stage = pipeline.get_stage(10)
+        _stage_ctx = getattr(_tool_stage, "_context", None) if _tool_stage is not None else None
+        if _stage_ctx is not None:
+            _stage_ctx.result_filter = tool_result_filter
 
     if repeat_stop_after and int(repeat_stop_after) > 0:
         # 반복 거부 종료(4.45.0, s16_loop/repeat_stop.py) — 하네스가 실행을 거부한 호출이

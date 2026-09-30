@@ -100,10 +100,6 @@ class PipelineBuilder:
         self._stage_configs["think"] = kwargs
         return self
 
-    def with_agent(self, **kwargs: Any) -> PipelineBuilder:
-        self._stage_configs["agent"] = kwargs
-        return self
-
     def with_evaluate(self, **kwargs: Any) -> PipelineBuilder:
         self._stage_configs["evaluate"] = kwargs
         return self
@@ -122,10 +118,6 @@ class PipelineBuilder:
 
     def with_tool_review(self, **kwargs: Any) -> PipelineBuilder:
         self._stage_configs["tool_review"] = kwargs
-        return self
-
-    def with_task_registry(self, **kwargs: Any) -> PipelineBuilder:
-        self._stage_configs["task_registry"] = kwargs
         return self
 
     def with_hitl(self, **kwargs: Any) -> PipelineBuilder:
@@ -216,12 +208,6 @@ class PipelineBuilder:
                 )
             )
 
-        # Agent
-        if "agent" in self._stage_configs:
-            from xgen_agent_runtime.stages.s12_agent import AgentStage
-
-            pipeline.register_stage(AgentStage(**self._stage_configs["agent"]))
-
         # Evaluate
         if "evaluate" in self._stage_configs:
             from xgen_agent_runtime.stages.s14_evaluate import EvaluateStage
@@ -256,11 +242,6 @@ class PipelineBuilder:
             from xgen_agent_runtime.stages.s11_tool_review import ToolReviewStage
 
             pipeline.register_stage(ToolReviewStage(**self._stage_configs["tool_review"]))
-
-        if "task_registry" in self._stage_configs:
-            from xgen_agent_runtime.stages.s13_task_registry import TaskRegistryStage
-
-            pipeline.register_stage(TaskRegistryStage(**self._stage_configs["task_registry"]))
 
         if "hitl" in self._stage_configs:
             from xgen_agent_runtime.stages.s15_hitl import HITLStage

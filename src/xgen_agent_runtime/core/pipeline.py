@@ -33,7 +33,6 @@ from xgen_agent_runtime.core.errors import (
 )
 from xgen_agent_runtime.core.result import PipelineResult
 from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
-from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.stage import Stage, StageDescription
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.events.bus import EventBus
@@ -826,10 +825,10 @@ class Pipeline:
     """
 
     # Loop boundary constants. Sub-phase 9a (S9a.3) extended the
-    # 16-slot layout to 21 slots — the loop body now spans the
-    # five new mid-pipeline stages (tool_review / task_registry /
-    # hitl) and the finalize tail is five stages long instead of
-    # three (emit / memory / summarize / persist / yield).
+    # 16-slot layout to 21 slots — the loop body now spans the new
+    # mid-pipeline stages (tool_review / hitl; order 13 task_registry
+    # was retired in 4.71.0) and the finalize tail is five stages long
+    # instead of three (emit / memory / summarize / persist / yield).
     LOOP_START = 2
     LOOP_END = 16  # inclusive
     FINALIZE_START = 17
@@ -842,7 +841,10 @@ class Pipeline:
     # instances attribute-safe (None = "no manifest registration ran").
     tool_resolution_report: Optional[ToolResolutionReport] = None
 
-    # Default names for unregistered stage slots (used in bypass events)
+    # Default names for unregistered stage slots (used in bypass events).
+    # Orders 12 / 13 are retired (``core.artifact.RETIRED_STAGE_ORDERS``)
+    # but keep their names here so a 1..21 walk (describe(), bypass
+    # events) stays shape-stable for UIs.
     _DEFAULT_STAGE_NAMES: Dict[int, str] = {
         1: "input",
         2: "context",
@@ -924,7 +926,6 @@ class Pipeline:
         # the sandbox through its tools, like every other provider.
         self._attached_sandbox: Any = None
         self._credentials: CredentialBundle = CredentialBundle()  # set by from_manifest_async
-        self._subagent_registry: Any = None  # set by attach_runtime; populates state + agent stage
         self._attached_session_runtime: Any = None  # v0.30.0 plugin slot; propagated in _init_state
         # Optional Codex-style durable rollout sink, discovered through the
         # existing free-shape ``session_runtime.rollout_recorder`` slot.  The
@@ -1205,8 +1206,6 @@ class Pipeline:
         *,
         credentials: Optional[CredentialBundle] = None,
         api_key: Optional[str] = None,
-        subagent_registry: Optional[Any] = None,
-        subagent_env_resolver: Optional[Callable[[str], Any]] = None,
         strict: bool = True,
         adhoc_providers: Sequence["AdhocToolProvider"] = (),
         tool_registry: Optional["ToolRegistry"] = None,
@@ -1236,15 +1235,9 @@ class Pipeline:
              chain ordering, tool bindings, and model overrides.
           5. Store the ``credentials`` bundle on the pipeline. It is
              consulted by ``_resolve_llm_client`` when building the
-             ``state.llm_client`` for Stage 6 (and by sub-pipelines for
-             their own providers).
-          6. Compile ``manifest.subagents`` into
-             :class:`SubagentTypeDescriptor` registrations and wire
-             Stage 12's orchestrator (2.2.0 Wave 3, audit §1-1). A
-             host-supplied ``subagent_registry`` MERGES with the
-             manifest entries — the explicit registry wins on
-             ``agent_type`` collision (logged at info).
-          7. When ``manifest.memory`` is non-empty, build the declared
+             ``state.llm_client`` for Stage 6 (and by stages that build a
+             local client via ``provider_override``).
+          6. When ``manifest.memory`` is non-empty, build the declared
              :class:`MemoryProvider` via
              :func:`~xgen_agent_runtime.memory.factory.
              provider_from_manifest_memory` (the ``credentials`` bundle
@@ -1260,16 +1253,6 @@ class Pipeline:
             credentials: Single-channel credential bundle. The required
                 provider (Stage 6) must have an entry; otherwise
                 ``ConfigError`` is raised at strict load.
-            subagent_registry: Pre-built
-                :class:`SubagentTypeRegistry` (Geny's path today).
-                Merged with ``manifest.subagents`` — explicit
-                registrations win on collision.
-            subagent_env_resolver: Host callback resolving a
-                ``subagents`` entry's ``env_id`` to a stored
-                :class:`EnvironmentManifest` (or its dict form); sync
-                or async. Only needed when the manifest declares
-                ``env_id`` entries — without it those entries raise an
-                actionable ``ConfigError`` at first dispatch.
             strict: Fail on stage instantiation / schema errors versus
                 dropping the offending stage.
             adhoc_providers: Host-supplied
@@ -1277,14 +1260,27 @@ class Pipeline:
                 implementations.
             tool_registry: Existing registry to populate.
 
+        Retired declarations (4.71.0): stage entries for the retired
+        orders 12 ``agent`` / 13 ``task_registry`` are dropped with a
+        warning instead of failing the build — stored manifests written
+        before sub-agent orchestration was removed keep loading.
+
         Returns:
             A :class:`Pipeline` with every registered stage reflecting the
             manifest's template state.
         """
         from xgen_agent_runtime.core.artifact import create_stage
-        from xgen_agent_runtime.core.environment import validate_manifest
+        from xgen_agent_runtime.core.environment import (
+            drop_retired_manifest_declarations,
+            validate_manifest,
+        )
         from xgen_agent_runtime.core.mutation import PipelineMutator
         from xgen_agent_runtime.tools.registry import ToolRegistry
+
+        # Stored manifests may still declare the retired Stage 12/13
+        # slots (a manifest object built in memory never passed through
+        # ``from_dict``'s migration). Drop them loudly, never fail.
+        manifest = drop_retired_manifest_declarations(manifest)
 
         if strict:
             # Kept ahead of validate_manifest so the established, message-
@@ -1481,40 +1477,6 @@ class Pipeline:
                 if getattr(stage, "_registry") is not registry:
                     stage._registry = registry
 
-        # ── Sub-agents: manifest section + explicit registry merge ──
-        # (2.2.0 Wave 3, audit §1-1: sub-agent environments become
-        # manifest-expressible.) Manifest entries compile into
-        # library-backed descriptors; a host-supplied registry merges
-        # on top with explicit registrations winning per agent_type —
-        # runtime objects beat declarations, same precedence rule as
-        # the memory block below.
-        effective_subagent_registry = subagent_registry
-        manifest_subagents = list(getattr(manifest, "subagents", []) or [])
-        if manifest_subagents:
-            from xgen_agent_runtime.stages.s12_agent.subagent_type import (
-                SubagentTypeRegistry,
-                compile_subagent_descriptors,
-            )
-
-            compiled = compile_subagent_descriptors(
-                manifest_subagents, env_resolver=subagent_env_resolver
-            )
-            if effective_subagent_registry is None:
-                effective_subagent_registry = SubagentTypeRegistry()
-            for descriptor in compiled:
-                if descriptor.agent_type in effective_subagent_registry:
-                    logger.info(
-                        "from_manifest: subagents entry %r is also present in "
-                        "the host-supplied subagent_registry — the explicit "
-                        "registration wins; the manifest entry is skipped.",
-                        descriptor.agent_type,
-                    )
-                    continue
-                effective_subagent_registry.register(descriptor)
-        if effective_subagent_registry is not None:
-            pipeline._subagent_registry = effective_subagent_registry
-            pipeline._wire_subagent_orchestrator(effective_subagent_registry)
-
         # ── Memory: manifest block → provider build + slot wiring ──
         # (2.2.0 Wave 3, audit §1-1.) Wiring goes through
         # _apply_runtime — the exact path attach_runtime's memory
@@ -1563,8 +1525,6 @@ class Pipeline:
         *,
         credentials: Optional[CredentialBundle] = None,
         api_key: Optional[str] = None,
-        subagent_registry: Optional[Any] = None,
-        subagent_env_resolver: Optional[Callable[[str], Any]] = None,
         strict: bool = True,
         adhoc_providers: Sequence["AdhocToolProvider"] = (),
         tool_registry: Optional["ToolRegistry"] = None,
@@ -1616,8 +1576,6 @@ class Pipeline:
             manifest,
             credentials=credentials,
             api_key=api_key,
-            subagent_registry=subagent_registry,
-            subagent_env_resolver=subagent_env_resolver,
             strict=strict,
             adhoc_providers=adhoc_providers,
             tool_registry=registry,
@@ -1771,7 +1729,6 @@ class Pipeline:
         mcp_manager: Optional[Any] = None,
         permission_rules: Optional[Any] = None,
         permission_mode: Optional[str] = None,
-        subagent_registry: Optional[Any] = None,
         sandbox: Optional[Any] = None,
         env_persistence: Optional[Any] = None,
         pack_persistence: Optional[Any] = None,
@@ -1934,7 +1891,6 @@ class Pipeline:
             mcp_manager=mcp_manager,
             permission_rules=permission_rules,
             permission_mode=permission_mode,
-            subagent_registry=subagent_registry,
             sandbox=sandbox,
             env_persistence=env_persistence,
             pack_persistence=pack_persistence,
@@ -1996,7 +1952,6 @@ class Pipeline:
         mcp_manager: Optional[Any] = None,
         permission_rules: Optional[Any] = None,
         permission_mode: Optional[str] = None,
-        subagent_registry: Optional[Any] = None,
         sandbox: Optional[Any] = None,
         env_persistence: Optional[Any] = None,
         pack_persistence: Optional[Any] = None,
@@ -2154,31 +2109,6 @@ class Pipeline:
             registry = self._tool_registry
             if registry is not None:
                 self._reseed_registry_from_mcp(mcp_manager, registry)
-
-        if subagent_registry is not None:
-            # Hosts wire a SubagentTypeRegistry that Stage 12's
-            # ``subagent_type`` orchestrator consumes. We store it on the
-            # pipeline (propagated to ``state.subagent_registry`` in
-            # ``_init_state``) and, when the agent stage is registered,
-            # rebuild its orchestrator slot so the registry is bound.
-            self._subagent_registry = subagent_registry
-            self._wire_subagent_orchestrator(subagent_registry)
-
-    def _wire_subagent_orchestrator(self, registry: Any) -> None:
-        """Set the agent stage's orchestrator to a SubagentTypeOrchestrator
-        bound to ``registry``. No-op when the pipeline has no agent stage."""
-        agent_stage = next((s for s in self._stages.values() if s.name == "agent"), None)
-        if agent_stage is None:
-            return
-        from xgen_agent_runtime.stages.s12_agent.subagent_type import (
-            SubagentTypeOrchestrator,
-        )
-
-        slots = agent_stage.get_strategy_slots()
-        slot = slots.get("orchestrator")
-        if slot is None:
-            return
-        slot.strategy = SubagentTypeOrchestrator(registry)
 
     def _reseed_registry_from_mcp(self, manager: Any, registry: Any) -> None:
         """Register a freshly attached MCP manager's tools into ``registry``.
@@ -3239,11 +3169,7 @@ class Pipeline:
            longer matches (``invalidate_client`` / refreshed client
            since capture). Host-set clients (no generation on record)
            are never clobbered.
-        5. Publish the resolved Stage 6 provider into
-           ``state.shared[SharedKeys.PRIMARY_PROVIDER]`` so sub-agent
-           factories can inherit the parent backend (audit §2.8: the
-           read side existed for a release with no producer).
-        6. Event correlation + channel bridge (2.2.0, audit §3.2):
+        5. Event correlation + channel bridge (2.2.0, audit §3.2):
            mint this run's ``run_id`` and install the
            ``state.add_event`` → event-bus forwarder. Re-installed
            every run so a state migrated between pipelines always
@@ -3322,8 +3248,6 @@ class Pipeline:
                 )
         if state.credentials is None:
             state.credentials = self._credentials
-        if state.subagent_registry is None and self._subagent_registry is not None:
-            state.subagent_registry = self._subagent_registry
         if state.llm_client is None:
             state.llm_client = self._resolve_llm_client()
             state._client_generation = self._client_generation
@@ -3339,10 +3263,6 @@ class Pipeline:
             state._client_generation = self._client_generation
         if state.session_runtime is None and self._attached_session_runtime is not None:
             state.session_runtime = self._attached_session_runtime
-
-        provider_name = self._resolved_provider_name(state)
-        if provider_name:
-            state.shared[SharedKeys.PRIMARY_PROVIDER] = provider_name
 
         # Tool dispatch handle (2.3.0): Stage 6's tool_loop="internal"
         # strategy dispatches through Stage 10's exact machinery via

@@ -151,7 +151,6 @@ class GenyPresets:
             .with_guard()
             .with_cache(strategy="aggressive")
             .with_tool_review()
-            .with_task_registry()
             .with_hitl()
             .with_memory(strategy=strategy, persistence=NullPersistence())
             .with_summarize()
@@ -202,7 +201,6 @@ class GenyPresets:
             .with_cache(strategy="aggressive")
             .with_think()
             .with_tool_review()
-            .with_task_registry()
             .with_hitl()
             .with_evaluate()
             .with_loop(max_turns=max_turns)
@@ -275,7 +273,6 @@ class GenyPresets:
             .with_cache(strategy="aggressive")
             .with_think()
             .with_tool_review()
-            .with_task_registry()
             .with_hitl()
             .with_evaluate(strategy=eval_strategy)
             .with_loop(max_turns=max_turns)
@@ -331,7 +328,6 @@ class GenyPresets:
             .with_guard()
             .with_cache(strategy="aggressive")
             .with_tool_review()
-            .with_task_registry()
             .with_hitl()
             .with_evaluate()
             .with_loop(max_turns=10)
@@ -421,6 +417,6 @@ You are a friendly AI VTuber assistant. Engage in natural conversation
 while being helpful and knowledgeable.
 
 When the user asks a complex task that requires tools or multi-step work,
-indicate that you will delegate it.
+say briefly what you are about to do, then do it with your tools.
 
 Keep responses conversational and natural."""

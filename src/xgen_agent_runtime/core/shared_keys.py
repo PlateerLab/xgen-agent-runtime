@@ -33,17 +33,13 @@ class SharedKeys:
     """Identifier of the tool_use block currently being processed."""
 
     PRIMARY_PROVIDER: Final = "primary_provider"
-    """Resolved Stage 6 provider name, written by ``Pipeline._init_state``
-    at every run start (2.2.0, audit 2026-06-09 §2.8).
+    """**Retired (4.71.0)** — no longer written.
 
-    Sub-agent factories read ``ctx.parent_state_shared["primary_provider"]``
-    to inherit the parent pipeline's backend when
-    ``descriptor.provider is None`` — that read side existed for a full
-    release with NO producer, so inheritance silently fell through to
-    host-global heuristics (the #866 misrouting class, one level down).
-    The value is deliberately the bare legacy string (no ``executor.``
-    prefix) because host factories already shipped reading this exact
-    key."""
+    It carried the resolved Stage 6 provider for sub-agent factories to
+    inherit; sub-agent orchestration was removed, so the executor no
+    longer publishes it. The constant stays (stable-string contract —
+    removal is a major-version change) so imports keep working; hosts
+    that need the provider read ``state.llm_client.provider``."""
 
     SKILL_CTX: Final = "executor.current_skill_ctx"
     """Context for an in-flight Skill invocation (Phase 3)."""
@@ -68,10 +64,12 @@ class SharedKeys:
     """List of annotations emitted by Stage 11 Tool Review (Phase 9)."""
 
     TASKS_NEW_THIS_TURN: Final = "executor.tasks_new_this_turn"
-    """Tasks spawned by Stage 12 Agent in this iteration (Phase 9)."""
+    """**Retired (4.71.0)** — Stage 12 / 13 were removed; nothing writes it.
+    Kept only so imports don't break (stable-string contract)."""
 
     TASKS_BY_STATUS: Final = "executor.tasks_by_status"
-    """Dict keyed by TaskStatus for cross-stage inspection (Phase 9)."""
+    """**Retired (4.71.0)** — Stage 12 / 13 were removed; nothing writes it.
+    Kept only so imports don't break (stable-string contract)."""
 
     HITL_REQUEST: Final = "executor.hitl_request"
     """Present when Stage 15 HITL should block for approval (Phase 9)."""

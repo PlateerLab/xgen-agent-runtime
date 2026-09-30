@@ -162,7 +162,7 @@ class CronRunner:
     async def _submit(self, job: CronJob, fire_time: datetime) -> Optional[str]:
         """Build a TaskRecord and hand it to the task runner. Returns
         the task_id (or None on failure)."""
-        from xgen_agent_runtime.stages.s13_task_registry.types import TaskRecord
+        from xgen_agent_runtime.runtime.tasks import TaskRecord
 
         record = TaskRecord(
             task_id=str(uuid.uuid4()),

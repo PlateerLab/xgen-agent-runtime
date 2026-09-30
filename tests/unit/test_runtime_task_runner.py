@@ -10,10 +10,9 @@ import pytest
 from xgen_agent_runtime.runtime import (
     BackgroundTaskExecutor,
     BackgroundTaskRunner,
-    LocalAgentExecutor,
     LocalBashExecutor,
 )
-from xgen_agent_runtime.stages.s13_task_registry import (
+from xgen_agent_runtime.runtime.tasks import (
     InMemoryRegistry,
     TaskFilter,
     TaskRecord,
@@ -256,77 +255,5 @@ class TestLocalBashExecutor:
             payload={"command": "yes hello | head -c 1000"},
         )
         with pytest.raises(RuntimeError, match="max_output_bytes"):
-            async for _ in executor.execute(record):
-                pass
-
-
-# ── LocalAgentExecutor ───────────────────────────────────────────────
-
-
-class _FakeOrch:
-    def __init__(self, response="ok"):
-        self.response = response
-        self.last_call = None
-
-    async def run_subagent(self, subagent_type, prompt, *, model=None):
-        self.last_call = (subagent_type, prompt, model)
-        return self.response
-
-
-class TestLocalAgentExecutor:
-    @pytest.mark.asyncio
-    async def test_dispatches_to_orchestrator(self):
-        orch = _FakeOrch(response="hello")
-        executor = LocalAgentExecutor(lambda: orch)
-        record = TaskRecord(
-            task_id="t1",
-            kind="local_agent",
-            payload={"subagent_type": "researcher", "prompt": "go"},
-        )
-        chunks = [c async for c in executor.execute(record)]
-        assert b"hello" in b"".join(chunks)
-        assert orch.last_call == ("researcher", "go", None)
-
-    @pytest.mark.asyncio
-    async def test_serializes_dict_response_as_json(self):
-        executor = LocalAgentExecutor(lambda: _FakeOrch(response={"score": 0.9}))
-        record = TaskRecord(
-            task_id="t1",
-            kind="local_agent",
-            payload={"subagent_type": "x", "prompt": ""},
-        )
-        out = b"".join([c async for c in executor.execute(record)])
-        assert b'"score"' in out
-
-    @pytest.mark.asyncio
-    async def test_passes_model_override(self):
-        orch = _FakeOrch()
-        executor = LocalAgentExecutor(lambda: orch)
-        record = TaskRecord(
-            task_id="t1",
-            kind="local_agent",
-            payload={"subagent_type": "x", "prompt": "hi", "model": "claude-haiku"},
-        )
-        async for _ in executor.execute(record):
-            pass
-        assert orch.last_call[2] == "claude-haiku"
-
-    @pytest.mark.asyncio
-    async def test_missing_subagent_type_raises(self):
-        executor = LocalAgentExecutor(lambda: _FakeOrch())
-        record = TaskRecord(task_id="t1", kind="local_agent", payload={"prompt": "x"})
-        with pytest.raises(ValueError):
-            async for _ in executor.execute(record):
-                pass
-
-    @pytest.mark.asyncio
-    async def test_missing_prompt_raises(self):
-        executor = LocalAgentExecutor(lambda: _FakeOrch())
-        record = TaskRecord(
-            task_id="t1",
-            kind="local_agent",
-            payload={"subagent_type": "x"},
-        )
-        with pytest.raises(ValueError):
             async for _ in executor.execute(record):
                 pass

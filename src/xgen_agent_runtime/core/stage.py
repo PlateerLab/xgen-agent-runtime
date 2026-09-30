@@ -365,7 +365,7 @@ class Stage(ABC, Generic[T_In, T_Out]):
         the pipeline-wide fields on ``state`` (the pre-override defaults
         from :meth:`PipelineConfig.apply_to_state`).
 
-        Model-using stages (API, agent sub-pipelines, evaluators, memory
+        Model-using stages (API, evaluators, memory
         summarizers, memory reflectors) should call this helper instead of
         reading ``state.model`` or reading ``self.model_override``
         field-by-field so the override is honored uniformly and so stages

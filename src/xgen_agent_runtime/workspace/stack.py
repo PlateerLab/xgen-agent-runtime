@@ -15,7 +15,7 @@ class WorkspaceStack:
     top of the stack or ``None`` when empty.
 
     Not thread-safe — sessions are single-coroutine; if you need a
-    workspace stack across concurrent sub-agents, give each its own
+    workspace stack across concurrent sessions, give each its own
     instance (typically seeded from the parent's current workspace).
     """
 
@@ -40,8 +40,8 @@ class WorkspaceStack:
 
     def snapshot(self) -> List[Workspace]:
         """Frozen copy of the stack — newest last. Useful for debug
-        dumps and AgentTool spawn (sub-agent inherits the parent's
-        chain so it can compose its own pushes on top)."""
+        dumps and for seeding a derived context with the parent's
+        chain so it can compose its own pushes on top."""
         return list(self._stack)
 
 

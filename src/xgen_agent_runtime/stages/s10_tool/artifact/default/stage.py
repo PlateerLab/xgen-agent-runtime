@@ -243,12 +243,17 @@ class ToolStage(Stage[Any, Any]):
             # off ``self._context`` so a session attached after the stage
             # was constructed still routes correctly.
             sandbox=getattr(self._context, "sandbox", None),
-            # Structured-event sink so long-running tools (Bash streaming,
-            # delegation) can surface progress; ``None`` is the no-op default.
+            # Structured-event sink so long-running tools (Bash streaming)
+            # can surface progress; ``None`` is the no-op default.
             event_emit=getattr(self._context, "event_emit", None),
             # The LLM tool_use block this dispatch belongs to — lets nested
-            # tool calls (sub-agents, tasks) attribute their events correctly.
+            # tool calls (e.g. ToolBatch members) attribute their events correctly.
             parent_tool_use_id=getattr(self._context, "parent_tool_use_id", None),
+            # Host tool-result filter (4.71.0) — read live like the fields
+            # above so the SDK loop, the Stage 6 internal dispatcher and the
+            # CLI tool surface (all build their context HERE) apply the same
+            # post-processing. ToolBatch members reuse this context.
+            result_filter=getattr(self._context, "result_filter", None),
         )
 
         # 2.2.0 (audit §1-5 — policy via config): the permission posture

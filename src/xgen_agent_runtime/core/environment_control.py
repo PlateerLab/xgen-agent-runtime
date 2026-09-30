@@ -77,8 +77,6 @@ _RESERVED_EXTRAS_KEYS = frozenset(
         "task_runner",
         "cron_store",
         "cron_runner",
-        "agent_orchestrator",
-        "subagent_manager",
         "mcp_manager",
         "mcp_config",
         "notification_endpoints",

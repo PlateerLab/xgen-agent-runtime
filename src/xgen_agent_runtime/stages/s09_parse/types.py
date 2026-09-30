@@ -28,7 +28,7 @@ class ParsedResponse:
     tool_calls: List[ToolCall] = field(default_factory=list)
 
     # Completion signal
-    signal: Optional[str] = None  # "continue", "complete", "blocked", "error", "delegate"
+    signal: Optional[str] = None  # "continue", "complete", "blocked", "error"
     signal_detail: Optional[str] = None
 
     # Stop reason
