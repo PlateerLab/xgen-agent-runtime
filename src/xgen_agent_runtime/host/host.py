@@ -24,13 +24,11 @@ survey (see memory ``geny-shared-host-extraction``):
 
   B/C/E-abstract → injected here (③ "needs abstraction").
   D/E-server, workspace store, sandbox runner → ④ "server-resident": the server
-    impl does the real thing; the connector impl calls the server over RPC, or
-    returns a graceful no-op when the capability is genuinely unavailable
-    locally (e.g. self-evolution edits a server-owned graph).
+    impl does the real thing.
 
 Nothing here imports server symbols; the protocol is defined against
 ``xgen_agent_runtime`` types + plain data only, so this package stays a pure,
-bundle-able dependency of BOTH hosts.
+bundle-able dependency of the host.
 """
 
 from __future__ import annotations
@@ -59,13 +57,12 @@ CliRuntime = Tuple[Any, Optional[Any]]
 
 @runtime_checkable
 class HostServices(Protocol):
-    """Everything a turn needs from its host. See module docstring for the two
-    implementations and the non-divergence contract they must honour."""
+    """Everything a turn needs from its host. See module docstring for the
+    implementation and the non-divergence contract it must honour."""
 
     # ── A. settings & credentials ────────────────────────────────────────
-    # Server: admin config-composer DB → env → default. Connector: env/local
-    # config → default (no DB). ``_cli_setting`` already carries the env
-    # fallback, so this seam is a drop-in.
+    # Server: admin config-composer DB → env → default. ``_cli_setting``
+    # already carries the env fallback, so this seam is a drop-in.
     def setting(self, name: str, default: str = "") -> str: ...
     def setting_truthy(self, name: str) -> bool: ...
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str: ...
@@ -88,20 +85,17 @@ class HostServices(Protocol):
     #: BEFORE the turn. Returns True iff hydration succeeded — the executor only
     #: publishes afterwards when it did (empty-cache-deletes-everything guard).
     def hydrate_workspace(self, workflow_id: str, run_dir: str) -> bool: ...
-    #: Reflect a turn's workspace changes back to the source of truth. Connector
-    #: local mode is a no-op here (the connector's own sync engine owns it).
+    #: Reflect a turn's workspace changes back to the source of truth.
     def publish_workspace(
         self, workflow_id: str, run_dir: str, *, origin: str = "agent"
     ) -> None: ...
 
     #: 실행 환경 안내 프롬프트 — 도구가 **어디서** 도는지 에이전트에게 알린다.
-    #: 서버: 러너 sandbox / 커넥터 로컬(ConnectorLocalSandbox) 설명. 커넥터
-    #: 사이드카: 이 PC 로컬 환경 설명(OS 포함). 없으면 "".
+    #: 서버: 러너 sandbox 설명. 없으면 "".
     def environment_prompt(self, sandbox: Any, provider: str) -> str: ...
 
     # ── C. memory ────────────────────────────────────────────────────────
-    # Server: xgen-db provider. Connector: file/sqlite vault OR server RPC so
-    # web↔connector share the same memory (confirmed decision: state is shared).
+    # Server: xgen-db provider.
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]: ...
 
     # ── D. (제거됨) ambient user cloud ───────────────────────────────────
@@ -113,9 +107,7 @@ class HostServices(Protocol):
     # ── E. server-owned tool families ────────────────────────────────────
     # Injected as tools into the runtime ToolRegistry (SDK path) or advertised
     # via the connector MCP bridge (CLI path). Each returns tools/None or
-    # registers into the passed registry. Connector impl routes to server RPC
-    # for the DB-backed ones (jobs/self-evolution/delegation) or no-ops when
-    # unavailable locally, without ever changing the executor's call shape.
+    # registers into the passed registry.
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]: ...
 
     def build_host_skill_tools(self, **kwargs: Any) -> List[Any]:
@@ -151,7 +143,7 @@ class HostServices(Protocol):
     #: Build the per-turn delegation extras (sub-pipeline factory + report sink).
     #: ``spec_fields`` is a plain dict of the turn's LLM/run fields — the server
     #: impl constructs its SubPipelineSpec from it (the spec type is server-owned,
-    #: so it never appears in the shared executor). Connector → {} (no delegation).
+    #: so it never appears in the shared executor).
     def build_turn_delegation(
         self,
         *,
@@ -161,16 +153,16 @@ class HostServices(Protocol):
         spec_fields: Mapping[str, Any],
     ) -> Dict[str, Any]: ...
     #: True iff this turn's text is a delegation report (recursion guard). Server
-    #: consults its delegation module; connector → False.
+    #: consults its delegation module.
     def is_report_turn(self, text: str) -> bool: ...
     #: Server-owned delegation tool classes (name → class) to register into the
-    #: SDK registry. Connector → {}.
+    #: SDK registry.
     def delegation_extra_tool_classes(self) -> Dict[str, type]: ...
     #: Filesystem root for a workflow's delegation run when no sandbox is present.
-    #: Server → local pod path; connector → the local synced folder.
+    #: Server → local pod path.
     def delegation_workspace(self, workflow_id: str) -> str: ...
     #: Claim & format any unreported delegation completions to inject into this
-    #: turn (alarm/pod-restart fallback). Server → the report block; connector → "".
+    #: turn (alarm/pod-restart fallback). Server → the report block.
     def drain_pending_reports(self, workflow_id: str, interaction_id: str) -> str: ...
     def make_sub_cli_client_factory(
         self, params: Mapping[str, Any], workflow_id: str
@@ -199,8 +191,7 @@ class HostServices(Protocol):
     # ── H. product helpers injected into the pure ② modules ──────────────
     # rag / token_budget / distill are otherwise-pure orchestration helpers;
     # these are the last xgen-workflow-specific calls they need, injected by the
-    # host so the modules stay import-clean. Server delegates to editor; the
-    # connector returns a graceful default (None/""/skip).
+    # host so the modules stay import-clean. Server delegates to editor.
     #: Build one RAG context block from a retrieval port item (or None to skip).
     def rag_context_builder(self, text: str, item: Any) -> Optional[str]: ...
     #: Live vLLM ``max_model_len`` probe for an OpenAI-compatible base_url (or None).
@@ -223,10 +214,8 @@ class HostServices(Protocol):
     ) -> Optional[Any]: ...
 
     # ── G. turn teardown: reflect the turn's file changes ────────────────
-    # The 3-way publish decision (connector-local flush / runner publish / pod
-    # publish). Server does the real reflection; the connector sidecar flushes
-    # through its own sync engine. Local resource cleanups (cli/run-dir) stay
-    # in the executor — they are not host state.
+    # The publish decision (runner publish / pod publish). Local resource
+    # cleanups (cli/run-dir) stay in the executor — they are not host state.
     def finalize_turn(
         self,
         *,

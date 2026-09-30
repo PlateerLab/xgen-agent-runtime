@@ -1081,10 +1081,10 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
 def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) -> bool:
     """메모리 실행 기록 여부 — 출력 0 으로 실패한 턴은 host 정책에 따른다.
 
-    ``host.record_failed_starts``(기본 True) 가 False 인 호스트(커넥터 로컬
-    LocalHostServices)는 "시작도 못 한" 턴(텍스트 0 + 오류/취소)을 vault 에
-    남기지 않는다 — 서버 폴백이 같은 턴을 다시 돌려 기록하므로 중복 실패
-    기록이 쌓이던 경로. 성공 턴·출력이 있었던 실패 턴은 항상 기록.
+    ``host.record_failed_starts``(기본 True) 가 False 인 호스트는 "시작도 못 한"
+    턴(텍스트 0 + 오류/취소)을 vault 에 남기지 않는다 — 폴백이 같은 턴을 다시
+    돌려 기록하는 호스트에서 중복 실패 기록이 쌓이지 않게. 성공 턴·출력이
+    있었던 실패 턴은 항상 기록.
     """
     if produced_output or not failed:
         return True

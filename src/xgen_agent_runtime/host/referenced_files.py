@@ -18,7 +18,6 @@ Cursor·Aider 의 파일 추가).
 * 파일당 ``PER_FILE`` 바이트, 합계 ``TOTAL`` 바이트까지. 넘치는 파일은 앞부분만 싣고 잘렸다고
   적는다. 바이너리(문서·이미지 등)는 이름·크기만 알려 주고 알맞은 도구로 열라고 한다.
 * 끝까지 실은 파일은 "읽은 파일" 장부에 올린다 — 바로 Edit/Write 할 수 있다.
-* 사용자 PC(커넥터 로컬 세션)는 건너뛴다 — 경로 규약이 다르고 매 파일이 원격 왕복이다.
 """
 
 from __future__ import annotations
@@ -137,8 +136,6 @@ async def _head(fs: Any, resolved: str, cap: int) -> Optional[Tuple[bytes, int]]
     kind = getattr(fs, "kind", "")
     if kind == "runner":
         sb = fs.sandbox
-        if getattr(sb, "is_connector_local", False):
-            return None
         size = await sb.exec(["stat", "-c", "%s", "--", resolved], timeout_s=10)
         if not size.ok or not size.stdout.strip().isdigit():
             return None
