@@ -4,6 +4,17 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.72.0] — 2026-09-30
+
+### Fixed — Gemini·Vertex 가 구조화 출력을 실제로 요청에 싣는다
+
+`GoogleClient` 는 `supports_structured_output=True` 를 선언해 왔지만 `response_format` 을
+`GenerateContentConfig` 에 옮기지 않았다. 부르는 쪽(구조화 증류, xgen-workflow 앱 LLM 의 JSON 받기)은 JSON 이
+강제된다고 믿고 산문을 받았다(2026-09-30 앱 LLM provider 감사에서 발견). 이제 `json_object` → 
+`response_mime_type: application/json`, `json_schema` → 그 스키마까지(`response_json_schema`, 옛 SDK 는
+`response_schema`). OpenAI 식 중첩(`{"json_schema": {"name", "schema"}}`)도 받는다. `VertexClient` 는 같은 요청 조립을
+물려받는다.
+
 ## [4.71.0] — 2026-09-30
 
 ### Removed — Stage 12(agent)·Stage 13(task_registry)와 하위 에이전트 라이브러리

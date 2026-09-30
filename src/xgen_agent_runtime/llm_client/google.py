@@ -25,6 +25,42 @@ from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, Content
 logger = logging.getLogger(__name__)
 
 
+def _json_schema_field() -> str:
+    """이 google-genai 가 JSON Schema 를 받는 칸 — 새 SDK 는 ``response_json_schema``(JSON Schema 그대로),
+    옛 SDK 는 ``response_schema``(OpenAPI 부분집합)뿐이다."""
+    try:
+        from google.genai import types
+
+        if "response_json_schema" in getattr(types.GenerateContentConfig, "model_fields", {}):
+            return "response_json_schema"
+    except Exception:  # noqa: BLE001 — SDK 가 없으면 옛 칸 이름
+        pass
+    return "response_schema"
+
+
+def _structured_output_config(response_format: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """표준 ``response_format`` → Gemini ``GenerateContentConfig`` 칸.
+
+    이 클라이언트는 구조화 출력을 지원한다고 선언해 왔는데(``supports_structured_output=True``) 요청에
+    싣지 않았다 — 부르는 쪽은 JSON 이 강제된다고 믿고 산문을 받았다(2026-09-30, 앱 LLM provider 감사).
+    ``json_object`` 는 JSON 응답만, ``json_schema`` 는 스키마까지 강제한다. OpenAI 식 중첩
+    (``{"json_schema": {"name", "schema"}}``)도 받는다.
+    """
+    if not isinstance(response_format, dict):
+        return {}
+    kind = str(response_format.get("type") or "")
+    if kind not in ("json_object", "json_schema"):
+        return {}
+    config: Dict[str, Any] = {"response_mime_type": "application/json"}
+    if kind == "json_schema":
+        schema = response_format.get("json_schema")
+        if isinstance(schema, dict) and isinstance(schema.get("schema"), dict):
+            schema = schema["schema"]
+        if isinstance(schema, dict) and schema:
+            config[_json_schema_field()] = schema
+    return config
+
+
 class GoogleClient(BaseClient):
     """Google Gemini generateContent API client.
 
@@ -287,6 +323,8 @@ class GoogleClient(BaseClient):
             thinking_config = canonical_thinking_to_google(request.thinking)
             if thinking_config:
                 config["thinking_config"] = thinking_config
+
+        config.update(_structured_output_config(request.response_format))
 
         kwargs: Dict[str, Any] = {
             "model": request.model,
