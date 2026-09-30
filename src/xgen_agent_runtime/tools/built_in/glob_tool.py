@@ -22,7 +22,7 @@ class GlobTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Find files matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts'). "
+            "Find files in your sandbox matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts'). "
             "Returns matching file paths sorted by modification time."
         )
 

@@ -96,6 +96,10 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
     )
 
 
+#: 시스템 프롬프트가 없는 요청의 codex 기본 지시 — 빈 파일은 거부된다.
+_NEUTRAL_INSTRUCTIONS = "You are a helpful assistant."
+
+
 class CodexCLIClient(BaseClient):
     """Subprocess-backed OpenAI Codex client."""
 
@@ -149,6 +153,7 @@ class CodexCLIClient(BaseClient):
         strict_wire: bool = False,
         runner_factory: Optional[Callable[..., CLIProcessRunner]] = None,
         session_hint: Optional[Dict[str, Any]] = None,
+        host_tools_only: bool = False,
     ) -> None:
         super().__init__(
             api_key=api_key,
@@ -177,6 +182,9 @@ class CodexCLIClient(BaseClient):
         self._runner_factory = runner_factory
         self._session_hint: Optional[Dict[str, Any]] = dict(session_hint) if session_hint else None
         self._cli_version_value: Optional[str] = None
+        #: 도구는 호스트 MCP 브릿지뿐 — codex 네이티브 도구·지시를 끄고 시스템 프롬프트를 codex 의
+        #: 기본 지시 자리에 넣는다(:func:`codex_host_only_args`).
+        self._host_tools_only = bool(host_tools_only)
 
     # ─────────────────────────────────────────────────────── helpers ─
 
@@ -238,7 +246,9 @@ class CodexCLIClient(BaseClient):
             logger.debug("codex: schema tempfile write failed", exc_info=True)
             return ""
 
-    def _build_argv(self, request: APIRequest, *, output_schema_path: str = "") -> List[str]:
+    def _build_argv(
+        self, request: APIRequest, *, output_schema_path: str = "", instructions_path: str = ""
+    ) -> List[str]:
         return codex_argv(
             request,
             sandbox_mode=self._sandbox_mode,
@@ -246,13 +256,47 @@ class CodexCLIClient(BaseClient):
             mcp_config=self._mcp_config,
             output_schema_path=output_schema_path,
             extra_args=self._extra_args,
+            host_tools_only=self._host_tools_only,
+            instructions_path=instructions_path,
         )
+
+    @staticmethod
+    def _system_text(request: APIRequest) -> str:
+        system = request.system
+        if isinstance(system, str):
+            return system.strip()
+        if isinstance(system, list):
+            texts = [str(b.get("text", "")) for b in system if isinstance(b, dict)]
+            return "\n".join(t for t in texts if t).strip()
+        return ""
+
+    def _instructions_tempfile(self, request: APIRequest) -> str:
+        """시스템 프롬프트를 codex 기본 지시 파일로 쓴다(``host_tools_only`` 일 때만).
+
+        시스템 프롬프트가 없어도 파일은 쓴다 — 안 쓰면 codex 기본 지시(있지도 않은 셸 도구를 전제한
+        코딩 에이전트 지시 17k 자)가 남는다. 빈 파일은 codex 가 거부하므로(0.159.2 실측) 중립 한 줄.
+        """
+        if not self._host_tools_only:
+            return ""
+        text = self._system_text(request) or _NEUTRAL_INSTRUCTIONS
+        try:
+            fd, path = tempfile.mkstemp(prefix="codex-instructions-", suffix=".md")
+            with os.fdopen(fd, "w", encoding="utf-8") as fp:
+                fp.write(text)
+            return path
+        except OSError:
+            logger.debug("codex: instructions tempfile write failed", exc_info=True)
+            return ""
 
     def _build_stdin(self, request: APIRequest) -> bytes:
         parts: List[str] = []
         hint = request.session_hint or {}
         is_resume = bool(hint.get("resume") and hint.get("session_id"))
         system = request.system
+        if self._host_tools_only:
+            # 시스템 프롬프트는 codex 기본 지시 파일로 간다(_instructions_tempfile) — 여기서 또 보내면
+            # 두 번 읽는다.
+            system = None
         # ``codex exec resume`` owns the prior thread, including its system
         # instructions and compacted history.  Re-sending either duplicates
         # context and is a common source of repeated progress prose.
@@ -427,7 +471,10 @@ class CodexCLIClient(BaseClient):
 
         cli_version = await self._ensure_cli_version()
         schema_path = self._schema_tempfile(request)
-        argv = self._build_argv(request, output_schema_path=schema_path)
+        instructions_path = self._instructions_tempfile(request)
+        argv = self._build_argv(
+            request, output_schema_path=schema_path, instructions_path=instructions_path
+        )
         stdin = self._build_stdin(request)
 
         try:
@@ -460,11 +507,12 @@ class CodexCLIClient(BaseClient):
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
         finally:
-            if schema_path:
-                try:
-                    os.unlink(schema_path)
-                except OSError:
-                    pass
+            for _tmp in (schema_path, instructions_path):
+                if _tmp:
+                    try:
+                        os.unlink(_tmp)
+                    except OSError:
+                        pass
 
     # ───────────────────────────────────────────────── streaming API ─
 
@@ -500,7 +548,10 @@ class CodexCLIClient(BaseClient):
 
         cli_version = await self._ensure_cli_version()
         schema_path = self._schema_tempfile(request)
-        argv = self._build_argv(request, output_schema_path=schema_path)
+        instructions_path = self._instructions_tempfile(request)
+        argv = self._build_argv(
+            request, output_schema_path=schema_path, instructions_path=instructions_path
+        )
         stdin = self._build_stdin(request)
         accum = CodexEventAccumulator(model=model_config.model, cli_version=cli_version)
 
@@ -527,8 +578,9 @@ class CodexCLIClient(BaseClient):
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
         finally:
-            if schema_path:
-                try:
-                    os.unlink(schema_path)
-                except OSError:
-                    pass
+            for _tmp in (schema_path, instructions_path):
+                if _tmp:
+                    try:
+                        os.unlink(_tmp)
+                    except OSError:
+                        pass

@@ -27,11 +27,24 @@ logger = logging.getLogger("editor.geny_bridge.tools")
 _EMPTY_SCHEMA: Dict[str, Any] = {"type": "object", "properties": {}}
 
 
-def _sanitize_name(name: Any) -> str:
-    """Provider-safe tool name (same rule as the agent helper's sanitizer)."""
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", str(name or ""))
-    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
-    return sanitized or "unnamed_tool"
+def _sanitize_name(name: Any, taken: Any = ()) -> str:
+    """Provider-safe tool name — :func:`xgen_agent_runtime.tools.definition.safe_tool_name`.
+
+    ``[A-Za-z0-9_-]``, 48자 이하(CLI 가 붙이는 ``mcp__connector__`` 까지 64자 안), ``taken`` 과 겹치지 않음.
+    한글 이름은 ``tool_<해시>`` 가 된다 — 글자를 ``_`` 로 바꾸면 서로 다른 도구가 한 이름으로 뭉개진다.
+    """
+    from xgen_agent_runtime.tools.definition import safe_tool_name
+
+    return safe_tool_name(name, taken=taken)
+
+
+def _described(description: Any, original: str, name: str) -> str:
+    """이름이 바뀐 도구는 원래 이름을 설명에 남긴다 — 사용자·노드가 부르는 이름과 모델이 부르는 이름을 잇는다."""
+    text = str(description or "").strip()
+    if original and original != name:
+        tail = f"(Original name: {original})"
+        text = f"{text}\n{tail}" if text else tail
+    return text
 
 
 def _stringify(value: Any) -> str:
@@ -60,15 +73,19 @@ def _json_schema_of(lc_tool: Any) -> Dict[str, Any]:
     being dropped.
     """
     raw = getattr(lc_tool, "args_schema", None)
+    # 스키마는 **통째로** 둔다 — 예전엔 properties·required 만 남겨 ``$defs`` 가 사라지고 ``$ref`` 가
+    # 깨졌다(중첩 모델·MCP 스키마). 정규화(참조 풀기·제약 글로 적기)는 모델에게 보낼 때 한 곳에서
+    # 한다(tools.definition.api_definition — SDK·CLI 공통).
     if isinstance(raw, dict):
-        return _object_schema(raw.get("properties", {}), raw.get("required"))
+        return dict(raw) if raw else dict(_EMPTY_SCHEMA)
     if raw is not None:
         for attr in ("model_json_schema", "schema"):
             fn = getattr(raw, attr, None)
             if callable(fn):
                 try:
                     full = fn()
-                    return _object_schema(full.get("properties", {}), full.get("required"))
+                    if isinstance(full, dict) and full:
+                        return dict(full)
                 except Exception:  # noqa: BLE001 - schema extraction is best-effort
                     break
     try:
@@ -172,9 +189,10 @@ def _denied_result(name: str, denied: str, result_sink: Optional[Dict[str, str]]
     return ToolResult(content=text, is_error=True)
 
 
-def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool:
-    name = _sanitize_name(getattr(lc_tool, "name", type(lc_tool).__name__))
-    description = str(getattr(lc_tool, "description", "") or "")
+def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: Any = ()) -> Tool:
+    original = str(getattr(lc_tool, "name", "") or type(lc_tool).__name__)
+    name = _sanitize_name(original, taken)
+    description = _described(getattr(lc_tool, "description", ""), original, name)
     family = _opens_family(lc_tool)
 
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
@@ -212,16 +230,15 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
     )
 
 
-def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, str]]) -> Tool:
+def _wrap_callable_dict(
+    spec: Dict[str, Any], result_sink: Optional[Dict[str, str]], taken: Any = ()
+) -> Tool:
     func = spec.get("func") or spec.get("function")
-    name = _sanitize_name(spec.get("name"))
-    description = str(spec.get("description", "") or "")
+    original = str(spec.get("name") or "")
+    name = _sanitize_name(original, taken)
+    description = _described(spec.get("description", ""), original, name)
     schema = spec.get("input_schema") or spec.get("args_schema")
-    input_schema = (
-        _object_schema(schema.get("properties", {}), schema.get("required"))
-        if isinstance(schema, dict)
-        else dict(_EMPTY_SCHEMA)
-    )
+    input_schema = dict(schema) if isinstance(schema, dict) and schema else dict(_EMPTY_SCHEMA)
 
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         try:
@@ -250,6 +267,29 @@ def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, st
     )
 
 
+def _reserved_names() -> List[str]:
+    """노드 도구가 가져가면 안 되는 이름 — 런타임 내장 도구와 기억 도구(턴 조립이 나중에 등록한다)."""
+    names = list(_MEMORY_TOOL_NAMES)
+    try:
+        from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
+
+        names += list(BUILT_IN_TOOL_CLASSES)
+    except Exception:  # noqa: BLE001
+        pass
+    return names
+
+
+#: host.memory_tools 가 등록하는 이름.
+_MEMORY_TOOL_NAMES = (
+    "memory_write",
+    "memory_pin",
+    "memory_read",
+    "memory_list",
+    "memory_search",
+    "memory_categories",
+)
+
+
 def _flatten(value: Any) -> List[Any]:
     if value is None:
         return []
@@ -261,25 +301,31 @@ def _flatten(value: Any) -> List[Any]:
     return [value]
 
 
-def _adapt_one(obj: Any, result_sink: Optional[Dict[str, str]]) -> List[Tool]:
+def _adapt_one(obj: Any, result_sink: Optional[Dict[str, str]], taken: Any = ()) -> List[Tool]:
     if obj is None:
         return []
     if isinstance(obj, Tool):
         return [obj]
+    if not isinstance(obj, dict) and getattr(obj, "dispatch_tool", None) is not None:
+        # 스킬 페이로드가 dataclass 로 오는 노드(파일시스템 스킬 등) — dict 와 같은 규약이다. 예전엔
+        # "cannot adapt" 로 조용히 버려져 도구도 안내도 전달되지 않았다.
+        obj = {"dispatch_tool": getattr(obj, "dispatch_tool")}
     if isinstance(obj, dict):
         # Skill payload: the real tool travels under "dispatch_tool".
         if obj.get("dispatch_tool") is not None:
-            return [
-                t for item in _flatten(obj["dispatch_tool"]) for t in _adapt_one(item, result_sink)
-            ]
+            out: List[Tool] = []
+            for item in _flatten(obj["dispatch_tool"]):
+                adapted = _adapt_one(item, result_sink, set(taken) | {t.name for t in out})
+                out.extend(adapted)
+            return out
         if obj.get("name") and callable(obj.get("func") or obj.get("function")):
-            return [_wrap_callable_dict(obj, result_sink)]
+            return [_wrap_callable_dict(obj, result_sink, taken)]
         logger.warning(
             "geny_bridge: cannot adapt tool dict with keys %s — skipping", sorted(obj.keys())
         )
         return []
     if _looks_like_langchain_tool(obj):
-        return [_wrap_langchain(obj, result_sink)]
+        return [_wrap_langchain(obj, result_sink, taken)]
     logger.warning(
         "geny_bridge: cannot adapt tool object of type %s — skipping", type(obj).__name__
     )
@@ -310,7 +356,18 @@ def adapt_tools(
     Returns ``None`` when nothing usable was connected (and no registry was
     passed in), so callers can skip tool stages entirely.
     """
-    tools = [t for item in _flatten(port_value) for t in _adapt_one(item, result_sink)]
+    # 이름은 한 턴 안에서 유일해야 한다 — 두 노드가 같은 이름의 도구를 내면(MCP 노드 둘의 ``search``)
+    # 예전엔 나중 것이 앞의 것을 조용히 덮어 한 도구가 사라졌다. 이미 등록된 이름과 내장 도구 이름도
+    # 피한다(노드 도구가 ``Read`` 를 덮으면 sandbox 파일 읽기가 사라진다).
+    taken = set(_reserved_names())
+    if registry is not None:
+        taken |= set(registry.list_names())
+    tools: List[Tool] = []
+    for item in _flatten(port_value):
+        adapted = _adapt_one(item, result_sink, taken)
+        for tool in adapted:
+            taken.add(getattr(tool, "name", ""))
+        tools.extend(adapted)
     if not tools and registry is None:
         return None
     registry = registry if registry is not None else ToolRegistry()

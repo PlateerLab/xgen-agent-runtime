@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "codex_argv",
     "codex_mcp_overrides",
+    "codex_host_only_args",
+    "CODEX_NATIVE_FEATURES_OFF",
     "CodexEventAccumulator",
     "parse_codex_output_to_response",
     "flatten_messages_to_prompt",
@@ -78,6 +80,80 @@ def codex_mcp_overrides(mcp_config: Any) -> List[str]:
         if isinstance(env, dict) and env:
             rendered = ", ".join(f"{k} = {_toml_string(v)}" for k, v in env.items() if k)
             args += ["-c", f"mcp_servers.{safe}.env={{{rendered}}}"]
+        # 도구 호출 승인 — codex exec 는 승인 정책이 never 라 "승인이 필요한" MCP 도구 호출을 전부 거절한다
+        # ("MCP tool call requires approval, but approval policy is never"). 0.159.2 실측: 주석(annotations)
+        # 없는 우리 도구는 전부 승인 대상으로 분류돼 **한 번도 실행되지 않았다.** 우리 도구의 허용·거부는
+        # 호스트(Stage 10 가드·도구 정책)가 한다 — SDK 경로처럼 codex 는 묻지 않고 부른다.
+        approval = spec.get("default_tools_approval_mode") or "approve"
+        args += [
+            "-c",
+            f"mcp_servers.{safe}.default_tools_approval_mode={_toml_string(str(approval))}",
+        ]
+        timeout = spec.get("tool_timeout_sec")
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            timeout = CODEX_MCP_TOOL_TIMEOUT_SEC
+        # 도구 한 번의 제한 — codex 기본값(60초)은 SDK 경로에선 끝까지 도는 긴 셸 명령·문서 빌드를
+        # 먼저 끊는다. 제한은 도구 쪽(Bash timeout 등)이 정하게 턴 제한과 같은 값으로 둔다.
+        args += ["-c", f"mcp_servers.{safe}.tool_timeout_sec={float(timeout)}"]
+    return args
+
+
+#: MCP 도구 한 번의 제한(초) — CLI 턴 제한(build_codex_cli_client ``timeout_s``)과 같다.
+CODEX_MCP_TOOL_TIMEOUT_SEC = 3600.0
+
+
+#: codex 가 자기 쪽에서 모델에게 주는 도구·지시를 끄는 설정 — 우리 MCP 브릿지만 남긴다.
+#:
+#: 2026-09-30 실측(codex-cli 0.159.2, 가짜 모델 서버로 요청 캡처): 기본 요청에 네이티브 도구 9개
+#: (exec_command·write_stdin·request_user_input·view_image·multi_agent_v1·get/create/update_goal·
+#: web_search)와 17k 자 기본 지시, 스킬·권한·환경·협업 모드 개발자 메시지가 실렸다. SDK 경로와 같은
+#: 표면을 주려면 이것들을 전부 끈다. 모르는 키는 codex 가 무시하므로(``-c`` 는 엄격 모드가 아님) 버전이
+#: 바뀌어도 실행이 깨지지 않는다. ``request_user_input`` 은 끌 설정이 없다 — exec 모드에서 codex 가
+#: 스스로 "지원하지 않음" 으로 돌려준다.
+CODEX_NATIVE_FEATURES_OFF = (
+    "shell_tool",
+    "unified_exec",
+    "view_image",
+    "multi_agent",
+    "goals",
+    "memories",
+    "apps",
+    "plugins",
+    "skill_search",
+    "tool_suggest",
+    "sleep_tool",
+    "image_generation",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "in_app_browser",
+)
+
+#: 도구 결과 한도(토큰) — 결과 크기는 우리 Stage 10 이 정한다(10만 자를 넘는 결과는 파일로 옮기고 짧은 안내를
+#: 준다). codex 기본 한도가 그보다 작으면 같은 결과가 CLI 에서만 잘린다.
+CODEX_TOOL_OUTPUT_TOKEN_LIMIT = 150000
+
+CODEX_HOST_ONLY_OVERRIDES = (
+    f"tool_output_token_limit={CODEX_TOOL_OUTPUT_TOKEN_LIMIT}",
+    'web_search="disabled"',
+    "include_environment_context=false",
+    "include_apps_instructions=false",
+    "include_collaboration_mode_instructions=false",
+    "include_permissions_instructions=false",
+    "skills.bundled.enabled=false",
+    "skills.include_instructions=false",
+)
+
+
+def codex_host_only_args(instructions_path: str = "") -> List[str]:
+    """codex 네이티브 도구·지시를 끄는 ``-c`` 인자. ``instructions_path`` 가 있으면 기본 지시를 교체한다."""
+    args: List[str] = []
+    for feature in CODEX_NATIVE_FEATURES_OFF:
+        args += ["-c", f"features.{feature}=false"]
+    for override in CODEX_HOST_ONLY_OVERRIDES:
+        args += ["-c", override]
+    if instructions_path:
+        args += ["-c", f"model_instructions_file={_toml_string(instructions_path)}"]
     return args
 
 
@@ -89,6 +165,8 @@ def codex_argv(
     mcp_config: Any = None,
     output_schema_path: str = "",
     extra_args: Iterable[str] = (),
+    host_tools_only: bool = False,
+    instructions_path: str = "",
 ) -> List[str]:
     """Build the ``codex`` argument vector for one canonical request.
 
@@ -128,6 +206,10 @@ def codex_argv(
         argv += ["--output-schema", output_schema_path]
 
     argv += codex_mcp_overrides(mcp_config)
+    if host_tools_only:
+        # 도구는 호스트의 MCP 브릿지뿐이다 — codex 자기 도구·지시를 끄고, 기본 지시를 우리 시스템
+        # 프롬프트로 바꾼다(SDK 경로와 같은 표면).
+        argv += codex_host_only_args(instructions_path)
     argv += list(extra_args)
     # Only images from the current user turn belong to this invocation.
     current_user = next((m for m in reversed(request.messages) if m.get("role") == "user"), {})

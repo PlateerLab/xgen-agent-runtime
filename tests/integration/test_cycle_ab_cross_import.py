@@ -32,13 +32,7 @@ CYCLE_A_EXPORTS: Tuple[Tuple[str, str], ...] = (
     ("xgen_agent_runtime.runtime", "BackgroundTaskExecutor"),
     ("xgen_agent_runtime.runtime", "LocalBashExecutor"),
     ("xgen_agent_runtime.runtime", "LocalAgentExecutor"),
-    ("xgen_agent_runtime.tools.built_in", "AgentTool"),
-    ("xgen_agent_runtime.tools.built_in", "TaskCreateTool"),
-    ("xgen_agent_runtime.tools.built_in", "TaskGetTool"),
-    ("xgen_agent_runtime.tools.built_in", "TaskListTool"),
-    ("xgen_agent_runtime.tools.built_in", "TaskUpdateTool"),
-    ("xgen_agent_runtime.tools.built_in", "TaskOutputTool"),
-    ("xgen_agent_runtime.tools.built_in", "TaskStopTool"),
+    # AgentTool·Task*Tool(하위 에이전트 위임)은 4.70.0 에서 제거됐다.
     # P0.2 slash commands
     ("xgen_agent_runtime.slash_commands", "SlashCommand"),
     ("xgen_agent_runtime.slash_commands", "SlashCommandRegistry"),
@@ -151,12 +145,11 @@ def test_built_in_tool_classes_includes_all_new():
     """The registry mapping must enumerate every tool added in 1.1.0."""
     from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
     new_tools = (
-        "Agent", "AskUserQuestion", "PushNotification",
+        "AskUserQuestion", "PushNotification",
         "MCP", "ListMcpResources", "ReadMcpResource", "McpAuth",
         "EnterWorktree", "ExitWorktree",
         "LSP", "REPL", "Brief",
         "Config", "Monitor", "SendUserFile", "SendMessage",
-        "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop",
         "CronCreate", "CronDelete", "CronList",
     )
     missing = [t for t in new_tools if t not in BUILT_IN_TOOL_CLASSES]
@@ -166,7 +159,7 @@ def test_built_in_tool_classes_includes_all_new():
 def test_built_in_tool_features_groups_present():
     from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_FEATURES
     expected_groups = {
-        "agent", "tasks", "interaction", "notification",
+        "interaction", "notification",
         "mcp", "worktree", "dev", "operator", "messaging", "cron",
     }
     missing = expected_groups - set(BUILT_IN_TOOL_FEATURES)

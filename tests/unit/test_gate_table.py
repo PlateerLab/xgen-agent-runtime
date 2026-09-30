@@ -97,8 +97,13 @@ class TestFamilies:
         assert sorted(fam) == ["mcp_local_BrowserNavigate", "mcp_local_Shell", "mcp_local_WriteFile"]
 
     def test_a_gate_opens_only_its_own_prefix(self):
-        assert family_of("BrowserGuide", self.REG) == ["BrowserNavigate"]
         assert family_of("mcp_local_BrowserGuide", self.REG) == ["mcp_local_BrowserNavigate"]
+
+    def test_the_browser_gate_exists_only_on_a_device(self):
+        """서버 브라우저(an-web)는 제거됐다 — 접두 없는 BrowserGuide 는 문이 아니다."""
+        assert gate_of("BrowserGuide") is None
+        assert family_of("BrowserGuide", self.REG) == []
+        assert gate_of("mcp_local_BrowserGuide") is not None
 
     def test_an_unprefixed_local_control_is_not_a_gate(self):
         """CLI 경로의 LocalControl(접두 없음)이 모든 내장 도구를 가족으로 삼으면 안 된다."""

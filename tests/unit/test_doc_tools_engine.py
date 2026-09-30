@@ -1,9 +1,9 @@
-"""Browser* (an-web) + Doc* (edit2docs) built-in tool families (2.43.0).
+"""Doc* (edit2docs) built-in tool family.
 
-The engines are optional extras — every test that needs one skips
-cleanly when it is not importable, so the suite stays green on minimal
-installs. Deterministic paths run against the real engines with local
-fixtures (no network, no LLM key).
+The engine is an optional import — every test that needs it skips cleanly
+when it is not importable, so the suite stays green on minimal installs.
+Deterministic paths run against the real engine with local fixtures (no
+network, no LLM key).
 """
 
 from __future__ import annotations
@@ -19,15 +19,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES
-from xgen_agent_runtime.tools.built_in.browser_tools import (
-    BROWSER_TOOL_CLASSES,
-    BrowserActTool,
-    BrowserCloseTool,
-    BrowserNavigateTool,
-    BrowserSnapshotTool,
-    _parse_target,
-    _runtime,
-)
 from xgen_agent_runtime.tools.built_in.doc_tools import (
     DOC_TOOL_CLASSES,
     DocAnalyzeTool,
@@ -42,7 +33,6 @@ from xgen_agent_runtime.tools.built_in.doc_tools import (
     DocXmlReadTool,
 )
 
-an_web = pytest.importorskip("an_web", reason="an-web extra not installed")
 edit2docs = pytest.importorskip("edit2docs", reason="edit2docs extra not installed")
 
 
@@ -50,138 +40,25 @@ edit2docs = pytest.importorskip("edit2docs", reason="edit2docs extra not install
 
 
 class TestRegistration:
-    def test_families_registered(self):
-        for name in list(BROWSER_TOOL_CLASSES) + list(DOC_TOOL_CLASSES):
+    def test_family_registered(self):
+        for name in DOC_TOOL_CLASSES:
             assert name in BUILT_IN_TOOL_CLASSES
 
-    def test_feature_groups(self):
-        assert BUILT_IN_TOOL_FEATURES["browser"] == list(BROWSER_TOOL_CLASSES.keys())
+    def test_feature_group(self):
         assert BUILT_IN_TOOL_FEATURES["documents"] == list(DOC_TOOL_CLASSES.keys())
 
+    def test_no_browser_family(self):
+        # an-web 은 제거됐다 — 서버 브라우저 도구가 다시 생기지 않는다.
+        assert "browser" not in BUILT_IN_TOOL_FEATURES
+        assert not any(n.startswith("Browser") for n in BUILT_IN_TOOL_CLASSES)
+
     def test_schemas_are_valid_shapes(self):
-        for name, cls in {**BROWSER_TOOL_CLASSES, **DOC_TOOL_CLASSES}.items():
+        for name, cls in DOC_TOOL_CLASSES.items():
             tool = cls()
             fmt = tool.to_api_format()
             assert fmt["name"] == name
             assert fmt["description"]
             assert fmt["input_schema"]["type"] == "object"
-
-
-# ── Browser target parsing ─────────────────────────────────
-
-
-class TestTargetParsing:
-    def test_ref_handle(self):
-        assert _parse_target("n42") == {"by": "node_id", "node_id": "n42"}
-
-    def test_text_prefix(self):
-        assert _parse_target("text=Sign in") == {"by": "text", "text": "Sign in"}
-
-    def test_css_passthrough(self):
-        assert _parse_target("#login .btn") == "#login .btn"
-
-    def test_dict_passthrough(self):
-        loc = {"by": "role", "role": "button", "text": "Go"}
-        assert _parse_target(loc) is loc
-
-
-# ── Browser tools against a local HTML page (no real network) ──
-
-
-@pytest.fixture
-def html_url(tmp_path, monkeypatch):
-    """Serve a small page over HTTP from localhost (an-web fetches for
-    real; a loopback server keeps the test hermetic)."""
-    import http.server
-    import threading
-
-    # The 2.51.1 SSRF guard blocks loopback by default; this hermetic
-    # fixture legitimately targets 127.0.0.1, so opt into the escape hatch.
-    monkeypatch.setenv("GENY_ALLOW_PRIVATE_URLS", "1")
-
-    page = (
-        "<html><head><title>Fixture Page</title></head><body>"
-        "<h1>Hello World</h1>"
-        "<p id='intro'>Intro text with <a href='/next.html' id='go'>a link</a>.</p>"
-        "<button id='btn'>Press me</button>"
-        "</body></html>"
-    )
-    next_page = (
-        "<html><head><title>Next Page</title></head><body>"
-        "<h1>Second page</h1><p>You arrived.</p></body></html>"
-    )
-    (tmp_path / "index.html").write_text(page, encoding="utf-8")
-    (tmp_path / "next.html").write_text(next_page, encoding="utf-8")
-
-    handler = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(  # noqa: E731
-        *a, directory=str(tmp_path), **kw
-    )
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/index.html"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-class TestBrowserFlow:
-    @pytest.mark.asyncio
-    async def test_navigate_snapshot_click_close(self, html_url):
-        sid = "browser-flow-test"
-        ctx = ToolContext(session_id=sid)
-        try:
-            nav = await BrowserNavigateTool().execute({"url": html_url}, ctx)
-            assert not nav.is_error, nav.content
-            assert "Fixture Page" in nav.content
-            assert "Hello World" in nav.content
-            assert "[ref=" in nav.content  # interactive elements got handles
-
-            snap = await BrowserSnapshotTool().execute({}, ctx)
-            assert not snap.is_error
-            assert "Fixture Page" in snap.content
-
-            # Click the link — navigates to next.html and inlines the new page.
-            act = await BrowserActTool().execute(
-                {"action": "click", "target": "#go"}, ctx
-            )
-            assert not act.is_error, act.content
-            assert "Second page" in act.content or "Next Page" in act.content
-
-            closed = await BrowserCloseTool().execute({}, ctx)
-            assert not closed.is_error
-            assert closed.metadata["closed"] is True
-        finally:
-            await _runtime.close_session(sid)
-
-    @pytest.mark.asyncio
-    async def test_act_without_page_errors(self):
-        ctx = ToolContext(session_id="browser-no-page")
-        result = await BrowserActTool().execute(
-            {"action": "click", "target": "#x"}, ctx
-        )
-        assert result.is_error
-        assert "BrowserNavigate" in result.content
-
-    @pytest.mark.asyncio
-    async def test_navigate_rejects_bad_scheme(self):
-        ctx = ToolContext(session_id="browser-bad-scheme")
-        result = await BrowserNavigateTool().execute({"url": "file:///etc/passwd"}, ctx)
-        assert result.is_error
-
-    @pytest.mark.asyncio
-    async def test_sessions_are_isolated(self, html_url):
-        ctx_a = ToolContext(session_id="browser-iso-a")
-        ctx_b = ToolContext(session_id="browser-iso-b")
-        try:
-            await BrowserNavigateTool().execute({"url": html_url}, ctx_a)
-            # Session B never navigated — it must not see A's tab.
-            snap_b = await BrowserSnapshotTool().execute({}, ctx_b)
-            assert snap_b.is_error
-        finally:
-            await _runtime.close_session("browser-iso-a")
-            await _runtime.close_session("browser-iso-b")
 
 
 # ── Doc tools against real generated fixtures (no LLM) ─────

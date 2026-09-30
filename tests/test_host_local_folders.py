@@ -66,7 +66,7 @@ _CATALOG = [
 
 class _DeviceHost(_FakeHost):
     def __init__(self, catalog: List[str] = _CATALOG, platform: str = "", **kw: Any) -> None:
-        super().__init__(delegation_extras={}, **kw)
+        super().__init__(**kw)
         self._catalog = catalog
         self._platform = platform
 
@@ -142,8 +142,11 @@ def test_cli_backend_gets_the_same_note_from_the_same_catalog(capture) -> None:
         client_surface="connector",
         local_folders=[{"path": "C:\\work\\docs"}],
     )
-    # CLI 는 registry 를 쓰지 않는다 — 도구는 서버 CLI 브리지가 같은 규칙으로 광고한다.
+    # CLI 는 파이프라인 registry 를 쓰지 않는다 — 같은 레지스트리가 표면 객체로 브릿지에 간다.
     assert capture.get("registry") is None
+    surface = host.cli_params["_tool_surface"]
+    assert surface.registry.is_core("mcp_local_ReadFile")
+    assert "mcp_local_LocalControl" not in surface.registry.list_names()
     note = "\n".join(_state(capture).shared[SharedKeys.TURN_NOTES])
     assert "- docs: C:\\work\\docs" in note
     assert "Windows PC" in note
@@ -156,7 +159,7 @@ def test_a_host_without_the_platform_hook_says_device(capture) -> None:
             return [_DeviceTool("mcp_local_ReadFile")]
 
     _run(
-        _NoPlatformHost(delegation_extras={}),
+        _NoPlatformHost(),
         capture,
         client_surface="connector",
         local_folders=[{"path": "/p"}],

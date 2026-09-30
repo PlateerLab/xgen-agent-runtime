@@ -14,6 +14,8 @@ LangChain 도구는 ``metadata["opens_family"]`` 를 달아야 했다. 빠뜨려
 * 09-23 ``LocalControl``(커넥터, SDK 경로) — 지도의 Shell·WriteFile 을 한 번도 못 부르고
   브라우저 도구에 ``rm -rf`` 를 우겨넣음. 부르지도 않은 쓰기로 "PC 에 저장했다" 고 답함.
 
+(서버 쪽 브라우저·위임 가족과 그 문은 4.70.0 에서 제거됐다 — 위 사고 기록은 규칙의 근거로 남긴다.)
+
 이 모듈이 그 관계의 **유일한 출처**다. 여기 적힌 문이 불리면 그 가족은 문의 구현과 무관하게
 열린다(:func:`family_of` — Stage 10 라우터가 부른다). 그리고 매 표면마다 "숨긴 가족에는 보이는
 문이 있다" 를 검사한다(:func:`reachability_fixes` — Stage 3 가 부른다). 규칙을 **기억**하지
@@ -25,9 +27,9 @@ LangChain 도구는 ``metadata["opens_family"]`` 를 달아야 했다. 빠뜨려
 (``Browser*``, ``Doc*``, ``Job*`` …). workflow 가 가진 작업 가족도 이름 규칙이라
 여기서 따로 목록을 들고 있을 필요가 없다. 앱 가족(``App*``)은 **이름 목록**으로 적는다 —
 ``App`` 으로 시작하는 이름은 사용자가 만든 도구(``AppendRows`` 같은)와 너무 쉽게 겹친다. 그리고 문과 방은 **같은 MCP 접두**를 가져야 같은
-가족이다 — 커넥터의 ``mcp_local_BrowserGuide`` 는 ``mcp_local_Browser*`` 를 열고, 내장
-``BrowserGuide`` 는 접두 없는 ``Browser*`` 를 연다. 남의 MCP 서버 도구가 우리 규칙에
-우연히 맞아도 접두가 달라 섞이지 않는다.
+가족이다 — 커넥터의 ``mcp_local_BrowserGuide`` 는 ``mcp_local_Browser*`` 만 연다. 남의 MCP
+서버 도구가 우리 규칙에 우연히 맞아도 접두가 달라 섞이지 않는다. 내장 ``Browser*`` 는 없다 —
+브라우저 문은 접두 전용이다.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ __all__ = [
     "Gate",
     "family_of",
     "gate_of",
+    "owner_gate",
     "reachability_fixes",
     "restore_from_history",
     "split_prefix",
@@ -93,9 +96,9 @@ class Gate:
     #: 이 문이 턴-1 에 **보여야 하는가**. False 는 "그 가족은 의도적으로 ToolSearch 로 찾는
     #: 긴 꼬리" 라는 선언이다 — 불변식이 그 문을 억지로 세우지 않는다.
     visible: bool = True
-    #: 접두 **없는** 문(내장)만 가족을 여는가. 로컬 컨트롤처럼 "같은 접두의 전부" 를 여는 문은
-    #: 접두가 있을 때만 의미가 있다 — 접두 없는 LocalControl(CLI 경로)이 모든 내장 도구를
-    #: 가족으로 삼는 사고를 막는다.
+    #: 접두가 **있는** 문(사용자 기기 앱의 도구)만 가족을 여는가. 로컬 컨트롤처럼 "같은 접두의
+    #: 전부" 를 여는 문은 접두가 있을 때만 의미가 있다 — 접두 없는 LocalControl 이 모든 내장
+    #: 도구를 가족으로 삼는 사고를 막는다. 브라우저도 기기 앱에만 있다(서버 브라우저는 제거).
     prefixed_only: bool = False
 
 
@@ -104,18 +107,14 @@ class Gate:
 GATES: Dict[str, Gate] = {
     g.name: g
     for g in (
-        Gate("BrowserGuide", _starts("Browser", "BrowserGuide")),
+        # 브라우저는 사용자 PC 의 XGEN 브라우저 탭뿐이다(커넥터 ``mcp_local_BrowserGuide`` → ``mcp_local_Browser*``).
+        # 서버 쪽 브라우저 엔진(an-web)은 제거됐다 — 접두 없는 ``Browser*`` 는 더 이상 없다.
+        Gate("BrowserGuide", _starts("Browser", "BrowserGuide"), prefixed_only=True),
         Gate("JobGuide", _starts("Job", "JobGuide")),
         # 앱(에이전트가 만들어 띄우는 웹 앱) — 2026-09-28 Artifact* 에서 이름을 바꿨다.
         # 옛 이름으로 부르면 tools.renamed 가 새 이름으로 보낸다.
         Gate("AppGuide", _named("AppCreate", "AppPublish", "AppStatus", "AppList", "AppDelete")),
         Gate("SshListServers", _named("SshRun", "SshUpload", "SshDownload")),
-        Gate(
-            "DelegationGuide",
-            _lazy_family(
-                "xgen_agent_runtime.tools.built_in.delegation_guide_tool", "DELEGATION_FAMILY"
-            ),
-        ),
         Gate(
             "SelfExtendGuide",
             _lazy_family(
@@ -166,6 +165,22 @@ def _owner(name: str, present: Set[str]) -> Tuple[str, Gate] | None:
             if best is None or (best[1].prefixed_only and not gate.prefixed_only):
                 best = cand
     return best
+
+
+def owner_gate(name: str, registered: Iterable[str]) -> str | None:
+    """이 도구를 여는 **보이는 문**의 이름(접두 포함). 문이 없거나 숨은 문(DocGuide)이면 None.
+
+    숨김 목록(:mod:`xgen_agent_runtime.tools.catalog`)이 문 뒤의 도구를 문 이름 아래로 묶을 때 쓴다 —
+    문이 첫 화면에 서 있으니 도구마다 한 줄씩 적을 필요가 없다.
+    """
+    present: Set[str] = set(registered)
+    owner = _owner(str(name), present)
+    if owner is None:
+        return None
+    gate_full, gate = owner
+    if not gate.visible or gate_full not in present:
+        return None
+    return gate_full
 
 
 def family_of(gate_name: str, registered: Iterable[str]) -> List[str]:

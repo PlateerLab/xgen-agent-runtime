@@ -4,6 +4,55 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.70.0] — 2026-09-30
+
+### Changed — 도구 표면은 provider 와 무관하게 하나다
+
+CLI 백엔드(claude_code·codex)는 도구를 MCP 로만 받는다. 예전엔 호스트가 CLI 표면을 **따로 조립**해서 같은
+에이전트가 provider 에 따라 다른 도구·다른 스키마·다른 가드를 받았다(게스트·고정 턴의 쓰기 도구 제외 누락, 문과
+숨김 목록 누락, 기기 도구 스키마 차이, Stage 10 가드 누락 — 2026-09-30 감사).
+
+- `host/tool_surface.py` `TurnToolSurface` — 턴 조립이 만든 **같은 레지스트리·도구 컨텍스트·턴 상태**를 묶어 호스트
+  MCP 브릿지에 넘긴다(`kwargs["_tool_surface"]`). 광고는 Stage 3 와 같은 정의, 실행은 Stage 10 과 같은 함수
+  (`ToolStage.dispatch_calls`)이고 **턴 루프에서** 돈다(`bind_loop` · `on_loop`). 기록 복원·문 도달성 검사도 Stage 3 와 같다.
+- `stages/s10_tool` — 실행 본체를 `dispatch_calls()` 로 추출(파이프라인과 CLI 표면이 같은 함수).
+- `turn_executor` — provider 무관 조립. CLI 프롬프트 = SDK 프롬프트 + 같은 숨김 목록 + 이름 규약 한 줄
+  (`cli_tool_naming_note`). 도구별 CLI 각주(`cli_memory_note`·`cli_self_evolution_note`·`cli_delegation_note`)는 없앴다.
+- codex 는 턴 안에서 도구 목록을 다시 읽지 않아(실측) 평면 노출로 돈다 — 능력은 같고 숨김 목록이 없을 뿐이다.
+
+### Added — 두 CLI 의 한도에 맞춘 도구 정의 (`tools/definition.py`)
+
+실측(가짜 모델 서버로 실제 요청 캡처): Claude Code 는 도구 설명을 2048자에서 자르고 이름의 한글을 `_` 로 바꾸며
+64자 넘는 이름을 그대로 보낸다. Codex 는 스키마가 약 5,000바이트를 넘으면 모든 설명을 지우고 default·format·범위를
+늘 지운다. 런타임 자신도 노드 도구 스키마의 `$defs` 를 버려 `$ref` 가 깨졌다.
+
+- `safe_tool_name` — 48자 이하, 한글 이름은 `tool_<해시>`, 턴 안에서 유일(`_2`), 내장·기억 도구 이름 예약.
+- `normalize_input_schema` — 로컬 `$ref` 인라인, 제약 키워드를 설명에도 적는다, `required` 정리.
+- `fit_definition` — 설명 2,000자·스키마 4,000바이트 안으로, 넘친 원문은 `ToolSearch(query="<이름>")` 가 돌려준다.
+- `ToolRegistry.to_api_format` 과 CLI 표면이 같은 `api_definition` 을 쓴다. 이름이 바뀐 노드 도구는 설명에 원래 이름을 남긴다.
+- 스킬 페이로드가 dataclass 로 와도 받는다(예전엔 조용히 버려졌다). 숨김 목록은 이름 단위로 끊는다.
+
+### Added — CLI 네이티브 도구 끄기
+
+- Claude Code: `--tools ""` (네이티브 0개). `MAX_MCP_OUTPUT_TOKENS=150000` — 결과 크기는 Stage 10 이 정한다.
+- Codex (`host_tools_only`, 기본): 네이티브 기능 끄기(셸·이미지·하위 에이전트·목표·웹 검색…), 환경·권한·스킬·협업 지시 끄기,
+  기본 지시를 시스템 프롬프트로 교체(`model_instructions_file`), MCP 도구 자동 승인(`default_tools_approval_mode="approve"`
+  — 0.159.2 exec 는 승인 정책이 never 라 **우리 도구 호출이 전부 거절**되고 있었다), 도구 제한 3600초, 출력 한도 150,000토큰.
+
+### Changed — 샌드박스와 사용자 기기 폴더를 헷갈리지 않게
+
+- 파일·셸 도구 설명이 "sandbox 에서" 를 말한다(Bash 는 기기에 닿지 못한다고 말한다). Read 는 바이너리 문서에 DocRender 를 안내한다.
+- `second_machine` — sandbox 도구가 연결된 기기 폴더 경로를 받으면 늘 "[Wrong machine]" 안내, "없음" 결과에는 폴더 안내(턴당 2회).
+- `host/device_tools.py` — 기기 도구 공통 래퍼: 스키마 그대로(enum·items 보존), 이미지 블록 통과, 실패·거부 표시,
+  sandbox 경로를 기기 도구에 주면 부르기 전에 거절. 기기의 `Search` 는 모델에게 `SearchFiles`(WebSearch·ToolSearch 와 구분).
+- 폴더 연결 턴 안내가 두 기계를 명시한다.
+
+### Removed
+
+- 하위 에이전트 위임 도구 전부(`Agent`·`SubAgent*`·`Task*`·`DelegationGuide`)와 그 패밀리·문·호스트 훅.
+- 서버 브라우저(an-web) 패밀리(`Browser*`)와 `xgen-an-web` 의존, WebFetch `render_js`. 브라우저는 사용자 기기 앱의 도구뿐이다.
+- 고정본(`_frozen`) 턴은 자기진화를 받지 않는다.
+
 ## [4.69.2] — 2026-09-30
 
 ### Removed — 커넥터 로컬 실행·동기화의 남은 자리

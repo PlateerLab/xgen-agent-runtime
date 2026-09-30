@@ -23,7 +23,7 @@ class EditTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Perform exact string replacements in a file. "
+            "Perform exact string replacements in a file in your sandbox. "
             "old_string must be unique in the file unless replace_all is true."
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 from pathlib import PurePosixPath
 from typing import Any, Dict
 
@@ -11,6 +12,28 @@ from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, T
 from xgen_agent_runtime.tools.fs import tool_fs
 
 _DEFAULT_LIMIT = 2000
+
+
+#: 문서 형식 — Read 로는 내용을 못 본다. 문서 도구(DocRender)가 읽는다.
+_DOCUMENT_SUFFIXES = frozenset(
+    {".docx", ".xlsx", ".pptx", ".pdf", ".hwp", ".hwpx", ".doc", ".xls", ".ppt"}
+)
+
+
+def _binary_note(name: str, size: int) -> str:
+    """바이너리 파일 결과. 문서면 읽는 도구를 알려 준다.
+
+    예전엔 ``[Binary file: …]`` 한 줄뿐이었다 — 문서 도구의 문(DocGuide)은 첫 화면에 없으므로 모델은
+    문서를 읽을 방법이 없다고 결론짓거나 Bash 로 zip 을 풀었다(2026-09-30 감사).
+    """
+    note = f"[Binary file: {name}, {size} bytes]"
+    suffix = os.path.splitext(str(name))[1].lower()
+    if suffix in _DOCUMENT_SUFFIXES:
+        note += (
+            " This is a document — read its text with DocRender (to='md'). If DocRender is not "
+            'in your tool list, open it with ToolSearch("DocRender").'
+        )
+    return note
 
 
 class ReadTool(Tool):
@@ -27,7 +50,7 @@ class ReadTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read a file from the filesystem. Returns content with line numbers. "
+            "Read a file in your sandbox. Returns content with line numbers. "
             "Use offset and limit to read specific portions of large files."
         )
 
@@ -99,7 +122,7 @@ class ReadTool(Tool):
             return ToolResult(content=f"[Image file: {name}, {len(raw)} bytes, type={mime}]")
 
         if b"\x00" in raw[:8192]:
-            return ToolResult(content=f"[Binary file: {name}, {len(raw)} bytes]")
+            return ToolResult(content=_binary_note(name, len(raw)))
 
         try:
             text = raw.decode("utf-8")
@@ -107,7 +130,7 @@ class ReadTool(Tool):
             try:
                 text = raw.decode("latin-1")
             except Exception:
-                return ToolResult(content=f"[Binary file: {name}, {len(raw)} bytes]")
+                return ToolResult(content=_binary_note(name, len(raw)))
 
         lines = text.splitlines(keepends=True)
         total = len(lines)

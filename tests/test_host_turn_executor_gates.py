@@ -1,14 +1,12 @@
 """AgentTurnExecutor 프롬프트/도구 게이트 — 호스트가 주지 않는 것은 약속하지 않는다.
 
-* [DELEGATION_GATE] host.build_turn_delegation 이 실제 백엔드(subagent_manager /
-  task_runner / task_registry)를 돌려줄 때만 SDK SubAgent*/Task*/DelegateTask 가
-  등록된다. {} (데스크톱 사이드카) → 아무것도 등록 안 됨 + '위임 미배선 — host 미제공'.
-* [CLI_BRIDGE] host.cli_bridge_available(provider) 가 False 면 CLI 전용 노트
-  (memory_* 이름 규약 / SELF_EVOLUTION / 위임 노트·스태시)를 붙이지 않고 메모리는
-  '자동'이라고만 안내한다. 메서드 부재 → True(레거시 서버).
-* 한 스위치가 옆 능력을 끌고 내려가지 않는다: 자기진화를 꺼도 위임·메모리는
-  그대로다. (내장 도구를 통째로 끄던 enable_builtin_tools 는 폐기됐다 —
-  표면을 정하는 축은 tool_exposure 의 계층 하나뿐이다.)
+* [ONE_SURFACE] 표면은 provider 와 무관하게 하나다. SDK 는 레지스트리를 파이프라인으로, CLI
+  (claude_code·codex)는 **같은 레지스트리**를 ``TurnToolSurface`` 로 묶어 호스트 브릿지에 넘긴다.
+  CLI 프롬프트는 SDK 프롬프트 + (Stage 3 가 SDK 에 붙이는 것과 같은) 숨김 목록 + 이름 규약 한 줄이다.
+* [CLI_BRIDGE] host.cli_bridge_available(provider) 가 False 면 도구가 CLI 에 닿지 않는다 — 도구를
+  약속하지 않고 메모리는 '자동'이라고만 안내한다. 메서드 부재 → True(레거시 서버).
+* 하위 에이전트 위임은 4.70.0 에서 제거됐다 — 호스트 프로토콜에도, 표면에도 없다.
+* 한 스위치가 옆 능력을 끌고 내려가지 않는다: 자기진화를 꺼도 메모리는 그대로다.
 """
 
 from __future__ import annotations
@@ -28,7 +26,7 @@ from xgen_agent_runtime.host._constants import (
     MEMORY_AUTO_PROMPT_BLOCK,
     MEMORY_PROMPT_BLOCK,
     SELF_EVOLUTION_PROMPT_BLOCK,
-    _delegation_wired,
+    cli_tool_naming_note,
     default_prompt,
 )
 from xgen_agent_runtime.host.host import HostServices
@@ -50,43 +48,17 @@ class _FakeMemoryProvider:
         return None
 
 
-class _DelegateTaskStub(Tool):
-    @property
-    def name(self) -> str:
-        return "DelegateTask"
-
-    @property
-    def description(self) -> str:
-        return "stub"
-
-    @property
-    def input_schema(self) -> Dict[str, Any]:
-        return {"type": "object", "properties": {}}
-
-    async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:  # noqa: A002
-        return ToolResult(content="ok")
-
-
-_WIRED_EXTRAS = {
-    "subagent_manager": object(),
-    "task_runner": object(),
-    "task_registry": object(),
-}
-
-
 class _FakeHost:
     """HostServices 최소 대역 — 실행기가 파이프라인 조립 직전까지 닿는 표면만."""
 
     def __init__(
         self,
         *,
-        delegation_extras: Optional[Dict[str, Any]] = None,
         memory: bool = True,
         cli_bridge: Optional[bool] = None,
         rollout_enabled: bool = False,
         storage_root: str = "/tmp/ws-storage",
     ) -> None:
-        self._delegation_extras = delegation_extras
         self._memory = memory
         self._rollout_enabled = rollout_enabled
         self._storage_root = storage_root
@@ -142,16 +114,8 @@ class _FakeHost:
         return _FakeMemoryProvider() if self._memory else None
 
     # D
-
-
-
-
-
-
     def jobs_prompt_block(self):
         return ""
-
-
 
     # E
     def build_connector_mcp_tools(self, *a, **k):
@@ -162,25 +126,6 @@ class _FakeHost:
 
     def register_workflow_self_tools(self, registry, **k):
         return None  # 데스크톱: WorkflowSelf 미제공
-
-    def build_turn_delegation(self, **k):
-        self.calls.append("build_turn_delegation")
-        return dict(self._delegation_extras) if self._delegation_extras is not None else {}
-
-    def is_report_turn(self, text):
-        return False
-
-    def delegation_extra_tool_classes(self):
-        return {"DelegateTask": _DelegateTaskStub} if self._delegation_extras else {}
-
-    def delegation_workspace(self, workflow_id):
-        return "/tmp/ws"
-
-    def drain_pending_reports(self, *a, **k):
-        return ""
-
-    def make_sub_cli_client_factory(self, *a, **k):
-        return None
 
     def register_forged_tools(self, *a, **k):
         return None
@@ -212,7 +157,7 @@ class _FakeHost:
         return None
 
     def build_cli_runtime(self, provider, params):
-        # kwargs 사전 그 자체가 넘어온다 — 위임 스태시(_delegation_extras) 관찰 지점.
+        # kwargs 사전 그 자체가 넘어온다 — 도구 표면(_tool_surface) 관찰 지점.
         self.cli_params = params
         return object(), None
 
@@ -271,7 +216,7 @@ def _registry_names(capture: Dict[str, Any]) -> List[str]:
 
 
 def test_structured_image_input_survives_host_executor(capture) -> None:
-    host = _FakeHost(delegation_extras={}, memory=False)
+    host = _FakeHost(memory=False)
     image = {
         "kind": "image",
         "mime_type": "image/png",
@@ -291,7 +236,7 @@ def test_structured_image_input_survives_host_executor(capture) -> None:
 
 
 def test_openai_content_array_becomes_canonical_image_input(capture) -> None:
-    host = _FakeHost(delegation_extras={}, memory=False)
+    host = _FakeHost(memory=False)
     seen = _run(
         host,
         capture,
@@ -343,7 +288,7 @@ def test_opt_in_workspace_fast_path_is_wired_before_the_model_call(
     source = tmp_path / "source"
     source.write_text("alpha", encoding="utf-8")
     seen = _run(
-        _FastPathHost(delegation_extras={}, memory=False),
+        _FastPathHost(memory=False),
         capture,
         text=f"Transform {source} and save the requested output",
     )
@@ -391,7 +336,7 @@ def test_opt_in_workspace_fast_path_is_wired_before_the_model_call(
     capture.clear()
     original = f"Transform {source} and save the requested output"
     fallback = _run(
-        _FastPathHost(delegation_extras={}, memory=False),
+        _FastPathHost(memory=False),
         capture,
         text=original,
         enable_compaction=True,
@@ -405,42 +350,36 @@ def test_opt_in_workspace_fast_path_is_wired_before_the_model_call(
     )
 
 
-# ── [DELEGATION_GATE] ─────────────────────────────────────────────────
+# ── 위임은 없다 ──────────────────────────────────────────────────────
 
 
-def test_delegation_wired_helper_contract() -> None:
-    assert not _delegation_wired({})
-    assert not _delegation_wired(None)
-    assert not _delegation_wired({"agent_depth": 0})
-    assert _delegation_wired({"subagent_manager": object()})
-    assert _delegation_wired({"task_runner": object(), "task_registry": object()})
+_REMOVED_TOOLS = {
+    "DelegationGuide", "DelegateTask", "SubAgentSpawn", "SubAgentSend", "SubAgentList",
+    "SubAgentKill", "Task", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+    "TaskUpdate", "Agent",
+}
 
 
-def test_sdk_delegation_registered_when_host_provides_backend(capture, caplog) -> None:
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS)
-    with caplog.at_level(logging.INFO):
-        seen = _run(host, capture)
-    names = _registry_names(seen)
-    assert "DelegateTask" in names
-    assert "SubAgentSpawn" in names and "SubAgentAssign" in names
-    assert "TaskCreate" in names and "TaskStop" in names
-    assert "위임 미배선" not in caplog.text
-    assert "build_turn_delegation" in host.calls
+def test_host_protocol_has_no_delegation_hooks() -> None:
+    for hook in (
+        "build_turn_delegation",
+        "delegation_extra_tool_classes",
+        "delegation_workspace",
+        "make_sub_cli_client_factory",
+        "is_report_turn",
+        "drain_pending_reports",
+    ):
+        assert not hasattr(HostServices, hook), hook
 
 
-def test_sdk_delegation_not_registered_when_host_returns_empty(capture, caplog) -> None:
-    host = _FakeHost(delegation_extras={})
-    with caplog.at_level(logging.INFO):
-        seen = _run(host, capture)
-    names = _registry_names(seen)
-    assert not [n for n in names if n.startswith("SubAgent") or n.startswith("Task")]
-    assert "DelegateTask" not in names
-    assert "위임 미배선 — host 미제공" in caplog.text
-    # SDK 경로엔 애초 위임 노트가 없다 — CLI 노트 문구도 섞이지 않는다.
-    # (노트는 **게이트웨이**를 가리킨다: 계층 표면의 턴 1 에는 DelegationGuide 만
-    #  있고 DelegateTask 는 그 문 뒤라, 동사를 직접 가리키면 모델이 아직 열리지
-    #  않은 이름을 부른다.)
-    assert "mcp__connector__DelegationGuide" not in seen["system_prompt"]
+def test_no_turn_registers_a_delegation_tool(capture) -> None:
+    for provider in ("openai", "claude_code", "codex"):
+        capture.clear()
+        host = _FakeHost()
+        _run(host, capture, provider=provider)
+        names = set(_surface_names(capture, host))
+        assert not names & _REMOVED_TOOLS, provider
+        assert "Delegat" not in capture["system_prompt"]
 
 
 # ── [CLI_BRIDGE] ──────────────────────────────────────────────────────
@@ -452,67 +391,105 @@ def test_host_services_declares_optional_cli_bridge_available() -> None:
     assert [p for p in inspect.signature(fn).parameters if p != "self"] == ["provider"]
 
 
-def test_cli_legacy_host_without_probe_keeps_notes(capture) -> None:
-    """메서드 부재 → True: 서버 레거시 동작(노트 전부 유지)."""
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=None)
+def _surface_names(capture: Dict[str, Any], host: Any) -> List[str]:
+    """이 턴에 등록된 도구 이름 — SDK 는 파이프라인 레지스트리, CLI 는 브릿지로 간 표면."""
+    reg = capture.get("registry")
+    if reg is None and host.cli_params is not None:
+        surface = host.cli_params.get("_tool_surface")
+        reg = surface.registry if surface is not None else None
+    return list(reg.list_names()) if reg is not None else []
+
+
+class _SelfEditHost(_FakeHost):
+    """서버처럼 WorkflowSelf 를 등록하는 호스트."""
+
+    def register_workflow_self_tools(self, registry, **k):
+        registry.register(_NamedTool("WorkflowSelf"), core=False)
+
+
+class _NamedTool(Tool):
+    input_schema = {"type": "object", "properties": {}}
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return f"{self._name} tool"
+
+    async def execute(self, input, context):  # noqa: A002
+        return ToolResult(content="ok")
+
+
+@pytest.mark.parametrize("provider", ["claude_code", "codex"])
+def test_cli_gets_the_same_registry_and_the_same_prompt_as_sdk(capture, provider) -> None:
+    """CLI 표면 = SDK 표면. 프롬프트는 SDK 것 + 숨김 목록 + 이름 규약 한 줄."""
+    from xgen_agent_runtime.tools.catalog import deferred_catalog_text
+
+    sdk_host = _SelfEditHost()
+    sdk = dict(_run(sdk_host, capture, provider="openai"))
+    sdk_names = _registry_names(sdk)
+    capture.clear()
+
+    cli_host = _SelfEditHost()
+    cli = _run(cli_host, capture, provider=provider)
+    assert cli.get("registry") is None, "CLI 는 파이프라인 Stage 10 이 돌지 않는다"
+    surface = cli_host.cli_params["_tool_surface"]
+    assert list(surface.registry.list_names()) == sdk_names
+    assert sorted(t.name for t in surface.registry.list_exposed()) == sorted(
+        t.name for t in sdk["registry"].list_exposed()
+    )
+    assert "memory_write" in sdk_names and "WorkflowSelf" in sdk_names
+
+    catalog = deferred_catalog_text(surface.registry)
+    expected = sdk["system_prompt"]
+    if catalog:
+        expected += "\n\n" + catalog
+    expected += cli_tool_naming_note("connector", provider)
+    assert cli["system_prompt"] == expected
+    assert SELF_EVOLUTION_PROMPT_BLOCK in cli["system_prompt"]
+    assert MEMORY_PROMPT_BLOCK in cli["system_prompt"]
+
+
+def test_cli_legacy_host_without_probe_gets_the_surface(capture) -> None:
+    """메서드 부재 → True: 서버 레거시 동작(브릿지 있음)."""
+    host = _FakeHost(cli_bridge=None)
     assert not hasattr(host, "cli_bridge_available")
-    seen = _run(host, capture, provider="claude_code")
-    sp = seen["system_prompt"]
-    assert MEMORY_PROMPT_BLOCK in sp and "mcp__connector__memory_write" in sp
-    assert MEMORY_AUTO_PROMPT_BLOCK not in sp
-    assert SELF_EVOLUTION_PROMPT_BLOCK in sp and "mcp__connector__WorkflowSelf" in sp
-    assert "mcp__connector__DelegationGuide" in sp
-    assert host.cli_params is not None and "_delegation_extras" in host.cli_params
+    _run(host, capture, provider="claude_code")
+    assert host.cli_params.get("_tool_surface") is not None
 
 
-def test_cli_bridge_available_true_keeps_notes(capture) -> None:
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=True)
-    seen = _run(host, capture, provider="claude_code")
-    sp = seen["system_prompt"]
-    assert "mcp__connector__memory_write" in sp
-    assert SELF_EVOLUTION_PROMPT_BLOCK in sp
-    assert "mcp__connector__DelegationGuide" in sp
-    assert "_delegation_extras" in host.cli_params
-
-
-def test_cli_bridge_unavailable_drops_tool_notes_and_memory_is_automatic(capture, caplog) -> None:
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=False)
+def test_cli_bridge_unavailable_drops_tools_and_memory_is_automatic(capture, caplog) -> None:
+    host = _SelfEditHost(cli_bridge=False)
     with caplog.at_level(logging.INFO):
         seen = _run(host, capture, provider="claude_code")
     sp = seen["system_prompt"]
     # 메모리: 도구 광고 없음, 자동 계층 안내만
     assert MEMORY_PROMPT_BLOCK not in sp
-    assert "memory_categories(" not in sp and "mcp__connector__memory" not in sp
+    assert "memory_categories(" not in sp and "mcp__connector__" not in sp
     assert MEMORY_AUTO_PROMPT_BLOCK in sp
-    # self-evolution / 위임: 블록·노트·스태시 전부 없음
+    # 자기진화: 블록·도구 없음
     assert SELF_EVOLUTION_PROMPT_BLOCK not in sp and "WorkflowSelf" not in sp
-    assert "mcp__connector__DelegationGuide" not in sp
-    assert "_delegation_extras" not in host.cli_params
-    assert "build_turn_delegation" not in host.calls  # 쓸 데 없는 백엔드 생성도 없다
+    assert host.cli_params.get("_tool_surface") is None
     assert "self-evolution 미배선 — CLI 브릿지 없음" in caplog.text
-    assert "위임 미배선 — CLI 브릿지 없음" in caplog.text
 
 
 def test_codex_bridge_unavailable_memory_automatic_no_self_evolution(capture) -> None:
-    host = _FakeHost(delegation_extras={}, cli_bridge=False)
+    host = _SelfEditHost(cli_bridge=False)
     seen = _run(host, capture, provider="codex")
     sp = seen["system_prompt"]
     assert MEMORY_AUTO_PROMPT_BLOCK in sp
-    assert "'connector' MCP server" not in sp
+    assert "'connector'" not in sp
     assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
-
-
-def test_codex_bridge_available_keeps_connector_note(capture) -> None:
-    host = _FakeHost(delegation_extras={}, cli_bridge=True)
-    seen = _run(host, capture, provider="codex")
-    sp = seen["system_prompt"]
-    assert MEMORY_PROMPT_BLOCK in sp and "'connector' MCP server" in sp
-    assert SELF_EVOLUTION_PROMPT_BLOCK in sp
 
 
 def test_sdk_provider_memory_block_unchanged_regardless_of_probe(capture) -> None:
     """SDK 경로는 registry 에 memory 도구를 직접 등록 — 프로브와 무관하게 블록 유지."""
-    host = _FakeHost(delegation_extras={}, cli_bridge=False)
+    host = _FakeHost(cli_bridge=False)
     seen = _run(host, capture, provider="openai")
     sp = seen["system_prompt"]
     assert MEMORY_PROMPT_BLOCK in sp
@@ -528,7 +505,7 @@ def test_sdk_provider_memory_block_unchanged_regardless_of_probe(capture) -> Non
 
 def test_empty_system_prompt_is_preserved_not_replaced_by_default(capture) -> None:
     """System Prompt 를 사용자가 명시적으로 비우면("") 기본 문구로 대체되면 안 된다."""
-    host = _FakeHost(delegation_extras={}, cli_bridge=False, memory=False)
+    host = _FakeHost(cli_bridge=False, memory=False)
     seen = _run(host, capture, provider="openai", system_prompt="")
     sp = seen["system_prompt"]
     assert default_prompt not in sp
@@ -537,7 +514,7 @@ def test_empty_system_prompt_is_preserved_not_replaced_by_default(capture) -> No
 
 def test_missing_system_prompt_still_falls_back_to_default(capture) -> None:
     """system_prompt 키 자체를 안 주면(레거시 호출부 등) 여전히 기본 문구를 쓴다."""
-    host = _FakeHost(delegation_extras={}, cli_bridge=False, memory=False)
+    host = _FakeHost(cli_bridge=False, memory=False)
     seen = _run(host, capture, provider="openai")  # system_prompt 미지정
     sp = seen["system_prompt"]
     assert default_prompt in sp
@@ -552,38 +529,20 @@ def test_missing_system_prompt_still_falls_back_to_default(capture) -> None:
 # 아니어서 스위치를 걷어냈다. 남은 축은 하나, ``tool_exposure`` 의 계층이다.
 
 
-def test_run_ctx_는_자기진화만_꺼도_살아_있다(capture, caplog) -> None:
-    """자기진화를 꺼도 위임·메모리는 그대로다.
-
-    WorkflowSelf 는 registry + workflow_id 만 필요하다(편집은 DB, workspace 불필요).
-    한 스위치가 옆 능력을 조용히 끌고 내려가던 회귀(감사 HIGH)를 여기서 막는다.
-    """
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=True)
+@pytest.mark.parametrize("provider", ["openai", "claude_code"])
+def test_self_evolution_off_leaves_memory_alone(capture, caplog, provider) -> None:
+    """자기진화를 꺼도 메모리는 그대로다 — 한 스위치가 옆 능력을 끌고 내려가지 않는다."""
+    host = _SelfEditHost(cli_bridge=True)
     with caplog.at_level(logging.INFO):
-        seen = _run(host, capture, provider="claude_code", enable_self_evolution=False)
+        seen = _run(host, capture, provider=provider, enable_self_evolution=False)
     sp = seen["system_prompt"]
     assert SELF_EVOLUTION_PROMPT_BLOCK not in sp
-    assert "mcp__connector__DelegationGuide" in sp
-    assert "_delegation_extras" in host.cli_params
-    assert "mcp__connector__memory_write" in sp
+    names = _surface_names(seen, host)
+    assert "WorkflowSelf" not in names
+    assert "memory_write" in names and MEMORY_PROMPT_BLOCK in sp
 
 
-def test_cli_legacy_host_also_keeps_self_evolution(capture) -> None:
-    """프로브가 없는 레거시 호스트도 같은 판정(브릿지 있음으로 간주)."""
-    host = _FakeHost(delegation_extras=_WIRED_EXTRAS, cli_bridge=None)
-    seen = _run(host, capture, provider="claude_code")
-    sp = seen["system_prompt"]
-    assert SELF_EVOLUTION_PROMPT_BLOCK in sp
-    assert "mcp__connector__DelegationGuide" in sp
-    assert "mcp__connector__memory_write" in sp
-
-
-# ── 그래프 연결 도구는 CLI 백엔드에도 도달한다 ─────────────────────────
-#
-# CLI 는 파이프라인 registry 를 보지 못하므로, 실행기가 그걸 **버리지 않고**
-# host 의 CLI 런타임 빌더에 넘겨야 브릿지가 광고할 수 있다. 예전엔 정말로 버렸고
-# (registry = None), 그래서 캔버스에서 붙인 도구 노드가 claude_code/codex 에
-# 영원히 도달하지 않았다.
+# ── 그래프 연결 도구도 같은 표면이다 ─────────────────────────────────
 
 
 class _GraphTool(Tool):
@@ -595,22 +554,11 @@ class _GraphTool(Tool):
         return ToolResult(content="ok")
 
 
-def test_cli_hands_graph_tools_to_the_bridge_instead_of_dropping_them(capture) -> None:
-    host = _FakeHost(delegation_extras={})
-    _run(host, capture, provider="claude_code", tools=[_GraphTool()])
-    # 파이프라인에는 안 넘긴다(Stage 10 이 안 돈다).
-    assert capture.get("registry") is None
-    # 대신 CLI 런타임 빌더가 받는 kwargs 에 실려 있다.
-    graph = host.cli_params.get("_graph_tools")
-    assert graph is not None, "그래프 도구가 버려졌다 — 브릿지가 광고할 수 없다"
-    assert "jira_search" in graph.list_names()
-
-
-def test_sdk_backend_keeps_graph_tools_in_the_pipeline_registry(capture) -> None:
-    """SDK 는 원래대로 registry 로 직접 쓴다 — 두 경로가 같은 도구를 갖는다."""
-    host = _FakeHost(delegation_extras={})
-    _run(host, capture, provider="openai", tools=[_GraphTool()])
-    assert "jira_search" in _registry_names(capture)
+@pytest.mark.parametrize("provider", ["openai", "claude_code", "codex"])
+def test_graph_tools_are_on_every_backend(capture, provider) -> None:
+    host = _FakeHost()
+    _run(host, capture, provider=provider, tools=[_GraphTool()])
+    assert "jira_search" in _surface_names(capture, host)
 
 
 def test_cli_says_so_when_graph_tools_cannot_be_delivered(capture, caplog) -> None:
@@ -618,14 +566,14 @@ def test_cli_says_so_when_graph_tools_cannot_be_delivered(capture, caplog) -> No
 
     프롬프트에 사실을 실어, 사용자가 물으면 설정 문제라고 정확히 답하게 한다.
     """
-    host = _FakeHost(delegation_extras={}, cli_bridge=False)
+    host = _FakeHost(cli_bridge=False)
     out = _run(host, capture, provider="claude_code", tools=[_GraphTool()])
     assert "cannot be delivered on this backend" in out["system_prompt"]
     assert "1 tool(s)" in out["system_prompt"]
 
 
 def test_no_such_note_when_the_bridge_is_available(capture) -> None:
-    host = _FakeHost(delegation_extras={})
+    host = _FakeHost()
     out = _run(host, capture, provider="claude_code", tools=[_GraphTool()])
     assert "cannot be delivered" not in out["system_prompt"]
 
@@ -634,7 +582,7 @@ def test_no_such_note_when_the_bridge_is_available(capture) -> None:
 
 
 def test_rollout_recording_is_opt_in_and_passes_no_path_by_default(capture) -> None:
-    host = _FakeHost(delegation_extras={}, memory=False)
+    host = _FakeHost(memory=False)
 
     seen = _run(host, capture)
 
@@ -645,7 +593,6 @@ def test_rollout_recording_allocates_safe_workflow_scoped_path(
     capture, tmp_path: Path
 ) -> None:
     host = _FakeHost(
-        delegation_extras={},
         memory=False,
         rollout_enabled=True,
         storage_root=str(tmp_path),
@@ -662,7 +609,6 @@ def test_rollout_recording_allocates_safe_workflow_scoped_path(
 
 def test_rollout_recording_reaches_non_stream_runner(capture, tmp_path: Path) -> None:
     host = _FakeHost(
-        delegation_extras={},
         memory=False,
         rollout_enabled=True,
         storage_root=str(tmp_path),
@@ -686,7 +632,7 @@ def test_rollout_recording_reaches_non_stream_runner(capture, tmp_path: Path) ->
 
 
 def test_rollout_recording_skips_unscoped_turn_with_warning(capture, caplog) -> None:
-    host = _FakeHost(delegation_extras={}, memory=False, rollout_enabled=True)
+    host = _FakeHost(memory=False, rollout_enabled=True)
 
     with caplog.at_level(logging.WARNING):
         seen = _run(host, capture, workflow_id="")
@@ -720,7 +666,6 @@ def test_rollout_recording_runs_end_to_end_without_public_result_change(
         lambda *args, **kwargs: _Client(api_key="k"),
     )
     host = _FakeHost(
-        delegation_extras={},
         memory=False,
         rollout_enabled=True,
         storage_root=str(tmp_path),
@@ -750,55 +695,28 @@ def test_rollout_recording_runs_end_to_end_without_public_result_change(
     assert records[-1]["type"] == "pipeline.complete"
 
 
-# ── CLI 표면 각주는 사본이 아니라 한 함수다 ──────────────────────────
+# ── CLI 이름 규약은 한 줄이다 ─────────────────────────────────────────
 #
-# 같은 문장이 turn_executor 안에서만도 여러 번, 그리고 xgen-workflow 의 [기본정보]
-# 화면에서 한 번 더 쓰인다. 사본으로 두면 한 곳만 고쳐지고, 실제로 그렇게 됐다:
-# 위임 각주가 게이트웨이를 가리키도록 바뀐 뒤에도 관리자 화면은 옛 문장(아직
-# 열리지 않은 DelegateTask 를 직접 부르라는)을 계속 보여 줬다.
+# 예전엔 메모리·자기진화·위임마다 CLI 각주가 따로 있었다. 각주가 도구마다 있으면 빠진 도구가
+# 생기고(SSH·작업·앱·기기 도구는 각주가 없었다), 빠진 도구는 모델에게 이름을 모르는 것이 된다.
+# 이제 이름 규약 하나가 모든 도구에 적용된다.
 
 
-def test_the_cli_notes_are_built_by_one_function_not_copied():
-    """turn_executor 소스에 각주 문장의 사본이 남아 있으면 안 된다."""
-    from pathlib import Path
+def test_the_cli_naming_note_is_one_sentence_for_every_tool():
+    from xgen_agent_runtime.host import _constants
 
-    from xgen_agent_runtime.host import turn_executor
-
-    body = Path(turn_executor.__file__).read_text(encoding="utf-8")
-    for sentence in (
-        "on this backend the memory tools appear as",
-        "on this backend the graph-editing tool appears as",
-        "Delegation/background work: start with",
-    ):
-        assert sentence not in body, (
-            f"각주 문장이 turn_executor 에 직접 적혀 있다: {sentence!r} — "
-            "_constants 의 cli_*_note() 를 쓰라"
-        )
+    for gone in ("cli_memory_note", "cli_self_evolution_note", "cli_delegation_note"):
+        assert not hasattr(_constants, gone), gone
+    claude = cli_tool_naming_note("connector", "claude_code")
+    assert "mcp__connector__X" in claude and "only tools" in claude
+    codex = cli_tool_naming_note("connector", "codex")
+    assert "'connector'" in codex and "mcp__" not in codex
 
 
-def test_the_delegation_note_points_at_the_gateway():
-    from xgen_agent_runtime.host._constants import cli_delegation_note
-
-    note = cli_delegation_note("connector")
-    assert "mcp__connector__DelegationGuide" in note
-    # 동사를 직접 가리키면 모델은 아직 열리지 않은 이름을 부른다.
-    assert "mcp__connector__DelegateTask" not in note
-    assert "opens the delegation tools" in note
-
-
-def test_the_notes_follow_the_server_name():
+def test_the_note_follows_the_server_name():
     """브릿지 서버 이름이 바뀌면 각주도 따라간다 — 하드코딩된 'connector' 금지."""
-    from xgen_agent_runtime.host._constants import (
-        cli_delegation_note,
-        cli_memory_note,
-        cli_self_evolution_note,
-    )
-
-    assert "mcp__local__DelegationGuide" in cli_delegation_note("local")
-    assert "mcp__local__memory_write" in cli_memory_note("local", "claude_code")
-    assert "'local' MCP server" in cli_memory_note("local", "codex")
-    assert "mcp__local__WorkflowSelf" in cli_self_evolution_note("local", "claude_code")
-    assert "'local' MCP server" in cli_self_evolution_note("local", "codex")
+    assert "mcp__local__X" in cli_tool_naming_note("local", "claude_code")
+    assert "'local'" in cli_tool_naming_note("local", "codex")
 
 
 # ── 메모리 지침은 남은 도구를 보고 고른다 (2026-09-21) ──────────────────────────
@@ -821,7 +739,7 @@ class _ReadOnlyMemoryHost(_FakeHost):
 
 
 def test_sdk_uses_the_readonly_block_when_the_host_removed_write_tools(capture) -> None:
-    host = _ReadOnlyMemoryHost(delegation_extras={}, cli_bridge=False)
+    host = _ReadOnlyMemoryHost(cli_bridge=False)
     seen = _run(host, capture, provider="openai")
     sp = seen["system_prompt"]
     assert MEMORY_READONLY_PROMPT_BLOCK in sp and MEMORY_PROMPT_BLOCK not in sp
@@ -830,24 +748,46 @@ def test_sdk_uses_the_readonly_block_when_the_host_removed_write_tools(capture) 
 
 
 def test_sdk_keeps_the_write_block_when_write_tools_remain(capture) -> None:
-    host = _FakeHost(delegation_extras={}, cli_bridge=False)
+    host = _FakeHost(cli_bridge=False)
     seen = _run(host, capture, provider="openai")
     sp = seen["system_prompt"]
     assert MEMORY_PROMPT_BLOCK in sp and MEMORY_READONLY_PROMPT_BLOCK not in sp
     assert "memory_write" in _registry_names(seen)
 
 
-def test_cli_bridge_asks_the_host_whether_writes_exist(capture) -> None:
-    """CLI 브릿지 경로는 registry 를 여기서 못 본다 — 호스트 훅 memory_write_available 로 고른다."""
-    host = _ReadOnlyMemoryHost(delegation_extras={}, cli_bridge=True)
-    seen = _run(host, capture, provider="claude_code")
+@pytest.mark.parametrize("provider", ["claude_code", "codex"])
+def test_cli_memory_wording_follows_the_same_registry(capture, provider) -> None:
+    """CLI 도 같은 레지스트리를 보고 고른다 — 쓰기 도구가 빠지면 읽기 전용 문구, 표면에도 없다."""
+    host = _ReadOnlyMemoryHost(cli_bridge=True)
+    seen = _run(host, capture, provider=provider)
     sp = seen["system_prompt"]
     assert MEMORY_READONLY_PROMPT_BLOCK in sp and MEMORY_PROMPT_BLOCK not in sp
-    assert "mcp__connector__memory_write" in sp or "memory_" in sp  # 이름 규약 각주는 그대로
+    names = _surface_names(seen, host)
+    assert "memory_read" in names and "memory_write" not in names
 
 
-def test_a_host_without_the_hook_keeps_the_old_wording(capture) -> None:
-    host = _FakeHost(delegation_extras={}, cli_bridge=True)
-    assert not hasattr(host, "memory_write_available")
+def test_cli_keeps_the_write_block_when_write_tools_remain(capture) -> None:
+    host = _FakeHost(cli_bridge=True)
     seen = _run(host, capture, provider="claude_code")
     assert MEMORY_PROMPT_BLOCK in seen["system_prompt"]
+
+
+# ── 목록을 다시 읽지 않는 CLI(codex)는 처음부터 전부 본다 ─────────────────────
+#
+# 2026-09-30 실측(실제 CLI + 실제 브릿지): Claude Code 는 list_changed 뒤 tools/list 를 다시 읽지만 codex 는
+# 한 번도 다시 읽지 않았다 — 문·ToolSearch 로 연 도구를 부르면 "unsupported call". 계층은 토큰 절약이지 능력의
+# 경계가 아니므로 codex 는 평면 노출로 돈다.
+
+
+def test_codex_gets_every_tool_up_front_and_claude_keeps_the_hierarchy(capture) -> None:
+    codex_host = _FakeHost()
+    _run(codex_host, capture, provider="codex", tools=[_GraphTool()])
+    codex_reg = codex_host.cli_params["_tool_surface"].registry
+    assert codex_reg.list_deferred() == []
+    assert codex_reg.is_exposed("jira_search")
+
+    capture.clear()
+    claude_host = _FakeHost()
+    _run(claude_host, capture, provider="claude_code", tools=[_GraphTool()])
+    claude_reg = claude_host.cli_params["_tool_surface"].registry
+    assert not claude_reg.is_exposed("jira_search"), "Claude Code 는 목록을 다시 읽으므로 계층을 지킨다"
