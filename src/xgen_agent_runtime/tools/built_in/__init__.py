@@ -91,23 +91,9 @@ from xgen_agent_runtime.tools.built_in.google_tools import GOOGLE_TOOL_CLASSES
 # the host marks ``feature:atlassian_connected`` satisfied.
 from xgen_agent_runtime.tools.built_in.atlassian_tools import ATLASSIAN_TOOL_CLASSES
 
-# Doc — office documents (docx/xlsx/pptx) on the edit2docs engine: addressable
-# outlines, deterministic edits, generation. Lazy import — 'pip install
-# xgen-agent-runtime[docs]'.
-from xgen_agent_runtime.tools.built_in.doc_tools import (
-    DOC_FAMILY,
-    DOC_TOOL_CLASSES,
-    DocAnalyzeTool,
-    DocApplyEditsTool,
-    DocArrangeTool,
-    DocBuildTool,
-    DocEditTool,
-    DocGenerateTool,
-    DocGuideTool,
-    DocRenderTool,
-    DocXmlEditTool,
-    DocXmlReadTool,
-)
+# Parsing — 문서 파일의 글 위주 요소를 뽑는다(xgen-doc2chunk 추출 단계). 편집 도구는 없다
+# (2026-09-30 edit2docs 기반 Doc* 도구 제거).
+from xgen_agent_runtime.tools.built_in.parse_document_tool import ParseDocumentTool
 
 # NOT in BUILT_IN_TOOL_CLASSES: SandboxExecTool is instantiated per Sandbox Tool
 # Pack (with a spec + a live SandboxHandle), not activated by a manifest name.
@@ -176,8 +162,8 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     # Atlassian (gated on feature:atlassian_connected — hidden until the host
     # injects a site URL + API token and marks Atlassian connected).
     **ATLASSIAN_TOOL_CLASSES,
-    # Doc (edit2docs) — office document engine; same lazy-import contract.
-    **DOC_TOOL_CLASSES,
+    # 문서 읽기 — 글 위주 추출(doc2chunk). 구조 전체가 아니다.
+    "ParseDocument": ParseDocumentTool,
     # SSH — command/SFTP on the session's configured servers (gated on
     # feature:ssh_enabled); lazy-imports asyncssh with an install-hint fallback.
     **SSH_TOOL_CLASSES,
@@ -205,7 +191,6 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
 #: ``JobGuide`` 는 xgen-workflow 에 산다(서버 스케줄러에 묶여 있다) — 같은 규약을
 #: 그쪽 테스트가 고정한다.
 SKILL_GATEWAYS: Dict[str, Tuple[str, ...]] = {
-    "DocGuide": DOC_FAMILY,
     # 목록 도구가 곧 문이다 — SshRun 이 받는 서버 '이름' 의 유일한 출처다.
     "SshListServers": SSH_FAMILY,
     "SelfExtendGuide": SELF_EXTEND_FAMILY,
@@ -216,8 +201,8 @@ BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
     "filesystem": ["Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"],
     "shell": ["Bash"],
     "web": ["WebFetch", "WebSearch"],
-    # Office documents (edit2docs engine) — outline/edit/preview/generate.
-    "documents": list(DOC_TOOL_CLASSES.keys()),
+    # 문서 파일의 글 위주 요소 추출(doc2chunk) — 읽기만. 편집 도구는 없다.
+    "parsing": ["ParseDocument"],
     # ToolBatch — 같은 도구를 입력 목록으로 한 왕복에 실행 (목록 작업의 왕복 수를 N → 1).
     "workflow": ["TodoWrite", "ToolBatch"],
     "meta": ["ToolSearch", "SelfExtendGuide", "EnterPlanMode", "ExitPlanMode"],
@@ -298,24 +283,14 @@ def get_builtin_tools(
 
 __all__ = [
     "SKILL_GATEWAYS",
+    "ParseDocumentTool",
     "ATLASSIAN_TOOL_CLASSES",
-    "DOC_TOOL_CLASSES",
     "SSH_TOOL_CLASSES",
     "AUDIO_TOOL_CLASSES",
     "SshListServersTool",
     "SshRunTool",
     "SshUploadTool",
     "SshDownloadTool",
-    "DocAnalyzeTool",
-    "DocApplyEditsTool",
-    "DocArrangeTool",
-    "DocBuildTool",
-    "DocEditTool",
-    "DocGenerateTool",
-    "DocGuideTool",
-    "DocRenderTool",
-    "DocXmlEditTool",
-    "DocXmlReadTool",
     "AskUserQuestionTool",
     "BriefTool",
     "ConfigTool",

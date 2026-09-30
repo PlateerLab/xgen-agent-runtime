@@ -54,10 +54,10 @@ class TestCatalogIsConsistent:
     """파일 하나를 받는 내장 도구는 전부 ``file_path`` 를 쓴다."""
 
     def _file_tools(self):
-        from xgen_agent_runtime.tools.built_in import audio_tools, doc_tools, dev_tools
+        from xgen_agent_runtime.tools.built_in import audio_tools, dev_tools, parse_document_tool
 
         out = []
-        for mod in (doc_tools, audio_tools):
+        for mod in (parse_document_tool, audio_tools):
             for name in dir(mod):
                 obj = getattr(mod, name)
                 if isinstance(obj, type) and name.endswith("Tool") and not name.startswith("_"):
@@ -99,17 +99,17 @@ class TestRouterUsesTheBridge:
     @pytest.mark.asyncio
     async def test_an_old_call_still_runs(self):
         from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
-        from xgen_agent_runtime.tools.built_in.doc_tools import DocRenderTool
+        from xgen_agent_runtime.tools.built_in.parse_document_tool import ParseDocumentTool
         from xgen_agent_runtime.tools.base import ToolContext
         from xgen_agent_runtime.tools.registry import ToolRegistry
 
-        tool = DocRenderTool()
+        tool = ParseDocumentTool()
         reg = ToolRegistry()
         reg.register(tool)
         # 옛 이름으로 불러도 "필수 필드 누락" 으로 거절당하지 않는다.
         result = await RegistryRouter(reg).route(
-            "DocRender",
-            {"path": "/nonexistent/a.docx", "to": "md"},
+            "ParseDocument",
+            {"path": "/tmp/nonexistent-a.docx"},
             ToolContext(session_id="t", working_dir="/tmp"),
         )
         payload = result.content

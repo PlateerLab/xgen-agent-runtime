@@ -14,24 +14,25 @@ from xgen_agent_runtime.tools.fs import tool_fs
 _DEFAULT_LIMIT = 2000
 
 
-#: 문서 형식 — Read 로는 내용을 못 본다. 문서 도구(DocRender)가 읽는다.
+#: 문서 형식 — Read 로는 내용을 못 본다. ParseDocument 가 글을 뽑는다.
 _DOCUMENT_SUFFIXES = frozenset(
-    {".docx", ".xlsx", ".pptx", ".pdf", ".hwp", ".hwpx", ".doc", ".xls", ".ppt"}
+    {".docx", ".xlsx", ".pptx", ".pdf", ".hwp", ".hwpx", ".doc", ".xls", ".ppt", ".rtf"}
 )
 
 
 def _binary_note(name: str, size: int) -> str:
     """바이너리 파일 결과. 문서면 읽는 도구를 알려 준다.
 
-    예전엔 ``[Binary file: …]`` 한 줄뿐이었다 — 문서 도구의 문(DocGuide)은 첫 화면에 없으므로 모델은
-    문서를 읽을 방법이 없다고 결론짓거나 Bash 로 zip 을 풀었다(2026-09-30 감사).
+    예전엔 ``[Binary file: …]`` 한 줄뿐이었다 — 모델은 문서를 읽을 방법이 없다고 결론짓거나 Bash 로
+    zip 을 풀었다(2026-09-30 감사).
     """
     note = f"[Binary file: {name}, {size} bytes]"
     suffix = os.path.splitext(str(name))[1].lower()
     if suffix in _DOCUMENT_SUFFIXES:
         note += (
-            " This is a document — read its text with DocRender (to='md'). If DocRender is not "
-            'in your tool list, open it with ToolSearch("DocRender").'
+            " This is a document — extract its text with ParseDocument (text-centric: text, "
+            "tables as text, page markers; not the layout). If it is not in your tool list, "
+            'open it with ToolSearch("ParseDocument").'
         )
     return note
 

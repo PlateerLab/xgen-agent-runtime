@@ -124,9 +124,6 @@ GATES: Dict[str, Gate] = {
         # 사용자 PC(커넥터) — 같은 접두의 **나머지 전부**. 셸·파일·앱·오피스, 이 PC 의 브라우저,
         # 사용자가 커넥터에 붙인 MCP 서버까지. 다른 문(BrowserGuide 등)은 가족에서 뺀다.
         Gate("LocalControl", lambda base: True, prefixed_only=True),
-        # 문서 — 현재 턴-1 에 없다(문도 ToolSearch 로 찾는다). 호출당 약 211 토큰이라 세울지는
-        # 따로 판단한다. 여기서는 **지금의 동작을 선언**만 한다: 불변식이 억지로 세우지 않는다.
-        Gate("DocGuide", _starts("Doc", "DocGuide"), visible=False),
     )
 }
 
@@ -168,7 +165,7 @@ def _owner(name: str, present: Set[str]) -> Tuple[str, Gate] | None:
 
 
 def owner_gate(name: str, registered: Iterable[str]) -> str | None:
-    """이 도구를 여는 **보이는 문**의 이름(접두 포함). 문이 없거나 숨은 문(DocGuide)이면 None.
+    """이 도구를 여는 **보이는 문**의 이름(접두 포함). 문이 없거나 숨은 문이면 None.
 
     숨김 목록(:mod:`xgen_agent_runtime.tools.catalog`)이 문 뒤의 도구를 문 이름 아래로 묶을 때 쓴다 —
     문이 첫 화면에 서 있으니 도구마다 한 줄씩 적을 필요가 없다.

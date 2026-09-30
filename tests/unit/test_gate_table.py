@@ -200,11 +200,6 @@ class TestReachability:
         reg = _surface(["Bash", "mcp_github_BrowserNavigate", "mcp_github_JobList"])
         assert reachability_fixes(reg.list_names(), reg.is_exposed) == []
 
-    def test_documents_stay_behind_tool_search_as_declared(self):
-        """DocGuide 는 visible=False — 지금 동작(ToolSearch 로 찾기)을 선언한 것이다."""
-        reg = _surface(["Bash", "DocGuide", "DocRender", "DocBuild"])
-        assert reachability_fixes(reg.list_names(), reg.is_exposed) == []
-
 
 class TestStageThree:
     def test_the_surface_is_repaired_before_the_model_sees_it(self):
