@@ -126,7 +126,23 @@ jobs:
       # affected pip and there is no fix release as of this commit.
       # Ignore the single CVE so the audit keeps catching real issues
       # in our dependency tree. Revisit once pip ships a fix.
-      - run: pip-audit --ignore-vuln CVE-2026-3219
+      # 의존성은 서비스(xgen-workflow)가 지금 설치하는 정확한 버전으로 고정한다(4.74.0).
+      # 아래는 그 설치 버전에 이미 있는 알려진 취약점이다 — 올리는 것은 서비스 전체에
+      # 닿는 별도 결정이라 여기서 몰래 올리지 않는다:
+      # - asyncssh 2.23.1: 2.24+ 는 cryptography>=48 을 요구하는데 플랫폼은 46.0.7 고정.
+      # - langchain / langchain-anthropic / langsmith / pydantic-settings / python-multipart:
+      #   xgen-doc2chunk 가 끌어오는 것으로, 워크플로가 같은 버전을 정확히 고정해 쓴다.
+      # 버전을 올릴 때 이 목록도 함께 줄인다.
+      - run: >-
+          pip-audit --ignore-vuln CVE-2026-3219
+          --ignore-vuln CVE-2026-62949
+          --ignore-vuln PYSEC-2026-2192
+          --ignore-vuln PYSEC-2026-2556
+          --ignore-vuln CVE-2026-59152
+          --ignore-vuln CVE-2026-58203
+          --ignore-vuln PYSEC-2026-3040
+          --ignore-vuln PYSEC-2026-3036
+          --ignore-vuln PYSEC-2026-3037
 
   build:
     name: Build package
