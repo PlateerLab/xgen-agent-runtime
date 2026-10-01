@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.76.0] — 2026-10-01
+
+### Changed — 턴 조립과 실행 코어를 나누고, 실행 엔진을 설정으로 고른다
+
+`AgentTurnExecutor.run` 의 본체(호스트 계약 26단계 — 자격증명·도구 표면·샌드박스·메모리·프롬프트 조각·예산)를 같은
+모듈의 `assemble_turn(host, kwargs, resources) → TurnPlan` 으로 옮겼다. 실행 코어만 엔진이 정한다.
+
+- 기본은 **기존 21-stage 엔진 그대로**(`build_pipeline` + `stream_turn`/`run_turn`). 설정이 없으면 동작이 바뀌지 않는다
+  (런타임 전체 테스트 통과).
+- 관리자 설정 `XGEN_HARNESS_ENGINE=rsi` 면 `xgen-agent-runtime-rsi`(`xgen_rsi`)의 RSI 하네스가 **같은 TurnPlan** 으로 돈다 —
+  RRSI(정규화된 하네스 진화)와 Dream-RSI(재생 기반 탐색 정책 개선)를 위한 새 실행 코어. 호스트 호출 순서·kwargs 역방향
+  키(`_sandbox_session`, `_tool_surface`)는 조립에서 끝나므로 두 엔진이 같다. 패키지가 없으면 기존 엔진으로 돌아가고 경고를
+  한 번 남긴다.
+- 시스템 프롬프트를 이름 붙은 조각(`SystemPromptParts`: base·jobs·environment·efficiency·memory·self_evolution·
+  tool_catalog·cli_naming…)으로도 기록한다. 최종 문자열은 조각을 이은 것과 같다 — RSI 하네스의 `prompt` 구성요소가
+  조각 단위로 고칠 수 있게.
+- 조립 중 만든 메모리 provider 는 `resources` 에 바로 기록해 조립·준비 실패 시 닫는다(기존과 같은 정리).
+- 테스트용 kwargs `harness_engine` 은 호스트로 넘기기 전에 뺀다. 노드에는 노출하지 않는다.
+
 ## [4.75.0] — 2026-10-01
 
 ### Added — 생각(thinking·reasoning) 조절을 한 값으로 (`llm_client.thinking`)
