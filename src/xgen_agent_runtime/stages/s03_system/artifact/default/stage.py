@@ -333,16 +333,18 @@ class SystemStage(Stage[Any, Any]):
         # (Stage 10 can still dispatch them) but their schemas stay out of
         # the request payload until discovered — that's the token contract.
         if self._tool_registry is not None:
+            # 기억 지도 표면이 이번 턴에 두 번 빗나갔으면 지도 이전 표면부터 되살린다(host.tool_exposure).
+            # 레지스트리 버전과 상관없이 매 반복 본다 - 지도의 도구가 오류만 내는 턴에는 아무것도 새로 열리지
+            # 않아 버전이 그대로이고, 그때가 바로 되돌려야 할 때다(실측: ReadFile ENOENT 7회, 되돌림 0).
+            fell_back = _map_fallback(self._tool_registry, state)
             reg_version = getattr(self._tool_registry, "version", None)
-            if not state.tools or (reg_version is not None and reg_version != state.tools_version):
+            if not state.tools or fell_back or (reg_version is not None and reg_version != state.tools_version):
                 # 모델이 보는 표면을 굳히기 **직전에** "숨긴 가족에는 보이는 문이 있다" 를
                 # 검사한다(tools.gates). 어기면 숨기지 않는다 — 최악의 결과를 "도구에 영영 못
                 # 닿음" 에서 "표면이 조금 커짐" 으로 바꾼다. 열었으면 버전이 올라가므로
                 # 아래에서 다시 읽는다.
                 # 앞 턴에 쓴 도구를 먼저 되살린다 — 호스트가 턴마다 레지스트리를 새로 만들어
                 # 열어 둔 가족이 날아간다(tools.gates.restore_from_history).
-                # 기억 지도 표면이 두 번 빗나갔으면 지도 이전 표면부터 되살린다(host.tool_exposure).
-                fell_back = _map_fallback(self._tool_registry, state)
                 restored = _restore_from_history(self._tool_registry, state.messages)
                 if restored:
                     state.add_event("tool.surface_restored", {"opened": restored})
@@ -419,11 +421,14 @@ def _map_fallback(registry: Any, state: PipelineState) -> bool:
     if not isinstance(record, dict) or record.get("fallen_back"):
         return False
     try:
-        if not map_fallback_due(state.messages, record.get("open")):
+        scope = _map_scope(registry, record.get("open"))
+        due = map_fallback_due(state.messages, scope)
+        logger.debug("memory map fallback check: due=%s scope=%s messages=%d", due, scope, len(state.messages))
+        if not due:
             return False
         restore_tool_map(registry, record)
     except Exception:  # noqa: BLE001 - 되돌림 판정이 턴을 막지 않는다
-        logger.debug("memory map fallback failed", exc_info=True)
+        logger.warning("memory map fallback failed", exc_info=True)
         return False
     record["fallen_back"] = True
     state.add_event(
@@ -431,6 +436,29 @@ def _map_fallback(registry: Any, state: PipelineState) -> bool:
         {"open": list(record.get("open") or []), "restored": len(record.get("core") or {})},
     )
     return True
+
+
+def _field_of(obj: Any, key: str) -> Any:
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
+def _map_scope(registry: Any, open_names: Any) -> List[str]:
+    """빗나감을 셀 지도의 도구. 지도가 연 도구에 사용자 PC 도구가 있으면 그 PC 의 도구 전부를 센다 - 지도는 "어디서
+    찾을지" 를 말한 것이라 같은 자리의 다른 도구가 빈 결과 · 오류를 낸 것도 지도가 빗나간 것이다(실측: 지도는 ListDir 을
+    열었고 모델은 같은 폴더에서 SearchFiles · ReadFile 로 다섯 번 빗나갔는데 되돌림이 돌지 않았다)."""
+    from xgen_agent_runtime.tools.base import tool_origin
+
+    names = [str(n) for n in (open_names or ()) if str(n or "").strip()]
+    get = getattr(registry, "get", None)
+    list_all = getattr(registry, "list_all", None)
+    if not callable(get) or not callable(list_all):
+        return names
+    try:
+        if any(tool_origin(get(n)) == "device" for n in names if get(n) is not None):
+            names += [t.name for t in list_all() if tool_origin(t) == "device" and t.name not in names]
+    except Exception:  # noqa: BLE001 - 범위를 못 넓혀도 연 도구만으로 센다
+        logger.debug("memory map scope failed", exc_info=True)
+    return names
 
 
 def _restore_from_history(registry: Any, messages: Any) -> List[str]:
