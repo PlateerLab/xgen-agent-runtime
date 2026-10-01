@@ -31,6 +31,8 @@ class APIRequest:
     stream: bool = False
 
     thinking: Optional[Dict[str, Any]] = None
+    #: 생각의 표준 값(이 모델이 받는 값으로 이미 맞춘 것) — 있으면 클라이언트가 ``thinking`` 대신 이것을 옮긴다.
+    thinking_level: Optional[str] = None
 
     #: Structured output request. Canonical shapes:
     #:   {"type": "text"}                                       (default)

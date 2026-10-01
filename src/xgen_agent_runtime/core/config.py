@@ -37,6 +37,9 @@ class ModelConfig:
     thinking_budget_tokens: int = 10000
     thinking_type: str = "enabled"  # "enabled" | "disabled" | "adaptive"
     thinking_display: Optional[str] = None  # "summarized" | "omitted" | None
+    #: 생각의 표준 값(llm_client.thinking) — "off" | "on" | "minimal".."max", None 이면 모델 기본.
+    #: 정해져 있으면 위의 옛 필드보다 먼저다: 클라이언트가 이 모델이 받는 요청으로 옮긴다.
+    thinking_level: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-ready representation."""
@@ -51,6 +54,7 @@ class ModelConfig:
             "thinking_budget_tokens": self.thinking_budget_tokens,
             "thinking_type": self.thinking_type,
             "thinking_display": self.thinking_display,
+            "thinking_level": self.thinking_level,
         }
 
     @classmethod
@@ -72,6 +76,7 @@ class ModelConfig:
             "thinking_budget_tokens",
             "thinking_type",
             "thinking_display",
+            "thinking_level",
         ):
             if key in data:
                 kwargs[key] = data[key]
@@ -120,6 +125,7 @@ class ModelOverrides:
     top_p: Optional[float] = None
     thinking_enabled: Optional[bool] = None
     thinking_budget_tokens: Optional[int] = None
+    thinking_level: Optional[str] = None
 
     def non_none_fields(self) -> Dict[str, Any]:
         """Return ``{field: value}`` for every field that is set.
@@ -247,6 +253,7 @@ class PipelineConfig:
         state.thinking_budget_tokens = self.model.thinking_budget_tokens
         state.thinking_type = self.model.thinking_type
         state.thinking_display = self.model.thinking_display
+        state.thinking_level = self.model.thinking_level
 
         # Behavior
         state.stream = self.stream

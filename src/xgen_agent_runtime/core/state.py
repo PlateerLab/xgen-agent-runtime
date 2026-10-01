@@ -179,6 +179,7 @@ class PipelineState:
     thinking_budget_tokens: int = 10000
     thinking_type: str = "enabled"  # "enabled" | "disabled" | "adaptive"
     thinking_display: Optional[str] = None  # "summarized" | "omitted" | None
+    thinking_level: Optional[str] = None  # llm_client.thinking 표준 값 — None 이면 모델 기본
     thinking_history: List[Dict[str, Any]] = field(default_factory=list)
 
     # ── Token & Cost tracking ──

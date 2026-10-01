@@ -38,6 +38,12 @@ from xgen_agent_runtime.host.turn_input import TurnInput
 _CLI_WITHOUT_LIST_REFRESH = ("codex",)
 
 
+def _thinking_param(value: Any) -> Optional[str]:
+    """노드·대화의 ``thinking`` 값 → 파이프라인의 표준 값. 비었거나 ``auto`` 면 None(모델 기본)."""
+    text = str(value or "").strip().lower()
+    return None if text in ("", "auto", "default") else text
+
+
 def _env_bytes(name: str, default: int) -> int:
     """``GENY_*`` 를 읽고, 없으면 개명 전 이름(``XGENY_*``)을 읽는다 — 배포에 남은 옛 설정을 살린다.
 
@@ -1047,6 +1053,8 @@ class AgentTurnExecutor:
                 max_iterations=int(kwargs.get("max_iterations", 20)),
                 temperature=kwargs.get("temperature", 0.7),
                 max_tokens=max_tokens_val,
+                # 생각의 강도(노드 값·대화의 선택) — "auto"·빈 값이면 모델 기본.
+                thinking_level=_thinking_param(kwargs.get("thinking")),
                 stream=streaming,
                 output_schema=schema,
                 llm_client=llm_client,

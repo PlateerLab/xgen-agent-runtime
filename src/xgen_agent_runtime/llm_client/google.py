@@ -323,6 +323,14 @@ class GoogleClient(BaseClient):
             thinking_config = canonical_thinking_to_google(request.thinking)
             if thinking_config:
                 config["thinking_config"] = thinking_config
+        if request.thinking_level:
+            # 생각의 표준 값 — 2.5 는 토큰 예산(0 이면 끔), 3 계열은 thinking_level(llm_client.thinking 표).
+            from xgen_agent_runtime.llm_client.thinking import gemini_thinking_config, thinking_spec
+
+            config["thinking_config"] = gemini_thinking_config(
+                thinking_spec(self.thinking_provider(), request.model),
+                request.thinking_level,
+            )
 
         config.update(_structured_output_config(request.response_format))
 

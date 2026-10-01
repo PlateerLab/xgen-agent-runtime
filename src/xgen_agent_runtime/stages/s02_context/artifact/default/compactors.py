@@ -248,6 +248,11 @@ class LLMSummaryCompactor(SummaryCompactor):
         )
 
         cfg = resolve(state)
+        if getattr(cfg, "thinking_level", None):
+            # 사용자가 고른 생각의 강도는 답을 위한 것이다 — 요약은 모델 기본으로(예전과 같게).
+            from dataclasses import replace as _replace
+
+            cfg = _replace(cfg, thinking_level=None)
         try:
             resp = await client.create_message(
                 model_config=cfg,

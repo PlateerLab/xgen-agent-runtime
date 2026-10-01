@@ -179,6 +179,19 @@ class BaseClient(ABC):
         except Exception:  # noqa: BLE001 — 정리가 호출자를 깨지 않는다
             logger.debug("%s: SDK client close failed", type(self).__name__, exc_info=True)
 
+    #: 클라이언트 이름 → 생각 표(llm_client.thinking)의 provider 이름.
+    _THINKING_PROVIDERS = {
+        "claude_code_cli": "claude_code",
+        "codex_cli": "codex",
+        "azure_foundry": "azure",
+        "custom": "vllm",
+    }
+
+    def thinking_provider(self) -> str:
+        """생각 표를 고르는 provider 이름 — 같은 모델 이름이라도 provider 마다 받는 것이 다르다."""
+        name = str(getattr(self, "provider", "") or "")
+        return self._THINKING_PROVIDERS.get(name, name)
+
     # ── High-level surface used by stages ───────────────────────────────
 
     async def create_message(
@@ -289,6 +302,19 @@ class BaseClient(ABC):
                 request.thinking = thinking
             else:
                 self._emit_unsupported("thinking_enabled")
+
+        # 생각의 표준 값 — 이 모델이 받는 값으로 맞추고(llm_client.thinking), 옛 필드는 내려놓는다.
+        # 하나의 요청에 두 길이 함께 실리면 어느 쪽이 이겼는지 아무도 모른다.
+        if getattr(model_config, "thinking_level", None):
+            from xgen_agent_runtime.llm_client.thinking import normalize_thinking, thinking_spec
+
+            level = normalize_thinking(
+                thinking_spec(self.thinking_provider(), model_config.model),
+                model_config.thinking_level,
+            )
+            if level:
+                request.thinking_level = level
+                request.thinking = None
 
         if model_config.top_k is not None and not self.capabilities.supports_top_k:
             self._emit_unsupported("top_k")

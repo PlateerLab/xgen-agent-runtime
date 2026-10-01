@@ -140,7 +140,10 @@ def _thinking_active(thinking: Any) -> bool:
     """이 thinking 값이 생각을 켜는가 — 비었거나 ``type: disabled`` 면 아니다."""
     if not thinking:
         return False
-    return not (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+    # between_tools 는 Sonnet 5.5 에서 생각을 끄는 값이다(API 거절 문구가 그렇게 안내한다).
+    return not (
+        isinstance(thinking, dict) and thinking.get("type") in ("disabled", "between_tools")
+    )
 
 
 def _model_thinks_by_default(model: str) -> bool:
@@ -621,6 +624,22 @@ class AnthropicClient(BaseClient):
             kwargs["thinking"] = request.thinking
         if request.metadata:
             kwargs["metadata"] = request.metadata
+        if request.thinking_level:
+            # 생각의 표준 값 — 이 모델이 받는 모양(llm_client.thinking 표): 예산·adaptive+effort·끄는 값.
+            # effort 는 SDK 판에 기대지 않게 본문에 싣는다(extra_body).
+            from xgen_agent_runtime.llm_client.thinking import anthropic_request, thinking_spec
+
+            shaped = anthropic_request(
+                thinking_spec(self.thinking_provider(), request.model),
+                request.thinking_level,
+                request.max_tokens,
+            )
+            kwargs["thinking"] = shaped["thinking"]
+            kwargs["max_tokens"] = shaped["max_tokens"]
+            if "output_config" in shaped:
+                extra = dict(kwargs.get("extra_body") or {})
+                extra["output_config"] = shaped["output_config"]
+                kwargs["extra_body"] = extra
 
         # Extended-thinking sampling-param compatibility — see the
         # ``_THINKING_INCOMPATIBLE_SAMPLING_KEYS`` block at module top.

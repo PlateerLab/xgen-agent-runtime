@@ -390,6 +390,7 @@ class Stage(ABC, Generic[T_In, T_Out]):
             thinking_budget_tokens=state.thinking_budget_tokens,
             thinking_type=getattr(state, "thinking_type", "enabled"),
             thinking_display=getattr(state, "thinking_display", None),
+            thinking_level=getattr(state, "thinking_level", None),
         )
 
     def resolve_model(self, state: PipelineState) -> str:

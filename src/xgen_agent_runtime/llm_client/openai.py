@@ -439,6 +439,8 @@ class OpenAIClient(BaseClient):
             effort = canonical_thinking_to_openai(request.thinking)
             if effort:
                 kwargs["reasoning_effort"] = effort
+        if request.thinking_level:
+            self._apply_thinking_level(kwargs, request)
 
         # 구조화 출력 — 표준 요청({"type": "json_schema", "json_schema": <스키마>})을 OpenAI 전송 형식으로.
         # 예전엔 전달하지 않아 스키마가 지시문에만 있었고, Qwen(vLLM) 은 키를 지어내 메모리 사실 추출이
@@ -449,6 +451,39 @@ class OpenAIClient(BaseClient):
                 kwargs["response_format"] = wire
 
         return kwargs
+
+    def _apply_thinking_level(self, kwargs: Dict[str, Any], request: APIRequest) -> None:
+        """생각의 표준 값 → OpenAI ``reasoning_effort`` 또는 vLLM 채팅 템플릿 값(llm_client.thinking 표).
+
+        OpenAI 는 effort 가 ``none`` 이 아니면 temperature·top_p 를 받지 않는다 — 함께 내려놓는다.
+        """
+        from xgen_agent_runtime.llm_client.thinking import (
+            openai_effort,
+            thinking_spec,
+            vllm_request,
+        )
+
+        spec = thinking_spec(self.thinking_provider(), request.model)
+        level = str(request.thinking_level)
+        if spec.via == "openai_effort":
+            kwargs["reasoning_effort"] = openai_effort(level)
+            if level != "off":
+                for key in ("temperature", "top_p"):
+                    kwargs.pop(key, None)
+            return
+        shaped = vllm_request(spec, level)
+        if "reasoning_effort" in shaped:
+            kwargs["reasoning_effort"] = shaped["reasoning_effort"]
+        if "extra_body" in shaped:
+            extra = dict(kwargs.get("extra_body") or {})
+            for key, value in shaped["extra_body"].items():
+                if isinstance(value, dict):
+                    merged = dict(extra.get(key) or {})
+                    merged.update(value)
+                    extra[key] = merged
+                else:
+                    extra[key] = value
+            kwargs["extra_body"] = extra
 
     def _parse_response(self, raw: Any) -> APIResponse:
         choice = raw.choices[0]
