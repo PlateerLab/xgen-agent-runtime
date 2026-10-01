@@ -136,6 +136,13 @@ _THINKS_BY_DEFAULT_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _thinking_active(thinking: Any) -> bool:
+    """이 thinking 값이 생각을 켜는가 — 비었거나 ``type: disabled`` 면 아니다."""
+    if not thinking:
+        return False
+    return not (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+
+
 def _model_thinks_by_default(model: str) -> bool:
     return any(model.startswith(prefix) for prefix in _THINKS_BY_DEFAULT_PREFIXES)
 
@@ -621,7 +628,12 @@ class AnthropicClient(BaseClient):
         # ``thinking`` is set; drop them silently at the boundary so
         # an env with both ``thinking_enabled=True`` and an explicit
         # ``temperature`` (the common combo Geny ships) still works.
-        if "thinking" in kwargs:
+        #
+        # ``{"type": "disabled"}`` 은 생각을 **끄는** 값이다 — 그때는 표준 샘플러라 temperature 를
+        # 받는다(2026-10-01 live: haiku-4-5·sonnet-4-6 모두 200). 예전에는 thinking 칸이 있기만
+        # 하면 지워서, 생각을 끄고 temperature=0 으로 JSON 을 받으려던 호출(앱 LLM ask_json)이
+        # 기본 temperature 1.0 으로 돌았다.
+        if _thinking_active(kwargs.get("thinking")):
             for key in _THINKING_INCOMPATIBLE_SAMPLING_KEYS:
                 if key in kwargs:
                     dropped = kwargs.pop(key)

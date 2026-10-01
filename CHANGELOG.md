@@ -4,6 +4,16 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.74.2] — 2026-10-01
+
+### Fixed — 생각을 끈 Anthropic 호출의 temperature
+
+`AnthropicClient._build_kwargs` 가 `thinking` 칸이 **있기만 하면** `temperature`·`top_p`·`top_k` 를 지웠다.
+`{"type": "disabled"}` 은 생각을 끄는 값이라 표준 샘플러이고 API 는 그 값을 받는다(2026-10-01 live: haiku-4-5·
+sonnet-4-6 모두 200). 그래서 생각을 끄고 `temperature=0` 으로 JSON 을 받으려던 호출(앱 LLM `ask_json`)이 기본값
+1.0 으로 돌았다. 이제 생각이 실제로 켜질 때(`enabled`·`adaptive`)만 지운다. temperature 를 아예 받지 않는 계열
+(Opus 4.7+·Sonnet 5 등)은 예전처럼 지운다.
+
 ## [4.74.1] — 2026-09-30
 
 ### Fixed — Gemini 로 가는 도구 결과의 이름
