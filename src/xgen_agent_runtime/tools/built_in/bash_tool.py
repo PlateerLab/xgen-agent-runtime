@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import sys
-from typing import Any, Dict, FrozenSet, Mapping, Optional
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import (
     HOST_IS_EXECUTION_TARGET,
@@ -200,69 +200,193 @@ _MAX_OUTPUT = 100_000  # characters
 
 # ── 명령의 성격 ────────────────────────────────────────────────────────
 # ``capabilities(input)`` 이 명령마다 답한다(base.py 의 약속: "ls 는 read_only, rm 은 destructive"). 호출 사건을 받는
-# 쪽(실행 기록 · 기억)이 셸 문자열을 저마다 다시 해석하지 않게 한다. 모르면 **쓰기 가능**으로 둔다(실패-닫힘).
-#: 파일을 쓰는 흔적: 경로로의 리다이렉트(2>&1 · /dev/null 제외), tee, 파일 조작 명령, 제자리 치환, 설치, 저장 호출.
-_SHELL_WRITE_RE = re.compile(
-    r"(?<![0-9&<>=-])>>?\s*(?!&|/dev/null|[0-9.]+(?:[\s'\")]|$))[\"']?[\w$-]*[~./][\w~./$-]*"
-    r"|\btee\s"
-    r"|(?:^|[;&|(]\s*)(?:sudo\s+)?(?:rm|mv|cp|mkdir|rmdir|touch|chmod|chown|ln|truncate|dd|unzip|tar|mkfs(?:\.\w+)?|fdisk|format(?:\.com)?)\s"
-    r"|\b(?:Remove-Item|Move-Item|Copy-Item|New-Item|Set-Content|Add-Content|Out-File)\b|\bdel\s+/"
-    r"|\bsed\s+-[a-zA-Z]*i"
-    r"|\b(?:pip3?|npm|pnpm|yarn|apt(?:-get)?|apk|conda|uv)\s+(?:install|add|remove|uninstall|upgrade)\b"
-    r"|\bgit\s+(?:add|commit|checkout|switch|reset|rebase|merge|push|pull|clone|rm|mv|stash|tag|cherry-pick)\b"
-    r"|\bto_(?:excel|csv|json|parquet|pickle)\(|\.save(?:fig)?\(|\bwrite_(?:text|bytes)\("
-    r"|\bopen\([^)]*[\"'][wa]b?\+?[\"']",
+# 쪽(실행 기록 · 기억)이 셸 문자열을 저마다 다시 해석하지 않게 한다. **모르면 읽기 전용이 아니다**(실패-닫힘): 읽기
+# 전용은 명령줄의 모든 구간이 아는 읽기 프로그램으로 시작하고 쓰기 흔적이 없을 때만이다.
+
+#: 구간 머리의 환경 변수 · 감싸는 명령(sudo [-u x] · time · nohup · env · command · exec · nice). 이 뒤가 진짜 프로그램이다.
+_SHELL_PREFIX_RE = re.compile(
+    r"^(?:\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+|sudo(?:\s+-\S+(?:\s+\S+)?)*\s+|time\s+|nohup\s+"
+    r"|env\s+|command\s+|exec\s+|nice(?:\s+-n\s*\S+)?\s+|busybox\s+))*"
+)
+#: 결과를 읽기만 하는 프로그램. 하위 명령이나 플래그에 따라 쓰는 것(git · find · sed · tar · docker …)은 따로 본다.
+_READ_ONLY_PROGRAMS = frozenset({
+    "ls", "dir", "cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "ag", "ack", "wc", "echo", "printf",
+    "pwd", "which", "whereis", "type", "env", "printenv", "date", "cal", "whoami", "id", "uname", "hostname", "df", "du",
+    "stat", "file", "sort", "uniq", "cut", "awk", "gawk", "tr", "diff", "cmp", "comm", "md5sum", "sha1sum", "sha256sum",
+    "basename", "dirname", "realpath", "readlink", "test", "[", "true", "false", "jq", "yq", "xxd", "hexdump", "od",
+    "strings", "tree", "column", "nl", "paste", "fold", "seq", "ps", "pgrep", "lsof", "free", "uptime", "nproc", "lscpu",
+    "lsblk", "mount", "ping", "nslookup", "dig", "host", "traceroute", "netstat", "ss", "ip", "ifconfig", "history",
+    "man", "help", "tac", "rev", "expr", "bc", "sleep", "wait", "ulimit", "locale", "getconf", "lsb_release", "fdisk",
+    "last", "w", "who", "zcat", "bzcat", "xzcat", "iconv", "base64", "sha512sum", "cd", "pushd", "popd", "export",
+    "set", "unset", "alias", "ulimit", "umask", "shopt", "declare", "local", "readonly", "__heredoc__",
+    "Get-ChildItem", "Get-Content", "Get-Item", "Get-Location", "Select-String", "Get-Date", "Get-Process", "Write-Output",
+    "Write-Host", "Test-Path", "Resolve-Path", "Get-Command", "Measure-Object", "Select-Object", "Where-Object",
+    "ForEach-Object", "Format-Table", "Format-List", "Out-String", "ConvertTo-Json", "ConvertFrom-Json", "Sort-Object",
+    "Get-Help", "Get-Member", "findstr", "where", "tasklist", "systeminfo", "ver", "hostname", "ipconfig",
+})
+#: 바깥으로 나가는 프로그램(읽기 전용일 수 있다 - curl 로 보기만 하는 것).
+_EGRESS_PROGRAMS = frozenset({"curl", "wget", "ssh", "scp", "sftp", "rsync", "ping", "nslookup", "dig", "host", "traceroute",
+                              "nc", "netcat", "telnet", "Invoke-WebRequest", "Invoke-RestMethod", "iwr", "irm"})
+_PKG_MANAGERS = frozenset({"pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "apk", "conda", "uv", "brew", "yum",
+                           "dnf", "cargo", "pipx", "gem", "go", "poetry", "choco", "winget"})
+_PKG_READ_ONLY = frozenset({"show", "list", "freeze", "search", "info", "ls", "view", "outdated", "check", "env", "config",
+                            "version", "--version", "-v", "-V", "help", "--help"})
+_GIT_READ_ONLY = frozenset({"log", "status", "diff", "show", "rev-parse", "ls-files", "ls-tree", "blame", "describe",
+                            "shortlog", "grep", "cat-file", "rev-list", "reflog", "name-rev", "var", "version", "--version",
+                            "check-ignore", "merge-base", "ls-remote", "count-objects", "whatchanged"})
+_DOCKER_READ_ONLY = frozenset({"ps", "images", "logs", "inspect", "version", "info", "stats", "top", "port", "diff",
+                               "history", "search", "events", "--version"})
+_KUBECTL_READ_ONLY = frozenset({"get", "describe", "logs", "top", "version", "cluster-info", "api-resources", "explain",
+                                "config", "diff"})
+_INTERPRETERS = frozenset({"python", "python3", "python2", "node", "ruby", "perl", "php", "bash", "sh", "zsh", "dash",
+                           "pwsh", "powershell", "Rscript", "deno", "bun"})
+#: 스크립트 안의 쓰기 흔적(인라인 코드에만 본다).
+_INLINE_WRITE_RE = re.compile(
+    r"\bto_(?:excel|csv|json|parquet|pickle|sql)\(|\.save(?:fig)?\(|\bwrite_(?:text|bytes)\(|\bopen\([^)]*[\"'][wax]b?\+?[\"']"
+    r"|\bos\.(?:remove|unlink|rename|rmdir|makedirs|mkdir|replace)\(|\bshutil\.|\bfs\.(?:write|append|unlink|rm|rename|mkdir|copy)"
+    r"|\bsubprocess\.|\bos\.system\(|\bexecSync\(|\bPath\([^)]*\)\.(?:write_text|write_bytes|unlink|rename|mkdir)\(",
     re.IGNORECASE,
 )
 #: 되돌릴 수 없는 삭제 · 덮어쓰기. 사용자 PC 의 셸(dex ``isDangerousShellCommand``)이 확인 창을 띄우는 묶음과 같은 범위
 #: (재귀 삭제 · 절대 경로 삭제 · 디스크 포맷 · dd · 전원 · 재귀 권한 변경 · 포크 폭탄 · 강제 푸시 · curl | sh · sudo rm).
 _SHELL_DESTRUCTIVE_RE = re.compile(
-    r"(?:^|[;&|(]\s*)(?:sudo\s+)?rm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+"
-    r"|(?:^|[;&|`(]\s*)rm\s+/"
+    r"\brm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+"
+    r"|\brm\s+/"
     r"|\bsudo\s+rm\b"
     r"|\bRemove-Item\b[^\n]*-Recurse|\brmdir\s+/s|\bdel\s+/[a-z]*[sf]"
-    r"|(?:^|[;&|`(]\s*)(?:sudo\s+)?(?:mkfs(?:\.\w+)?|fdisk|format(?:\.com)?)\b"
-    r"|\bdd\b[^\n]*\b(?:of|if)="
-    r"|\b(?:shutdown|reboot|halt|poweroff)\b"
+    r"|\bdd\s+(?:[^\n|;&]*\s)?(?:of|if)="
     r"|\bch(?:mod|own)\s+-R\b"
     r"|>\s*/dev/(?:sd|nvme|disk|hd)"
     r"|:\s*\(\s*\)\s*\{\s*:\s*\|\s*:"
     r"|\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b"
-    r"|\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f|push\b[^\n]*--force)"
-    r"|\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b"
-    r"|(?<![0-9&<>=-])>\s*(?!&|/dev/null|[0-9.]+(?:[\s'\")]|$))[\"']?[\w$-]*[~./][\w~./$-]*",
+    r"|\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f|push\b[^\n]*(?:--force|-f\b)|branch\s+-D|stash\s+drop|checkout\s+--\s)"
+    r"|\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b|\bDELETE\s+FROM\b"
+    r"|\b(?:shred|wipefs)\b|\brsync\b[^\n]*--delete|\bdocker\s+(?:rm|rmi|system\s+prune)\b|\bkubectl\s+delete\b"
+    r"|\bfind\b[^\n]*(?:\s-delete\b|-exec\s+rm\b)|\bxargs\s+(?:-\S+\s+)*rm\b",
     re.IGNORECASE,
 )
-#: 바깥으로 나가는 흔적: HTTP 클라이언트 · 패키지 설치 · 원격 git · ssh.
+#: 전원 · 디스크 명령은 명령 자리에서만(``grep shutdown log`` 는 읽기다).
+_DESTRUCTIVE_PROGRAMS = frozenset({"mkfs", "fdisk", "format", "format.com", "shutdown", "reboot", "halt", "poweroff",
+                                   "shred", "wipefs", "diskpart"})
+#: 바깥으로 나가는 흔적(프로그램 밖의 것): HTTP 클라이언트 호출 코드 · 원격 git · 설치.
 _SHELL_EGRESS_RE = re.compile(
-    r"\b(?:curl|wget|ssh|scp|rsync)\s"
-    r"|\brequests\.(?:get|post|put|delete|patch|head)\(|\burlopen\(|\bhttpx\.|\bfetch\("
-    r"|\b(?:pip3?|npm|pnpm|yarn|apt(?:-get)?|apk|conda|uv)\s+(?:install|add|upgrade)\b"
-    r"|\bgit\s+(?:clone|fetch|pull|push)\b",
+    r"\brequests\.(?:get|post|put|delete|patch|head)\(|\burlopen\(|\bhttpx\.|\bfetch\(|\baiohttp\."
+    r"|\bgit\s+(?:clone|fetch|pull|push|ls-remote)\b",
     re.IGNORECASE,
 )
-#: 스크립트 실행기 — 안이 무엇을 하는지 셸 문자열만으로는 모른다(파일을 읽는 코드일 수도, 쓰는 코드일 수도).
-#: 쓰기 흔적이 없어도 읽기 전용으로 꾸미지 않는다.
-_SHELL_OPAQUE_RE = re.compile(
-    r"(?:^|[;&|(]\s*)(?:python3?|node|ruby|perl|php|bash|sh|zsh)\s+(?!-c\b)[\w./-]+\.(?:py|js|mjs|rb|pl|php|sh)\b",
-    re.IGNORECASE,
-)
+_SPLIT_RE = re.compile(r"\|\||&&|\||;|\n|&(?!&)")
+_REDIRECT_PATH_RE = re.compile(r"(?<![0-9&<>=-])>>?\s*(?!&|/dev/null\b|[0-9.]+(?:[\s'\")]|$))\S")
+_REDIRECT_FD_RE = re.compile(r"\d*>&\d+|\d*>\s*/dev/null")
+
+
+def _program(segment: str) -> Tuple[str, List[str]]:
+    """구간의 프로그램 이름(경로 · 따옴표 벗김)과 인자."""
+    body = _SHELL_PREFIX_RE.sub("", segment.strip())
+    parts = body.split()
+    if not parts:
+        return "", []
+    head = parts[0].strip("\"'")
+    head = head.replace("\\", "/").rsplit("/", 1)[-1]
+    if head.lower().endswith(".exe"):
+        head = head[:-4]
+    return head, parts[1:]
+
+
+def _segment_read_only(segment: str) -> bool:
+    prog, args = _program(segment)
+    if not prog:
+        return True
+    flags = " ".join(args)
+    if prog in ("xargs",):
+        rest = [a for a in args if not a.startswith("-")]
+        return _segment_read_only(" ".join(rest)) if rest else True
+    if prog == "find":
+        return not re.search(r"(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b", flags)
+    if prog == "sed":
+        return not re.search(r"(?:^|\s)-[a-zA-Z]*i|(?:^|\s)--in-place", flags)
+    if prog == "git":
+        sub = next((a for a in args if not a.startswith("-")), "")
+        if sub == "branch":
+            return not re.search(r"(?:^|\s)-(?:[a-zA-Z]*[dDmM]|-delete|-move)\b", flags)
+        if sub == "remote":
+            return not re.search(r"\b(?:add|remove|rm|rename|set-url)\b", flags)
+        if sub == "tag":
+            return not re.search(r"(?:^|\s)-(?:[a-zA-Z]*[da])\b", flags) and not any(not a.startswith("-") for a in args[1:])
+        if sub == "config":
+            return "--get" in flags or "-l" in flags or "--list" in flags
+        if sub == "stash":
+            return any(a in ("list", "show") for a in args[1:])
+        return sub in _GIT_READ_ONLY
+    if prog in ("tar",):
+        mode = args[0].lstrip("-") if args else ""
+        return "t" in mode and not any(c in mode for c in "xc")
+    if prog in ("unzip", "7z", "7za", "zipinfo"):
+        return bool(re.search(r"(?:^|\s)-l\b|(?:^|\s)l\b|(?:^|\s)-Z\b", flags)) or prog == "zipinfo"
+    if prog == "docker":
+        sub = next((a for a in args if not a.startswith("-")), "")
+        return sub in _DOCKER_READ_ONLY or (sub == "compose" and any(a in ("ps", "logs", "config") for a in args[1:]))
+    if prog == "kubectl":
+        return next((a for a in args if not a.startswith("-")), "") in _KUBECTL_READ_ONLY
+    if prog in _PKG_MANAGERS:
+        return next((a for a in args if not a.startswith("-")), "") in _PKG_READ_ONLY or (args and args[0] in _PKG_READ_ONLY)
+    if prog in _EGRESS_PROGRAMS:
+        return not re.search(r"(?:^|\s)(?:-o|-O|--output|--remote-name|-OutFile|-outfile)\b", flags) \
+            and prog not in ("scp", "sftp", "rsync")
+    if prog in _INTERPRETERS:
+        inline = re.search(r"(?:^|\s)(?:-c|-e|-Command|-Comm?and)\s+(.*)$", flags, re.DOTALL)
+        if inline:
+            return not _INLINE_WRITE_RE.search(inline.group(1)) and not _SHELL_DESTRUCTIVE_RE.search(inline.group(1))
+        return bool(re.search(r"(?:^|\s)(?:-V|--version|-h|--help)\b", flags))   # 스크립트 · 모듈 실행은 안을 모른다
+    if prog == "python" or prog == "python3":
+        return False
+    return prog in _READ_ONLY_PROGRAMS
+
+
+_HEREDOC_RE = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[ \t]*\n(.*?)\n[ \t]*\1[ \t]*(?:\n|$)", re.DOTALL)
+
+
+def _split_heredocs(command: str) -> Tuple[str, List[str]]:
+    """히어독 본문(``python3 - <<'EOF' … EOF``)을 떼어 낸다. 본문은 인라인 코드로 보고 명령줄은 따로 가른다."""
+    bodies: List[str] = []
+
+    def take(m: "re.Match[str]") -> str:
+        bodies.append(m.group(2))
+        return "\n"
+
+    return _HEREDOC_RE.sub(take, command), bodies
+
+
+def _segments(command: str) -> List[str]:
+    text = _REDIRECT_FD_RE.sub(" ", command)
+    return [s for s in (p.strip() for p in _SPLIT_RE.split(text)) if s]
 
 
 def classify_shell_command(command: str) -> ToolCapabilities:
-    """셸 명령 하나의 능력. 쓰기 흔적이 없고 불투명한 스크립트 실행이 아니면 읽기 전용이다."""
-    text = str(command or "")
-    writes = bool(_SHELL_WRITE_RE.search(text))
-    opaque = bool(_SHELL_OPAQUE_RE.search(text))
-    destructive = bool(_SHELL_DESTRUCTIVE_RE.search(text))
-    read_only = not writes and not opaque and not destructive
+    """셸 명령 하나의 능력. 모든 구간이 아는 읽기 프로그램이고 파일로 쓰는 리다이렉트 · 되돌릴 수 없는 명령이 없을 때만
+    읽기 전용이다. 모르는 프로그램 · 스크립트 실행은 읽기 전용이 아니다. 히어독으로 넘긴 스크립트는 그 본문을 본다."""
+    raw = str(command or "")
+    text, heredocs = _split_heredocs(raw)
+    if heredocs:
+        inline = "\n".join(heredocs)
+        text = re.sub(r"(?<=\s)-(?=\s|$)", "-c __heredoc__", text, count=1)   # ``python3 -`` 는 인라인 코드 실행이다
+        if _INLINE_WRITE_RE.search(inline) or _SHELL_DESTRUCTIVE_RE.search(inline):
+            text += "\n__write__ > ./heredoc"   # 본문이 쓰면 명령도 쓴다
+    segments = _segments(text)
+    programs = [_program(s)[0] for s in segments]
+    destructive = bool(_SHELL_DESTRUCTIVE_RE.search(_REDIRECT_FD_RE.sub(" ", text))) or any(
+        p.lower() in _DESTRUCTIVE_PROGRAMS or p.lower().split(".", 1)[0] in _DESTRUCTIVE_PROGRAMS for p in programs)
+    redirects = bool(_REDIRECT_PATH_RE.search(_REDIRECT_FD_RE.sub(" ", text)))
+    read_only = bool(segments) and not destructive and not redirects and all(_segment_read_only(s) for s in segments)
+    egress = bool(_SHELL_EGRESS_RE.search(text)) or any(p in _EGRESS_PROGRAMS for p in programs) or any(
+        p in _PKG_MANAGERS and _program(s)[1] and _program(s)[1][0] in ("install", "add", "upgrade", "update")
+        for p, s in zip(programs, segments))
     # 셸은 작업 디렉터리 · 환경 · 프로세스를 공유하므로 읽기 전용 명령도 다른 호출과 나란히 돌리지 않는다.
     return ToolCapabilities(
         concurrency_safe=False,
         read_only=read_only,
         destructive=destructive,
         idempotent=read_only,
-        network_egress=bool(_SHELL_EGRESS_RE.search(text)),
+        network_egress=egress,
     )
 
 

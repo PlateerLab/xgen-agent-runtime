@@ -157,6 +157,8 @@ TURN_ONE_TOOLS = TURN_ONE_BASICS | TURN_ONE_DISCOVERY | TURN_ONE_MEMORY | frozen
 #: 우리 도구가 MCP 를 지나며 얻는 접두 — ``mcp_local_BrowserNavigate``,
 #: ``mcp__connector__WorkflowSelf``. 같은 도구인데 표면에 따라 이름이 달라진다.
 _MCP_PREFIX = re.compile(r"^mcp_{1,2}[A-Za-z0-9-]+_{1,2}")
+#: CLI 브릿지가 커넥터 도구에 한 겹 더 씌우는 접두.
+_CLI_PREFIX = "mcp__connector__"
 
 
 def is_turn_one(name: object) -> bool:
@@ -237,6 +239,7 @@ def resolve_tool_map(registry, open_names) -> list:
     from xgen_agent_runtime.tools.gates import gate_of
 
     names = list(registry.list_names())
+    registry_names = set(names)
     by_bare = {}
     for n in names:
         by_bare.setdefault(_bare(n), []).append(n)
@@ -246,6 +249,13 @@ def resolve_tool_map(registry, open_names) -> list:
         if n not in out:
             out.append(n)
 
+    def add_group(members, qual):
+        # ``:ro`` 는 읽기 전용 멤버만. 아무도 능력을 말하지 않는 가족(주석 없는 옛 기기 · 외부 MCP)이면 다 연다 -
+        # 빈 표면보다 넓은 표면이 낫다(되돌림 규칙과 같은 방향).
+        picked = [n for n in members if qual != "ro" or _read_only(registry.get(n))]
+        for n in picked or list(members):
+            add(n)
+
     for raw in open_names or ():
         token = str(raw or "").strip()
         if not token:
@@ -253,21 +263,22 @@ def resolve_tool_map(registry, open_names) -> list:
         kind, _, rest = token.partition(":")
         if kind == "family" and rest:
             fam, _, qual = rest.partition(":")
-            for member in BUILT_IN_TOOL_FEATURES.get(fam, ()):
-                for n in by_bare.get(member, ()):
-                    if qual != "ro" or _read_only(registry.get(n)):
-                        add(n)
+            add_group([n for member in BUILT_IN_TOOL_FEATURES.get(fam, ()) for n in by_bare.get(member, ())], qual)
         elif kind == "folder":
-            for n in names:
-                if is_folder_tool(n) and (rest != "ro" or _read_only(registry.get(n))):
-                    add(n)
+            add_group([n for n in names if is_folder_tool(n)], rest)
         elif kind == "gate" and rest:
             for n in names:
                 if _bare(n) == rest and gate_of(n) is not None:
                     add(n)
         else:
-            for n in by_bare.get(_bare(token), ()):
-                add(n)
+            # 등록된 이름 그대로가 먼저(CLI 브릿지 접두 한 겹은 벗긴다) - 다른 서버의 같은 이름(mcp_other_ReadFile)과
+            # 섞지 않는다. 접두 없는 이름(ReadFile)만 접두를 벗겨 맞춘다.
+            exact = token[len(_CLI_PREFIX):] if token.startswith(_CLI_PREFIX) else token
+            if exact in registry_names:
+                add(exact)
+            else:
+                for n in by_bare.get(_bare(token), ()):
+                    add(n)
     return out
 
 
@@ -278,7 +289,7 @@ def apply_tool_map(registry, open_names) -> dict:
     ``{"open", "hidden", "core", "activated"}`` 이다.
     """
     names = list(registry.list_names())
-    wanted = {_bare(n) for n in resolve_tool_map(registry, open_names)}
+    wanted = set(resolve_tool_map(registry, open_names))   # 등록된 이름 그대로 비교한다(다른 서버의 같은 이름은 다른 도구)
     record = {
         "open": [],
         "hidden": [],
@@ -286,10 +297,9 @@ def apply_tool_map(registry, open_names) -> dict:
         "activated": list(registry.activated_names()),
     }
     for name in names:
-        base = _bare(name)
-        if base in wanted:
+        if name in wanted:
             record["open"].append(name)
-        if base in wanted or base in MAP_BASE_TOOLS:
+        if name in wanted or name in MAP_BASE_TOOLS:
             registry.activate(name)
         elif registry.is_exposed(name):
             registry.set_core(name, False)
@@ -323,12 +333,8 @@ def _result_text(content) -> str:
     return str(content or "")
 
 
-def map_fallback_due(messages, open_names) -> bool:
-    """이번 턴(마지막 사용자 발화 뒤)에서 지도의 도구가 빈 결과나 오류를 :data:`MAP_FALLBACK_MISSES` 번 냈는가.
-
-    지도가 연 도구가 없으면(답을 기억에서 그대로 내는 턴) 어떤 도구든 센다 — 그 턴에 도구가 두 번 빗나갔다면
-    기억이 틀렸을 수 있으니 계층형으로 돌아가 찾게 한다.
-    """
+def turn_messages(messages) -> list:
+    """이번 턴의 메시지 - 마지막 사용자 발화(도구 결과가 아닌 것) 뒤."""
     msgs = list(messages or ())
     start = 0
     for i, msg in enumerate(msgs):
@@ -337,17 +343,27 @@ def map_fallback_due(messages, open_names) -> bool:
         content = _field(msg, "content")
         if isinstance(content, str) or not any(_field(b, "type") == "tool_result" for b in (content or [])):
             start = i + 1
-    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip() and not str(n).startswith(("family:", "gate:", "folder"))}
+    return msgs[start:]
+
+
+def map_fallback_due(messages, open_names) -> bool:
+    """이번 턴(마지막 사용자 발화 뒤)에서 지도의 도구가 빈 결과나 오류를 :data:`MAP_FALLBACK_MISSES` 번 냈는가.
+
+    ``open_names`` 는 등록된 이름 그대로(:func:`apply_tool_map` 의 기록). 지도가 연 도구가 없으면(답을 기억에서
+    그대로 내는 턴) 어떤 도구든 센다 — 그 턴에 도구가 두 번 빗나갔다면 기억이 틀렸을 수 있으니 계층형으로 돌아가
+    찾게 한다.
+    """
+    wanted = {str(n) for n in (open_names or ()) if str(n or "").strip()}
     calls = {}
     misses = 0
-    for msg in msgs[start:]:
+    for msg in turn_messages(messages):
         content = _field(msg, "content")
         if not isinstance(content, list):
             continue
         for block in content:
             kind = _field(block, "type")
             if kind == "tool_use":
-                calls[str(_field(block, "id") or "")] = _bare(_field(block, "name"))
+                calls[str(_field(block, "id") or "")] = str(_field(block, "name") or "")
             elif kind == "tool_result":
                 name = calls.get(str(_field(block, "tool_use_id") or ""), "")
                 if wanted and name not in wanted:

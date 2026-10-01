@@ -345,7 +345,12 @@ class SystemStage(Stage[Any, Any]):
                 # 아래에서 다시 읽는다.
                 # 앞 턴에 쓴 도구를 먼저 되살린다 — 호스트가 턴마다 레지스트리를 새로 만들어
                 # 열어 둔 가족이 날아간다(tools.gates.restore_from_history).
-                restored = _restore_from_history(self._tool_registry, state.messages)
+                # 지도가 살아 있는 동안은 이번 턴에 쓴 도구만 되살린다 - 앞 턴에 쓴 도구는 지도가 일부러 숨긴 것이고,
+                # 모델이 이번 턴 기록에서 보는 호출은 표면에 있어야 한다(tools.gates 의 규칙).
+                from xgen_agent_runtime.host.tool_exposure import turn_messages
+
+                history = turn_messages(state.messages) if _map_active(state) else state.messages
+                restored = _restore_from_history(self._tool_registry, history)
                 if restored:
                     state.add_event("tool.surface_restored", {"opened": restored})
                 # 지도 표면이 살아 있는 동안은 문도 숨긴다(기획: 기본 + 지도의 도구만). 숨긴 도구는 ToolSearch 로
