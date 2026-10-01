@@ -254,6 +254,33 @@ def test_build_kwargs_drops_temperature_after_alias_resolves_to_opus_4_7() -> No
     assert "temperature" not in kwargs
 
 
+@pytest.mark.parametrize("model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"])
+def test_disabled_thinking_keeps_temperature(model: str) -> None:
+    """``thinking={"type": "disabled"}`` 은 생각을 끈다 — 표준 샘플러라 temperature 를 받는다
+    (2026-10-01 live 200). 예전에는 칸이 있기만 하면 지워서 temperature=0 JSON 호출이 1.0 으로 돌았다."""
+    client = AnthropicClient(api_key="sk-mock")
+    kwargs = client._build_kwargs(_req(
+        model=model,
+        temperature=0.0,
+        top_p=0.9,
+        thinking={"type": "disabled"},
+    ))
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["top_p"] == 0.9
+    assert kwargs["thinking"] == {"type": "disabled"}
+
+
+def test_disabled_thinking_still_drops_for_models_that_refuse_temperature() -> None:
+    """생각을 꺼도 temperature 자체를 받지 않는 계열(Sonnet 5 등)은 그대로 지운다."""
+    client = AnthropicClient(api_key="sk-mock")
+    kwargs = client._build_kwargs(_req(
+        model="claude-sonnet-5",
+        temperature=0.0,
+        thinking={"type": "disabled"},
+    ))
+    assert "temperature" not in kwargs
+
+
 def test_sonnet_4_6_keeps_temperature_when_no_thinking() -> None:
     """Regression — only Opus 4.7 (and prefix variants) belong in
     ``_TEMPERATURE_DEPRECATED_PREFIXES``. Sonnet / Haiku still accept
