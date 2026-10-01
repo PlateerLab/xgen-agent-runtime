@@ -4,6 +4,13 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.79.0] — 2026-10-01
+
+### Changed — 실행 엔진 이름: `geny`(기존 21-stage) · `geny-rsi`(RSI 하네스)
+
+`XGEN_HARNESS_ENGINE` 이 엔진 이름을 받는다 — `geny` 는 기존 21-stage 엔진(기본), `geny-rsi` 는 `xgen_rsi`
+패키지(PlateerLab/xgen-agent-runtime-rsi)의 커널 + 하네스. 4.76.0 의 값 `pipeline21` · `rsi` 도 그대로 받고, 모르는 값은
+기본 엔진이다(`ENGINE_ALIASES`). `geny-rsi` 인데 패키지가 없으면 기존처럼 기존 엔진으로 돈다.
 ## [4.78.1] — 2026-10-01
 
 ### Fixed — 4.78.0 검토 보강
