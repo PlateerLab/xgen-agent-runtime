@@ -205,7 +205,8 @@ _MAX_OUTPUT = 100_000  # characters
 _SHELL_WRITE_RE = re.compile(
     r"(?<![0-9&<>=-])>>?\s*(?!&|/dev/null|[0-9.]+(?:[\s'\")]|$))[\"']?[\w$-]*[~./][\w~./$-]*"
     r"|\btee\s"
-    r"|(?:^|[;&|(]\s*)(?:sudo\s+)?(?:rm|mv|cp|mkdir|rmdir|touch|chmod|chown|ln|truncate|dd|unzip|tar)\s"
+    r"|(?:^|[;&|(]\s*)(?:sudo\s+)?(?:rm|mv|cp|mkdir|rmdir|touch|chmod|chown|ln|truncate|dd|unzip|tar|mkfs(?:\.\w+)?|fdisk|format(?:\.com)?)\s"
+    r"|\b(?:Remove-Item|Move-Item|Copy-Item|New-Item|Set-Content|Add-Content|Out-File)\b|\bdel\s+/"
     r"|\bsed\s+-[a-zA-Z]*i"
     r"|\b(?:pip3?|npm|pnpm|yarn|apt(?:-get)?|apk|conda|uv)\s+(?:install|add|remove|uninstall|upgrade)\b"
     r"|\bgit\s+(?:add|commit|checkout|switch|reset|rebase|merge|push|pull|clone|rm|mv|stash|tag|cherry-pick)\b"
@@ -213,10 +214,21 @@ _SHELL_WRITE_RE = re.compile(
     r"|\bopen\([^)]*[\"'][wa]b?\+?[\"']",
     re.IGNORECASE,
 )
-#: 되돌릴 수 없는 삭제 · 덮어쓰기.
+#: 되돌릴 수 없는 삭제 · 덮어쓰기. 사용자 PC 의 셸(dex ``isDangerousShellCommand``)이 확인 창을 띄우는 묶음과 같은 범위
+#: (재귀 삭제 · 절대 경로 삭제 · 디스크 포맷 · dd · 전원 · 재귀 권한 변경 · 포크 폭탄 · 강제 푸시 · curl | sh · sudo rm).
 _SHELL_DESTRUCTIVE_RE = re.compile(
     r"(?:^|[;&|(]\s*)(?:sudo\s+)?rm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+"
-    r"|\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f|push\s+.*--force)"
+    r"|(?:^|[;&|`(]\s*)rm\s+/"
+    r"|\bsudo\s+rm\b"
+    r"|\bRemove-Item\b[^\n]*-Recurse|\brmdir\s+/s|\bdel\s+/[a-z]*[sf]"
+    r"|(?:^|[;&|`(]\s*)(?:sudo\s+)?(?:mkfs(?:\.\w+)?|fdisk|format(?:\.com)?)\b"
+    r"|\bdd\b[^\n]*\b(?:of|if)="
+    r"|\b(?:shutdown|reboot|halt|poweroff)\b"
+    r"|\bch(?:mod|own)\s+-R\b"
+    r"|>\s*/dev/(?:sd|nvme|disk|hd)"
+    r"|:\s*\(\s*\)\s*\{\s*:\s*\|\s*:"
+    r"|\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b"
+    r"|\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f|push\b[^\n]*--force)"
     r"|\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b"
     r"|(?<![0-9&<>=-])>\s*(?!&|/dev/null|[0-9.]+(?:[\s'\")]|$))[\"']?[\w$-]*[~./][\w~./$-]*",
     re.IGNORECASE,
@@ -242,12 +254,13 @@ def classify_shell_command(command: str) -> ToolCapabilities:
     text = str(command or "")
     writes = bool(_SHELL_WRITE_RE.search(text))
     opaque = bool(_SHELL_OPAQUE_RE.search(text))
-    read_only = not writes and not opaque
+    destructive = bool(_SHELL_DESTRUCTIVE_RE.search(text))
+    read_only = not writes and not opaque and not destructive
     # 셸은 작업 디렉터리 · 환경 · 프로세스를 공유하므로 읽기 전용 명령도 다른 호출과 나란히 돌리지 않는다.
     return ToolCapabilities(
         concurrency_safe=False,
         read_only=read_only,
-        destructive=bool(_SHELL_DESTRUCTIVE_RE.search(text)),
+        destructive=destructive,
         idempotent=read_only,
         network_egress=bool(_SHELL_EGRESS_RE.search(text)),
     )

@@ -12,7 +12,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 network_egress · idempotent)과 출처(`tool_origin`)를 싣는다. 받는 쪽(호스트 실행 기록 · 기억)이 도구 이름표를 들고
 "읽기인지 쓰기인지" 를 다시 추측하지 않는다. 레지스트리가 도구를 모르면 비워 보낸다(기본 능력으로 꾸미지 않는다).
 
-- `BashTool.capabilities(input)`: 명령마다 답한다(base.py 의 약속). 쓰기 흔적(경로 리다이렉트 · tee · 파일 조작 · sed -i ·
+- `BashTool.capabilities(input)`: 명령마다 답한다(base.py 의 약속). 되돌릴 수 없는 명령의 범위는 사용자 PC 셸(dex `isDangerousShellCommand`)이 확인 창을 띄우는 묶음과 같다(재귀 삭제 · 절대 경로 삭제 · 디스크 포맷 · dd · 전원 · 재귀 권한 변경 · 포크 폭탄 · 강제 푸시 · curl | sh · sudo rm), 그런 명령은 읽기 전용이 아니다. 쓰기 흔적(경로 리다이렉트 · tee · 파일 조작 · sed -i ·
   설치 · git 변경 · 저장 호출)이 없고 불투명한 스크립트 실행이 아니면 읽기 전용, 되돌릴 수 없는 삭제 · 덮어쓰기는 destructive,
   curl · wget · 설치 · 원격 git 은 network_egress.
 - 기기 도구(`host/device_tools.build_device_tool(annotations=)`): MCP 도구 주석(readOnlyHint · destructiveHint ·
