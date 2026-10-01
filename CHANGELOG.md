@@ -4,6 +4,41 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.81.0] — 2026-10-01
+
+### Fixed — WebSearch 가 "엔진이 막았다" 를 "결과 없음" 으로 말하던 것
+
+ddgs 는 엔진의 non-200 응답(google·brave 429, mojeek 403, duckduckgo 202)을 빈 페이지와 똑같이 버리고, 아무 엔진도 결과를
+못 내면 `No results found.` 만 남긴다. 우리 서버에서는 대부분의 엔진이 막혀 있고 남은 yahoo 는 절반이 ddgs 가 못 읽는
+레이아웃이라, dev 실사용 WebSearch 101회 중 27회(09-29~10-01)가 이 문구였다. 모델은 검색어 탓으로 알고 바꿔 가며 다시
+찾았다(한 턴은 14번 검색에 7번 실패).
+
+- **엔진마다 무엇을 받았는지 본다.** 이번 검색의 `DDGS` 인스턴스에서만 엔진의 HTTP 응답과 결과 수를 기록한다(ddgs 전역은
+  건드리지 않는다). 훅이 없는 ddgs 버전·테스트 대역이면 예전 동작 그대로.
+- **막혔으면 2초 뒤 한 번 더.** 웹 엔진이 하나도 결과를 못 냈고 거절한 엔진이 있을 때만. 어느 엔진이 답하는지는 호출마다
+  달라서(duckduckgo·google·yahoo 레이아웃) dev·stage·홈서버 세 번 측정에서 24건 중 18건이 두 번째에 결과를 받았다.
+  거절이 한두 개뿐이고 나머지 웹 엔진이 빈 답을 줬으면(brave·mojeek 은 매번 거절) 막힘이 아니라 결과 없음으로 본다.
+- **두 번 다 막히면 그렇다고 말한다(is_error).** `web search failed twice: the search engines refused this server's requests
+  (brave HTTP 429, …) … not a problem with your query — rewording it will not help. WebFetch a page whose URL you already know,
+  or tell the user web search is unavailable right now.` 거절 없이 모두 빈 결과면 진짜 결과 없음 — `No results for 'q'.`
+  (오류 아님, 재시도 안 함).
+- 위키백과류 조회(wikipedia·grokipedia)만 결과를 냈으면 결과 뒤에 "only encyclopedia lookups returned results … incomplete" 한 줄.
+- `metadata["engines"]` 에 엔진별 결과(found·refused·empty·attempts).
+- 실측(dev·stage 파드, ddgs 9.16.0, 질의 12개씩 두 번 = 48회): 첫 시도에 웹 엔진이 막힌 12건 중 6건은 재시도로 결과(재시도한
+  호출은 약 11초), 2건은 위키백과 결과+안내, 4건은 위 문구로 끝났다. 예전 같으면 10건이 `No results found.` 였다.
+
+### Changed — ddgs 가 꺼 둔 yandex 엔진을 우리 검색에서는 다시 쓴다
+
+ddgs 9.15.0(2026-08-16)이 yandex 엔진을 이유 없이 껐다(9.16.0 도 그대로). 우리 이미지는 `ddgs>=9.11` 이라 최신이 깔려
+그때부터 yandex 가 빠졌는데, dev·stage·홈서버에서 yandex 는 36개 질의 모두 결과를 줬다(약 1.4초, 한국어 질의 관련성 양호).
+
+- 이번 검색의 `DDGS` 인스턴스에만 엔진을 더한다(ddgs 전역 레지스트리는 그대로). 순서는 ddgs 가 자기 엔진에 하듯
+  섞은 뒤 우선순위로 — 꺼지기 전 ddgs 와 같다. ddgs 가 이미 돌리는 엔진이면 더하지 않는다(9.14 이하는 그대로).
+- 설정: `extras['web_search']['ddg_extra_engines']` > `GENY_WEBSEARCH_DDG_EXTRA_ENGINES` > 기본 `yandex`. 쉼표 목록,
+  빈 값이면 끈다. **yandex 는 러시아 서비스라 질의를 그쪽으로 보내면 안 되는 고객 환경은 빈 값으로 끌 것.**
+- 실측(dev·stage 파드, ddgs 9.16.0, 질의 12개씩): 첫 시도 24/24 성공·매번 10건, 평균 3.5초(끄면 같은 시각 4건 중
+  1건이 막힘 문구, 1건은 재시도로 회복).
+
 ## [4.80.0] — 2026-10-01
 
 ### Removed — 외부 실행 엔진 선택점을 걷어 낸다(4.76.0·4.79.0 되돌림)

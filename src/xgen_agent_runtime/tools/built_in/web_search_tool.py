@@ -48,6 +48,7 @@ from typing import Any, Dict, List, Optional
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in import _web_search_backends as _backends
 from xgen_agent_runtime.tools.built_in._web_search_backends import (
+    WebSearchBlockedError,
     WebSearchConfigError,
     build_backend,
     select_backend_name,
@@ -186,6 +187,15 @@ class WebSearchTool(Tool):
         except WebSearchConfigError as exc:
             # Missing key / url (or missing ddgs package) → config hint.
             return ToolResult(content=str(exc), is_error=True)
+        except WebSearchBlockedError as exc:
+            # The engines turned us away twice — say so, so the model stops
+            # rewording a query that was never the problem.
+            logger.warning("WebSearch %r turned away: %s", backend_name, exc.engines)
+            return ToolResult(
+                content=str(exc),
+                is_error=True,
+                metadata={"query": query, "results_count": 0, "engines": exc.engines},
+            )
         except Exception as exc:
             logger.exception("WebSearch backend %r call failed", backend_name)
             return ToolResult(
@@ -193,23 +203,28 @@ class WebSearchTool(Tool):
                 is_error=True,
             )
 
+        engines = getattr(backend, "engines", None)
         if not hits:
-            return ToolResult(
-                content=f"No results for {query!r}.",
-                metadata={"query": query, "results_count": 0},
-            )
+            metadata: Dict[str, Any] = {"query": query, "results_count": 0}
+            if engines:
+                metadata["engines"] = engines
+            return ToolResult(content=f"No results for {query!r}.", metadata=metadata)
 
         hits = hits[:max_results]
         header = f"Search results for {query!r} ({len(hits)} of max {max_results}):"
         body = "\n\n".join(self._format_hit(h) for h in hits)
-        return ToolResult(
-            content=f"{header}\n\n{body}",
-            metadata={
-                "query": query,
-                "results_count": len(hits),
-                "results": hits,
-            },
-        )
+        metadata = {
+            "query": query,
+            "results_count": len(hits),
+            "results": hits,
+        }
+        content = f"{header}\n\n{body}"
+        notice = getattr(backend, "notice", None)
+        if notice:
+            content = f"{content}\n\n{notice}"
+        if engines:
+            metadata["engines"] = engines
+        return ToolResult(content=content, metadata=metadata)
 
     @staticmethod
     def _search_sync(
