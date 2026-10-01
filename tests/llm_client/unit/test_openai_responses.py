@@ -474,3 +474,105 @@ def test_memory_does_not_store_or_replay_reasoning():
     big = dict(_reasoning_block())
     big["item"] = {**big["item"], "encrypted_content": "x" * 40_000}
     assert _estimate_block(big) < 200
+
+
+# ── 4.78.1 검토 보강 ──────────────────────────────────────────────────
+
+
+def test_turn_context_beside_tool_results_goes_as_developer_message():
+    """도구 결과 곁의 턴 맥락을 user 로 보내면 도구 출력 뒤의 새 질문으로 읽혔다(gpt-6-luna 16번 중 2번
+    "Got it."). developer 로 보내면 16/16 정상(dev 실측). 사용자 말에 붙은 맥락은 그대로 user 다."""
+    ctx = {"type": "text", "text": "<session-context>\nCurrent date: now\n</session-context>"}
+    history = _history() + [
+        {"role": "user", "content": [{"type": "text", "text": "And Busan?"}, ctx]},
+    ]
+    history[2] = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "18C clear"}, ctx],
+    }
+    _, items = canonical_to_responses_input(history, "", model="gpt-6-sol")
+    after_output = items[items.index(next(i for i in items if i.get("type") == "function_call_output")) + 1]
+    assert after_output == {"role": "developer", "content": ctx["text"]}
+    last = items[-1]
+    assert last["role"] == "user" and last["content"][-1]["text"] == ctx["text"]
+
+
+@pytest.mark.parametrize("model", ["gpt-5-search-api", "gpt-5-chat-latest", "gpt-5.1-chat-latest"])
+def test_search_and_chat_variants_stay_on_chat_completions(model):
+    assert OpenAIClient(api_key="sk")._uses_responses(model) is False
+
+
+def test_truncated_tool_call_is_reported_as_max_tokens():
+    raw = _output_response(status="incomplete", incomplete=SimpleNamespace(reason="max_output_tokens"))
+    resp = OpenAIClient(api_key="sk")._parse_responses_response(raw, "gpt-6-sol")
+    assert resp.stop_reason == "max_tokens"
+
+
+def test_output_budget_never_lowers_a_large_setting():
+    from xgen_agent_runtime.llm_client.thinking import openai_output_budget, thinking_spec
+
+    assert openai_output_budget(thinking_spec("openai", "gpt-5.4"), "high", 128_000) == 128_000
+    assert openai_output_budget(thinking_spec("openai", "gpt-5.4"), "high", 8192) == 8192 + 32768
+
+
+def _reasoning_only(status="incomplete"):
+    return SimpleNamespace(
+        id="r", model="gpt-6-sol", status=status,
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        output=[SimpleNamespace(type="reasoning", model_dump=lambda exclude_none=True: {"type": "reasoning", "id": "rs"}, summary=[])],
+        usage=None,
+    )
+
+
+def test_send_retries_once_with_more_room_when_reasoning_ate_the_budget():
+    class _Seq:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kw):
+            self.calls.append(kw)
+            return _reasoning_only() if len(self.calls) == 1 else _output_response()
+
+    seq = _Seq()
+    client = OpenAIClient(api_key="sk")
+    client._client = SimpleNamespace(responses=seq)
+    resp = asyncio.run(client.create_message(
+        model_config=ModelConfig(model="gpt-6-sol", max_tokens=1024, thinking_level="high"),
+        messages=[{"role": "user", "content": "hi"}], tools=TOOLS,
+    ))
+    first, second = (c["max_output_tokens"] for c in seq.calls)
+    assert second > first and resp.stop_reason == "tool_use"
+
+
+def test_stream_retries_once_with_more_room_and_streams_tool_args():
+    events_first = [
+        SimpleNamespace(type="response.output_item.added", item=SimpleNamespace(type="reasoning")),
+        SimpleNamespace(type="response.incomplete", response=_reasoning_only()),
+    ]
+    events_second = [
+        SimpleNamespace(type="response.output_item.added", item=SimpleNamespace(type="function_call")),
+        SimpleNamespace(type="response.function_call_arguments.delta", delta='{"city":'),
+        SimpleNamespace(type="response.completed", response=_output_response()),
+    ]
+
+    class _Seq:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kw):
+            self.calls.append(kw)
+            return _Stream(events_first if len(self.calls) == 1 else events_second)
+
+    seq = _Seq()
+    chunks = asyncio.run(_collect(_client_with(seq), level="high"))
+    assert len(seq.calls) == 2 and seq.calls[1]["max_output_tokens"] > seq.calls[0]["max_output_tokens"]
+    assert {"type": "input_json_delta", "delta": '{"city":'} in chunks
+    assert chunks[-1]["response"].stop_reason == "tool_use"
+
+
+def test_anthropic_skips_assistant_messages_left_empty_after_storage():
+    """저장하며 생각 블록을 뺀 뒤 복원된 `content: []` — Anthropic 은 빈 content 를 거절한다."""
+    out = canonical_messages_to_anthropic([
+        {"role": "user", "content": "hi"}, {"role": "assistant", "content": []}, {"role": "user", "content": "again"},
+    ])
+    assert [m["role"] for m in out] == ["user", "user"]

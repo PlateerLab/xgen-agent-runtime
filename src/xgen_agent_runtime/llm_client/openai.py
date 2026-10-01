@@ -66,9 +66,9 @@ RESPONSES_FAMILIES: tuple[str, ...] = ("gpt-5", "gpt-6", "o1", "o3", "o4")
 #: 감시(무응답 상한)가 끊지 않게 살아 있다는 신호를 보낸다. 이 시간이 지나면 보내지 않는다.
 def _reasoning_wait_s() -> float:
     try:
-        return max(0.0, float(os.getenv("XGEN_LLM_REASONING_TIMEOUT_S", "900")))
+        return max(0.0, float(os.getenv("XGEN_LLM_REASONING_TIMEOUT_S", "600")))
     except ValueError:
-        return 900.0
+        return 600.0
 
 
 #: 살아 있다는 신호의 간격(초) — 스트림 감시의 무응답 상한(기본 120초)보다 짧게.
@@ -89,8 +89,16 @@ def _is_official_endpoint(base_url: Optional[str]) -> bool:
     return host == "api.openai.com" or host.endswith(".openai.com")
 
 
+#: 같은 묶음이라도 Responses 로 부르지 않는 변형 — 검색 모델은 Responses 를 받지 않고
+#: (dev 실측: gpt-5-search-api 400 "not supported with the Responses API"), chat 변형은 생각하지 않아
+#: Chat Completions 로 도구를 쓸 수 있다.
+_CHAT_ONLY_MARKERS: tuple[str, ...] = ("search", "-chat")
+
+
 def model_uses_responses(model: str) -> bool:
     name = str(model or "").strip().lower()
+    if any(marker in name for marker in _CHAT_ONLY_MARKERS):
+        return False
     return any(name.startswith(prefix) for prefix in RESPONSES_FAMILIES)
 
 
@@ -197,6 +205,42 @@ def _dump_item(item: Any) -> Dict[str, Any]:
         except TypeError:
             return dict(dump())
     return {}
+
+
+def _has_visible_output(response: Any) -> bool:
+    """글이나 도구 호출이 하나라도 있는가."""
+    for item in _get_attr(response, "output", None) or []:
+        kind = _get_attr(item, "type", "")
+        if kind == "function_call":
+            return True
+        if kind == "message":
+            for part in _get_attr(item, "content", None) or []:
+                if _get_attr(part, "text", "") or _get_attr(part, "refusal", ""):
+                    return True
+    return False
+
+
+#: 상한을 넓혀 다시 부를 때의 천장 — gpt-5.x·6 은 128k 까지 받는다.
+_RETRY_OUTPUT_CEILING = 128_000
+
+
+def _with_more_output_room(kwargs: Dict[str, Any], response: Any) -> Optional[Dict[str, Any]]:
+    """생각만 하다 출력 상한에 닿아 보일 것이 없는 응답이면, 상한을 넓힌 인자(아니면 None).
+
+    생각 토큰은 출력 상한 안에서 자리를 먹는다 — 높은 강도·긴 문제에서 답을 쓰기 전에 상한에 닿을
+    수 있다. 한 번만, 넓힐 여지가 있을 때만.
+    """
+    if response is None or _get_attr(response, "status", "") != "incomplete":
+        return None
+    reason = _get_attr(_get_attr(response, "incomplete_details", None), "reason", "")
+    if reason != "max_output_tokens" or _has_visible_output(response):
+        return None
+    current = int(kwargs.get("max_output_tokens") or 0)
+    if not current or current >= _RETRY_OUTPUT_CEILING:
+        return None
+    retry = dict(kwargs)
+    retry["max_output_tokens"] = min(max(current * 2, current + 32_768), _RETRY_OUTPUT_CEILING)
+    return retry
 
 
 class OpenAIClient(BaseClient):
@@ -401,6 +445,20 @@ class OpenAIClient(BaseClient):
                 kwargs,
                 purpose=purpose or "responses.create",
             )
+            roomier = _with_more_output_room(kwargs, raw) if not _has_visible_output(raw) else None
+            if roomier is not None:
+                logger.warning(
+                    "openai responses: output hit max_output_tokens=%s while reasoning, nothing "
+                    "visible — retrying once with %s (model=%r)",
+                    kwargs.get("max_output_tokens"),
+                    roomier["max_output_tokens"],
+                    request.model,
+                )
+                raw = await self._invoke_with_heal(
+                    client.responses.create,
+                    roomier,
+                    purpose=purpose or "responses.create",
+                )
             return self._parse_responses_response(raw, request.model)
         kwargs = self._build_kwargs(request)
         raw = await self._invoke_with_heal(
@@ -858,21 +916,55 @@ class OpenAIClient(BaseClient):
     async def _stream_responses(
         self, client: Any, request: APIRequest, *, purpose: str = ""
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Responses 스트림 → 표준 스트림 청크(``text_delta``·``thinking_delta``·``message_complete``).
+        """Responses 스트림 → 표준 스트림 청크(``text_delta``·``thinking_delta``·``input_json_delta``·
+        ``heartbeat``·``message_complete``).
 
         생각은 몇 분씩 걸릴 수 있고 그동안 서버는 아무것도 보내지 않는다. 생각이 시작되면(생각 항목이
         열리면) 빈 ``thinking_delta`` 로 "응답이 시작됐다" 를 알리고, 그 뒤 ``_HEARTBEAT_S`` 마다
         ``heartbeat`` 청크를 보내 스트림 감시가 무응답으로 끊지 않게 한다(``XGEN_LLM_REASONING_TIMEOUT_S``
-        까지). 최종 응답은 ``response.completed``·``response.incomplete`` 가 실어 오는 응답 전체로 만든다.
+        까지). 도구 인자는 ``input_json_delta`` 로 흘린다(Anthropic 과 같다 — 긴 인자를 쓰는 동안에도
+        살아 있다). 최종 응답은 ``response.completed``·``response.incomplete`` 가 실어 오는 응답 전체로
+        만든다. 생각만 하다 상한에 닿아 보일 것이 하나도 없으면 상한을 넓혀 한 번 다시 부른다.
         """
         kwargs = self._build_responses_kwargs(request)
         kwargs["stream"] = True
+        seen: Dict[str, Any] = {}
+        async for chunk in self._stream_responses_once(client, kwargs, purpose, seen):
+            yield chunk
+        final = seen.get("final")
+        roomier = None if seen.get("visible") else _with_more_output_room(kwargs, final)
+        if roomier is not None:
+            logger.warning(
+                "openai responses: output hit max_output_tokens=%s while reasoning, nothing visible — "
+                "retrying once with %s (model=%r)",
+                kwargs.get("max_output_tokens"),
+                roomier["max_output_tokens"],
+                request.model,
+            )
+            seen = {}
+            async for chunk in self._stream_responses_once(client, roomier, purpose, seen):
+                yield chunk
+            final = seen.get("final")
+        if final is None:
+            raise APIError(
+                "OpenAI Responses stream ended without a final response",
+                category=ErrorCategory.SERVER_ERROR,
+            )
+        yield {
+            "type": "message_complete",
+            "response": self._parse_responses_response(final, request.model),
+        }
+
+    async def _stream_responses_once(
+        self, client: Any, kwargs: Dict[str, Any], purpose: str, seen: Dict[str, Any]
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """한 번의 Responses 스트림. 최종 응답은 ``seen["final"]``, 보이는 것(글·도구 호출)을 흘렸으면
+        ``seen["visible"]``."""
         stream = await self._invoke_with_heal(
             client.responses.create,
             kwargs,
             purpose=purpose or "responses.create(stream)",
         )
-        final: Any = None
         reasoning_started_at: Optional[float] = None
         summary_parts = 0
         iterator = stream.__aiter__()
@@ -898,7 +990,12 @@ class OpenAIClient(BaseClient):
                     reasoning_started_at = None
                     delta = _get_attr(event, "delta", "")
                     if delta:
+                        seen["visible"] = True
                         yield {"type": "text_delta", "text": str(delta)}
+                elif etype == "response.function_call_arguments.delta":
+                    delta = _get_attr(event, "delta", "")
+                    if delta:
+                        yield {"type": "input_json_delta", "delta": str(delta)}
                 elif etype == "response.reasoning_summary_text.delta":
                     delta = _get_attr(event, "delta", "")
                     if delta:
@@ -914,8 +1011,10 @@ class OpenAIClient(BaseClient):
                         yield {"type": "thinking_delta", "text": ""}
                     else:
                         reasoning_started_at = None
+                        if _get_attr(item, "type", "") == "function_call":
+                            seen["visible"] = True
                 elif etype in ("response.completed", "response.incomplete"):
-                    final = _get_attr(event, "response", None)
+                    seen["final"] = _get_attr(event, "response", None)
                 elif etype == "response.failed":
                     response = _get_attr(event, "response", None)
                     error = _get_attr(response, "error", None)
@@ -947,16 +1046,6 @@ class OpenAIClient(BaseClient):
                         await out
                 except Exception:  # noqa: BLE001 — 닫기 실패가 결과를 가리지 않는다
                     pass
-
-        if final is None:
-            raise APIError(
-                "OpenAI Responses stream ended without a final response",
-                category=ErrorCategory.SERVER_ERROR,
-            )
-        yield {
-            "type": "message_complete",
-            "response": self._parse_responses_response(final, request.model),
-        }
 
     def _parse_response(self, raw: Any) -> APIResponse:
         choice = raw.choices[0]

@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.78.1] — 2026-10-01
+
+### Fixed — 4.78.0 검토 보강
+
+- **턴 맥락 위치를 되돌렸다.** 4.78.0 은 `<session-context>`(시각·기억)를 도구 결과가 아니라 이 턴의 사용자 말에
+  붙였는데, 다음 턴은 그 말에서 맥락이 빠지므로 이전 턴의 도구 교환 전체가 프롬프트 캐시에서 다시 쓰였다(재사용
+  구간 수만 자 → 수백 자). 맥락은 예전처럼 가장 최근 user 메시지에 붙이고, **OpenAI Responses 번역기**만 도구 결과
+  곁의 맥락을 `developer` 메시지로 보낸다 — user 로 보내면 도구 출력 뒤의 새 질문으로 읽혀 gpt-6-luna 가 16번 중
+  2번 "Got it." 으로 답했고, developer 로는 16/16 정상이었다(dev 실측). Anthropic·Chat Completions 는 그대로.
+- 검색·chat 변형(`*search*`·`*-chat*`)은 Responses 로 보내지 않는다 — `gpt-5-search-api` 는 Responses 를
+  받지 않는다(400, dev 실측).
+- 출력 상한에 닿아 끊긴 응답은 도구 호출이 있어도 `max_tokens` 로 알린다(인자가 잘렸을 수 있다 — Chat Completions
+  의 "length" 와 같다).
+- 생각만 하다 출력 상한에 닿아 보일 것이 없으면 상한을 넓혀 한 번 다시 부른다(Anthropic 경로와 같은 안전망).
+- 스트림: 도구 인자를 `input_json_delta` 로 흘린다 — 긴 인자를 쓰는 동안 무응답 감시가 끊지 않는다.
+- `openai_output_budget` 은 더하기만 한다 — 천장(100k)보다 크게 둔 설정을 줄이지 않는다.
+- 생각 대기 신호 상한 기본값 600초(SDK 읽기 상한 630초 안쪽).
+- Anthropic 번역기는 빈 content 메시지를 보내지 않는다 — 저장하며 생각 블록을 뺀 뒤 복원된 `content: []`.
+
 ## [4.78.0] — 2026-10-01
 
 ### Fixed — OpenAI 추론 모델은 Responses API 로: 도구와 생각을 함께
