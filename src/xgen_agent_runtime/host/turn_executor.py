@@ -166,7 +166,6 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
     return result_filter if callable(result_filter) else None
 
 
-
 class SystemPromptParts:
     """시스템 프롬프트를 **이름 붙은 조각**으로 기록한다 — 최종 문자열은 조각을 그대로 이은 것.
 
@@ -298,9 +297,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # 노드에서 아는 값만 실행 전에 막는다.
     from xgen_agent_runtime.host.param_validator import validate_agent_params
 
-    param_error = validate_agent_params(
-        provider, temperature=kwargs.get("temperature", 0.7)
-    )
+    param_error = validate_agent_params(provider, temperature=kwargs.get("temperature", 0.7))
     if param_error:
         logger.error(
             "agents/geny: 파라미터 검증 실패 (provider=%s, temperature=%r): %s",
@@ -331,9 +328,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         # 이 CLI 는 턴 안에서 도구 목록을 다시 읽지 않는다 — 문이나 ToolSearch 가 연 도구를 이름으로
         # 부를 수 없다("unsupported call"). 계층은 토큰 절약이지 능력의 경계가 아니므로, 이 백엔드는
         # 처음부터 전부 보여 준다(능력은 SDK 와 같고, 숨김 목록이 없을 뿐이다).
-        logger.info(
-            "agents/geny: %s 는 턴 중 도구 목록을 다시 읽지 않는다 — 평면 노출", provider
-        )
+        logger.info("agents/geny: %s 는 턴 중 도구 목록을 다시 읽지 않는다 — 평면 노출", provider)
         _flat_tools = True
 
     def _turn_one(name: str) -> bool:
@@ -402,9 +397,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         connector_tools = host.build_connector_mcp_tools(
             kwargs.get("user_id"), kwargs.get("client_surface")
         )
-        connector_tools = _local_folders.filter_device_tools(
-            connector_tools or [], _folders
-        )
+        connector_tools = _local_folders.filter_device_tools(connector_tools or [], _folders)
         _device_tool_names = [getattr(t, "name", "") or "" for t in connector_tools]
         if connector_tools:
             # 기기 도구도 계층을 지킨다 — 브라우저 조작 6종은 BrowserGuide 뒤에
@@ -415,8 +408,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
                 result_sink=result_sink,
                 registry=registry,
                 core=lambda name: (
-                    _turn_one(name)
-                    or _local_folders.folder_tool_is_turn_one(name, _folders)
+                    _turn_one(name) or _local_folders.folder_tool_is_turn_one(name, _folders)
                 ),
             )
             logger.info(
@@ -428,9 +420,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         logger.warning("agents/geny: 기기 도구 주입 실패 (무시): %s", exc)
     #: 이번 턴에 폴더 도구가 하나도 없는가 — 그러면 기록 속 옛 폴더 도구 호출을
     #: 요청 사본에서 평문으로 바꾼다(없는 도구를 다시 부르거나 옛 경로를 믿지 않게).
-    _retire_device_calls = not any(
-        _local_folders.is_folder_tool(n) for n in _device_tool_names
-    )
+    _retire_device_calls = not any(_local_folders.is_folder_tool(n) for n in _device_tool_names)
     _turn_notes: List[str] = []
     _folder_info = _folder_device_info(host) if _folders else {}
     _folder_platform = _local_device_platform(host) if _folders is not None else None
@@ -485,9 +475,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
 
         state.metadata[STM_RECORDED_KEY] = len(history)
         state.metadata[_ARCHIVED_KEY] = len(history)
-        logger.info(
-            "agents/geny: preloaded %d history message(s) from Memory port", len(history)
-        )
+        logger.info("agents/geny: preloaded %d history message(s) from Memory port", len(history))
 
     # ── 내장 메모리 (에이전트당 하나) ──────────────────────
     # enable_memory 기본 True — 메모리 노드와 무관하게 파일 vault 를 attach 한다.
@@ -601,9 +589,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
                 _memory_block_pending = True
                 logger.info("agents/geny: 내장 메모리 활성 (self-serve 도구 6개 등록)")
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "agents/geny: 메모리 도구 등록 실패 (자동 계층만 동작): %s", exc
-                )
+                logger.warning("agents/geny: 메모리 도구 등록 실패 (자동 계층만 동작): %s", exc)
 
     # ── built-in 도구 패밀리 (web/parsing/ssh/workflow/filesystem/shell) ──
     # 모든 provider 가 **같은 조립**을 지난다. CLI 네이티브 도구는 전면 차단이므로 파일/셸도
@@ -673,15 +659,12 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
                             )
                         else:
                             logger.warning(
-                                "agents/geny: workspace 복원 실패 — 이번 턴은 "
-                                "원본 반영을 건너뛴다"
+                                "agents/geny: workspace 복원 실패 — 이번 턴은 원본 반영을 건너뛴다"
                             )
                     # executor 내부 저장소는 workspace 밖 형제 경로로
                     # (tool-results/·ssh/ 가 사용자 파일 목록·동기화에
                     #  섞이지 않게).
-                    _storage_dir = os.path.join(
-                        host.workspace_storage_root(_wf_for_ws), "executor"
-                    )
+                    _storage_dir = os.path.join(host.workspace_storage_root(_wf_for_ws), "executor")
                 else:
                     run_dir = _tempfile.mkdtemp(prefix="xgen-geny-run-")
 
@@ -711,9 +694,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
                             sandboxed=_sandbox is not None,
                         )
                     except Exception as _fexc:  # noqa: BLE001
-                        logger.warning(
-                            "agents/geny: 저장된 도구 복원 실패 (스킵): %s", _fexc
-                        )
+                        logger.warning("agents/geny: 저장된 도구 복원 실패 (스킵): %s", _fexc)
 
         except Exception as exc:  # noqa: BLE001 — 내장 도구는 실행을 깨지 않는다
             logger.warning("agents/geny: built-in 도구 등록 실패 (스킵): %s", exc)
@@ -722,11 +703,14 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         # 호스트 정책이 끝난 뒤의 registry 가 진실이다 — 쓰기 도구가 남아 있으면 "저장하라",
         # 없으면 "여기서는 저장할 수 없다". 약속과 표면이 어긋나면 모델이 우회한다.
         _has_write = registry is not None and registry.get("memory_write") is not None
-        system_prompt = _sp.add("memory", _memory_block_for(
-            host,
-            str(kwargs.get("workflow_id") or ""),
-            write_available=_has_write,
-        ))
+        system_prompt = _sp.add(
+            "memory",
+            _memory_block_for(
+                host,
+                str(kwargs.get("workflow_id") or ""),
+                write_available=_has_write,
+            ),
+        )
         _memory_block_pending = False
 
     # ── 자기진화(self-evolution) 등록 — built-in tools 와 독립 ──────────
@@ -793,9 +777,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         cli_binary_path = ""
         distill_api_key = api_key
         if provider == "claude_code":
-            cli_auth_mode = (
-                host.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key"
-            ).strip()
+            cli_auth_mode = (host.setting("CLAUDE_CODE_AUTH_MODE", "api_key") or "api_key").strip()
             if cli_auth_mode == "setup_token":
                 cli_oauth_token = host.setting("CLAUDE_CODE_OAUTH_TOKEN") or ""
             else:
@@ -867,12 +849,15 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
                 len(registry),
                 _cli_bridge_reason,
             )
-            system_prompt = _sp.add("cli_tools_unavailable", (
-                f"\n\n(Note: {len(registry)} tool(s) are wired into this agent"
-                " but cannot be delivered on this backend this turn"
-                f" — {_cli_bridge_reason}. Do not claim they exist; tell the user"
-                " this configuration issue if they ask for those capabilities.)"
-            ))
+            system_prompt = _sp.add(
+                "cli_tools_unavailable",
+                (
+                    f"\n\n(Note: {len(registry)} tool(s) are wired into this agent"
+                    " but cannot be delivered on this backend this turn"
+                    f" — {_cli_bridge_reason}. Do not claim they exist; tell the user"
+                    " this configuration issue if they ask for those capabilities.)"
+                ),
+            )
     if provider == "claude_code":
         llm_client, cli_cleanup = host.build_cli_runtime(
             "claude_code",
@@ -1077,9 +1062,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     )
 
     _ws_base = str(
-        getattr(run_tool_context, "working_dir", "")
-        or getattr(_sandbox, "workdir", "")
-        or ""
+        getattr(run_tool_context, "working_dir", "") or getattr(_sandbox, "workdir", "") or ""
     )
     if turn_input.attachments:
         _atts = (
@@ -1093,8 +1076,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         # 실패는 첨부 하나를 포기할 뿐 턴을 깨지 않는다.
         if _sandbox is not None and any(
             isinstance(a, dict)
-            and str(a.get("kind") or a.get("type") or "").lower()
-            in ("image", "img", "picture")
+            and str(a.get("kind") or a.get("type") or "").lower() in ("image", "img", "picture")
             for a in _atts
         ):
             import asyncio as _asyncio
@@ -1127,8 +1109,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         rollout_workflow_id = str(kwargs.get("workflow_id") or "")
         if not rollout_workflow_id:
             logger.warning(
-                "agents/geny: rollout recording enabled but skipped — "
-                "workflow_id is unavailable"
+                "agents/geny: rollout recording enabled but skipped — workflow_id is unavailable"
             )
         else:
             rollout_storage_root = host.workspace_storage_root(rollout_workflow_id)
@@ -1139,59 +1120,58 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
                 interaction_id,
             )
 
-
     pipeline_kwargs = dict(
-            name=node_name,
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            system_prompt=system_prompt,
-            # CLI 는 레지스트리를 파이프라인이 아니라 표면 객체로 받는다(위 _tool_surface).
-            registry=None if _is_cli else registry,
-            max_iterations=int(kwargs.get("max_iterations", 20)),
-            temperature=kwargs.get("temperature", 0.7),
-            max_tokens=max_tokens_val,
-            # 생각의 강도(노드 값·대화의 선택) — "auto"·빈 값이면 모델 기본.
-            thinking_level=_thinking_param(kwargs.get("thinking")),
-            stream=streaming,
-            output_schema=schema,
-            llm_client=llm_client,
-            memory_provider=memory_provider,
-            memory_distill_spec=memory_distill_spec,
-            tool_context=None if _is_cli else run_tool_context,
-            # run_tool_context 가 없는 턴(내장 도구 없음)에도 Stage 10 에 필터가 실리게.
-            tool_result_filter=None if _is_cli else _result_filter,
-            # 모델의 실제 윈도우 — 압축 임계(80%)·guard·루프 토큰-비 정지의
-            # 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
-            context_window_budget=budget_window,
-            # claude_code 는 CLI 가 자체 컨텍스트(오토-컴팩션)를 관리한다 —
-            # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게
-            # 되므로 CLI 백엔드에서는 항상 끈다 (파라미터 설명과 일치).
-            enable_compaction=(enable_compaction and provider not in _CLI_BACKENDS),
-            credentials=credentials,
-            # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
-            enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
-            # 노드가 주면 그대로, 없으면 런타임 기본(3). 0 이면 반복 거부 종료 끔.
-            **(
-                {"repeat_stop_after": _prune_threshold(kwargs["repeat_stop_after"])}
-                if "repeat_stop_after" in kwargs
-                and _prune_threshold(kwargs["repeat_stop_after"]) is not None
-                else {}
-            ),
-            # 노드가 주면 그대로, 없으면 런타임 기본(30,000). 0 이면 비용 트리거 끔.
-            **(
-                {"prune_over_tokens": _prune_threshold(kwargs["prune_over_tokens"])}
-                if "prune_over_tokens" in kwargs
-                and _prune_threshold(kwargs["prune_over_tokens"]) is not None
-                else {}
-            ),
-            # 노드가 (soft, hard) 를 주면 그대로, 없으면 런타임 기본(100만/300만).
-            **(
-                {"turn_input_budget_tokens": _budget_pair(kwargs["turn_input_budget_tokens"])}
-                if "turn_input_budget_tokens" in kwargs
-                else {}
-            ),
+        name=node_name,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        system_prompt=system_prompt,
+        # CLI 는 레지스트리를 파이프라인이 아니라 표면 객체로 받는다(위 _tool_surface).
+        registry=None if _is_cli else registry,
+        max_iterations=int(kwargs.get("max_iterations", 20)),
+        temperature=kwargs.get("temperature", 0.7),
+        max_tokens=max_tokens_val,
+        # 생각의 강도(노드 값·대화의 선택) — "auto"·빈 값이면 모델 기본.
+        thinking_level=_thinking_param(kwargs.get("thinking")),
+        stream=streaming,
+        output_schema=schema,
+        llm_client=llm_client,
+        memory_provider=memory_provider,
+        memory_distill_spec=memory_distill_spec,
+        tool_context=None if _is_cli else run_tool_context,
+        # run_tool_context 가 없는 턴(내장 도구 없음)에도 Stage 10 에 필터가 실리게.
+        tool_result_filter=None if _is_cli else _result_filter,
+        # 모델의 실제 윈도우 — 압축 임계(80%)·guard·루프 토큰-비 정지의
+        # 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
+        context_window_budget=budget_window,
+        # claude_code 는 CLI 가 자체 컨텍스트(오토-컴팩션)를 관리한다 —
+        # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게
+        # 되므로 CLI 백엔드에서는 항상 끈다 (파라미터 설명과 일치).
+        enable_compaction=(enable_compaction and provider not in _CLI_BACKENDS),
+        credentials=credentials,
+        # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).
+        enable_prompt_cache=bool(kwargs.get("enable_prompt_cache", False)),
+        # 노드가 주면 그대로, 없으면 런타임 기본(3). 0 이면 반복 거부 종료 끔.
+        **(
+            {"repeat_stop_after": _prune_threshold(kwargs["repeat_stop_after"])}
+            if "repeat_stop_after" in kwargs
+            and _prune_threshold(kwargs["repeat_stop_after"]) is not None
+            else {}
+        ),
+        # 노드가 주면 그대로, 없으면 런타임 기본(30,000). 0 이면 비용 트리거 끔.
+        **(
+            {"prune_over_tokens": _prune_threshold(kwargs["prune_over_tokens"])}
+            if "prune_over_tokens" in kwargs
+            and _prune_threshold(kwargs["prune_over_tokens"]) is not None
+            else {}
+        ),
+        # 노드가 (soft, hard) 를 주면 그대로, 없으면 런타임 기본(100만/300만).
+        **(
+            {"turn_input_budget_tokens": _budget_pair(kwargs["turn_input_budget_tokens"])}
+            if "turn_input_budget_tokens" in kwargs
+            else {}
+        ),
     )
 
     # 호스트가 턴 단위 취소 훅을 줄 수 있다(같은 interaction 의 다음 턴을
