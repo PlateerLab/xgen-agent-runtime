@@ -184,35 +184,51 @@ _CLAUDE_CODE_ALIASES = {
 _CLI_CANNOT_DISABLE = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable", "claude-mythos")
 
 
-# ── OpenAI (Chat Completions ``reasoning_effort``) ───────────────────
+# ── OpenAI (Responses ``reasoning.effort`` · Chat Completions ``reasoning_effort``) ──
 #
-# 2026-10-01 dev 실측: gpt-4.1·gpt-4o-mini 는 파라미터 자체를 거절("Unrecognized request argument"),
-# gpt-5.4·5.6-*·6-luna·6-sol 은 none|low|medium|high|xhigh, gpt-6-astra 는 none 을 거절(끌 수 없다).
-# minimal·max 는 이 모델들이 모두 거절했다.
+# 2026-10-01 dev 실측(도구를 함께 실은 요청, Responses 로 도구 호출 → 결과 → 답까지):
+#   gpt-4.1·4o          생각 파라미터 자체를 거절(두 표면 모두)
+#   gpt-5               minimal|low|medium|high (none·xhigh·max ✗)
+#   gpt-5.2·5.4·5.5     none|low|medium|high|xhigh (max ✗)
+#   gpt-5.6-*·6-luna·6-sol  none|low|medium|high|xhigh|max — max 는 **Responses 에서만**(Chat Completions ✗)
+#   gpt-6-astra·6.1-sol low|medium|high|xhigh|max — none ✗(끌 수 없다)
+# minimal 은 gpt-5 만 받는다. 도구와 생각을 함께 쓰려면 gpt-5.4 이후는 Responses 여야 한다
+# (``llm_client/openai.py`` 가 고른다).
+
+_EFF_MAX = _EFF + ("max",)
 
 _OPENAI: Tuple[Tuple[str, ThinkingSpec], ...] = (
     (
         "gpt-6-astra",
-        _levels(_EFF, can_disable=False, default="medium", via="openai_effort", verified=True),
+        _levels(_EFF_MAX, can_disable=False, default="medium", via="openai_effort", verified=True),
     ),
-    ("gpt-6.1-sol", _levels(_EFF, can_disable=False, default="medium", via="openai_effort")),
-    ("gpt-6-sol", _levels(_EFF, default="medium", via="openai_effort", verified=True)),
-    ("gpt-6-luna", _levels(_EFF, default="medium", via="openai_effort", verified=True)),
-    ("gpt-5.6", _levels(_EFF, default="medium", via="openai_effort", verified=True)),
+    (
+        "gpt-6.1-sol",
+        _levels(_EFF_MAX, can_disable=False, default="medium", via="openai_effort", verified=True),
+    ),
+    ("gpt-6-sol", _levels(_EFF_MAX, default="medium", via="openai_effort", verified=True)),
+    ("gpt-6-luna", _levels(_EFF_MAX, default="medium", via="openai_effort", verified=True)),
+    ("gpt-5.6", _levels(_EFF_MAX, default="medium", via="openai_effort", verified=True)),
     ("gpt-5.5-pro", NONE),
-    ("gpt-5.5", _levels(_EFF, default="medium", via="openai_effort")),
+    ("gpt-5.5", _levels(_EFF, default="medium", via="openai_effort", verified=True)),
     ("gpt-5.4-pro", NONE),
     ("gpt-5.4", _levels(_EFF, default="off", via="openai_effort", verified=True)),
     ("gpt-5.3-codex", _levels(_EFF, can_disable=False, via="openai_effort")),
     ("gpt-5.2-pro", NONE),
     ("gpt-5.2-codex", _levels(_EFF, can_disable=False, via="openai_effort")),
-    ("gpt-5.2", _levels(_EFF, default="off", via="openai_effort")),
+    ("gpt-5.2", _levels(_EFF, default="off", via="openai_effort", verified=True)),
     ("gpt-5.1", _levels(_LV3, default="off", via="openai_effort")),
     ("gpt-5-pro", NONE),
     ("gpt-5-chat", NONE),
     (
         "gpt-5",
-        _levels(("minimal",) + _LV3, can_disable=False, default="medium", via="openai_effort"),
+        _levels(
+            ("minimal",) + _LV3,
+            can_disable=False,
+            default="medium",
+            via="openai_effort",
+            verified=True,
+        ),
     ),
     ("o4-mini", _levels(_LV3, can_disable=False, default="medium", via="openai_effort")),
     ("o3", _levels(_LV3, can_disable=False, default="medium", via="openai_effort")),
@@ -339,6 +355,20 @@ def _basename(model: str) -> str:
     return str(model or "").strip().lower().rsplit("/", 1)[-1]
 
 
+def _without_max(spec: ThinkingSpec) -> ThinkingSpec:
+    if "max" not in spec.levels:
+        return spec
+    return _levels(
+        tuple(lv for lv in spec.levels if lv != "max"),
+        can_disable=spec.can_disable,
+        default=spec.default,
+        via=spec.via,
+        verified=spec.verified,
+        off_type=spec.off_type,
+        budgets=spec.budgets,
+    )
+
+
 def thinking_spec(provider: str, model: str) -> ThinkingSpec:
     """이 provider 의 이 모델이 생각을 어떻게 조절받는가. 모르면 :data:`NONE`."""
     provider = _PROVIDER_ALIASES.get(
@@ -363,8 +393,11 @@ def thinking_spec(provider: str, model: str) -> ThinkingSpec:
             via="cli_effort",
             verified=name.lower() in _CLAUDE_CODE_ALIASES,
         )
-    if provider in ("openai", "azure"):
+    if provider == "openai":
         return _match(_OPENAI, name.lower()) or NONE
+    if provider == "azure":
+        # Azure 는 Chat Completions 로 부른다 — max 는 Responses 에서만 받는다.
+        return _without_max(_match(_OPENAI, name.lower()) or NONE)
     if provider == "codex":
         found = _match(_CODEX, name.lower())
         if found is not None:
@@ -373,7 +406,10 @@ def thinking_spec(provider: str, model: str) -> ThinkingSpec:
         if base is None or base.kind == "none":
             return NONE
         return _levels(
-            base.levels, can_disable=base.can_disable, default=base.default, via="codex_effort"
+            tuple(lv for lv in base.levels if lv != "max"),
+            can_disable=base.can_disable,
+            default=base.default,
+            via="codex_effort",
         )
     if provider in ("google", "vertex"):
         return _match(_GEMINI, _basename(name)) or NONE
@@ -450,6 +486,61 @@ def openai_effort(level: str) -> str:
     return "none" if level == "off" else level
 
 
+#: OpenAI 의 생각 토큰은 출력 상한(``max_output_tokens``·``max_completion_tokens``) 안에서 자리를 먹는다.
+#: 상한이 답 길이에만 맞춰져 있으면 높은 강도에서 **보이는 글자 하나 없이** 상한에 닿는다
+#: (OpenAI 문서: "reserving at least 25,000 tokens"). 강도마다 답 위에 이만큼을 더 둔다.
+_OPENAI_REASONING_RESERVE = {
+    "minimal": 2048,
+    "low": 8192,
+    "medium": 16384,
+    "high": 32768,
+    "xhigh": 49152,
+    "max": 65536,
+}
+#: 출력 상한의 천장 — 이 표의 모델 중 가장 작은 출력 한도(o3·o4-mini 100k)를 넘지 않게.
+_OPENAI_MAX_OUTPUT_CEILING = 100_000
+
+
+def openai_output_budget(spec: ThinkingSpec, level: Optional[str], max_tokens: int) -> int:
+    """생각할 자리를 더한 출력 상한. 생각하지 않으면(끄기·조절할 수 없는 모델) ``max_tokens`` 그대로.
+
+    ``level`` 이 없으면 그 모델의 기본 강도로 본다 — gpt-6-sol 은 아무것도 보내지 않아도 medium 으로 생각한다.
+    """
+    effective = level or (spec.default if spec.kind == "levels" else "")
+    reserve = _OPENAI_REASONING_RESERVE.get(str(effective or ""), 0)
+    if not reserve or not max_tokens:
+        return max_tokens
+    return min(int(max_tokens) + reserve, _OPENAI_MAX_OUTPUT_CEILING)
+
+
+_SUPPORTED_RE = re.compile(r"[Ss]upported values are:?\s*(.+?)(?:\.\s|\.?['\"]?$|\.$)", re.S)
+
+
+def nearest_supported_effort(message: str, wanted: str) -> Optional[str]:
+    """400 이 알려 준 받는 값들(``Supported values are: 'low', 'medium', and 'high'.``) 중 ``wanted`` 에
+    가장 가까운 값. 문구가 없으면 None — 표가 낡았을 때(새 모델) 한 번 고쳐 보내기 위한 것이다."""
+    found = _SUPPORTED_RE.search(str(message or ""))
+    if not found:
+        return None
+    values = [v for v in re.findall(r"'([a-z]+)'", found.group(1)) if v in ("none",) + LEVEL_ORDER]
+    if not values:
+        return None
+    want = "off" if wanted in ("none", "off", "") else wanted
+    if want == "off":
+        return (
+            "none"
+            if "none" in values
+            else min(values, key=lambda v: LEVEL_ORDER.index(v) if v in LEVEL_ORDER else -1)
+        )
+    if want not in LEVEL_ORDER:
+        return None
+    levels = [v for v in values if v in LEVEL_ORDER]
+    if not levels:
+        return None
+    idx = LEVEL_ORDER.index(want)
+    return min(levels, key=lambda v: (abs(LEVEL_ORDER.index(v) - idx), LEVEL_ORDER.index(v)))
+
+
 def gemini_thinking_config(spec: ThinkingSpec, level: str) -> Dict[str, Any]:
     """google-genai ``thinking_config``."""
     if spec.via == "gemini_budget":
@@ -489,8 +580,10 @@ __all__ = [
     "claude_code_flags",
     "codex_effort",
     "gemini_thinking_config",
+    "nearest_supported_effort",
     "normalize_thinking",
     "openai_effort",
+    "openai_output_budget",
     "thinking_spec",
     "vllm_request",
 ]

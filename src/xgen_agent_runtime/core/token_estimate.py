@@ -40,6 +40,9 @@ def _estimate_block(block: Any) -> int:
     btype = block.get("type")
     if btype == "image" or "source" in block:
         return _IMAGE_TOKEN_ESTIMATE
+    if btype == "reasoning":
+        # OpenAI 의 생각 항목 — 암호화된 내용의 글자 수는 토큰이 아니다. 요약 + 작은 고정값.
+        return _estimate_text(str(block.get("summary") or "")) + 64
     total = 0
     for key in ("text", "content", "input", "thinking"):
         val = block.get(key)

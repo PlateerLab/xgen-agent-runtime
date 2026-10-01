@@ -45,10 +45,18 @@ def _dehydrate_block(block: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def dehydrate_content(content: Any) -> Any:
-    """Return a dehydrated copy of canonical message content."""
+    """Return a dehydrated copy of canonical message content.
+
+    OpenAI 의 생각 블록(``reasoning`` — 암호화된 내용이 수 KB)은 저장하지 않는다. 같은 턴의 다음
+    호출에만 필요하고(그건 ``state.messages`` 가 들고 있다), 단기 기억 창도 다시 보내지 않는다.
+    """
     if not isinstance(content, list):
         return content
-    return [_dehydrate_block(b) if isinstance(b, dict) else b for b in content]
+    return [
+        _dehydrate_block(b) if isinstance(b, dict) else b
+        for b in content
+        if not (isinstance(b, dict) and b.get("type") == "reasoning")
+    ]
 
 
 def dehydrate_message(msg: Dict[str, Any]) -> Dict[str, Any]:

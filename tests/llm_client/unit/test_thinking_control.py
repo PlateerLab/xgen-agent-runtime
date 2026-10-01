@@ -48,9 +48,14 @@ def _opts(provider: str, model: str):
         ("openai", "gpt-4.1", "none", []),
         ("openai", "gpt-4o-mini", "none", []),
         ("openai", "gpt-5.4", "levels", ["off", "low", "medium", "high", "xhigh"]),
-        ("openai", "gpt-5.6-luna", "levels", ["off", "low", "medium", "high", "xhigh"]),
-        ("openai", "gpt-6-sol", "levels", ["off", "low", "medium", "high", "xhigh"]),
-        ("openai", "gpt-6-astra", "levels", ["low", "medium", "high", "xhigh"]),
+        # max 는 Responses 에서만 받는다(2026-10-01 도구와 함께 실측) — Azure(Chat Completions)는 뺀다
+        ("openai", "gpt-5.6-luna", "levels", ["off", "low", "medium", "high", "xhigh", "max"]),
+        ("openai", "gpt-6-sol", "levels", ["off", "low", "medium", "high", "xhigh", "max"]),
+        ("openai", "gpt-6-astra", "levels", ["low", "medium", "high", "xhigh", "max"]),
+        ("openai", "gpt-6.1-sol", "levels", ["low", "medium", "high", "xhigh", "max"]),
+        ("openai", "gpt-5", "levels", ["minimal", "low", "medium", "high"]),
+        ("azure", "gpt-6-sol", "levels", ["off", "low", "medium", "high", "xhigh"]),
+        ("codex", "gpt-6-sol", "levels", ["off", "low", "medium", "high", "xhigh"]),
         # Gemini — 문서
         ("vertex", "gemini-2.5-pro", "levels", ["low", "medium", "high"]),
         ("vertex", "gemini-2.5-flash", "levels", ["off", "low", "medium", "high"]),

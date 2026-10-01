@@ -210,7 +210,8 @@ def test_classic_families_keep_max_tokens(model: str) -> None:
 def test_build_kwargs_sends_max_completion_tokens_for_o_series() -> None:
     client = OpenAIClient(api_key="sk-mock")
     kwargs = client._build_kwargs(_req(model="o3-mini", max_tokens=2048))
-    assert kwargs["max_completion_tokens"] == 2048
+    # o3 는 기본으로 medium 만큼 생각한다 — 생각할 자리(16384)를 답 위에 더 둔다(2026-10-01).
+    assert kwargs["max_completion_tokens"] == 2048 + 16384
     assert "max_tokens" not in kwargs
 
 
@@ -455,7 +456,7 @@ def test_build_kwargs_drops_temperature_and_top_p_for_reasoning_models(
         )
     assert "temperature" not in kwargs
     assert "top_p" not in kwargs
-    assert kwargs["max_completion_tokens"] == 256
+    assert kwargs["max_completion_tokens"] == 256 + 16384  # gpt-5 기본 medium 의 생각 자리
     dropped = [r.getMessage() for r in caplog.records if "dropped" in r.getMessage()]
     assert any("'temperature'" in m for m in dropped)
     assert any("'top_p'" in m for m in dropped)

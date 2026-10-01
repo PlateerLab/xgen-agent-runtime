@@ -292,7 +292,7 @@ def _full_messages(
         blocks: List[Dict[str, Any]] = []
         for b in _blocks(content):
             btype = b.get("type")
-            if btype in ("thinking", "redacted_thinking"):
+            if btype in ("thinking", "redacted_thinking", "reasoning"):
                 continue
             if btype == "tool_result":
                 b = _shrink_result_block(b, trim_over=cfg.result_trim_over, keep=result_keep)
