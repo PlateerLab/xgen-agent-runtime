@@ -304,3 +304,228 @@ class TestConcurrencyCap:
         ctx = ToolContext(working_dir="/tmp")
         await asyncio.gather(*(tool.execute({"query": f"q{i}"}, ctx) for i in range(6)))
         assert state["peak"] == m._MAX_CONCURRENT_SEARCHES == 2
+
+
+# ── 엔진이 막은 것 vs 진짜 결과 없음 — 한 번 더, 그래도 막히면 그렇다고 (4.81.0) ──────
+#
+# 2026-10-01 dev·stage·홈서버: google 429·brave 429·mojeek 403·duckduckgo 202 로 막히고,
+# 남은 yahoo 는 절반이 ddgs 가 못 읽는 레이아웃. ddgs 는 non-200 을 빈 페이지와 똑같이 버려
+# "No results found." 라고만 한다 — dev 실사용 101회 중 27회(09-29~10-01), 한 턴은 14번 검색에
+# 7번 실패. 2초 뒤 한 번 더 하자 24건 중 18건이 결과를 받았다(세 번 측정).
+
+_BLOCKED = [
+    {"name": "wikipedia"},
+    {"name": "google", "status": 429},
+    {"name": "brave", "status": 429},
+    {"name": "mojeek", "status": 403},
+    {"name": "duckduckgo", "status": 202},
+    {"name": "yahoo"},
+]
+_WEB_HITS = [{"name": "wikipedia"}, {"name": "google", "status": 429}, {"name": "yahoo", "hits": 7}]
+_NOTHING_MATCHED = [{"name": "wikipedia"}, {"name": "google"}, {"name": "yahoo"}]
+_LOOKUP_ONLY = [{"name": "wikipedia", "hits": 1}, {"name": "google", "status": 429}, {"name": "yahoo"}]
+# brave·mojeek refuse every call from our servers; the rest answered with nothing.
+_FEW_REFUSED = [
+    {"name": "wikipedia"},
+    {"name": "brave", "status": 429},
+    {"name": "mojeek", "status": 403},
+    {"name": "google"},
+    {"name": "duckduckgo"},
+    {"name": "yahoo"},
+]
+_UNREACHABLE = [
+    {"name": "google", "error": TimeoutError("request timed out")},
+    {"name": "yahoo", "error": ConnectionError("dns error")},
+]
+
+
+class _FakeResp:
+    def __init__(self, status: int) -> None:
+        self.status_code = status
+
+
+class _FakeHttp:
+    def __init__(self, status: int, error: Exception | None) -> None:
+        self._status, self._error = status, error
+
+    def request(self, *args, **kwargs):
+        if self._error is not None:
+            raise self._error
+        return _FakeResp(self._status)
+
+
+class _FakeEngine:
+    """Stands in for a ddgs engine: non-200 → ``None``, like ``BaseSearchEngine``."""
+
+    def __init__(self, name: str, status: int = 200, hits: int = 0, error: Exception | None = None):
+        self.name = name
+        self.http_client = _FakeHttp(status, error)
+        self._hits = hits
+
+    def search(self, query, **kwargs):
+        if self.http_client.request("GET", "https://engine.example").status_code != 200:
+            return None
+        return [
+            {"title": f"{self.name} {i}", "href": f"https://{self.name}.example/{i}", "body": "b"}
+            for i in range(self._hits)
+        ]
+
+
+def _fake_ddgs(*plans):
+    """A DDGS stand-in; the n-th client runs the n-th engine plan (last one repeats)."""
+    made: List[Any] = []
+
+    class _DDGS:
+        def __init__(self):
+            self._plan = plans[min(len(made), len(plans) - 1)]
+            made.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _get_engines(self, category, backend):
+            return [_FakeEngine(**spec) for spec in self._plan]
+
+        def text(self, query, **kwargs):
+            results: List[Dict[str, Any]] = []
+            err = None
+            for engine in self._get_engines("text", "auto"):
+                try:
+                    found = engine.search(query)
+                except Exception as ex:  # ddgs logs and moves on
+                    err = ex
+                    continue
+                results.extend(found or [])
+            if results:
+                return results
+            raise RuntimeError(err or "No results found.")
+
+    _DDGS.made = made
+    return _DDGS
+
+
+@pytest.fixture
+def fake_ddgs(monkeypatch):
+    from xgen_agent_runtime.tools.built_in import _web_search_backends as backends
+
+    monkeypatch.setattr(backends, "_DDG_RETRY_PAUSE_S", 0)
+
+    def _install(*plans):
+        cls = _fake_ddgs(*plans)
+        monkeypatch.setattr(
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs", lambda: cls
+        )
+        return cls
+
+    return _install
+
+
+class TestTurnedAway:
+    @pytest.mark.asyncio
+    async def test_refused_twice_says_so_instead_of_no_results(self, fake_ddgs):
+        cls = fake_ddgs(_BLOCKED)
+        result = await WebSearchTool().execute({"query": "2026년 최저임금"}, _ctx())
+        assert result.is_error
+        assert len(cls.made) == 2
+        assert "No results" not in result.content
+        assert "refused this server's requests" in result.content
+        for part in ("google HTTP 429", "brave HTTP 429", "mojeek HTTP 403", "duckduckgo HTTP 202"):
+            assert part in result.content
+        assert "yahoo answered without a usable result" in result.content
+        assert "rewording it will not help" in result.content and "WebFetch" in result.content
+        assert "wikipedia" not in result.content  # title lookups say nothing about blocking
+        assert result.metadata["engines"]["attempts"] == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_gets_through(self, fake_ddgs):
+        cls = fake_ddgs(_BLOCKED, _WEB_HITS)
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert not result.is_error
+        assert len(cls.made) == 2
+        assert result.metadata["results_count"] == 7
+        assert "Note:" not in result.content
+        assert result.metadata["engines"]["found"] == {"yahoo": 7}
+
+    @pytest.mark.asyncio
+    async def test_nothing_matched_is_plain_no_results_without_retry(self, fake_ddgs):
+        cls = fake_ddgs(_NOTHING_MATCHED)
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert not result.is_error
+        assert result.content == "No results for 'q'."
+        assert len(cls.made) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_few_refusals_next_to_empty_answers_is_still_no_results(self, fake_ddgs):
+        cls = fake_ddgs(_FEW_REFUSED)
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert not result.is_error
+        assert result.content == "No results for 'q'."
+        assert len(cls.made) == 1
+        assert result.metadata["engines"]["refused"] == {"brave": "HTTP 429", "mojeek": "HTTP 403"}
+
+    @pytest.mark.asyncio
+    async def test_web_hits_first_time_no_retry_no_note(self, fake_ddgs):
+        cls = fake_ddgs(_WEB_HITS)
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert len(cls.made) == 1
+        assert result.metadata["results_count"] == 7
+        assert "Note:" not in result.content
+        assert result.metadata["engines"]["refused"] == {"google": "HTTP 429"}
+
+    @pytest.mark.asyncio
+    async def test_lookup_only_hits_come_with_a_note(self, fake_ddgs):
+        cls = fake_ddgs(_LOOKUP_ONLY)
+        result = await WebSearchTool().execute({"query": "삼성전자 주가"}, _ctx())
+        assert not result.is_error
+        assert len(cls.made) == 2
+        assert result.metadata["results_count"] == 1
+        assert "Note: only encyclopedia lookups returned results" in result.content
+        assert "google HTTP 429" in result.content
+
+    @pytest.mark.asyncio
+    async def test_lookup_hit_then_web_hits_on_retry(self, fake_ddgs):
+        fake_ddgs(_LOOKUP_ONLY, _WEB_HITS)
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert result.metadata["results_count"] == 7
+        assert "Note:" not in result.content
+
+    @pytest.mark.asyncio
+    async def test_unreachable_engines(self, fake_ddgs):
+        fake_ddgs(_UNREACHABLE)
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert result.is_error
+        assert "refused or did not answer" in result.content
+        assert "on this server's side" in result.content
+        assert "google timeout" in result.content and "yahoo unreachable" in result.content
+
+    @pytest.mark.asyncio
+    async def test_client_without_engine_hooks_keeps_ddgs_error(self, monkeypatch):
+        class _Opaque:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def text(self, query, **kwargs):
+                raise RuntimeError("No results found.")
+
+        monkeypatch.setattr(
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs", lambda: _Opaque
+        )
+        result = await WebSearchTool().execute({"query": "q"}, _ctx())
+        assert result.is_error
+        assert result.content == "web search failed: No results found."
+
+    def test_answered_page_that_fails_to_parse_is_not_a_refusal(self):
+        from xgen_agent_runtime.tools.built_in._web_search_backends import _EngineWatch
+
+        watch = _EngineWatch()
+        watch._note("yahoo", status=200)
+        watch._note("yahoo", error=ValueError("bad markup"))
+        watch._note("brave", status=429)
+        out = watch.outcome()
+        assert out["empty"] == ["yahoo"] and out["refused"] == {"brave": "HTTP 429"}
