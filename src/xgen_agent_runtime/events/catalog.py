@@ -213,6 +213,8 @@ class EventTypes(str, Enum):
     TOOL_GATE_REACHABILITY_REPAIRED = "tool.gate_reachability_repaired"
     TOOL_USER_DENIED = "tool.user_denied"
     TOOL_SURFACE_RESTORED = "tool.surface_restored"
+    # 기억 지도 표면(tool_exposure="map")의 도구가 두 번 빗나가 지도 이전 표면으로 되돌림 (host.tool_exposure).
+    TOOL_MAP_FALLBACK = "tool.map_fallback"
     # 기계가 둘인 대화에서 sandbox 파일 도구가 '없음' → PC 도 확인하라는 안내 (stages/s10_tool/second_machine.py).
     TOOL_NOT_IN_SANDBOX = "tool.not_in_sandbox"
 
@@ -659,6 +661,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     },
     EventTypes.TOOL_SURFACE_RESTORED: {
         "opened": "list[str] — deferred tools re-exposed because the visible history shows the model using them (or their gate) earlier in the conversation (tools.gates.restore_from_history)",
+    },
+    EventTypes.TOOL_MAP_FALLBACK: {
+        "open": "list[str] — tools the host's memory map had opened this turn",
+        "restored": "int — tools whose pre-map exposure was put back (host.tool_exposure.restore_tool_map)",
     },
     EventTypes.TOOL_NOT_IN_SANDBOX: {
         "count": "int — sandbox file-tool 'not found' results this round that got a 'check the user's computer too' note (stages/s10_tool/second_machine.py)",

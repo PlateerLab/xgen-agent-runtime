@@ -105,6 +105,13 @@ class SharedKeys:
     folders on the user's device connected to this conversation): a stale
     copy in history would contradict the current state."""
 
+    TOOL_MAP: Final = "executor.tool_map"
+    """The memory-map surface applied this turn (``tool_exposure="map"``).
+
+    ``{"open": [...], "hidden": [...], "core": {...}, "activated": [...]}`` from
+    :func:`host.tool_exposure.apply_tool_map`. Stage 3 reads it to fall back to the
+    pre-map surface when the map's tools miss twice, then sets ``"fallen_back": True``."""
+
     RETIRED_TOOL_CALLS: Final = "executor.retired_tool_calls"
     """Tools absent this turn whose earlier calls must not look callable.
 

@@ -11,7 +11,7 @@ up front spends the context window on things the turn will never call, and a
 model that reads a hundred near-identical schemas picks worse than one that
 reads five and drills into the right one.
 
-Two settings:
+Three settings:
 
 ``hierarchy``
     The default. Basic tools visible, the rest discovered on demand.
@@ -19,6 +19,12 @@ Two settings:
 ``flat``
     Every connected schema up front. An escape hatch for models that cannot
     drive a discovery step; it costs tokens on every request.
+
+``map``
+    The hierarchy, narrowed by the agent's memory. When the host already knows
+    where this turn's answer lives (``HostServices.turn_tool_map``), only that
+    turn's tools and a small base stay visible; everything else stays registered
+    and discoverable. Turns the host has no map for run as ``hierarchy``.
 
 Older workflows stored ``all`` (everything up front) or ``search`` (defer).
 Both now resolve to ``hierarchy`` — the hierarchy is the platform's behaviour,
@@ -33,6 +39,8 @@ import re
 HIERARCHY = "hierarchy"
 #: Every connected tool schema is sent up front.
 FLAT = "flat"
+#: The hierarchy, narrowed per turn by the host's memory map.
+MAP = "map"
 
 #: Values that mean "send everything up front".
 _FLAT_ALIASES = frozenset({FLAT, "all_upfront", "upfront"})
@@ -46,6 +54,8 @@ def normalize_exposure(value: object) -> str:
     running.
     """
     text = str(value or "").strip().lower()
+    if text == MAP:
+        return MAP
     return FLAT if text in _FLAT_ALIASES else HIERARCHY
 
 
@@ -179,3 +189,135 @@ def registers_core(name: object, *, flat: bool) -> bool:
     ``flat`` 이면 전부 선노출(탈출구), 아니면 턴 1 표면만.
     """
     return True if flat else is_turn_one(name)
+
+
+# ── 기억 지도 표면 (map) ─────────────────────────────────────────────
+#
+# 같은 질문을 전에 답한 적이 있으면, 그때 통한 도구만 있으면 된다. 호스트(기억 게이트웨이)가 턴마다
+# 열 도구를 정하고(``HostServices.turn_tool_map``), 등록이 다 끝난 뒤 첫 화면을 그 도구와 아래 기본으로
+# 좁힌다. 나머지는 **등록된 채 숨긴다**: ToolSearch 로 이름을 부르면 열리고, 숨긴 가족의 문은 Stage 3 의
+# 도달성 검사가 다시 세운다(tools.gates). 지도의 도구가 빈 결과나 오류를 두 번 내면 Stage 3 이 이 턴의
+# 표면을 지도 이전으로 되돌린다(:func:`map_fallback_due`, :func:`restore_tool_map`).
+#
+# 등록 지점은 지도를 모른다 — 지도는 등록 계획(``registers_core``)이 아니라 다 지은 표면 위에 한 번 얹는다.
+# 그래야 등록 지점 다섯 곳이 각자 지도를 해석하지 않는다.
+
+#: 지도 표면에서도 늘 보이는 도구 — 기억과 도구 발견.
+MAP_BASE_TOOLS = frozenset(
+    {
+        "ToolSearch",
+        "memory_write",
+        "memory_read",
+        "memory_list",
+        "memory_search",
+        "memory_pin",
+        "memory_categories",
+    }
+)
+
+#: 지도의 도구가 이만큼 빈 결과·오류를 내면 지도 이전 표면으로 되돌린다.
+MAP_FALLBACK_MISSES = 2
+
+
+def uses_tool_map(value: object) -> bool:
+    """이 에이전트가 기억 지도 표면을 골랐는가."""
+    return normalize_exposure(value) == MAP
+
+
+def _bare(name: object) -> str:
+    """접두를 끝까지 벗긴 이름. CLI 브릿지를 지난 커넥터 도구는 접두가 두 겹이다
+    (``mcp__connector__mcp_local_ReadFile``)."""
+    text = str(name or "")
+    while True:
+        stripped = _MCP_PREFIX.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
+def apply_tool_map(registry, open_names) -> dict:
+    """첫 화면을 기본(:data:`MAP_BASE_TOOLS`)과 지도가 연 도구로 좁힌다.
+
+    ``open_names`` 는 호스트가 고른 이름이다. 호스트는 이번 턴의 레지스트리를 모르므로 등록되지 않은 이름은
+    무시하고, MCP 접두가 붙은 이름(``mcp_local_ReadFile``)과 맨 이름은 같은 도구로 본다.
+
+    반환값은 되돌릴 때 쓰는 기록 ``{"open", "hidden", "core", "activated"}`` 이다.
+    """
+    names = list(registry.list_names())
+    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip()}
+    record = {
+        "open": [],
+        "hidden": [],
+        "core": {n: bool(registry.is_core(n)) for n in names},
+        "activated": list(registry.activated_names()),
+    }
+    for name in names:
+        base = _bare(name)
+        if base in wanted:
+            record["open"].append(name)
+        if base in wanted or base in MAP_BASE_TOOLS:
+            registry.activate(name)
+        elif registry.is_exposed(name):
+            registry.set_core(name, False)
+            registry.deactivate(name)
+            record["hidden"].append(name)
+    return record
+
+
+def restore_tool_map(registry, record: dict) -> None:
+    """:func:`apply_tool_map` 이전 표면으로 되돌린다(기록에 없는 이름은 그대로)."""
+    activated = set(record.get("activated") or ())
+    for name, core in (record.get("core") or {}).items():
+        if registry.get(name) is None:
+            continue
+        registry.set_core(name, bool(core))
+        if name in activated:
+            registry.activate(name)
+        else:
+            registry.deactivate(name)
+
+
+def _field(obj, key):
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(_field(b, "text") or "") for b in content)
+    return str(content or "")
+
+
+def map_fallback_due(messages, open_names) -> bool:
+    """이번 턴(마지막 사용자 발화 뒤)에서 지도의 도구가 빈 결과나 오류를 :data:`MAP_FALLBACK_MISSES` 번 냈는가.
+
+    지도가 연 도구가 없으면(답을 기억에서 그대로 내는 턴) 어떤 도구든 센다 — 그 턴에 도구가 두 번 빗나갔다면
+    기억이 틀렸을 수 있으니 계층형으로 돌아가 찾게 한다.
+    """
+    msgs = list(messages or ())
+    start = 0
+    for i, msg in enumerate(msgs):
+        if _field(msg, "role") != "user":
+            continue
+        content = _field(msg, "content")
+        if isinstance(content, str) or not any(_field(b, "type") == "tool_result" for b in (content or [])):
+            start = i + 1
+    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip()}
+    calls = {}
+    misses = 0
+    for msg in msgs[start:]:
+        content = _field(msg, "content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            kind = _field(block, "type")
+            if kind == "tool_use":
+                calls[str(_field(block, "id") or "")] = _bare(_field(block, "name"))
+            elif kind == "tool_result":
+                name = calls.get(str(_field(block, "tool_use_id") or ""), "")
+                if wanted and name not in wanted:
+                    continue
+                if _field(block, "is_error") or not _result_text(_field(block, "content")).strip():
+                    misses += 1
+    return misses >= MAP_FALLBACK_MISSES

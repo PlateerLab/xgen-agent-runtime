@@ -341,13 +341,15 @@ class SystemStage(Stage[Any, Any]):
                 # 아래에서 다시 읽는다.
                 # 앞 턴에 쓴 도구를 먼저 되살린다 — 호스트가 턴마다 레지스트리를 새로 만들어
                 # 열어 둔 가족이 날아간다(tools.gates.restore_from_history).
+                # 기억 지도 표면이 두 번 빗나갔으면 지도 이전 표면부터 되살린다(host.tool_exposure).
+                fell_back = _map_fallback(self._tool_registry, state)
                 restored = _restore_from_history(self._tool_registry, state.messages)
                 if restored:
                     state.add_event("tool.surface_restored", {"opened": restored})
                 repaired = _enforce_gate_reachability(self._tool_registry)
                 if repaired:
                     state.add_event("tool.gate_reachability_repaired", {"opened": repaired})
-                if restored or repaired:
+                if restored or repaired or fell_back:
                     reg_version = getattr(self._tool_registry, "version", None)
                 try:
                     state.tools = self._tool_registry.to_api_format(exposed_only=True)
@@ -397,6 +399,29 @@ def _enforce_gate_reachability(registry: Any) -> List[str]:
             ", ".join(opened),
         )
     return opened
+
+
+def _map_fallback(registry: Any, state: PipelineState) -> bool:
+    """기억 지도 표면의 도구가 이번 턴에 두 번 빗나갔으면 지도 이전 표면으로 되돌린다(한 번만)."""
+    from xgen_agent_runtime.core.shared_keys import SharedKeys
+    from xgen_agent_runtime.host.tool_exposure import map_fallback_due, restore_tool_map
+
+    record = state.shared.get(SharedKeys.TOOL_MAP)
+    if not isinstance(record, dict) or record.get("fallen_back"):
+        return False
+    try:
+        if not map_fallback_due(state.messages, record.get("open")):
+            return False
+        restore_tool_map(registry, record)
+    except Exception:  # noqa: BLE001 - 되돌림 판정이 턴을 막지 않는다
+        logger.debug("memory map fallback failed", exc_info=True)
+        return False
+    record["fallen_back"] = True
+    state.add_event(
+        "tool.map_fallback",
+        {"open": list(record.get("open") or []), "restored": len(record.get("core") or {})},
+    )
+    return True
 
 
 def _restore_from_history(registry: Any, messages: Any) -> List[str]:

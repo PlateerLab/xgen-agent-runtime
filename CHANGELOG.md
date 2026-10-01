@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added: 기억 지도 표면 (`tool_exposure="map"`)
+
+도구 노출 방식에 `hierarchy` · `flat` 과 나란히 `map` 을 더했다(에이전트별 선택). 등록은 계층형과 같고, 등록이 다 끝난
+표면 위에 호스트의 지도를 한 번 얹는다. 호스트가 `HostServices.turn_tool_map()`(OPTIONAL)으로 이번 턴에 열 도구를 주면
+첫 화면은 그 도구와 기본(기억 · ToolSearch)으로 좁혀지고, 나머지는 **등록된 채** 숨는다: ToolSearch 로 이름을 부르면
+열리고, 숨긴 가족의 문은 Stage 3 의 도달성 검사가 다시 세운다. 빈 목록이면 기본만(답이 이미 기억에 있는 턴), None 이면
+지도 없는 턴이라 계층형 그대로다. 지도의 도구가 이번 턴에 빈 결과나 오류를 두 번 내면 Stage 3 이 지도 이전 표면으로
+되돌린다(`tool.map_fallback`, 한 번만). 턴 중에 도구 목록을 다시 읽지 못하는 CLI 백엔드에는 얹지 않는다.
+
+- `host/tool_exposure.py`: `MAP`, `uses_tool_map`, `MAP_BASE_TOOLS`, `apply_tool_map`, `restore_tool_map`, `map_fallback_due`.
+- `host/turn_executor.py`: `_host_tool_map` 훅 조회와 적용, `SharedKeys.TOOL_MAP` 에 되돌림 기록.
+- `stages/s03_system/.../stage.py`: 매 반복 `_map_fallback`(기록에서 복원 · 도달성 검사 앞).
+- `events/catalog.py`: `tool.map_fallback`.
+
 ### Added: 호스트가 이번 턴 안내를 턴 노트로 넘기는 선택 훅 `turn_notes()`
 
 호스트가 턴마다 바뀌는 글(예: 에이전트 기억이 이번 질문에 고른 답·지도)을 넘길 자리가 Context 포트뿐이었다.

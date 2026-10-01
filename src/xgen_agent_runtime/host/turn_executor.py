@@ -25,7 +25,12 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
 from xgen_agent_runtime.host import local_folders as _local_folders
-from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
+from xgen_agent_runtime.host.tool_exposure import (
+    apply_tool_map,
+    registers_core,
+    sends_every_schema,
+    uses_tool_map,
+)
 from xgen_agent_runtime.host.turn_input import TurnInput
 
 
@@ -181,6 +186,25 @@ def _host_turn_notes(host: Any) -> List[str]:
     if not isinstance(notes, (list, tuple)):
         return []
     return [str(n).strip() for n in notes if str(n or "").strip()]
+
+
+def _host_tool_map(host: Any) -> Optional[List[str]]:
+    """호스트가 이번 턴에 열 도구(OPTIONAL 훅 ``turn_tool_map``). 훅이 없거나 실패하면 None(지도 없음)."""
+    probe = getattr(host, "turn_tool_map", None)
+    if not callable(probe):
+        return None
+    try:
+        names = probe()
+    except Exception:  # noqa: BLE001 - 지도 때문에 턴을 깨지 않는다
+        logger.warning("agents/geny: 호스트 도구 지도 실패 (계층형으로)", exc_info=True)
+        return None
+    if names is None:
+        return None
+    if isinstance(names, str):
+        names = [names]
+    if not isinstance(names, (list, tuple, set, frozenset)):
+        return None
+    return [str(n) for n in names if str(n or "").strip()]
 
 
 class AgentTurnExecutor:
@@ -689,6 +713,26 @@ class AgentTurnExecutor:
                 from xgen_agent_runtime.host.runner import ensure_surface_entrances
 
                 ensure_surface_entrances(registry)
+
+            # 기억 지도 표면(tool_exposure="map"): 등록이 다 끝난 표면 위에 호스트의 지도를 한 번 얹는다. CLI 는
+            # 턴 중에 도구 목록을 다시 읽지 못해 처음부터 평면으로 돌므로 지도도 얹지 않는다.
+            if (
+                _tools_reach_model
+                and not _is_cli
+                and registry is not None
+                and uses_tool_map(kwargs.get("tool_exposure"))
+            ):
+                _map_open = _host_tool_map(host)
+                if _map_open is not None:
+                    _map_record = apply_tool_map(registry, _map_open)
+                    # 숨긴 도구가 생겼으니 그리로 가는 입구(ToolSearch)가 있어야 한다.
+                    ensure_surface_entrances(registry)
+                    state.shared[SharedKeys.TOOL_MAP] = _map_record
+                    logger.info(
+                        "agents/geny: 기억 지도 표면 - 연 도구 %s, 숨긴 도구 %d개",
+                        ", ".join(_map_record["open"]) or "-",
+                        len(_map_record["hidden"]),
+                    )
 
             # 턴-종료 증류 스펙 — 이 턴의 LLM 자격증명 그대로 (memory_distill 기본 ON).
             memory_distill_spec = None

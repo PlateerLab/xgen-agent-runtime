@@ -260,3 +260,11 @@ class HostServices(Protocol):
     #: (e.g. what the agent's memory chose for this question). Absent method
     #: or an exception → no host notes.
     def turn_notes(self) -> List[str]: ...
+
+    #: **OPTIONAL**: the tools this turn's first screen should carry (the
+    #: agent memory's map). Asked only when ``tool_exposure="map"``. None → no
+    #: map this turn (plain hierarchy). An empty list → only the base (memory,
+    #: ToolSearch): the answer is already in memory. Unregistered names are
+    #: ignored; everything else stays registered and discoverable. Absent
+    #: method or an exception → no map.
+    def turn_tool_map(self) -> Optional[Sequence[str]]: ...
