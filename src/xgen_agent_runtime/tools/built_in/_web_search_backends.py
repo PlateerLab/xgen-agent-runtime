@@ -23,6 +23,9 @@ first, then environment variables:
 * ``brave``   — ``brave_api_key`` / ``BRAVE_SEARCH_API_KEY``
 * ``tavily``  — ``tavily_api_key`` / ``TAVILY_API_KEY``
 * ``searxng`` — ``searxng_url``   / ``SEARXNG_URL``
+* ``ddg``     — ``ddg_extra_engines`` / ``GENY_WEBSEARCH_DDG_EXTRA_ENGINES``:
+  engines ddgs ships switched off that we run anyway (comma list, default
+  ``yandex``; empty turns it off)
 
 When a backend is missing its key/url, it raises
 :class:`WebSearchConfigError` with a clear config hint; the tool turns
@@ -32,8 +35,10 @@ that into a ``ToolResult(is_error=True)``.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
+import random
 import threading
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
@@ -158,6 +163,91 @@ _LOOKUP_ENGINES = frozenset({"wikipedia", "grokipedia"})
 #: stage and the home box (2026-10-01, three runs): which engines answer varies
 #: per call (duckduckgo, google, yahoo's layout) — the refusals are not a ban.
 _DDG_RETRY_PAUSE_S = 2.0
+
+#: Engines ddgs ships but has switched off, run anyway for our searches.
+#: ddgs 9.15.0 (2026-08-16) disabled yandex without a stated reason; from dev,
+#: stage and the home box it answered 36 of 36 queries (about 1.4 s each,
+#: Korean ones included) while google, brave, mojeek and duckduckgo mostly
+#: refuse us — with it the first try got results 24 of 24 times on dev and
+#: stage. Yandex is a Russian service: a host whose policy forbids sending
+#: queries there sets ``ddg_extra_engines`` / ``GENY_WEBSEARCH_DDG_EXTRA_ENGINES``
+#: to "" (or to another comma list).
+_DEFAULT_DDG_EXTRA_ENGINES: Tuple[str, ...] = ("yandex",)
+
+
+def _ddg_extra_engines(context: Optional[ToolContext]) -> Tuple[str, ...]:
+    """Extra ddgs engine names: extras > ``GENY_WEBSEARCH_DDG_EXTRA_ENGINES`` > default."""
+    raw: Any = _extras_web_search(context).get("ddg_extra_engines") if context else None
+    if raw is None:
+        raw = os.environ.get("GENY_WEBSEARCH_DDG_EXTRA_ENGINES")
+    if raw is None:
+        return _DEFAULT_DDG_EXTRA_ENGINES
+    items = raw.split(",") if isinstance(raw, str) else list(raw)
+    return tuple(name for name in (str(item).strip().lower() for item in items) if name)
+
+
+def _ddg_engine_class(name: str) -> Optional[type]:
+    """ddgs' text engine class called ``name``, even when ddgs switched it off."""
+    if not name.isidentifier():
+        return None
+    try:
+        module = importlib.import_module(f"ddgs.engines.{name}")
+    except ImportError:
+        return None
+    for obj in vars(module).values():
+        if (
+            isinstance(obj, type)
+            and getattr(obj, "name", None) == name
+            and getattr(obj, "category", None) == "text"
+        ):
+            return obj
+    return None
+
+
+def _add_ddg_engines(client: Any, names: Tuple[str, ...]) -> None:
+    """Make ``client`` also run the text engines ``names`` that ddgs leaves out.
+
+    Wraps the instance's ``_get_engines`` — ddgs' global registry stays as
+    it is. The engines are ordered the way ddgs orders its own (shuffled,
+    then by priority), as if ddgs had never switched them off; an engine
+    ddgs already runs is not added twice.
+    """
+    get_engines = getattr(client, "_get_engines", None)
+    if not names or not callable(get_engines):
+        return
+
+    def _get_engines(category: Any, backend: Any, *args: Any, **kwargs: Any) -> Any:
+        engines = get_engines(category, backend, *args, **kwargs)
+        asked = backend if isinstance(backend, (list, tuple)) else str(backend).split(",")
+        if category != "text" or not {"auto", "all"} & {str(b).strip() for b in asked}:
+            return engines
+        present = {getattr(engine, "name", None) for engine in engines or ()}
+        added = []
+        for name in names:
+            cls = None if name in present else _ddg_engine_class(name)
+            if cls is None:
+                continue
+            try:
+                added.append(
+                    cls(
+                        proxy=getattr(client, "_proxy", None),
+                        timeout=getattr(client, "_timeout", None),
+                        verify=getattr(client, "_verify", True),
+                    )
+                )
+            except Exception:
+                logger.debug("WebSearch: could not start ddgs engine %r", name, exc_info=True)
+        if not added:
+            return engines
+        merged = list(engines or ()) + added
+        random.shuffle(merged)
+        merged.sort(key=lambda engine: getattr(engine, "priority", 1), reverse=True)
+        return merged
+
+    try:
+        client._get_engines = _get_engines
+    except (AttributeError, TypeError):
+        return
 
 
 class _EngineWatch:
@@ -344,10 +434,11 @@ class DdgBackend:
     directly here, so existing hosts / tests that monkey-patch
     ``web_search_tool._load_ddgs`` or ``WebSearchTool._search_sync``
     continue to take effect through the indirection. The body receives
-    a factory that builds the ``DDGS`` client with an :class:`_EngineWatch`
-    attached; when the web engines turned the search away it is run once
-    more, and if that fails too :class:`WebSearchBlockedError` says so
-    instead of ddgs' "No results found.".
+    a factory that builds the ``DDGS`` client with the extra engines added
+    (:func:`_add_ddg_engines`) and an :class:`_EngineWatch` attached; when
+    the web engines turned the search away it is run once more, and if that
+    fails too :class:`WebSearchBlockedError` says so instead of ddgs'
+    "No results found.".
     """
 
     name = "ddg"
@@ -356,9 +447,13 @@ class DdgBackend:
         self,
         load_ddgs: Optional[Callable[[], Optional[Any]]] = None,
         search_sync: Optional[Callable[..., List[Dict[str, Any]]]] = None,
+        extra_engines: Optional[Tuple[str, ...]] = None,
     ) -> None:
         self._load_ddgs = load_ddgs or _load_ddgs
         self._search_sync = search_sync or _default_ddg_search_sync
+        self._extra_engines = (
+            _ddg_extra_engines(None) if extra_engines is None else tuple(extra_engines)
+        )
         #: Caveat about the last search's results for the caller, or ``None``.
         self.notice: Optional[str] = None
         #: Per-engine outcome of the last search (empty when not observed).
@@ -416,6 +511,7 @@ class DdgBackend:
 
         def _watched_ddgs(*args: Any, **kwargs: Any) -> Any:
             client = ddgs_cls(*args, **kwargs)
+            _add_ddg_engines(client, self._extra_engines)
             watch.attach(client)
             return client
 
@@ -679,7 +775,11 @@ def build_backend(
     DDGS hooks for backward compatibility.
     """
     if name == "ddg":
-        return DdgBackend(load_ddgs=ddg_load_ddgs, search_sync=ddg_search_sync)
+        return DdgBackend(
+            load_ddgs=ddg_load_ddgs,
+            search_sync=ddg_search_sync,
+            extra_engines=_ddg_extra_engines(context),
+        )
     if name == "brave":
         return BraveBackend(context)
     if name == "tavily":

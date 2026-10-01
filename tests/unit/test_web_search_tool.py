@@ -412,6 +412,8 @@ def fake_ddgs(monkeypatch):
     from xgen_agent_runtime.tools.built_in import _web_search_backends as backends
 
     monkeypatch.setattr(backends, "_DDG_RETRY_PAUSE_S", 0)
+    # No real ddgs engine gets added to the fake client unless a test asks for one.
+    monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", "")
 
     def _install(*plans):
         cls = _fake_ddgs(*plans)
@@ -529,3 +531,88 @@ class TestTurnedAway:
         watch._note("brave", status=429)
         out = watch.outcome()
         assert out["empty"] == ["yahoo"] and out["refused"] == {"brave": "HTTP 429"}
+
+
+# ── ddgs 가 꺼 둔 yandex 를 우리 검색에서만 다시 켠다 (4.81.0) ────────────────────
+#
+# ddgs 9.15.0(2026-08-16)이 yandex 엔진을 이유 없이 껐다. dev·stage·홈서버에서 yandex 는
+# 36개 질의 모두 결과(약 1.4초)였고, 켜고 돌리면 dev·stage 첫 시도 24/24 성공.
+# ddgs 전역 레지스트리는 건드리지 않고 이번 검색의 DDGS 인스턴스에만 넣는다. 러시아 서비스라
+# 정책상 안 되는 호스트는 GENY_WEBSEARCH_DDG_EXTRA_ENGINES="" 로 끈다.
+
+
+class _FakeYandex(_FakeEngine):
+    started = 0
+
+    def __init__(self, proxy=None, timeout=None, verify=True):
+        type(self).started += 1
+        super().__init__("yandex", hits=10)
+
+
+class _Ranked:
+    def __init__(self, name: str, priority: float) -> None:
+        self.name, self.priority = name, priority
+
+
+class _EnginesClient:
+    def __init__(self, engines):
+        self._engines = engines
+
+    def _get_engines(self, category, backend):
+        return list(self._engines)
+
+
+class TestExtraEngines:
+    def test_default_is_yandex(self, monkeypatch):
+        from xgen_agent_runtime.tools.built_in._web_search_backends import _ddg_extra_engines
+
+        monkeypatch.delenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", raising=False)
+        assert _ddg_extra_engines(_ctx()) == ("yandex",)
+
+    def test_env_empty_turns_it_off_and_extras_win(self, monkeypatch):
+        from xgen_agent_runtime.tools.built_in._web_search_backends import _ddg_extra_engines
+
+        monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", "")
+        assert _ddg_extra_engines(_ctx()) == ()
+        monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", " Yandex , foo ")
+        assert _ddg_extra_engines(_ctx()) == ("yandex", "foo")
+        ctx = ToolContext(working_dir="", extras={"web_search": {"ddg_extra_engines": []}})
+        assert _ddg_extra_engines(ctx) == ()
+
+    @pytest.mark.asyncio
+    async def test_added_engine_answers_when_the_others_refuse(self, monkeypatch, fake_ddgs):
+        from xgen_agent_runtime.tools.built_in import _web_search_backends as backends
+
+        monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", "yandex")
+        monkeypatch.setattr(
+            backends, "_ddg_engine_class", lambda name: _FakeYandex if name == "yandex" else None
+        )
+        cls = fake_ddgs(_BLOCKED)
+        result = await WebSearchTool().execute({"query": "2026년 최저임금"}, _ctx())
+        assert not result.is_error
+        assert len(cls.made) == 1  # no retry needed
+        assert result.metadata["engines"]["found"] == {"yandex": 10}
+
+    def test_engine_ddgs_already_runs_is_not_added_twice(self, monkeypatch):
+        from xgen_agent_runtime.tools.built_in import _web_search_backends as backends
+
+        monkeypatch.setattr(backends, "_ddg_engine_class", lambda name: _FakeYandex)
+        _FakeYandex.started = 0
+        client = _EnginesClient([_Ranked("wikipedia", 2), _Ranked("yandex", 1)])
+        backends._add_ddg_engines(client, ("yandex",))
+        assert [e.name for e in client._get_engines("text", "auto")] == ["wikipedia", "yandex"]
+        assert _FakeYandex.started == 0
+
+    def test_lookups_stay_first_and_other_categories_untouched(self, monkeypatch):
+        from xgen_agent_runtime.tools.built_in import _web_search_backends as backends
+
+        monkeypatch.setattr(backends, "_ddg_engine_class", lambda name: _FakeYandex)
+        engines = [_Ranked("wikipedia", 2), _Ranked("grokipedia", 1.9), _Ranked("brave", 1), _Ranked("yahoo", 1)]
+        client = _EnginesClient(engines)
+        backends._add_ddg_engines(client, ("yandex",))
+        for _ in range(20):
+            names = [e.name for e in client._get_engines("text", "auto")]
+            assert names[:2] == ["wikipedia", "grokipedia"]
+            assert sorted(names[2:]) == ["brave", "yahoo", "yandex"]
+        assert [e.name for e in client._get_engines("news", "auto")] == [e.name for e in engines]
+        assert [e.name for e in client._get_engines("text", "brave")] == [e.name for e in engines]
