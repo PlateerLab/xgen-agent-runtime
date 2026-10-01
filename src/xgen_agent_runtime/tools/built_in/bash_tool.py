@@ -12,6 +12,7 @@ from typing import Any, Dict, FrozenSet, Mapping, Optional
 from xgen_agent_runtime.tools.base import (
     HOST_IS_EXECUTION_TARGET,
     Tool,
+    ToolCapabilities,
     ToolContext,
     ToolResult,
 )
@@ -197,6 +198,60 @@ def _detached_process_reason(command: str) -> Optional[str]:
 _MAX_TIMEOUT_MS = 600_000  # 10 minutes
 _MAX_OUTPUT = 100_000  # characters
 
+# ── 명령의 성격 ────────────────────────────────────────────────────────
+# ``capabilities(input)`` 이 명령마다 답한다(base.py 의 약속: "ls 는 read_only, rm 은 destructive"). 호출 사건을 받는
+# 쪽(실행 기록 · 기억)이 셸 문자열을 저마다 다시 해석하지 않게 한다. 모르면 **쓰기 가능**으로 둔다(실패-닫힘).
+#: 파일을 쓰는 흔적: 경로로의 리다이렉트(2>&1 · /dev/null 제외), tee, 파일 조작 명령, 제자리 치환, 설치, 저장 호출.
+_SHELL_WRITE_RE = re.compile(
+    r"(?<![0-9&<>=-])>>?\s*(?!&|/dev/null|[0-9.]+(?:[\s'\")]|$))[\"']?[\w$-]*[~./][\w~./$-]*"
+    r"|\btee\s"
+    r"|(?:^|[;&|(]\s*)(?:sudo\s+)?(?:rm|mv|cp|mkdir|rmdir|touch|chmod|chown|ln|truncate|dd|unzip|tar)\s"
+    r"|\bsed\s+-[a-zA-Z]*i"
+    r"|\b(?:pip3?|npm|pnpm|yarn|apt(?:-get)?|apk|conda|uv)\s+(?:install|add|remove|uninstall|upgrade)\b"
+    r"|\bgit\s+(?:add|commit|checkout|switch|reset|rebase|merge|push|pull|clone|rm|mv|stash|tag|cherry-pick)\b"
+    r"|\bto_(?:excel|csv|json|parquet|pickle)\(|\.save(?:fig)?\(|\bwrite_(?:text|bytes)\("
+    r"|\bopen\([^)]*[\"'][wa]b?\+?[\"']",
+    re.IGNORECASE,
+)
+#: 되돌릴 수 없는 삭제 · 덮어쓰기.
+_SHELL_DESTRUCTIVE_RE = re.compile(
+    r"(?:^|[;&|(]\s*)(?:sudo\s+)?rm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+"
+    r"|\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f|push\s+.*--force)"
+    r"|\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b"
+    r"|(?<![0-9&<>=-])>\s*(?!&|/dev/null|[0-9.]+(?:[\s'\")]|$))[\"']?[\w$-]*[~./][\w~./$-]*",
+    re.IGNORECASE,
+)
+#: 바깥으로 나가는 흔적: HTTP 클라이언트 · 패키지 설치 · 원격 git · ssh.
+_SHELL_EGRESS_RE = re.compile(
+    r"\b(?:curl|wget|ssh|scp|rsync)\s"
+    r"|\brequests\.(?:get|post|put|delete|patch|head)\(|\burlopen\(|\bhttpx\.|\bfetch\("
+    r"|\b(?:pip3?|npm|pnpm|yarn|apt(?:-get)?|apk|conda|uv)\s+(?:install|add|upgrade)\b"
+    r"|\bgit\s+(?:clone|fetch|pull|push)\b",
+    re.IGNORECASE,
+)
+#: 스크립트 실행기 — 안이 무엇을 하는지 셸 문자열만으로는 모른다(파일을 읽는 코드일 수도, 쓰는 코드일 수도).
+#: 쓰기 흔적이 없어도 읽기 전용으로 꾸미지 않는다.
+_SHELL_OPAQUE_RE = re.compile(
+    r"(?:^|[;&|(]\s*)(?:python3?|node|ruby|perl|php|bash|sh|zsh)\s+(?!-c\b)[\w./-]+\.(?:py|js|mjs|rb|pl|php|sh)\b",
+    re.IGNORECASE,
+)
+
+
+def classify_shell_command(command: str) -> ToolCapabilities:
+    """셸 명령 하나의 능력. 쓰기 흔적이 없고 불투명한 스크립트 실행이 아니면 읽기 전용이다."""
+    text = str(command or "")
+    writes = bool(_SHELL_WRITE_RE.search(text))
+    opaque = bool(_SHELL_OPAQUE_RE.search(text))
+    read_only = not writes and not opaque
+    # 셸은 작업 디렉터리 · 환경 · 프로세스를 공유하므로 읽기 전용 명령도 다른 호출과 나란히 돌리지 않는다.
+    return ToolCapabilities(
+        concurrency_safe=False,
+        read_only=read_only,
+        destructive=bool(_SHELL_DESTRUCTIVE_RE.search(text)),
+        idempotent=read_only,
+        network_egress=bool(_SHELL_EGRESS_RE.search(text)),
+    )
+
 
 async def _finish_result(
     *,
@@ -348,6 +403,9 @@ class BashTool(Tool):
             },
             "required": ["command"],
         }
+
+    def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
+        return classify_shell_command(str((input or {}).get("command") or ""))
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         command = input.get("command", "").strip()

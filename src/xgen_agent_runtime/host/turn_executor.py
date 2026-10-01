@@ -725,6 +725,7 @@ class AgentTurnExecutor:
                 _map_open = _host_tool_map(host)
                 if _map_open is not None:
                     _map_record = apply_tool_map(registry, _map_open)
+                    _map_record["asked"] = list(_map_open)
                     # 숨긴 도구가 생겼으니 그리로 가는 입구(ToolSearch)가 있어야 한다.
                     ensure_surface_entrances(registry)
                     state.shared[SharedKeys.TOOL_MAP] = _map_record

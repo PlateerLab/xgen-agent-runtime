@@ -1181,6 +1181,16 @@ class MemoryProvider(Protocol):
     def set_hooks(self, hooks: "MemoryHooks") -> None: ...
 
 
+def provider_hooks(provider: Any) -> Optional["MemoryHooks"]:
+    """저장소에 붙은 hooks. ``set_hooks`` 로 받은 것을 ``hooks`` 또는 ``_hooks`` 로 들고 있는 저장소를 모두 본다.
+    없으면 None(부르는 쪽이 기본값을 쓴다). Stage 2 의 창 설정과 검색기가 같은 규칙으로 읽는다."""
+    for attr in ("hooks", "_hooks"):
+        h = getattr(provider, attr, None)
+        if h is not None and hasattr(h, "max_results"):
+            return h
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 11. MemoryHooks — pluggable policy attached to a provider / stage
 # ─────────────────────────────────────────────────────────────────────

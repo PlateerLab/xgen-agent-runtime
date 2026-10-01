@@ -346,7 +346,9 @@ class SystemStage(Stage[Any, Any]):
                 restored = _restore_from_history(self._tool_registry, state.messages)
                 if restored:
                     state.add_event("tool.surface_restored", {"opened": restored})
-                repaired = _enforce_gate_reachability(self._tool_registry)
+                # 지도 표면이 살아 있는 동안은 문도 숨긴다(기획: 기본 + 지도의 도구만). 숨긴 도구는 ToolSearch 로
+                # 열리고, 지도가 두 번 빗나가면 _map_fallback 이 표면째 되돌린 뒤 이 검사가 다시 선다.
+                repaired = [] if _map_active(state) else _enforce_gate_reachability(self._tool_registry)
                 if repaired:
                     state.add_event("tool.gate_reachability_repaired", {"opened": repaired})
                 if restored or repaired or fell_back:
@@ -399,6 +401,13 @@ def _enforce_gate_reachability(registry: Any) -> List[str]:
             ", ".join(opened),
         )
     return opened
+
+
+def _map_active(state: PipelineState) -> bool:
+    from xgen_agent_runtime.core.shared_keys import SharedKeys
+
+    record = state.shared.get(SharedKeys.TOOL_MAP)
+    return isinstance(record, dict) and not record.get("fallen_back")
 
 
 def _map_fallback(registry: Any, state: PipelineState) -> bool:

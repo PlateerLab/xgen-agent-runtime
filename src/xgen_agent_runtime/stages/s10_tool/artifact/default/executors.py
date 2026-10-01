@@ -70,7 +70,38 @@ def _router_registry(router: ToolRouter) -> Optional[ToolRegistry]:
     return reg if isinstance(reg, ToolRegistry) else None
 
 
-def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) -> None:
+def _tool_facts(registry: Optional[ToolRegistry], tc: Dict[str, Any]) -> Dict[str, Any]:
+    """이 호출의 **성격** — 도구가 스스로 말하는 능력(``Tool.capabilities(input)``)과 출처(``tool_origin``).
+
+    사건을 받는 쪽(호스트 실행 기록 · 기억)이 도구 **이름표**를 따로 들고 "이건 읽기, 저건 쓰기" 를 다시
+    추측하지 않게 한다. 레지스트리가 없거나 도구를 모르면 빈 사전(모름)이다 — 기본 능력(쓰기 가능)으로
+    꾸며 보내지 않는다.
+    """
+    if registry is None:
+        return {}
+    tool = registry.get(tc.get("tool_name", ""))
+    if tool is None:
+        return {}
+    from xgen_agent_runtime.tools.base import tool_origin
+
+    try:
+        caps = tool.capabilities(tc.get("tool_input", {}))
+    except Exception:  # noqa: BLE001 - 성격을 모르는 것이 호출을 막지 않는다
+        return {"origin": tool_origin(tool)}
+    return {
+        "capabilities": {
+            "read_only": bool(caps.read_only),
+            "destructive": bool(caps.destructive),
+            "network_egress": bool(caps.network_egress),
+            "idempotent": bool(caps.idempotent),
+        },
+        "origin": tool_origin(tool),
+    }
+
+
+def _emit_call_start(
+    on_event: Optional[ToolEventCallback], tc: Dict[str, Any], registry: Optional[ToolRegistry] = None
+) -> None:
     if on_event is None:
         return
     on_event(
@@ -79,6 +110,7 @@ def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) 
             "tool_use_id": tc.get("tool_use_id", ""),
             "name": tc.get("tool_name", ""),
             "input": tc.get("tool_input", {}),
+            **_tool_facts(registry, tc),
         },
     )
 
@@ -122,6 +154,7 @@ def _emit_call_complete(
     tc: Dict[str, Any],
     result_dict: Dict[str, Any],
     duration_ms: int,
+    registry: Optional[ToolRegistry] = None,
 ) -> None:
     if on_event is None:
         return
@@ -131,6 +164,7 @@ def _emit_call_complete(
         "name": tc.get("tool_name", ""),
         "is_error": is_error,
         "duration_ms": duration_ms,
+        **_tool_facts(registry, tc),
     }
     if is_error:
         # **사유를 함께 싣는다.** 성공 결과는 크고 모델이 이미 받지만, 실패
@@ -177,7 +211,7 @@ class SequentialExecutor(ToolExecutor):
         registry = _router_registry(router)
         results = []
         for tc in tool_calls:
-            _emit_call_start(on_event, tc)
+            _emit_call_start(on_event, tc, registry)
             t0 = time.monotonic()
             result = await router.route(
                 tc["tool_name"],
@@ -195,7 +229,7 @@ class SequentialExecutor(ToolExecutor):
             )
             _apply_state_mutations_via_ctx(result, tc, context)
             result_dict = result.to_api_format(tc["tool_use_id"])
-            _emit_call_complete(on_event, tc, result_dict, duration_ms)
+            _emit_call_complete(on_event, tc, result_dict, duration_ms, registry)
             results.append(result_dict)
         return results
 
@@ -267,7 +301,7 @@ class ParallelExecutor(ToolExecutor):
 
         async def _execute_one(tc: Dict[str, Any]) -> Dict[str, Any]:
             async with semaphore:
-                _emit_call_start(on_event, tc)
+                _emit_call_start(on_event, tc, registry)
                 t0 = time.monotonic()
                 result = await router.route(
                     tc["tool_name"],
@@ -285,7 +319,7 @@ class ParallelExecutor(ToolExecutor):
                 )
                 _apply_state_mutations_via_ctx(result, tc, context)
                 result_dict = result.to_api_format(tc["tool_use_id"])
-                _emit_call_complete(on_event, tc, result_dict, duration_ms)
+                _emit_call_complete(on_event, tc, result_dict, duration_ms, registry)
                 return result_dict
 
         tasks = [_execute_one(tc) for tc in tool_calls]
@@ -395,7 +429,7 @@ class PartitionExecutor(ToolExecutor):
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def _run_one(tc: Dict[str, Any]) -> Dict[str, Any]:
-            _emit_call_start(on_event, tc)
+            _emit_call_start(on_event, tc, self._registry)
             t0 = time.monotonic()
             result = await router.route(
                 tc["tool_name"],
@@ -413,7 +447,7 @@ class PartitionExecutor(ToolExecutor):
             )
             _apply_state_mutations_via_ctx(result, tc, context)
             result_dict = result.to_api_format(tc["tool_use_id"])
-            _emit_call_complete(on_event, tc, result_dict, duration_ms)
+            _emit_call_complete(on_event, tc, result_dict, duration_ms, self._registry)
             return result_dict
 
         async def _run_bounded(tc: Dict[str, Any]) -> Dict[str, Any]:

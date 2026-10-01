@@ -1487,6 +1487,7 @@ class Pipeline:
         if manifest_memory:
             try:
                 from xgen_agent_runtime.memory.factory import provider_from_manifest_memory
+                from xgen_agent_runtime.memory.provider import provider_hooks as _provider_hooks
                 from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever
                 from xgen_agent_runtime.memory.strategy import ProviderDrivenStrategy
 
@@ -1512,7 +1513,7 @@ class Pipeline:
             else:
                 pipeline._memory_provider = memory_provider
                 pipeline._apply_runtime(
-                    memory_retriever=MemoryAwareRetriever(memory_provider),
+                    memory_retriever=MemoryAwareRetriever(memory_provider, hooks=_provider_hooks(memory_provider)),
                     memory_strategy=ProviderDrivenStrategy(memory_provider),
                 )
 

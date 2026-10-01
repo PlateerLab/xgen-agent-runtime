@@ -6,6 +6,29 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added: 도구 호출 사건이 그 호출의 성격을 싣는다 (`capabilities` · `origin`)
+
+`tool.call_start` · `tool.call_complete` 에 도구가 스스로 말하는 능력(`Tool.capabilities(input)`: read_only · destructive ·
+network_egress · idempotent)과 출처(`tool_origin`)를 싣는다. 받는 쪽(호스트 실행 기록 · 기억)이 도구 이름표를 들고
+"읽기인지 쓰기인지" 를 다시 추측하지 않는다. 레지스트리가 도구를 모르면 비워 보낸다(기본 능력으로 꾸미지 않는다).
+
+- `BashTool.capabilities(input)`: 명령마다 답한다(base.py 의 약속). 쓰기 흔적(경로 리다이렉트 · tee · 파일 조작 · sed -i ·
+  설치 · git 변경 · 저장 호출)이 없고 불투명한 스크립트 실행이 아니면 읽기 전용, 되돌릴 수 없는 삭제 · 덮어쓰기는 destructive,
+  curl · wget · 설치 · 원격 git 은 network_egress.
+- 기기 도구(`host/device_tools.build_device_tool(annotations=)`): MCP 도구 주석(readOnlyHint · destructiveHint ·
+  idempotentHint · openWorldHint)을 능력으로 옮긴다. 주석이 없으면 기본 능력(쓰기 가능).
+- 포트 도구(`host/tools.py`): LangChain 도구의 `metadata` 와 호출 가능 사전의 `capabilities` 에서 같은 키를 읽는다
+  (호스트 노드가 적는다: 파일 저장소 · 지식 컬렉션 검색은 읽기 전용, API 노드는 GET 이면 읽기).
+- `memory.provider.provider_hooks()`: 저장소에 `set_hooks` 로 붙은 hooks 를 검색기(runner · pipeline)가 본다. 전에는
+  검색기가 hooks 없이 만들어져 `search_exclude_categories` 가 자동 검색에 먹지 않았다.
+
+### Changed: 지도 표면은 가족 · 문 이름을 레지스트리에서 푼다
+
+`host/tool_exposure.resolve_tool_map`: 호스트가 `family:<가족>[:ro]` · `gate:<문>` · 도구 이름으로 말하면 이번 턴
+레지스트리에서 실제 도구로 푼다. `TURN_ONE_TOOLS` 를 그룹(기본 · 발견 · 기억)으로 나누고 `MAP_BASE_TOOLS` 는 발견 ·
+기억 그룹 그대로다. 지도 표면이 살아 있는 동안 Stage 3 은 "숨긴 가족에는 보이는 문" 검사를 유예한다(지도의 되돌림
+규칙이 안전망). 되돌림 기록에 호스트가 말한 원문(`asked`)을 남긴다.
+
 ### Added: 기억 지도 표면 (`tool_exposure="map"`)
 
 도구 노출 방식에 `hierarchy` · `flat` 과 나란히 `map` 을 더했다(에이전트별 선택). 등록은 계층형과 같고, 등록이 다 끝난

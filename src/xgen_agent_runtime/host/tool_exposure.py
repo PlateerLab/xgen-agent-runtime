@@ -86,29 +86,20 @@ def sends_every_schema(value: object) -> bool:
 #:
 #: 각 줄은 **입구 하나**다. 패밀리 전체를 올리는 줄은 없다 — 기본 명령만 예외인데,
 #: 그건 게이트웨이를 둘 수 없는 종류의 도구이기 때문이다(셸을 여는 문은 셸이다).
-TURN_ONE_TOOLS = frozenset(
+#: 1. 기본 명령 — 셸과 파일. 여기가 막히면 나머지가 다 무의미하다.
+TURN_ONE_BASICS = frozenset({"Bash", "Read", "Write", "Edit", "Glob", "Grep"})
+#: 2. 도구 발견 — 아래 계층 전부로 가는 문. 2-b. 목록 작업(ToolBatch) — 같은 도구를 여러 입력으로 한 왕복에.
+#:    첫 턴에 보여야 항목마다 따로 부르는 습관(왕복 N회)이 처음부터 생기지 않는다.
+#:    2-c. 표 내보내기(TableExport) 는 여기 있었다 — 28일 실측 5회(턴의 0.1%)에 318토큰이 매 호출에 실렸다.
+#:    카탈로그로 내린다(ToolSearch 로 열림).
+TURN_ONE_DISCOVERY = frozenset({"ToolSearch", "ToolBatch"})
+#: 3. 기억 — 도구가 곧 능력이라 게이트웨이를 둘 것이 없다.
+TURN_ONE_MEMORY = frozenset(
+    {"memory_write", "memory_read", "memory_list", "memory_search", "memory_pin", "memory_categories"}
+)
+
+TURN_ONE_TOOLS = TURN_ONE_BASICS | TURN_ONE_DISCOVERY | TURN_ONE_MEMORY | frozenset(
     {
-        # 1. 기본 명령 — 셸과 파일. 여기가 막히면 나머지가 다 무의미하다.
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Glob",
-        "Grep",
-        # 2. 도구 발견 — 아래 계층 전부로 가는 문.
-        "ToolSearch",
-        # 2-b. 목록 작업 — 같은 도구를 여러 입력으로 한 왕복에. 첫 턴에 보여야
-        #      항목마다 따로 부르는 습관(왕복 N회)이 처음부터 생기지 않는다.
-        "ToolBatch",
-        # 2-c. 표 내보내기(TableExport) 는 여기 있었다 — 28일 실측 5회(턴의 0.1%)에
-        #      318토큰이 매 호출에 실렸다. 카탈로그로 내린다(ToolSearch 로 열림).
-        # 3. 기억 — 도구가 곧 능력이라 게이트웨이를 둘 것이 없다.
-        "memory_write",
-        "memory_read",
-        "memory_list",
-        "memory_search",
-        "memory_pin",
-        "memory_categories",
         # 4. 영구 작업 — JobSchedule/JobList/JobCancel 은 이 문 뒤에.
         "JobGuide",
         # 4-b. 앱(사용자가 여는 웹 앱) — AppCreate/Publish/Status/List/Delete
@@ -202,18 +193,8 @@ def registers_core(name: object, *, flat: bool) -> bool:
 # 등록 지점은 지도를 모른다 — 지도는 등록 계획(``registers_core``)이 아니라 다 지은 표면 위에 한 번 얹는다.
 # 그래야 등록 지점 다섯 곳이 각자 지도를 해석하지 않는다.
 
-#: 지도 표면에서도 늘 보이는 도구 — 기억과 도구 발견.
-MAP_BASE_TOOLS = frozenset(
-    {
-        "ToolSearch",
-        "memory_write",
-        "memory_read",
-        "memory_list",
-        "memory_search",
-        "memory_pin",
-        "memory_categories",
-    }
-)
+#: 지도 표면에서도 늘 보이는 도구 — 턴 1 표의 발견 · 기억 그룹 그대로(표는 하나다).
+MAP_BASE_TOOLS = TURN_ONE_DISCOVERY | TURN_ONE_MEMORY
 
 #: 지도의 도구가 이만큼 빈 결과·오류를 내면 지도 이전 표면으로 되돌린다.
 MAP_FALLBACK_MISSES = 2
@@ -235,16 +216,63 @@ def _bare(name: object) -> str:
         text = stripped
 
 
+def _read_only(tool) -> bool:
+    try:
+        return bool(tool.capabilities({}).read_only)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def resolve_tool_map(registry, open_names) -> list:
+    """호스트가 말한 것을 이번 턴 레지스트리의 도구 이름으로 푼다.
+
+    호스트(기억 게이트웨이)는 이름표를 들고 있지 않다. 말할 수 있는 것은 세 가지다:
+      * ``family:<이름>[:ro]`` — 내장 도구 가족(:data:`BUILT_IN_TOOL_FEATURES`). ``:ro`` 면 읽기 전용 멤버만.
+      * ``gate:<이름>`` — 문(:mod:`tools.gates`). 문만 세우고 방은 문이 열리게 둔다(라우터 규약).
+      * 그 밖은 도구 이름 그대로(MCP 접두는 벗겨 비교). 등록되지 않은 이름은 무시한다.
+    """
+    from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_FEATURES
+    from xgen_agent_runtime.tools.gates import gate_of
+
+    names = list(registry.list_names())
+    by_bare = {}
+    for n in names:
+        by_bare.setdefault(_bare(n), []).append(n)
+    out: list = []
+
+    def add(n):
+        if n not in out:
+            out.append(n)
+
+    for raw in open_names or ():
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        kind, _, rest = token.partition(":")
+        if kind == "family" and rest:
+            fam, _, qual = rest.partition(":")
+            for member in BUILT_IN_TOOL_FEATURES.get(fam, ()):
+                for n in by_bare.get(member, ()):
+                    if qual != "ro" or _read_only(registry.get(n)):
+                        add(n)
+        elif kind == "gate" and rest:
+            for n in names:
+                if _bare(n) == rest and gate_of(n) is not None:
+                    add(n)
+        else:
+            for n in by_bare.get(_bare(token), ()):
+                add(n)
+    return out
+
+
 def apply_tool_map(registry, open_names) -> dict:
     """첫 화면을 기본(:data:`MAP_BASE_TOOLS`)과 지도가 연 도구로 좁힌다.
 
-    ``open_names`` 는 호스트가 고른 이름이다. 호스트는 이번 턴의 레지스트리를 모르므로 등록되지 않은 이름은
-    무시하고, MCP 접두가 붙은 이름(``mcp_local_ReadFile``)과 맨 이름은 같은 도구로 본다.
-
-    반환값은 되돌릴 때 쓰는 기록 ``{"open", "hidden", "core", "activated"}`` 이다.
+    ``open_names`` 는 호스트가 말한 것(:func:`resolve_tool_map` 이 푼다). 반환값은 되돌릴 때 쓰는 기록
+    ``{"open", "hidden", "core", "activated"}`` 이다.
     """
     names = list(registry.list_names())
-    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip()}
+    wanted = {_bare(n) for n in resolve_tool_map(registry, open_names)}
     record = {
         "open": [],
         "hidden": [],
@@ -303,7 +331,7 @@ def map_fallback_due(messages, open_names) -> bool:
         content = _field(msg, "content")
         if isinstance(content, str) or not any(_field(b, "type") == "tool_result" for b in (content or [])):
             start = i + 1
-    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip()}
+    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip() and not str(n).startswith(("family:", "gate:"))}
     calls = {}
     misses = 0
     for msg in msgs[start:]:

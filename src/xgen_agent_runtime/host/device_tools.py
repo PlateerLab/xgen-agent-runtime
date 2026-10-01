@@ -25,7 +25,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.host.local_folders import device_tool_name, model_tool_name
 from xgen_agent_runtime.tools import Tool, ToolResult, build_tool
-from xgen_agent_runtime.tools.base import with_origin
+from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 
 logger = logging.getLogger("xgen_agent_runtime.host.device_tools")
 
@@ -150,6 +150,23 @@ def to_tool_result(name: str, payload: Any) -> ToolResult:
         return ToolResult(content=str(result))
 
 
+def capabilities_from_annotations(annotations: Any) -> Optional[ToolCapabilities]:
+    """MCP 도구 주석(``readOnlyHint`` · ``destructiveHint`` · ``idempotentHint`` · ``openWorldHint``)을 런타임 능력으로.
+
+    주석이 없으면 None — 기본 능력(쓰기 가능 · 비멱등)으로 두어 모르는 도구를 읽기 전용으로 꾸미지 않는다.
+    """
+    if not isinstance(annotations, dict) or not annotations:
+        return None
+    read_only = bool(annotations.get("readOnlyHint"))
+    return ToolCapabilities(
+        concurrency_safe=read_only,
+        read_only=read_only,
+        destructive=bool(annotations.get("destructiveHint")) and not read_only,
+        idempotent=bool(annotations.get("idempotentHint", read_only)),
+        network_egress=bool(annotations.get("openWorldHint")),
+    )
+
+
 def build_device_tool(
     *,
     server: str,
@@ -157,8 +174,10 @@ def build_device_tool(
     description: str,
     input_schema: Any,
     call: DeviceCall,
+    annotations: Any = None,
 ) -> Tool:
-    """기기 카탈로그 한 줄 → 런타임 도구. 모델 이름은 :func:`model_tool_name` 이 정한다."""
+    """기기 카탈로그 한 줄 → 런타임 도구. 모델 이름은 :func:`model_tool_name` 이 정한다.
+    ``annotations`` 는 기기가 광고한 MCP 도구 주석 — 읽기 전용 · 파괴 여부를 능력으로 옮긴다."""
     name = model_tool_name(server, tool)
     raw_tool = device_tool_name(server, str(tool))
     schema = _object_schema(input_schema)
@@ -182,6 +201,7 @@ def build_device_tool(
             description=str(description or f"Device tool {tool} on {server}"),
             input_schema=schema,
             execute=_execute,
+            capabilities=capabilities_from_annotations(annotations),
         ),
         "device",
     )

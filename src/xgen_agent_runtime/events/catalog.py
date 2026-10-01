@@ -679,11 +679,15 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "tool_use_id": "str",
         "name": "str",
         "input": "dict",
+        "capabilities": "dict — {read_only, destructive, network_egress, idempotent} the tool declared for this input (Tool.capabilities); absent when the registry does not know the tool",
+        "origin": "str — tool_origin(): builtin / adapted / device / memory / mcp / ''",
     },
     EventTypes.TOOL_CALL_COMPLETE: {
         "tool_use_id": "str",
         "name": "str",
         "is_error": "bool",
+        "capabilities": "dict — same as tool.call_start",
+        "origin": "str — same as tool.call_start",
         "duration_ms": "int",
     },
     EventTypes.TOOL_REVIEW_FLAG: {

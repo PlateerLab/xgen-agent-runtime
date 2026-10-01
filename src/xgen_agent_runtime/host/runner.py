@@ -764,6 +764,7 @@ def build_pipeline(
         #         (Geny 의 MemoryContextBlock 경로와 동일 — 2.50 분리형 블록 사용)
         try:
             from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever
+            from xgen_agent_runtime.memory.provider import provider_hooks
 
             from xgen_agent_runtime.host.conversation_archive import ConversationArchivingStrategy
             from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
@@ -777,7 +778,8 @@ def build_pipeline(
 
             pipeline._memory_provider = memory_provider
             pipeline.attach_runtime(
-                memory_retriever=MemoryAwareRetriever(memory_provider),
+                # 저장소에 붙은 hooks(호스트가 set_hooks 로 준 검색 제외 분류 등)를 검색기도 본다 — 없으면 기본.
+                memory_retriever=MemoryAwareRetriever(memory_provider, hooks=provider_hooks(memory_provider)),
                 memory_strategy=ConversationArchivingStrategy(memory_provider),
                 system_builder=ComposablePromptBuilder(
                     blocks=[
@@ -916,11 +918,24 @@ def _attach_tool_use_id(event: Dict[str, Any], tool_use_id: Any) -> None:
     event["run_id"] = value
 
 
+def _attach_tool_facts(event: Dict[str, Any], data: Any) -> None:
+    """파이프라인 사건의 능력 · 출처(stages/s10_tool executors ``_tool_facts``)를 호스트 사건에 그대로 싣는다."""
+    if not isinstance(data, dict):
+        return
+    caps = data.get("capabilities")
+    if isinstance(caps, dict):
+        event["capabilities"] = dict(caps)
+    origin = data.get("origin")
+    if isinstance(origin, str) and origin:
+        event["origin"] = origin
+
+
 def _tool_call_event(
     name: str,
     tool_input: Any,
     *,
     tool_use_id: Any = None,
+    facts: Any = None,
 ) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
@@ -931,6 +946,7 @@ def _tool_call_event(
         "timestamp": datetime.now().isoformat(),
     }
     _attach_tool_use_id(event, tool_use_id)
+    _attach_tool_facts(event, facts)
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -1471,6 +1487,7 @@ def stream_turn(
                             event.data.get("name", ""),
                             event.data.get("input"),
                             tool_use_id=event.data.get("tool_use_id"),
+                            facts=event.data,
                         ),
                     }
                 elif tool_events and event.type == "tool.call_complete":
