@@ -4,6 +4,52 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.78.0] — 2026-10-01
+
+### Fixed — OpenAI 추론 모델은 Responses API 로: 도구와 생각을 함께
+
+GPT-5.4 부터 Chat Completions 는 **함수 도구와 생각을 함께 받지 않는다** — `Function tools with reasoning_effort are
+not supported for <model> in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to
+'none'.` dev 기록에 gpt-6-sol(생각 "기본")·gpt-5.4(생각 "높음")·gpt-5.6-luna 가 같은 400 으로 실패해 있었다. gpt-6-sol·
+gpt-5.6-*·gpt-6-luna 는 기본 강도가 medium 이라 생각을 고르지 않아도 도구만 있으면 실패했고, gpt-6-astra·gpt-6.1-sol 은
+`none` 도 받지 않아 Chat Completions 로는 도구를 아예 쓸 수 없었다.
+
+- `OpenAIClient` 가 공식 엔드포인트의 추론 모델(`gpt-5*`·`gpt-6*`·`o1/o3/o4*`)을 **Responses API** 로 부른다
+  (`translators/_responses`). 상태 없이(`store=False`) 부르고 생각은 `encrypted_content` 로 받아 같은 턴의 다음 호출에
+  그 자리 그대로 돌려준다(도구 호출 앞의 생각을 모델이 이어 간다). 표준 형식에서는 `{"type":"reasoning","provider":
+  "openai","model":…}` 블록 — 같은 모델에만 돌려주고, 다른 provider 번역기(Anthropic·Chat Completions)는 버린다.
+  STM 에는 저장하지 않는다(수 KB 의 암호문).
+- 스트림: 생각 요약을 `thinking_delta` 로 흘리고, 생각이 시작되면 첫 응답으로 치며, 서버가 조용히 생각하는 동안
+  `heartbeat` 청크로 스트림 감시가 끊지 않게 한다(`XGEN_LLM_REASONING_TIMEOUT_S`, 기본 900초).
+- 생각 토큰은 출력 상한 안에서 자리를 먹는다 — 강도마다 답 위에 자리를 더 둔다(`thinking.openai_output_budget`,
+  low 8k·medium 16k·high 32k·xhigh 48k·max 64k, 천장 100k). 기본 강도로 생각하는 모델도 그 기본만큼.
+- 한 번 고쳐 다시 보내기: 받지 않는 강도는 400 이 알려 준 값 중 가장 가까운 것으로, 생각 파라미터를 모르는
+  모델은 빼고, 돌려준 생각 항목이 거절되면 빼고. 공식이 아닌 base_url·Azure 처럼 Chat Completions 로 가는 곳에서
+  도구+생각 400 이 나면 생각을 끄고 다시 보낸다(경고를 남긴다).
+- 생각 표: `max` 는 Responses 에서만 받는다 — gpt-5.6-*·gpt-6-*·gpt-6.1-sol 에 더하고(Azure·Codex 는 뺀다),
+  gpt-5·5.2·5.5·6.1-sol 을 실측으로 표시했다.
+- 운영 스위치 `XGEN_OPENAI_API_SURFACE` = `auto`(기본)·`responses`·`chat`.
+
+### Fixed — 턴의 시각·기억 맥락은 사용자의 말에 붙는다(도구 결과가 아니라)
+
+`<session-context>`(현재 시각·찾아 온 기억)는 요청 사본의 **가장 최근 user 메시지**에 붙었다. 도구 루프의 두 번째
+호출부터 그 메시지는 도구 결과를 실어 나르는 메시지라, OpenAI 는 도구 출력 **뒤의 새 user 메시지**로 받았고 모델이
+날씨를 말하는 대신 "알겠습니다 — 지금은 10월 1일 15시입니다" 라고 답했다(dev 실측, gpt-6-luna 8번 중 1번). 이제 도구
+결과만 실은 메시지는 건너뛰고 이 턴의 사용자 말에 붙인다 — 같은 턴의 다음 호출에서도 자리가 같아 앞부분이 바이트
+그대로 남는다(예전에는 매 호출 마지막 도구 결과로 자리가 옮겨 다녀 캐시가 그 지점에서 갈렸다).
+
+### 확인(dev, 새 런타임 소스, 실제 API)
+
+- 도구 매트릭스(SDK 직접): 10개 모델 × 생각 강도에서 Chat Completions 는 gpt-5.4·5.5 가 끔/기본만, gpt-5.6·6-sol·6-luna
+  가 끔만 받았고 gpt-6-astra·6.1-sol 은 전부 실패했다. Responses 는 전부 받았다(gpt-5·5.x 의 max, astra·6.1-sol 의 none 처럼
+  그 모델이 받지 않는 값만 400).
+- 런타임 파이프라인(`build_pipeline` + `stream_turn`, 실제 도구)으로 dev 에 등록된 API 모델 × 그 모델의 생각 선택지 전부
+  (OpenAI 13·Anthropic 9·vLLM 2 모델, 117 경우): 도구 호출 → 답 → 같은 대화의 두 번째 질문까지 114 통과. 나머지 3 은
+  vLLM `Qwen/Qwen3-4B` 서버가 꺼져 있어 연결 실패(환경).
+- 긴 생각(gpt-5.4 xhigh·gpt-6-sol/astra/5.6-sol max, 소수 세기 + 도구): 생각 항목을 여러 번(최대 5) 돌려주며 통과.
+- 구조적 출력(JSON 스키마)·이미지 입력, 대화 중 다른 모델로 넘기기(Anthropic·gpt-4.1·gpt-5.4·gpt-6-sol) 통과.
+- 확인하지 못한 것: Vertex·Bedrock(dev 에 자격 없음), Claude Code·Codex CLI(dev 에 로그인 없음), Azure(구성 없음).
+
 ## [4.77.0] — 2026-10-01
 
 ### Fixed — 끝나지 못한 턴(중단·오류)도 대화 기억에 남는다

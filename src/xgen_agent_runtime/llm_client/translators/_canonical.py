@@ -357,10 +357,16 @@ def _content_has_media(content: Any) -> bool:
 
 _ANTHROPIC_INTERNAL_KEYS = ("_meta",)
 
+#: 다른 provider 가 남긴 생각 블록 — Anthropic 은 모르는 종류라 400 이다. 대화 중에 모델을 바꾸면
+#: 같은 기록이 다른 provider 로 간다(OpenAI Responses 의 ``reasoning`` 블록, ``translators/_responses``).
+_FOREIGN_BLOCK_TYPES = ("reasoning",)
+
 
 def _sanitize_anthropic_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Strip executor-internal keys and lower unsupported block types."""
     btype = block.get("type")
+    if btype in _FOREIGN_BLOCK_TYPES:
+        return None
     if btype == "file":
         # TODO: Anthropic ``document`` block 으로 매핑 (PDF/text 직접 지원).
         # 지금은 metadata 텍스트로 fallback.
@@ -396,6 +402,9 @@ def canonical_messages_to_anthropic(
                 cleaned = _sanitize_anthropic_block(block)
                 if cleaned is not None:
                     new_blocks.append(cleaned)
+            if not new_blocks and content:
+                # 다른 provider 의 생각만 있던 메시지 — 빈 content 는 Anthropic 이 거절한다.
+                continue
             sanitized.append({**msg, "content": new_blocks})
         else:
             sanitized.append(msg)
@@ -540,6 +549,9 @@ def canonical_messages_to_openai(
                 text = blocks_to_text(text_blocks)
                 if text:
                     msg_dict["content"] = text
+                if not text and not tool_uses:
+                    # 생각만 남은 메시지(다른 표면의 reasoning 블록) — 빈 assistant 는 보내지 않는다.
+                    continue
                 if tool_uses:
                     msg_dict["tool_calls"] = [
                         {
