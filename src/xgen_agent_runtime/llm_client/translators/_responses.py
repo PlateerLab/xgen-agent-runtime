@@ -104,6 +104,12 @@ def response_format_to_responses(rf: Dict[str, Any]) -> Optional[Dict[str, Any]]
 # ── 입력(대화) ────────────────────────────────────────────────────────
 
 
+def _meta(block: Dict[str, Any]) -> Dict[str, Any]:
+    """블록의 ``_meta``(런타임 내부 표시) — 없거나 모양이 다르면 빈 dict."""
+    meta = block.get("_meta")
+    return meta if isinstance(meta, dict) else {}
+
+
 def _image_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     block = materialize_local_image_block(block)
     source = block.get("source") or {}
@@ -113,7 +119,7 @@ def _image_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         url = source["url"]
     else:
         return None
-    meta = block.get("_meta") if isinstance(block.get("_meta"), dict) else {}
+    meta = _meta(block)
     return {
         "type": "input_image",
         "image_url": url,
@@ -230,8 +236,7 @@ def canonical_to_responses_input(
             if kind == "text":
                 text = block.get("text") or ""
                 if text:
-                    meta = block.get("_meta") if isinstance(block.get("_meta"), dict) else {}
-                    items.append(_assistant_text_item(text, meta.get("openai_phase")))
+                    items.append(_assistant_text_item(text, _meta(block).get("openai_phase")))
                 continue
             if kind == "tool_use":
                 call: Dict[str, Any] = {
@@ -240,9 +245,9 @@ def canonical_to_responses_input(
                     "name": block.get("name", ""),
                     "arguments": json.dumps(block.get("input", {}) or {}, ensure_ascii=False),
                 }
-                meta = block.get("_meta") if isinstance(block.get("_meta"), dict) else {}
-                if paired and meta.get("openai_item_id"):
-                    call["id"] = meta["openai_item_id"]
+                item_id = _meta(block).get("openai_item_id")
+                if paired and item_id:
+                    call["id"] = item_id
                 items.append(call)
     return instructions, items
 

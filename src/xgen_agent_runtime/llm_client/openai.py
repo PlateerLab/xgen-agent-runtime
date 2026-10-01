@@ -775,7 +775,9 @@ class OpenAIClient(BaseClient):
             if kind == "reasoning":
                 dumped = _dump_item(item)
                 summary = reasoning_summary_text(item)
-                kept = {k: dumped[k] for k in ("id", "summary", "encrypted_content") if k in dumped}
+                kept: Dict[str, Any] = {
+                    k: dumped[k] for k in ("id", "summary", "encrypted_content") if k in dumped
+                }
                 kept["type"] = "reasoning"
                 blocks.append(
                     ContentBlock(
