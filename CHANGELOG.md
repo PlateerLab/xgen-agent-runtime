@@ -4,6 +4,19 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.77.0] — 2026-10-01
+
+### Fixed — 끝나지 못한 턴(중단·오류)도 대화 기억에 남는다
+
+STM 기록은 Stage 18 이 맡는데, 그 단계는 파이프라인이 끝까지 가야 돈다. 사용자가 [정지] 를 누른 턴은 그 전에 끊겨
+**질문조차 STM 에 남지 않았고**, 다음 턴의 단기 기억 창은 그 턴을 몰랐다(dev 실측: 중단된 "캐시해서 중복 호출을 막자"
+다음 턴이 "어느 앱 얘기인가요?" 라고 되물었다).
+
+- `stream_turn`·`run_turn` 의 종료 처리가 끝나지 못한 턴의 **아직 기록되지 않은 메시지**(질문·도구 호출·받은 결과)를 STM 에
+  남기고, 끝에 표식(`[The user stopped this turn before it finished. …]`, 오류면 `ended with an error`)을 붙인다.
+- Stage 18 과 같은 워터마크를 보므로 이미 기록된 부분(이어 가기 조각)은 다시 적지 않는다. 질문이 상태에 오기 전에
+  끊겼으면 받은 입력의 글로 질문을 세운다. 짝이 안 맞는 도구 호출 꼬리는 다음 턴의 창이 고친다.
+
 ## [4.76.0] — 2026-10-01
 
 ### Changed — 턴 조립과 실행 코어를 나누고, 실행 엔진을 설정으로 고른다
@@ -4755,7 +4768,6 @@ output.
   covering all six ``stream_event`` sub-types + the end-to-end
   delta-then-envelope sequence + the duplicate-text guard. Full
   suite: 3276 passed.
-
 
 ## [2.1.3] — 2026-06-04
 

@@ -1203,6 +1203,90 @@ def _record_execution(
         logger.debug("geny_bridge: execution record failed (turn unaffected)", exc_info=True)
 
 
+#: 끝나지 못한 턴을 기억에 남길 때 그 턴 끝에 붙이는 표식 — 다음 턴의 단기 기억 창이 이 턴을 "끝나지
+#: 않은 턴" 으로 읽는다. 위의 도구 호출·결과는 그때까지 실제로 한 일이다.
+UNFINISHED_TURN_NOTES = {
+    "cancelled": "[The user stopped this turn before it finished. The steps above are what was done so far.]",
+    "error": "[This turn ended with an error before it finished. The steps above are what was done so far.]",
+}
+
+
+def _record_unfinished_turn(
+    pipeline: Pipeline,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    state: PipelineState,
+    input_text: Any,
+    reason: str,
+) -> int:
+    """끝나지 못한 턴(중단·오류)의 대화를 단기 기억(STM)에 남긴다. 남긴 메시지 수를 돌려준다.
+
+    STM 기록은 Stage 18 이 맡는데, 그 단계는 파이프라인이 끝까지 가야 돈다. 사용자가 [정지] 를
+    누른 턴은 그 전에 끊겨 **질문조차 남지 않았고**, 다음 턴은 "아까 그거" 가 무엇인지 몰랐다
+    (2026-10-01 실측: 중단된 "캐시해서 중복 호출을 막자" 다음 턴이 어느 앱 얘기냐고 되물었다).
+
+    아직 기록되지 않은 메시지(질문·도구 호출·받은 결과)를 그대로 남기고 끝에 표식을 붙인다.
+    Stage 18 과 같은 워터마크를 보므로 이미 기록된 것은 다시 적지 않는다(이어 가기 조각이 끝까지
+    간 부분). 짝이 안 맞는 도구 호출 꼬리는 다음 턴의 창이 고친다(repair_dangling_tool_calls).
+    질문이 상태에 아직 없으면(입력 단계 전에 끊겼다) 받은 입력의 글로 질문을 세운다.
+    실패는 로그만 — 턴 결과를 바꾸지 않는다.
+    """
+    provider = getattr(pipeline, "_memory_provider", None)
+    if provider is None or not callable(getattr(provider, "record_turn", None)):
+        return 0
+    try:
+        from xgen_agent_runtime.host.turn_input import TurnInput
+        from xgen_agent_runtime.memory.provider import Turn
+        from xgen_agent_runtime.memory.short_term_window import WINDOW_LEN_KEY
+        from xgen_agent_runtime.memory.transcript import _is_tool_result_only
+        from xgen_agent_runtime.stages.s18_memory._dehydrate import dehydrate_message
+        from xgen_agent_runtime.stages.s18_memory.artifact.default.stage import (
+            _STATE_LAST_RECORDED,
+            _STRATEGY_RECORDED,
+            _recorded_upto,
+        )
+
+        def _asks(msg: Any) -> bool:
+            return (
+                isinstance(msg, dict)
+                and str(msg.get("role") or "") == "user"
+                and not _is_tool_result_only(msg.get("content"))
+            )
+
+        messages = list(state.messages)
+        start = _recorded_upto(state)
+        pending = [m for m in messages[start:] if isinstance(m, dict)]
+        try:
+            window_len = int(state.metadata.get(WINDOW_LEN_KEY, 0) or 0)
+        except (TypeError, ValueError):
+            window_len = 0
+        if not any(_asks(m) for m in messages[window_len:]):
+            question = TurnInput.from_raw(input_text).text.strip()
+            if question:
+                pending.insert(0, {"role": "user", "content": question})
+        if not pending:
+            return 0  # 끝까지 기록됐다(Stage 18 이 돈 뒤에 끊겼다)
+        note = UNFINISHED_TURN_NOTES.get(reason, UNFINISHED_TURN_NOTES["error"])
+        pending.append({"role": "assistant", "content": note})
+
+        async def _write() -> None:
+            for msg in pending:
+                await provider.record_turn(Turn.from_state_message(dehydrate_message(msg)))
+
+        loop.run_until_complete(asyncio.wait_for(_write(), timeout=10.0))
+        state.metadata[_STATE_LAST_RECORDED] = len(messages)
+        state.metadata[_STRATEGY_RECORDED] = len(messages)
+        logger.info(
+            "geny_bridge: unfinished turn kept in short-term memory (%s, %d messages)",
+            reason,
+            len(pending),
+        )
+        return len(pending)
+    except Exception:  # noqa: BLE001 — 기록 실패가 턴 결과를 바꾸지 않는다
+        logger.warning("geny_bridge: failed to keep the unfinished turn in memory", exc_info=True)
+        return 0
+
+
 def _close_memory_provider(pipeline: Pipeline, loop: asyncio.AbstractEventLoop) -> None:
     """turn teardown 에서 내장 메모리 provider 를 닫는다.
 
@@ -1610,6 +1694,15 @@ def stream_turn(
         turn_failed = (
             bool(turn_error) or not turn_completed or task_status != RunStatus.COMPLETED.value
         )
+        if not turn_completed or turn_error:
+            # 끝나지 못한 턴도 대화 기억에 남긴다 — 다음 턴이 무엇을 하다 멈췄는지 안다.
+            _record_unfinished_turn(
+                pipeline,
+                loop,
+                state=state,
+                input_text=text,
+                reason="error" if turn_error else "cancelled",
+            )
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
             _record_execution(
                 pipeline,
@@ -1720,6 +1813,15 @@ def run_turn(
         if rollout_recorder is not None and rollout_path is not None:
             _close_rollout_recorder(rollout_recorder, rollout_path, loop)
             state.session_runtime = original_runtime
+        if not turn_success:
+            # 끝나지 못한 턴도 대화 기억에 남긴다(stream_turn 과 같다). 예외로 끊긴 턴은 취소로 본다.
+            _record_unfinished_turn(
+                pipeline,
+                loop,
+                state=state,
+                input_text=text,
+                reason="cancelled" if "Cancel" in turn_error else "error",
+            )
         if _should_record_execution(
             host, produced_output=produced_output or bool(turn_output), failed=not turn_success
         ):
