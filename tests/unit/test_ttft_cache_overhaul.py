@@ -297,35 +297,6 @@ class TestTurnContextInjection:
         assert sent[1]["content"][0]["type"] == "tool_use"
         assert sent[2]["content"][0]["type"] == "tool_result"
 
-    def test_pipeline_mode_tool_results_in_history_do_not_carry_the_context(self):
-        """파이프라인 모드는 도구 결과가 state.messages 에 있다 — 그래도 사용자의 말에 붙는다.
-        도구 결과에 붙으면 OpenAI 가 도구 출력 뒤의 새 user 메시지로 받아 시각에 답했다(실측)."""
-        stage = APIStage()
-        state = PipelineState()
-        state.messages = [
-            {"role": "user", "content": "weather in Seoul?"},
-            {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": "t1", "name": "get_weather", "input": {}}],
-            },
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "18C"}]},
-        ]
-        state.shared["turn_context_text"] = "Current date: now"
-        sent = stage._call_kwargs(stage.resolve_model_config(state), state)["messages"]
-        assert "<session-context>" in sent[0]["content"][-1]["text"]
-        assert sent[2]["content"] == state.messages[2]["content"]
-        assert all(b.get("type") == "tool_result" for b in sent[2]["content"])
-
-    def test_only_tool_results_falls_back_to_the_latest_user_message(self):
-        stage = APIStage()
-        state = PipelineState()
-        state.messages = [
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}]},
-        ]
-        state.shared["turn_context_text"] = "ctx"
-        sent = stage._call_kwargs(stage.resolve_model_config(state), state)["messages"]
-        assert "<session-context>" in sent[0]["content"][-1]["text"]
-
     def test_no_user_message_skips_injection(self):
         stage = APIStage()
         state = PipelineState()

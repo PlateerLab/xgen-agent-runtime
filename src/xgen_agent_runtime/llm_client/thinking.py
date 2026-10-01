@@ -510,7 +510,8 @@ def openai_output_budget(spec: ThinkingSpec, level: Optional[str], max_tokens: i
     reserve = _OPENAI_REASONING_RESERVE.get(str(effective or ""), 0)
     if not reserve or not max_tokens:
         return max_tokens
-    return min(int(max_tokens) + reserve, _OPENAI_MAX_OUTPUT_CEILING)
+    # 더하기만 한다 — 이미 천장보다 크게 둔 설정(gpt-5.x 는 128k 까지 받는다)을 줄이지 않는다.
+    return max(int(max_tokens), min(int(max_tokens) + reserve, _OPENAI_MAX_OUTPUT_CEILING))
 
 
 _SUPPORTED_RE = re.compile(r"[Ss]upported values are:?\s*(.+?)(?:\.\s|\.?['\"]?$|\.$)", re.S)

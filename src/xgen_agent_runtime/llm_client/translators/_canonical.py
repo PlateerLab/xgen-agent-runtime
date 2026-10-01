@@ -402,8 +402,9 @@ def canonical_messages_to_anthropic(
                 cleaned = _sanitize_anthropic_block(block)
                 if cleaned is not None:
                     new_blocks.append(cleaned)
-            if not new_blocks and content:
-                # 다른 provider 의 생각만 있던 메시지 — 빈 content 는 Anthropic 이 거절한다.
+            if not new_blocks:
+                # 빈 content 는 Anthropic 이 거절한다 — 다른 provider 의 생각만 있던 메시지, 또는
+                # 저장하며 그 생각을 뺀 뒤 복원된 메시지(`content: []`).
                 continue
             sanitized.append({**msg, "content": new_blocks})
         else:

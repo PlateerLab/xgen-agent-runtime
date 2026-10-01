@@ -615,31 +615,13 @@ class APIStage(Stage[Any, APIResponse]):
         so history stays clean and the injected text always lands after
         every prompt-cache breakpoint (system, tools, history prefix all
         stay byte-stable across turns).
-
-        **사용자의 말에 붙인다 — 도구 결과에 붙이지 않는다** (2026-10-01). 도구 루프의 두 번째
-        호출부터 가장 최근 user 메시지는 도구 결과를 실어 나르는 메시지다. 거기 붙이면 OpenAI 는
-        (Responses·Chat Completions 모두) 도구 출력 **뒤에 새 user 메시지**로 받아, 모델이 날씨를
-        말하는 대신 "알겠습니다 — 지금은 10월 1일 15시입니다" 라고 답했다(dev 실측, gpt-6-luna).
-        그래서 도구 결과만 실은 메시지는 건너뛰고 이 턴의 사용자 말에 붙인다. 같은 턴의 다음
-        호출에서도 같은 자리라 앞부분이 바이트 그대로 남는다(예전에는 매 호출 마지막 도구 결과로
-        자리가 옮겨 다녀 직전 호출의 캐시가 그 지점에서 갈렸다). 사용자 말이 없으면 예전처럼
-        가장 최근 user 메시지에 붙인다.
         """
         if not context_text:
             return messages
-
-        def _tool_results_only(msg: Dict[str, Any]) -> bool:
-            content = msg.get("content")
-            return (
-                isinstance(content, list)
-                and bool(content)
-                and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-            )
-
-        user_indexes = [i for i, m in enumerate(messages) if m.get("role") == "user"]
-        spoken = [i for i in user_indexes if not _tool_results_only(messages[i])]
-        for i in spoken[-1:] or user_indexes[-1:]:
+        for i in range(len(messages) - 1, -1, -1):
             msg = messages[i]
+            if msg.get("role") != "user":
+                continue
             content = msg.get("content")
             if isinstance(content, str):
                 blocks: List[Dict[str, Any]] = [{"type": "text", "text": content}]

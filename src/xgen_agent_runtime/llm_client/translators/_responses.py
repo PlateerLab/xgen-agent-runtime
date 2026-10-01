@@ -146,6 +146,18 @@ def _user_parts(content: List[Any]) -> List[Dict[str, Any]]:
     return parts
 
 
+#: stage 6 가 붙이는 턴 맥락 블록의 머리.
+_TURN_CONTEXT_PREFIX = "<session-context>"
+
+
+def _is_turn_context(block: Any) -> bool:
+    return (
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and str(block.get("text") or "").lstrip().startswith(_TURN_CONTEXT_PREFIX)
+    )
+
+
 def _reasoning_item(block: Dict[str, Any], model: str) -> Optional[Dict[str, Any]]:
     """돌려줄 수 있는 생각 항목 — 같은 모델이 만든 것, 암호화된 내용이 있는 것만."""
     if block.get("provider") != REASONING_PROVIDER:
@@ -211,10 +223,19 @@ def canonical_to_responses_input(
                 parts = _user_parts(lifted)
                 if parts:
                     items.append({"role": "user", "content": parts})
-            if other:
-                parts = _user_parts(other)
+            # 턴 맥락(<session-context>: 시각·찾아 온 기억)은 요청 사본의 가장 최근 user 메시지에
+            # 붙는다(stage 6). 도구 루프에서는 그것이 도구 결과 메시지라, user 로 보내면 도구 출력
+            # **뒤의 새 질문**으로 읽혀 모델이 결과 대신 시각에 답했다(dev 실측: gpt-6-luna 16번 중
+            # 2번 "Got it."). 도구 결과 곁의 맥락은 developer 메시지로 보낸다 — 같은 조건 16/16 정상.
+            # 사용자의 말에 붙은 맥락(도구 결과가 없는 메시지)은 그대로 둔다.
+            context = [b for b in other if tool_results and _is_turn_context(b)] if other else []
+            rest = [b for b in other if not any(b is c for c in context)] if other else []
+            if rest:
+                parts = _user_parts(rest)
                 if parts:
                     items.append({"role": "user", "content": parts})
+            for block in context:
+                items.append({"role": "developer", "content": str(block.get("text") or "")})
             continue
         if role != "assistant":
             continue
@@ -295,9 +316,11 @@ def reasoning_summary_text(item: Any) -> str:
 
 
 def stop_reason_of(response: Any, *, has_tool_calls: bool) -> str:
-    """Responses 의 끝 상태 → 표준 stop_reason."""
-    if has_tool_calls:
-        return "tool_use"
+    """Responses 의 끝 상태 → 표준 stop_reason.
+
+    상한에 닿아 끊긴 응답(``incomplete``)이 먼저다 — 도구 호출이 있어도 인자가 잘렸을 수 있다.
+    Chat Completions 경로도 같은 경우 ``max_tokens`` 다(finish_reason "length").
+    """
     if _get(response, "status", "") == "incomplete":
         reason = _get(_get(response, "incomplete_details", None), "reason", "")
         if reason == "max_output_tokens":
@@ -305,6 +328,8 @@ def stop_reason_of(response: Any, *, has_tool_calls: bool) -> str:
         if reason == "content_filter":
             return "content_filter"
         return str(reason or "max_tokens")
+    if has_tool_calls:
+        return "tool_use"
     return "end_turn"
 
 
