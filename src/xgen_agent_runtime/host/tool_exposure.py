@@ -226,11 +226,13 @@ def _read_only(tool) -> bool:
 def resolve_tool_map(registry, open_names) -> list:
     """호스트가 말한 것을 이번 턴 레지스트리의 도구 이름으로 푼다.
 
-    호스트(기억 게이트웨이)는 이름표를 들고 있지 않다. 말할 수 있는 것은 세 가지다:
+    호스트(기억 게이트웨이)는 이름표를 들고 있지 않다. 말할 수 있는 것은 네 가지다:
       * ``family:<이름>[:ro]`` — 내장 도구 가족(:data:`BUILT_IN_TOOL_FEATURES`). ``:ro`` 면 읽기 전용 멤버만.
+      * ``folder[:ro]`` — 이 대화에 연결된 폴더의 기기 도구(:func:`host.local_folders.is_folder_tool`).
       * ``gate:<이름>`` — 문(:mod:`tools.gates`). 문만 세우고 방은 문이 열리게 둔다(라우터 규약).
       * 그 밖은 도구 이름 그대로(MCP 접두는 벗겨 비교). 등록되지 않은 이름은 무시한다.
     """
+    from xgen_agent_runtime.host.local_folders import is_folder_tool
     from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_FEATURES
     from xgen_agent_runtime.tools.gates import gate_of
 
@@ -255,6 +257,10 @@ def resolve_tool_map(registry, open_names) -> list:
                 for n in by_bare.get(member, ()):
                     if qual != "ro" or _read_only(registry.get(n)):
                         add(n)
+        elif kind == "folder":
+            for n in names:
+                if is_folder_tool(n) and (rest != "ro" or _read_only(registry.get(n))):
+                    add(n)
         elif kind == "gate" and rest:
             for n in names:
                 if _bare(n) == rest and gate_of(n) is not None:
@@ -331,7 +337,7 @@ def map_fallback_due(messages, open_names) -> bool:
         content = _field(msg, "content")
         if isinstance(content, str) or not any(_field(b, "type") == "tool_result" for b in (content or [])):
             start = i + 1
-    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip() and not str(n).startswith(("family:", "gate:"))}
+    wanted = {_bare(n) for n in (open_names or ()) if str(n or "").strip() and not str(n).startswith(("family:", "gate:", "folder"))}
     calls = {}
     misses = 0
     for msg in msgs[start:]:
