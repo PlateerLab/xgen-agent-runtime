@@ -55,7 +55,7 @@ class PipelineBuilder:
 
         ModelConfig fields (max_tokens, temperature, top_p, top_k,
         stop_sequences, thinking_enabled, thinking_budget_tokens,
-        thinking_type, thinking_display) are routed to ModelConfig.
+        thinking_type, thinking_display, thinking_level) are routed to ModelConfig.
 
         Other kwargs are routed to PipelineConfig.
         """

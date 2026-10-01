@@ -199,6 +199,11 @@ def codex_argv(
     # knob when the caller pinned an effort; absent that, model defaults.
     thinking = request.thinking or {}
     effort = thinking.get("effort") if isinstance(thinking, dict) else None
+    if getattr(request, "thinking_level", None):
+        # 생각의 표준 값 — 끄기는 none(llm_client.thinking 표).
+        from xgen_agent_runtime.llm_client.thinking import codex_effort
+
+        effort = codex_effort(str(request.thinking_level))
     if effort:
         argv += ["-c", f"model_reasoning_effort={_toml_string(effort)}"]
 

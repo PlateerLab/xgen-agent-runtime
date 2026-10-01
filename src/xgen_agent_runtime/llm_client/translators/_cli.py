@@ -198,10 +198,14 @@ def claude_code_argv(
         if sys_text:
             argv += ["--system-prompt", sys_text]
 
-    # Thinking → --effort
-    effort = thinking_to_effort(request.thinking)
-    if effort:
-        argv += ["--effort", effort]
+    # Thinking → --effort. 표준 값이 있으면 그것(끄기는 argv 가 아니라 env — 클라이언트가 붙인다).
+    if getattr(request, "thinking_level", None):
+        if request.thinking_level != "off":
+            argv += ["--effort", str(request.thinking_level)]
+    else:
+        effort = thinking_to_effort(request.thinking)
+        if effort:
+            argv += ["--effort", effort]
 
     # Tool allow/deny lists. We pass these as space-joined strings (the CLI
     # accepts comma- or space-separated input per its --help).

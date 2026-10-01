@@ -158,7 +158,7 @@ class _CaptureRunner:
 async def test_nonstream_image_request_rides_stream_wire(monkeypatch):
     client = ClaudeCodeCLIClient(binary_path="/bin/true", api_key="sk-test")
     runner = _CaptureRunner()
-    monkeypatch.setattr(client, "_make_runner", lambda: runner)
+    monkeypatch.setattr(client, "_make_runner", lambda **_: runner)
 
     async def _ver():
         return "test"
@@ -209,7 +209,7 @@ async def test_nonstream_text_request_keeps_oneshot_wire(monkeypatch):
             raise AssertionError("text-only non-stream must stay one-shot")
 
     runner = _OneshotRunner()
-    monkeypatch.setattr(client, "_make_runner", lambda: runner)
+    monkeypatch.setattr(client, "_make_runner", lambda **_: runner)
 
     async def _ver():
         return "test"

@@ -135,6 +135,10 @@ def _process_alive(proc: Any) -> bool:
     return True
 
 
+def _thinking_off(request: Optional[APIRequest]) -> bool:
+    return request is not None and getattr(request, "thinking_level", None) == "off"
+
+
 class ClaudeCodeCLIClient(BaseClient):
     """Subprocess-backed Claude Code client."""
 
@@ -295,7 +299,7 @@ class ClaudeCodeCLIClient(BaseClient):
     #: monitor evicts whole sessions long after this anyway.
     _SPARE_TTL_S = 90.0
 
-    def _take_spare(self, argv: List[str]) -> Optional[Any]:
+    def _take_spare(self, argv: List[str], request: Optional[APIRequest] = None) -> Optional[Any]:
         """Claim the hot spare for *argv*, or None when it doesn't match.
 
         The spare is only valid for an IDENTICAL argv (model, MCP config,
@@ -324,7 +328,12 @@ class ClaudeCodeCLIClient(BaseClient):
         if expire_task is not None:
             expire_task.cancel()
         proc = spare["proc"]
-        if spare["argv"] != list(argv) or not _process_alive(proc):
+        # 생각 끄기는 argv 가 아니라 env 라 argv 만으로는 같은지 모른다 — 함께 본다.
+        if (
+            spare["argv"] != list(argv)
+            or spare.get("thinking_off", False) != _thinking_off(request)
+            or not _process_alive(proc)
+        ):
             self._discard_spare_proc(spare)
             return None
         return proc
@@ -342,7 +351,7 @@ class ClaudeCodeCLIClient(BaseClient):
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
 
-    async def _schedule_spare(self, argv: List[str]) -> None:
+    async def _schedule_spare(self, argv: List[str], request: Optional[APIRequest] = None) -> None:
         """Boot the NEXT turn's process right after this turn's tokens.
 
         Semantics are identical to today's one-shot mode — the spare
@@ -365,14 +374,19 @@ class ClaudeCodeCLIClient(BaseClient):
             return
         argv_snapshot = list(argv)
         try:
-            runner = self._make_runner()
+            runner = self._make_runner(request=request)
             proc, _t0 = await runner._spawn(argv_snapshot)
         except Exception:  # noqa: BLE001 — prewarm is best-effort
             logger.debug("cli prewarm: spawn failed", exc_info=True)
             return
         if proc.returncode is not None:
             return  # died at birth — nothing to keep
-        entry: Dict[str, Any] = {"proc": proc, "argv": argv_snapshot, "runner": runner}
+        entry: Dict[str, Any] = {
+            "proc": proc,
+            "argv": argv_snapshot,
+            "runner": runner,
+            "thinking_off": _thinking_off(request),
+        }
 
         async def _expire() -> None:
             try:
@@ -463,8 +477,17 @@ class ClaudeCodeCLIClient(BaseClient):
     def _truthy(value: Any) -> bool:
         return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
-    def _make_runner(self, *, timeout_s: Optional[float] = None) -> CLIProcessRunner:
+    def _make_runner(
+        self,
+        *,
+        timeout_s: Optional[float] = None,
+        request: Optional[APIRequest] = None,
+    ) -> CLIProcessRunner:
         effective_timeout = self._timeout_s if timeout_s is None else timeout_s
+        env_extras = self._env_extras()
+        if request is not None and getattr(request, "thinking_level", None) == "off":
+            # 생각 끄기는 argv 가 아니라 env 다(Claude Code: MAX_THINKING_TOKENS=0).
+            env_extras["MAX_THINKING_TOKENS"] = "0"
         # A host-supplied runner factory (e.g. a container sandbox) runs the
         # CLI elsewhere — the agent binary need not exist on this host — so the
         # host-binary check is the *default* in-process runner's concern only.
@@ -472,7 +495,7 @@ class ClaudeCodeCLIClient(BaseClient):
             return self._runner_factory(
                 binary=self._binary,
                 cwd=self._workspace_dir,
-                env_extras=self._env_extras(),
+                env_extras=env_extras,
                 timeout_s=effective_timeout,
             )
         if not self._binary:
@@ -483,7 +506,7 @@ class ClaudeCodeCLIClient(BaseClient):
         return CLIProcessRunner(
             binary=self._binary,
             cwd=self._workspace_dir,
-            env_extras=self._env_extras(),
+            env_extras=env_extras,
             timeout_s=effective_timeout,
         )
 
@@ -663,7 +686,7 @@ class ClaudeCodeCLIClient(BaseClient):
 
     async def _send(self, request: APIRequest, *, purpose: str = "") -> APIResponse:
         try:
-            runner = self._make_runner()
+            runner = self._make_runner(request=request)
         except CLIBinaryNotFound as e:
             raise APIError(str(e), category=ErrorCategory.CLI_NOT_FOUND) from e
 
@@ -752,7 +775,7 @@ class ClaudeCodeCLIClient(BaseClient):
         )
 
         try:
-            runner = self._make_runner()
+            runner = self._make_runner(request=request)
         except CLIBinaryNotFound as e:
             raise APIError(str(e), category=ErrorCategory.CLI_NOT_FOUND) from e
 
@@ -764,7 +787,7 @@ class ClaudeCodeCLIClient(BaseClient):
         # turn when its argv matches — Node boot + auth + MCP startup are
         # already done and the prompt travels over stdin exactly as on a
         # fresh spawn.
-        spare_proc = self._take_spare(argv)
+        spare_proc = self._take_spare(argv, request)
 
         from xgen_agent_runtime.llm_client._cli_runtime import parse_stream_json_line
 
@@ -836,7 +859,7 @@ class ClaudeCodeCLIClient(BaseClient):
             # prebooting again). Awaited inline: all tokens are already
             # out, and a background spawn task wedges 3.11/3.12 loop
             # teardown (see _schedule_spare).
-            await self._schedule_spare(argv)
+            await self._schedule_spare(argv, request)
             yield {
                 "type": "message_complete",
                 "response": self._attach_cli_version(accum.finalize()),

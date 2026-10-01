@@ -522,6 +522,7 @@ def build_pipeline(
         DEFAULT_TURN_SOFT_TOKENS,
         DEFAULT_TURN_HARD_TOKENS,
     ),
+    thinking_level: Optional[str] = None,
 ) -> Pipeline:
     """Assemble a one-shot pipeline for a single node execution.
 
@@ -607,6 +608,9 @@ def build_pipeline(
     if context_window_budget and int(context_window_budget) > 0:
         # PipelineConfig 필드 → attach 시 state.context_window_budget 로 전파.
         model_opts["context_window_budget"] = int(context_window_budget)
+    if thinking_level:
+        # 생각의 표준 값 — 클라이언트가 이 모델이 받는 요청으로 옮긴다(llm_client.thinking).
+        model_opts["thinking_level"] = str(thinking_level)
 
     builder = (
         PipelineBuilder(name, api_key=api_key, model=model)

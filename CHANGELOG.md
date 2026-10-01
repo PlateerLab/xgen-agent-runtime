@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.75.0] — 2026-10-01
+
+### Added — 생각(thinking·reasoning) 조절을 한 값으로 (`llm_client.thinking`)
+
+호출자는 `ModelConfig.thinking_level` 에 **하나의 값**(`off`·`on`·`minimal`..`max`, 비우면 모델 기본)만 준다. 그 모델이
+실제로 받는 요청으로 옮기는 일은 `thinking_spec(provider, model)` 표와 각 클라이언트가 한다:
+
+- **Anthropic·Bedrock**: Haiku 4.5·Sonnet 4.5·Opus 4.5 는 토큰 예산(`enabled`+`budget_tokens`, `max_tokens` 를 예산 위로),
+  4.6 이후는 `adaptive` + `output_config.effort`(본문 `extra_body`). 끄기는 `disabled`, Sonnet 5.5 는 `between_tools`,
+  Opus 5.5·Fable 은 끌 수 없다(가장 약한 강도로).
+- **OpenAI·Azure**: `reasoning_effort`(끄기 `none`), 생각을 켜면 temperature·top_p 를 내려놓는다. gpt-4.1·4o 는 조절 불가.
+- **Gemini·Vertex**: 2.5 는 `thinking_budget`(0 이면 끔, 2.5 Pro 는 못 끔), 3 계열은 `thinking_level`.
+- **vLLM**: 서빙 모델의 템플릿 변수 — Qwen3 계열 `chat_template_kwargs.enable_thinking`, DeepSeek V3.x `thinking`,
+  gpt-oss `reasoning_effort`. 모르는 모델은 조절 불가(템플릿이 모르는 키는 조용히 버려진다).
+- **Claude Code CLI**: `--effort`, 끄기는 `MAX_THINKING_TOKENS=0`(핫 스페어도 이 env 를 구별한다). **Codex CLI**: `model_reasoning_effort`.
+
+표의 출처: 2026-10-01 dev 에 등록된 모델 실측(받는 값·거절 문구·생각 토큰, `verified=True`)과 vendor 문서.
+`normalize_thinking` 이 모델에 없는 값을 가장 가까운 값으로 옮긴다(끌 수 없는 모델의 끄기 → 가장 약하게, 켜기/끄기
+모델의 강도 → 켜기). `build_pipeline(thinking_level=…)`, 턴 실행기는 노드·대화의 `thinking` 을 넘긴다. 압축 요약은
+사용자의 강도를 따르지 않고 모델 기본으로 돈다.
+
 ## [4.74.2] — 2026-10-01
 
 ### Fixed — 생각을 끈 Anthropic 호출의 temperature
