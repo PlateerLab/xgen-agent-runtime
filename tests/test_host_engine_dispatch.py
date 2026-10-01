@@ -52,6 +52,11 @@ def test_default_engine_is_the_pipeline() -> None:
     assert select_engine(SimpleNamespace(), {}) == ENGINE_PIPELINE21
     assert select_engine(_SettingHost("  RSI "), {}) == ENGINE_RSI
     assert select_engine(_SettingHost("something-else"), {}) == ENGINE_PIPELINE21
+    # 이름: geny = 기존 엔진, geny-rsi = RSI 하네스(대소문자·공백 무시)
+    assert select_engine(_SettingHost(" Geny-RSI "), {}) == ENGINE_RSI
+    assert select_engine(_SettingHost("geny"), {}) == ENGINE_PIPELINE21
+    assert select_engine(_SettingHost("pipeline21"), {}) == ENGINE_PIPELINE21
+    assert select_engine(_SettingHost(None), {"harness_engine": "geny-rsi"}) == ENGINE_RSI
 
 
 def test_kwargs_override_is_popped_before_the_host_sees_it() -> None:

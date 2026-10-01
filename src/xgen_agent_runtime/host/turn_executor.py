@@ -247,9 +247,18 @@ class TurnPlan:
 
 
 #: 실행 엔진 — 관리자 설정(``XGEN_HARNESS_ENGINE``) 또는 테스트용 kwargs(``harness_engine``)로 고른다.
+#: 이름: ``geny`` = 기존 21-stage 엔진(기본), ``geny-rsi`` = RSI 하네스(``xgen_rsi`` 패키지). 예전 값
+#: ``pipeline21`` · ``rsi`` 도 그대로 받는다.
 ENGINE_SETTING = "XGEN_HARNESS_ENGINE"
 ENGINE_PIPELINE21 = "pipeline21"
 ENGINE_RSI = "rsi"
+#: 설정값 → 엔진. 목록에 없는 값은 기본 엔진이다.
+ENGINE_ALIASES = {
+    "geny": ENGINE_PIPELINE21,
+    "pipeline21": ENGINE_PIPELINE21,
+    "geny-rsi": ENGINE_RSI,
+    "rsi": ENGINE_RSI,
+}
 
 
 def select_engine(host: Any, kwargs: Dict[str, Any]) -> str:
@@ -265,7 +274,7 @@ def select_engine(host: Any, kwargs: Dict[str, Any]) -> str:
                 value = getter(ENGINE_SETTING)
             except Exception:  # noqa: BLE001 — 설정 조회 실패는 기본 엔진
                 value = None
-    return ENGINE_RSI if str(value or "").strip().lower() == ENGINE_RSI else ENGINE_PIPELINE21
+    return ENGINE_ALIASES.get(str(value or "").strip().lower(), ENGINE_PIPELINE21)
 
 
 def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) -> Any:
@@ -1273,7 +1282,8 @@ class AgentTurnExecutor:
     """execute() 의 host-무관 판. 서버·커넥터가 같은 run() 을 돈다.
 
     턴 조립(:func:`assemble_turn`)은 엔진과 무관하고, 실행 코어는 엔진이 정한다 —
-    기존 21-stage 파이프라인(기본) 또는 RSI 하네스(``xgen_rsi``, 설정 ``XGEN_HARNESS_ENGINE=rsi``).
+    기존 21-stage 파이프라인 ``geny``(기본) 또는 RSI 하네스 ``geny-rsi``(``xgen_rsi``, 설정
+    ``XGEN_HARNESS_ENGINE=geny-rsi``).
     """
 
     def run(self, host: Any, **kwargs):
@@ -1287,7 +1297,7 @@ class AgentTurnExecutor:
                     from xgen_rsi.kernel.executor import RSITurnExecutor
                 except ImportError:
                     logger.warning(
-                        "agents/geny: %s=rsi 이지만 xgen_rsi 가 설치돼 있지 않다 — 기존 엔진으로 돈다",
+                        "agents/geny: %s=geny-rsi 이지만 xgen_rsi 가 설치돼 있지 않다 — 기존 엔진으로 돈다",
                         ENGINE_SETTING,
                     )
                     engine = ENGINE_PIPELINE21
