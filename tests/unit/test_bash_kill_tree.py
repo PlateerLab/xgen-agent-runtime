@@ -121,6 +121,8 @@ def test_spawn_kwargs_per_platform():
     assert bt._host_spawn_kwargs(platform="darwin") == {"start_new_session": True}
     flags = bt._host_spawn_kwargs(platform="win32")["creationflags"]
     assert flags & 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    # 창 없는 엔진이 띄우는 PowerShell 이 명령마다 콘솔 창을 만들지 않게(4.83.2).
+    assert flags & 0x08000000  # CREATE_NO_WINDOW
 
 
 def test_windows_kill_uses_taskkill_for_the_tree(monkeypatch):
@@ -132,6 +134,7 @@ def test_windows_kill_uses_taskkill_for_the_tree(monkeypatch):
 
     async def fake_exec(*argv, **kwargs):
         calls.append(argv)
+        assert kwargs.get("creationflags", 0) & 0x08000000  # taskkill 도 창을 만들지 않는다
         return _Killer()
 
     class _Proc:

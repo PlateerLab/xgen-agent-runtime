@@ -4,6 +4,14 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.83.2] — 2026-10-02
+
+### Fixed — Windows 에서 이 PC 의 Bash 가 명령마다 콘솔 창을 띄우던 것
+
+데스크톱 앱은 엔진을 창 없이(`CREATE_NO_WINDOW`) 띄운다. 그 엔진에는 콘솔이 없어서, 호스트 경로 Bash 가
+PowerShell(콘솔 프로그램)을 그냥 띄우면 Windows 가 새 콘솔 창을 만들어 명령마다 창이 깜빡였다. 셸과
+`taskkill` 을 `CREATE_NO_WINDOW` 로 띄운다 — 출력은 파이프로 받으므로 창이 필요 없다.
+
 ## [4.83.1] — 2026-10-02
 
 ### Fixed — 이 PC 에서 도는 Bash 가 취소·시간 초과 때 자식 프로세스를 남기던 것
