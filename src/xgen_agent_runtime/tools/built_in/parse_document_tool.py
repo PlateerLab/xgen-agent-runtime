@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import re
 import tempfile
+import threading
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional, Tuple
 
@@ -42,6 +43,15 @@ _IMAGE_TAG = re.compile(r"\[Image:[^\]]*\]")
 _PLAIN_TEXT = frozenset({"txt", "md", "markdown", "log"})
 
 
+#: 추출은 프로세스 전체에서 한 번에 하나만 돈다. PDF 를 여는 pypdfium2(PDFium)는 스레드 안전하지
+#: 않다 — dev 10-02: 모델이 ToolBatch 로 PDF 두 개를 동시에 읽자 글자가 깨졌고(``æîô WHÅçL…``),
+#: 그 뒤 같은 프로세스에서는 하나씩 읽어도 "broken document" 가 났다. 같은 파일 둘을 스레드 넷으로
+#: 동시에 추출하면 프로세스가 Segmentation fault 로 죽는다(워크플로 서버 전체가 내려간다).
+#: 추출은 몇 초짜리라 줄 세워도 비용이 작고, 다른 형식의 파서도 같은 처지일 수 있어 형식과
+#: 상관없이 잠근다. 다른 세션의 추출과도 겹치면 안 되므로 도구 인스턴스가 아니라 모듈에 둔다.
+_EXTRACT_LOCK = threading.Lock()
+
+
 def _load_processor(image_directory: str) -> Any:
     from xgen_doc2chunk import DocumentProcessor
 
@@ -50,7 +60,7 @@ def _load_processor(image_directory: str) -> Any:
 
 def _extract(local_path: str, extension: str) -> str:
     """doc2chunk 추출 — 청크 없이 글만. 지원하지 않는 형식이면 ValueError."""
-    with tempfile.TemporaryDirectory(prefix="xgen-parse-img-") as image_dir:
+    with _EXTRACT_LOCK, tempfile.TemporaryDirectory(prefix="xgen-parse-img-") as image_dir:
         processor = _load_processor(image_dir)
         if not processor.is_supported(extension):
             raise ValueError(f"unsupported file type: .{extension}")
