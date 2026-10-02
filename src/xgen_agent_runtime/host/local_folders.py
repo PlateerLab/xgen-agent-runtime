@@ -46,7 +46,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 #: 로컬 MCP 관리, 모바일 알림·위치…)는 여기 들지 않는다 — 각자 자기 설정이 정한다.
 FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
     # 데스크톱: 설정의 [로컬 컨트롤] 탭이 없어지고 폴더 연결이 PC 조작의 유일한 문이다.
-    # 복사 도구(CopyToWorkspace·CopyFromWorkspace)는 기기 폴더와 sandbox 사이로 파일을 옮긴다(앱 1.81.0~).
+    # 복사 도구(CopyToWorkspace·CopyFromWorkspace)는 기기 폴더와 sandbox 사이로 파일을 옮긴다
+    # (앱 1.81.0~, 웹 [폴더] 는 runtime 4.83.0~).
     "local": frozenset(
         {
             "ReadFile",
@@ -84,6 +85,8 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "ListDir",
             "DeleteFile",
             "SearchFiles",
+            "CopyToWorkspace",
+            "CopyFromWorkspace",
         }
     ),
 }

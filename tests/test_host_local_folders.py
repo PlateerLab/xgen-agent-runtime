@@ -203,7 +203,8 @@ def test_copy_tools_are_folder_tools_and_the_note_points_to_them() -> None:
     assert lf.is_folder_tool("mcp_mobile_CopyToWorkspace")
     assert lf.is_folder_tool("mcp_local_CopyFromWorkspace")
     assert lf.is_folder_tool("mcp__connector__mcp_local_CopyToWorkspace")
-    assert not lf.is_folder_tool("mcp_web_CopyToWorkspace")  # 웹 [폴더] 는 아직 이 도구가 없다
+    assert lf.is_folder_tool("mcp_web_CopyToWorkspace")  # 웹 [폴더] 도 같은 두 도구를 올린다
+    assert lf.is_folder_tool("mcp_web_CopyFromWorkspace")
     note = lf.turn_note(
         folders,
         available_tools=["mcp_mobile_ReadFile", "mcp_mobile_CopyToWorkspace", "mcp_mobile_CopyFromWorkspace"],
@@ -214,6 +215,18 @@ def test_copy_tools_are_folder_tools_and_the_note_points_to_them() -> None:
     old_app = lf.turn_note(folders, available_tools=["mcp_mobile_ReadFile"], platform="android")
     assert "read it with one side's tool" in old_app
     assert "mcp_local_CopyToWorkspace" in lf.retired_device_tool_names()
+
+
+def test_web_folder_note_points_to_the_copy_tools() -> None:
+    folders = [lf.LocalFolder(id="1", name="docs", path="/docs")]
+    note = lf.turn_note(
+        folders,
+        available_tools=["mcp_web_ReadFile", "mcp_web_CopyToWorkspace", "mcp_web_CopyFromWorkspace"],
+        platform="web",
+    )
+    assert "copy them into your workspace with mcp_web_CopyToWorkspace" in note
+    assert "use mcp_web_CopyFromWorkspace" in note
+    assert "This device has no terminal; use the file tools." in note
 
 
 def test_wrong_machine_note_names_the_copy_tool() -> None:

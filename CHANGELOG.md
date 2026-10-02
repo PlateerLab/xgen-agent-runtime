@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.83.0] — 2026-10-02
+
+### Added — 웹 [폴더] 에도 작업 공간 복사 도구
+
+4.82.0 은 데스크톱·CLI·VSCode·모바일 앱의 폴더에만 CopyToWorkspace·CopyFromWorkspace 를 붙였다. 웹 채팅의
+[폴더](브라우저가 고른 폴더, `mcp_web_*`)도 같은 두 도구를 올리므로(xgen-frontend) `FOLDER_TOOLS_BY_SERVER["web"]` 에
+넣는다 — 폴더가 연결된 대화에서만 보이고, 폴더가 그 브라우저에 있으면 어느 화면에서 보낸 턴이든 그 브라우저의 것으로
+붙는다. 턴 안내도 웹에서 복사 도구를 가리킨다.
+
 ## [4.82.0] — 2026-10-02
 
 ### Added — 기기 폴더 ↔ sandbox 를 옮기는 복사 도구(CopyToWorkspace·CopyFromWorkspace)
