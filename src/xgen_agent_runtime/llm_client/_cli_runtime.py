@@ -226,6 +226,42 @@ def detect_binary(name: str, override: Optional[str] = None) -> Optional[str]:
     return found
 
 
+#: Windows 프로세스 생성 플래그(``subprocess`` 상수는 Windows 에만 있어 값으로 둔다).
+_WIN_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_WIN_CREATE_NO_WINDOW = 0x08000000
+
+
+async def _win_kill_tree(proc: Any) -> None:
+    """Windows: ``taskkill /T /F`` 로 트리째(창 없이). 실패하면 CLI 하나라도 끝낸다. 던지지 않는다.
+
+    CLI 가 이미 끝났어도 부른다 — 그 자식(물려받은 stdout 을 쥔 MCP 서버)이 남아 있을 수 있고, 그것이
+    POSIX 쪽 ``force`` 가 그룹을 끝까지 신호하는 까닭과 같다.
+    """
+    try:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/T",
+            "/F",
+            "/PID",
+            str(proc.pid),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=_WIN_CREATE_NO_WINDOW,
+        )
+        await asyncio.wait_for(killer.wait(), timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def scrub_env(
     parent: Mapping[str, str],
     *,
@@ -427,6 +463,11 @@ class CLIProcessRunner:
         if sys.platform != "win32":
             # New process group → killpg-able.
             kwargs["start_new_session"] = True
+        else:
+            # 창 없이(CREATE_NO_WINDOW) — 데스크톱 앱이 엔진을 창 없이 띄우면 엔진에 콘솔이 없고, 그때 CLI(콘솔
+            # 프로그램)를 그냥 띄우면 Windows 가 턴마다 새 콘솔 창을 만든다. 출력은 파이프로 받는다.
+            # 새 프로세스 그룹(CREATE_NEW_PROCESS_GROUP) — 아래 _kill_tree 가 트리째 끝낸다.
+            kwargs["creationflags"] = _WIN_CREATE_NO_WINDOW | _WIN_CREATE_NEW_PROCESS_GROUP
         # Large tool results ride on single stream-json lines — raise the
         # StreamReader limit well past asyncio's 64 KiB default.
         kwargs["limit"] = _cli_stream_limit()
@@ -488,14 +529,15 @@ class CLIProcessRunner:
         """
         if proc.returncode is not None and not force:
             return
+        if sys.platform == "win32":  # pragma: no cover — Windows 에서만
+            # 신호가 없다 — CLI 가 띄운 MCP 서버 등 자식까지 트리째 끝낸다(proc.kill 은 CLI 하나만 끝낸다).
+            await _win_kill_tree(proc)
+            return
         try:
-            if sys.platform != "win32":
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            else:  # pragma: no cover — Windows path not exercised
-                proc.terminate()
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
         except Exception:
             pass
         try:
@@ -504,13 +546,10 @@ class CLIProcessRunner:
         except asyncio.TimeoutError:
             pass
         try:
-            if sys.platform != "win32":
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            else:  # pragma: no cover
-                proc.kill()
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         except Exception:
             pass
         try:
