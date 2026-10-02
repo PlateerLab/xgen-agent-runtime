@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import signal
-import subprocess
 import sys
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
@@ -155,8 +154,17 @@ def _host_shell_argv(command: str, *, platform: Optional[str] = None) -> Optiona
 _KILL_GRACE_S = 2.0
 
 
+#: Windows 프로세스 생성 플래그. ``subprocess`` 상수는 Windows 에만 있어 값으로 둔다.
+_WINDOWS_NEW_GROUP = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+_WINDOWS_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
+
+
 def _host_spawn_kwargs(*, platform: Optional[str] = None) -> Dict[str, Any]:
     """호스트 실행의 셸을 **자기 프로세스 그룹**으로 띄운다.
+
+    Windows 는 콘솔 창도 만들지 않는다(``CREATE_NO_WINDOW``). 데스크톱 앱은 엔진을 창 없이 띄우므로 엔진에는
+    콘솔이 없고, 콘솔 프로그램(PowerShell)을 그냥 띄우면 Windows 가 새 콘솔 창을 만들어 명령마다 창이
+    깜빡인다. 출력은 파이프로 받으므로 창이 필요 없다.
 
     셸이 띄운 자식(``npm`` 이 띄운 ``node``, ``sleep``…)까지 한 그룹이 되어야 취소·시간 초과 때 한 번에
     끝낼 수 있다. 셸 하나만 죽이면 자식은 고아로 남아 계속 돈다 — 사용자가 [정지]를 눌렀는데 빌드나 개발
@@ -164,7 +172,7 @@ def _host_spawn_kwargs(*, platform: Optional[str] = None) -> Dict[str, Any]:
     """
     plat = sys.platform if platform is None else platform
     if plat == "win32":
-        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)}
+        return {"creationflags": _WINDOWS_NEW_GROUP | _WINDOWS_NO_WINDOW}
     return {"start_new_session": True}
 
 
@@ -186,6 +194,7 @@ async def _kill_process_tree(proc: Any, *, platform: Optional[str] = None) -> No
                 str(proc.pid),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                creationflags=_WINDOWS_NO_WINDOW,
             )
             await asyncio.wait_for(killer.wait(), timeout=10)
         except Exception:  # noqa: BLE001 — taskkill 이 없거나 실패하면 셸만이라도
