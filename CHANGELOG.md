@@ -4,6 +4,20 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.82.0] — 2026-10-02
+
+### Added — 기기 폴더 ↔ sandbox 를 옮기는 복사 도구(CopyToWorkspace·CopyFromWorkspace)
+
+폴더 도구는 기기 안에서만 돌았다. ReadFile 은 글만 읽으므로 "카톡으로 받은 문서 세 개를 분석해 줘" 같은 요청에서
+에이전트는 docx·pdf·hwp 를 자기 작업 공간으로 가져올 길이 없었고("이 기능이 없다" 고 답했다, 2026-10-02 사용자
+실측), 작업 공간에서 만든 보고서를 사용자의 폴더에 놓을 길도 없었다. 앱(데스크톱·CLI·VSCode·모바일 1.81.0~)이 두
+도구를 올린다.
+
+- `FOLDER_TOOLS_BY_SERVER` 의 `local`·`mobile` 에 두 도구를 넣는다 — 폴더가 연결된 대화에서만 보이고, 폴더가 다른
+  기기에 있으면 그 기기의 것으로 붙는다(웹 [폴더] 는 아직 이 도구가 없다).
+- 턴 안내(`turn_note`)가 복사 도구가 있으면 "한쪽에서 읽어 다른 쪽에 쓰라" 대신 그 도구를 가리킨다.
+- 기기 경로를 sandbox 도구에 넘겼을 때의 안내(`second_machine`)가 CopyToWorkspace 도 함께 알려 준다.
+
 ## [4.81.2] — 2026-10-02
 
 ### Fixed — xgen-doc2chunk 0.4.3 과 함께 설치되지 않던 것

@@ -93,7 +93,7 @@ def device_file_tools(names: Iterable[str]) -> Optional[str]:
         found.setdefault(dev[0], []).append(text)
     if not found:
         return None
-    order = ("ListDir", "ReadFile", "SearchFiles", "Shell")
+    order = ("ListDir", "ReadFile", "SearchFiles", "Shell", "CopyToWorkspace")
     picked: List[str] = []
     for tools in found.values():
         by_base = {split_prefix(t)[1]: t for t in tools}
