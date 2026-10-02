@@ -46,6 +46,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 #: 로컬 MCP 관리, 모바일 알림·위치…)는 여기 들지 않는다 — 각자 자기 설정이 정한다.
 FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
     # 데스크톱: 설정의 [로컬 컨트롤] 탭이 없어지고 폴더 연결이 PC 조작의 유일한 문이다.
+    # 복사 도구(CopyToWorkspace·CopyFromWorkspace)는 기기 폴더와 sandbox 사이로 파일을 옮긴다(앱 1.81.0~).
     "local": frozenset(
         {
             "ReadFile",
@@ -57,6 +58,8 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "Open",
             "Clipboard",
             "Notify",
+            "CopyToWorkspace",
+            "CopyFromWorkspace",
         }
     ),
     # 모바일: 파일을 다루는 도구만. 터미널은 없다.
@@ -69,6 +72,8 @@ FOLDER_TOOLS_BY_SERVER: Dict[str, frozenset] = {
             "SearchFiles",
             "OpenFile",
             "TakePhoto",
+            "CopyToWorkspace",
+            "CopyFromWorkspace",
         }
     ),
     # 웹 브라우저: 사용자가 고른 폴더(File System Access)의 파일 도구만. 터미널은 없다.
@@ -387,13 +392,30 @@ def turn_note(
             )
         return "\n".join(lines)
     prefixes = sorted({f"mcp_{s}_*" for s, _ in folder_found})
+    copy_in = sorted(f"mcp_{s}_{t}" for s, t in folder_found if t == "CopyToWorkspace")
+    copy_out = sorted(f"mcp_{s}_{t}" for s, t in folder_found if t == "CopyFromWorkspace")
+    if copy_in:
+        # 기기가 옮기는 길을 준다 — 글만 읽는 ReadFile 로는 문서·그림을 sandbox 로 가져올 수 없다.
+        across = (
+            f"Nothing moves between the two by itself. To work on device files with your own tools "
+            f"(documents, spreadsheets, PDFs, images, whole folders), copy them into your workspace with "
+            f"{', '.join(copy_in)}; the result gives each file's path in your sandbox."
+        )
+        if copy_out:
+            across += (
+                f" To hand a file you made back to the user's folder, use {', '.join(copy_out)}."
+            )
+    else:
+        across = (
+            "Nothing moves between the two by itself — to bring a file across, read it with one "
+            "side's tool and write it with the other's."
+        )
     lines.append(
         f"Two machines this turn. Your own tools (Bash, Read, Write, Edit, Glob, Grep) act only on "
         f"your sandbox, which cannot see these folders. The device tools ({', '.join(prefixes)}) act "
         f"only on these folders on the user's {device}, which cannot see your sandbox. Pick the tool "
         "by where the file is: a path under the folders above belongs to the device tools, a path in "
-        "your sandbox to your own tools. Nothing moves between the two by itself — to bring a file "
-        "across, read it with one side's tool and write it with the other's."
+        f"your sandbox to your own tools. {across}"
     )
     if any(t == "Shell" for _, t in folder_found):
         lines.append(

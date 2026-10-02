@@ -192,3 +192,32 @@ def test_a_turn_from_another_screen_names_the_folder_pc(capture) -> None:
     assert 'Windows PC "사무실 PC"' in note
     assert "another screen" in note
     assert "- report: C:\\report" in note
+
+
+def test_copy_tools_are_folder_tools_and_the_note_points_to_them() -> None:
+    """기기 폴더 ↔ sandbox 복사 도구는 폴더 도구다(폴더가 있을 때만 보이고, 폴더 기기로 간다).
+
+    턴 안내는 옮기는 길을 가리킨다 — 글만 읽는 ReadFile 로는 문서·그림을 sandbox 로 가져올 수 없었다.
+    """
+    folders = [lf.LocalFolder(id="1", name="KakaoTalk", path="/KakaoTalk")]
+    assert lf.is_folder_tool("mcp_mobile_CopyToWorkspace")
+    assert lf.is_folder_tool("mcp_local_CopyFromWorkspace")
+    assert lf.is_folder_tool("mcp__connector__mcp_local_CopyToWorkspace")
+    assert not lf.is_folder_tool("mcp_web_CopyToWorkspace")  # 웹 [폴더] 는 아직 이 도구가 없다
+    note = lf.turn_note(
+        folders,
+        available_tools=["mcp_mobile_ReadFile", "mcp_mobile_CopyToWorkspace", "mcp_mobile_CopyFromWorkspace"],
+        platform="android",
+    )
+    assert "copy them into your workspace with mcp_mobile_CopyToWorkspace" in note
+    assert "use mcp_mobile_CopyFromWorkspace" in note
+    old_app = lf.turn_note(folders, available_tools=["mcp_mobile_ReadFile"], platform="android")
+    assert "read it with one side's tool" in old_app
+    assert "mcp_local_CopyToWorkspace" in lf.retired_device_tool_names()
+
+
+def test_wrong_machine_note_names_the_copy_tool() -> None:
+    from xgen_agent_runtime.stages.s10_tool.second_machine import device_file_tools
+
+    tools = device_file_tools(["mcp_local_ReadFile", "mcp_local_CopyToWorkspace", "Read"])
+    assert tools == "mcp_local_ReadFile / mcp_local_CopyToWorkspace"
