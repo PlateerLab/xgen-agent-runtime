@@ -4,6 +4,14 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.81.2] — 2026-10-02
+
+### Changed — xgen-doc2chunk 0.4.3
+
+doc2chunk 0.4.3 이 PDF 추출을 프로세스 잠금으로 한 번에 하나만 돌린다(PlateerLab/xgen-doc2chunk#6). 4.81.1 의
+ParseDocument 잠금은 이 도구만 막았고, 같은 프로세스에서 doc2chunk 를 직접 부르는 호스트 코드(첨부 읽기·색인기)는
+막지 못했다 — 아래층에서 함께 잠근다. 4.81.1 이 `==0.4.2` 로 고정해 호스트가 0.4.3 으로 올리면 설치가 충돌했다.
+
 ## [4.81.1] — 2026-10-02
 
 ### Fixed — ParseDocument 로 PDF 둘을 동시에 읽으면 글자가 깨지고 서버가 죽을 수 있던 것
