@@ -217,7 +217,9 @@ def codex_argv(
         argv += codex_host_only_args(instructions_path)
     argv += list(extra_args)
     # Only images from the current user turn belong to this invocation.
-    current_user = next((m for m in reversed(request.messages) if m.get("role") == "user"), {})
+    current_user: Dict[str, Any] = next(
+        (m for m in reversed(request.messages) if m.get("role") == "user"), {}
+    )
     content = current_user.get("content")
     if isinstance(content, list):
         for block in content:
