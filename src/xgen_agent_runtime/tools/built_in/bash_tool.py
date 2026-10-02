@@ -6,6 +6,8 @@ import asyncio
 import logging
 import os
 import re
+import signal
+import subprocess
 import sys
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
@@ -147,6 +149,77 @@ def _host_shell_argv(command: str, *, platform: Optional[str] = None) -> Optiona
         return [pwsh, "-NoProfile", "-NonInteractive", "-Command", command]
     comspec = os.environ.get("ComSpec") or os.environ.get("COMSPEC") or "cmd.exe"
     return [comspec, "/d", "/s", "/c", command]
+
+
+#: 그룹에 끝내라고(SIGTERM) 한 뒤 강제로 끝내기(SIGKILL)까지 기다리는 시간.
+_KILL_GRACE_S = 2.0
+
+
+def _host_spawn_kwargs(*, platform: Optional[str] = None) -> Dict[str, Any]:
+    """호스트 실행의 셸을 **자기 프로세스 그룹**으로 띄운다.
+
+    셸이 띄운 자식(``npm`` 이 띄운 ``node``, ``sleep``…)까지 한 그룹이 되어야 취소·시간 초과 때 한 번에
+    끝낼 수 있다. 셸 하나만 죽이면 자식은 고아로 남아 계속 돈다 — 사용자가 [정지]를 눌렀는데 빌드나 개발
+    서버가 이 PC 에서 계속 도는 것이다(2026-10-02 XD 실측: 취소한 ``sleep 30`` 이 남았다).
+    """
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)}
+    return {"start_new_session": True}
+
+
+async def _kill_process_tree(proc: Any, *, platform: Optional[str] = None) -> None:
+    """셸과 그 자식들을 끝낸다. 이미 끝났으면 아무것도 하지 않는다. 실패는 삼킨다(정리는 턴을 깨지 않는다).
+
+    POSIX: 그룹에 SIGTERM → 잠깐 기다림 → 남았으면 SIGKILL. Windows: ``taskkill /T /F`` 로 트리째.
+    """
+    if proc.returncode is not None:
+        return
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/T",
+                "/F",
+                "/PID",
+                str(proc.pid),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.wait(), timeout=10)
+        except Exception:  # noqa: BLE001 — taskkill 이 없거나 실패하면 셸만이라도
+            pass
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        for sig, grace in ((signal.SIGTERM, _KILL_GRACE_S), (signal.SIGKILL, 5.0)):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                break
+            except OSError:
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=grace)
+                # 셸이 끝났어도 그룹에 남은 자식이 있을 수 있다 — SIGKILL 단계로 한 번 더 쓴다.
+                if sig == signal.SIGKILL:
+                    break
+            except asyncio.TimeoutError:
+                continue
+            except Exception:  # noqa: BLE001
+                break
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _which_windows(name: str) -> Optional[str]:
@@ -428,6 +501,7 @@ class BashTool(Tool):
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
                     env=env,
+                    **_host_spawn_kwargs(),
                 )
             else:
                 proc = await asyncio.create_subprocess_shell(
@@ -436,6 +510,7 @@ class BashTool(Tool):
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
                     env=env,
+                    **_host_spawn_kwargs(),
                 )
         except OSError as e:
             return ToolResult(content=f"Failed to start process: {e}", is_error=True)
@@ -446,15 +521,15 @@ class BashTool(Tool):
                 timeout=timeout_s,
             )
         except asyncio.TimeoutError:
-            proc.kill()
-            try:
-                await proc.wait()
-            except Exception:
-                pass
+            await _kill_process_tree(proc)
             return ToolResult(
                 content=f"Command timed out after {timeout_ms}ms",
                 is_error=True,
             )
+        except asyncio.CancelledError:
+            # 턴이 멈췄다(사용자 [정지]). 명령이 만든 프로세스를 남겨 두지 않는다.
+            await _kill_process_tree(proc)
+            raise
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
