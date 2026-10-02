@@ -4,6 +4,19 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.83.1] — 2026-10-02
+
+### Fixed — 이 PC 에서 도는 Bash 가 취소·시간 초과 때 자식 프로세스를 남기던 것
+
+sandbox 없이 호스트에서 도는 Bash(서버는 늘 sandbox 라 해당 없음 — XD 같은 로컬 호스트의 경로)는 턴을
+취소해도 셸을 건드리지 않아 명령이 끝까지 돌았고, 시간 초과 때는 셸(`/bin/sh`)만 죽여 그 자식(`sleep`·
+`npm` 이 띄운 `node` 등)이 고아로 남았다. 자식이 출력 파이프를 쥐고 있어 1초 시간 초과가 자식이 끝날
+때까지(30초) 돌아오지 않기도 했다(2026-10-02 XD 실측).
+
+- 셸을 자기 프로세스 그룹으로 띄운다(POSIX `start_new_session`, Windows `CREATE_NEW_PROCESS_GROUP`).
+- 취소(`CancelledError`)·시간 초과 때 그룹째 끝낸다 — POSIX 는 SIGTERM 뒤 2초 안에 안 끝나면 SIGKILL,
+  Windows 는 `taskkill /T /F`. 취소는 정리 뒤 그대로 다시 던진다.
+
 ## [4.83.0] — 2026-10-02
 
 ### Added — 웹 [폴더] 에도 작업 공간 복사 도구
