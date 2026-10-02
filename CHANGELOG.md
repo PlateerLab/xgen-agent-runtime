@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.81.2] — 2026-10-02
+
+### Fixed — xgen-doc2chunk 0.4.3 과 함께 설치되지 않던 것
+
+workflow 가 doc2chunk 를 0.4.3(PDF 추출을 프로세스 잠금으로 한 번에 하나만)으로 올렸는데, 4.81.1 은 `xgen-doc2chunk==0.4.2`
+로 고정돼 있어 workflow 의 requirements.lock 이 풀리지 않았다(`uv pip compile`: unsatisfiable, 이미지의 `pip install -r
+requirements.lock` 도 같은 이유로 실패한다). 고정을 0.4.3 으로 옮긴다. 4.81.1 의 ParseDocument 추출 잠금은 그대로 둔다 —
+두 잠금은 겹쳐도 해가 없다(같은 프로세스에서 순서만 정한다).
+
 ## [4.81.1] — 2026-10-02
 
 ### Fixed — ParseDocument 로 PDF 둘을 동시에 읽으면 글자가 깨지고 서버가 죽을 수 있던 것

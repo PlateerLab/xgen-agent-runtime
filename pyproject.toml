@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime"
-version = "4.81.1"
+version = "4.81.2"
 description = "Harness-engineered agent pipeline library with 21-stage dual-abstraction architecture, built on the Anthropic API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -91,7 +91,7 @@ dependencies = [
     # 문서 읽기(ParseDocument) — doc2chunk 의 글 추출 단계. doc2chunk 는 xgen-pdf 를 **이름으로만**
     # 요구하고 xgen-pdf 는 어느 인덱스에도 없으므로, URL 직접참조를 여기 같이 적는다(없으면 설치가
     # 해석에 실패하거나 PyMuPDF 를 쓰던 옛 doc2chunk 로 조용히 물러난다).
-    "xgen-doc2chunk==0.4.2",
+    "xgen-doc2chunk==0.4.3",
     "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl",
     "asyncssh==2.23.1",
 ]
