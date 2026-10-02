@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.83.3] — 2026-10-02
+
+### Fixed — Windows 에서 CLI(claude·codex)를 창 없이 띄우고 트리째 끝낸다
+
+4.83.2 와 같은 문제가 CLI 백엔드에도 있었다: 데스크톱 앱이 엔진을 창 없이 띄우면, 엔진이 띄운 CLI(콘솔
+프로그램)마다 Windows 가 새 콘솔 창을 만든다. `_cli_runtime._spawn` 이 Windows 에서 `CREATE_NO_WINDOW |
+CREATE_NEW_PROCESS_GROUP` 로 띄우고, 끝낼 때는 `taskkill /T /F`(창 없이)로 CLI 가 띄운 MCP 서버까지 트리째
+끝낸다(예전엔 CLI 하나만 끝냈다). POSIX 는 바뀌지 않는다.
+
 ## [4.83.2] — 2026-10-02
 
 ### Fixed — Windows 에서 이 PC 의 Bash 가 명령마다 콘솔 창을 띄우던 것
