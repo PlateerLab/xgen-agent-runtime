@@ -4,6 +4,19 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.81.1] — 2026-10-02
+
+### Fixed — ParseDocument 로 PDF 둘을 동시에 읽으면 글자가 깨지고 서버가 죽을 수 있던 것
+
+PDF 를 여는 pypdfium2(PDFium)는 스레드 안전하지 않다. dev 10-02: 모델이 ToolBatch 로 PDF 두 개를 동시에
+읽자 글자가 깨졌고(`æîô WHÅçL…`), 그 뒤 같은 프로세스에서는 하나씩 읽어도 "broken document" 가 났다.
+dev 파드에서 같은 PDF 둘을 스레드 넷으로 동시에 추출하면 프로세스가 Segmentation fault 로 죽었다 —
+워크플로 서버라면 그 파드의 모든 대화가 끊긴다.
+
+- 추출을 프로세스 전체에서 한 번에 하나만 돌게 잠근다(모듈 수준 lock — 다른 세션의 추출과도 겹치지 않게).
+  형식과 상관없이 잠근다(다른 파서도 같은 처지일 수 있다). 한 건이 0.1~0.4초라 줄 세워도 비용이 작다.
+- dev 파드에서 같은 실험(동시 4개 × 3회): 고친 판은 전부 순차 결과와 같고, 뒤이은 순차 읽기도 정상.
+
 ## [4.81.0] — 2026-10-01
 
 ### Fixed — WebSearch 가 "엔진이 막았다" 를 "결과 없음" 으로 말하던 것
