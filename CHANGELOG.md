@@ -4,6 +4,39 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.84.0] — 2026-10-03
+
+### Added — WebSearch `days`: 최근 N일 뉴스만, 기사마다 날짜와 매체
+
+"최근·최신" 을 물으면 모델이 검색어에 연도("… 2026 2025")를 넣고, 텍스트 엔진은 관련도로 줄을 세워 옛 기사가
+섞였다. dev 에서 한 시장의 최신 신제품 뉴스를 물은 19턴(09-29~10-02, 검색 91회)은 결과에 2025년이 2026년만큼
+나왔고(278 대 272), "가장 최근 분기" 를 지난 분기로 답한 턴도 있었다. 우리 서버에서 답하는 텍스트 엔진(yandex)은
+ddgs 의 `timelimit` 을 무시하고, 텍스트 결과에는 날짜가 없다.
+
+- `days`(정수)를 주면 ddgs 의 뉴스 엔진으로 그 기간만 찾고, 결과마다 `날짜 · 매체` 줄을 붙인다. 기간 밖 기사는
+  버린다. 그 기간 뉴스가 없으면 웹 결과로 넘어가되 머리말에 "그 기간 뉴스 없음, 날짜 모름" 을 밝힌다.
+- ddgs 9.16 의 bing 뉴스 버그 두 개를 그 검색의 DDGS 인스턴스에서만 비켜 간다: "2026. 9. 28." 을 2026일 전,
+  "4 hours ago" 를 4일 전으로 읽던 날짜를 원문에서 다시 읽고, d·w 를 bing 의 1시간·하루 창으로 보내던 것을 실측한
+  창(7 = 하루, 8 = 일주일, 9 = 한 달)으로 보낸다.
+- `days` 를 모르는 백엔드(brave·tavily·searxng)는 무시했다고 결과에 적는다. `days` 가 없으면 이전과 같다.
+
+실측(10-03):
+- dev 파드, 질의 12개(설계 6·홀드아웃 6): `days=30` 결과 104건이 모두 30일 안. 기사 URL 의 날짜와 대조하면 12/12 가
+  하루 안으로 맞았다(지금 방식은 URL 날짜가 있는 7건 중 30일 안 0건). 검색 시간 중앙 0.9초(지금 2.9초).
+- 옛 기사를 고른 dev 검색어(연도가 들어간 것)를 재생: 홀드아웃 5개는 47/47 이 30일 안, 결과 속 "2025" 23회 → 1회.
+  너무 좁은 검색어 2개는 그 기간 뉴스가 없어 웹 결과로 넘어갔다.
+- Qwen 실험실(실제 호스트·파이프라인, 질문 10×2 + 대조 2×2): 최근 정보를 물은 20턴 중 18턴이 `days` 를 썼고 대조
+  질문은 0턴. 턴당 모델 호출 4.55 → 3.85, 도구 5.4 → 4.1, 입력 토큰 34.5k → 24.6k, 시간 62.8 → 54.6초.
+
+### Fixed — OpenAI 호환 서버에는 시스템 프롬프트를 `system` 역할로
+
+Chat Completions 로 보내는 시스템 프롬프트를 늘 `developer` 역할로 실었다. `developer` 는 OpenAI 고유의 역할이라
+OpenAI 호환 서버는 모를 수 있고, DeepSeek API(XGEN 은 vLLM 채널로 돌린다)는 422 "unknown variant `developer`" 로
+요청을 거절한다. `OpenAIClient.system_role` 은 `developer` 그대로, `VLLMClient` 와 OpenAI 호환 클라이언트(ollama·
+lmstudio·custom)는 `system`. Azure Foundry 는 OpenAI 추론 배포도 서빙해 그대로 둔다.
+DeepSeek: `developer` 422 → `system` 200(시스템 프롬프트대로 답함). dev Qwen(vLLM)은 두 역할의 프롬프트 토큰이
+같다(/tokenize 33개 동일) — 고객 모델의 입력은 바뀌지 않는다.
+
 ## [4.83.3] — 2026-10-02
 
 ### Fixed — Windows 에서 CLI(claude·codex)를 창 없이 띄우고 트리째 끝낸다

@@ -251,6 +251,10 @@ class OpenAIClient(BaseClient):
 
     provider = "openai"
     _sdk_module = "openai"
+    #: Role that carries the system prompt on Chat Completions. ``developer``
+    #: is OpenAI's own (its reasoning models expect it); subclasses that talk
+    #: to OpenAI-compatible servers send ``system``.
+    system_role = "developer"
     capabilities = ClientCapabilities(
         supports_thinking=False,
         supports_tools=True,
@@ -591,7 +595,9 @@ class OpenAIClient(BaseClient):
 
     def _build_kwargs(self, request: APIRequest) -> Dict[str, Any]:
         """Canonical APIRequest → OpenAI Chat Completions kwargs."""
-        messages = canonical_messages_to_openai(request.messages, request.system)
+        messages = canonical_messages_to_openai(
+            request.messages, request.system, system_role=self.system_role
+        )
 
         kwargs: Dict[str, Any] = {
             "model": request.model,

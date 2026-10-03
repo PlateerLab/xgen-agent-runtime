@@ -39,7 +39,9 @@ import importlib
 import logging
 import os
 import random
+import re
 import threading
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
@@ -93,12 +95,20 @@ def _normalise_hit(index: int, raw: Dict[str, Any]) -> Dict[str, Any]:
     accepted interchangeably so each backend can hand back whichever
     key its API uses.
     """
-    return {
+    hit = {
         "rank": index,
         "title": str(raw.get("title") or "").strip(),
         "url": str(raw.get("href") or raw.get("url") or "").strip(),
         "snippet": str(raw.get("body") or raw.get("snippet") or "").strip(),
     }
+    # News hits carry their publication date (ISO) and outlet.
+    published = str(raw.get("date") or "").strip()
+    if published:
+        hit["date"] = published[:10]
+    source = str(raw.get("source") or "").strip()
+    if source:
+        hit["source"] = source
+    return hit
 
 
 @runtime_checkable
@@ -422,6 +432,202 @@ def _lookup_only_notice(outcome: Dict[str, Any]) -> str:
     )
 
 
+# ─────────────────────────────────────────────────────────────────
+# ddg news — dated results for the ``days`` input
+# ─────────────────────────────────────────────────────────────────
+#
+# Asked for recent information, models put years into the query ("… 2026
+# 2025") and the text engines rank by relevance: on dev, 19 turns asking for
+# the latest product launches in one market (09-29~10-02, 91 searches) got
+# results naming 2025 as often as 2026 (278 to 272), and a "latest quarter"
+# question was answered with the previous quarter.
+# The text engine that answers from our servers, yandex, ignores ddgs'
+# ``timelimit``, and text results carry no date. ddgs' news engines honour
+# a window and date every article: 12 queries on dev (2026-10-03) came back
+# 80-100% within 30 days with a one-month window.
+#
+# Two ddgs 9.16 bugs sit on that path, worked around on the DDGS instance
+# only: bing news reads "2026. 9. 28." as 2026 days ago and "4 hours ago" as
+# four days, and it sends ``timelimit`` d/w as bing's one-hour/one-day
+# windows. :func:`_date_news_engines` sets bing's window itself and re-reads
+# every news engine's raw date with :func:`_news_date`.
+
+#: bing news ``qft`` windows by size in days, measured on dev (2026-10-03):
+#: interval 7 = past day, 8 = past week, 9 = past month (4 = past hour).
+_BING_NEWS_INTERVALS: Tuple[Tuple[int, str], ...] = ((1, "7"), (7, "8"), (31, "9"))
+
+#: News hits fetched per wanted result — the ones outside the window are dropped.
+_NEWS_OVERFETCH = 2
+_NEWS_FETCH_CAP = 30
+
+_AGO_EN = re.compile(r"(\d+|an?)\s*(minute|min|hour|hr|day|week|month|year)s?\s+ago", re.I)
+_AGO_KO = re.compile(r"(\d+)\s*(분|시간|일|주|개월|달|년)\s*전")
+_YMD = re.compile(r"(\d{4})(?:[-./]|\s*년)\s*(\d{1,2})(?:[-./]|\s*월)\s*(\d{1,2})")
+_MDY = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+_MON_D_Y = re.compile(r"\b([A-Z][a-z]{2})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})")
+_DAYS_PER_UNIT = {
+    "minute": 1 / 1440,
+    "min": 1 / 1440,
+    "hour": 1 / 24,
+    "hr": 1 / 24,
+    "day": 1,
+    "week": 7,
+    "month": 30,
+    "year": 365,
+    "분": 1 / 1440,
+    "시간": 1 / 24,
+    "일": 1,
+    "주": 7,
+    "개월": 30,
+    "달": 30,
+    "년": 365,
+}
+_DAYS_AGO_WORDS = {"today": 0, "just now": 0, "오늘": 0, "방금": 0, "yesterday": 1, "어제": 1}
+_MONTHS = {
+    m: i for i, m in enumerate(("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec").split(), 1)
+}
+
+
+def _safe_date(year: int, month: int, day: int) -> Optional[date]:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _news_date(raw: Any, now: Optional[datetime] = None) -> Optional[date]:
+    """Publication date in a news engine's date text, or ``None`` when there is none.
+
+    Engines hand back what their page shows: ``2026. 9. 28.``, ``8/30/2026``,
+    ``Sep 28, 2026``, ``4 hours ago``, ``3시간 전``, an ISO timestamp, epoch
+    seconds, sometimes glued to a label (``Opinion12 days ago``). Relative
+    times count back from ``now`` (local time).
+    """
+    now = now or datetime.now().astimezone()
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return datetime.fromtimestamp(raw, now.tzinfo).date() if raw > 0 else None
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.isdigit() and len(text) >= 9:
+        return datetime.fromtimestamp(int(text), now.tzinfo).date()
+    if "T" in text and text[:4].isdigit():
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        else:
+            return parsed.astimezone(now.tzinfo).date() if parsed.tzinfo else parsed.date()
+    for pattern in (_AGO_EN, _AGO_KO):
+        m = pattern.search(text)
+        if m:
+            count = 1 if m.group(1).lower() in ("a", "an") else int(m.group(1))
+            return (now - timedelta(days=count * _DAYS_PER_UNIT[m.group(2).lower()])).date()
+    lowered = text.lower()
+    for word, back in _DAYS_AGO_WORDS.items():
+        if word in lowered:
+            return (now - timedelta(days=back)).date()
+    m = _YMD.search(text)
+    if m:
+        return _safe_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = _MDY.search(text)
+    if m:
+        return _safe_date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+    m = _MON_D_Y.search(text)
+    if m and m.group(1) in _MONTHS:
+        return _safe_date(int(m.group(3)), _MONTHS[m.group(1)], int(m.group(2)))
+    return None
+
+
+def _news_timelimit(days: int) -> Optional[str]:
+    """ddgs ``timelimit`` for a window of ``days`` — beyond a month, none."""
+    if days <= 1:
+        return "d"
+    if days <= 7:
+        return "w"
+    if days <= 31:
+        return "m"
+    return None
+
+
+def _date_news_engines(client: Any, days: int) -> None:
+    """Make ``client``'s news engines search ``days`` back and keep their real dates.
+
+    Wraps the instance's ``_get_engines`` like :func:`_add_ddg_engines`; ddgs'
+    classes stay as they are. bing gets the window it understands
+    (``_BING_NEWS_INTERVALS``; none past a month), and every news engine's
+    results get their date re-read from the engine's own text by
+    :func:`_news_date` — an ISO date, or empty when there is none.
+    """
+    get_engines = getattr(client, "_get_engines", None)
+    if not callable(get_engines):
+        return
+    interval = next((iv for limit, iv in _BING_NEWS_INTERVALS if days <= limit), None)
+
+    def _get_engines(category: Any, backend: Any, *args: Any, **kwargs: Any) -> Any:
+        engines = get_engines(category, backend, *args, **kwargs)
+        if category == "news":
+            for engine in engines or ():
+                _date_news_engine(engine, interval)
+        return engines
+
+    try:
+        client._get_engines = _get_engines
+    except (AttributeError, TypeError):
+        return
+
+
+def _date_news_engine(engine: Any, bing_interval: Optional[str]) -> None:
+    if getattr(engine, "_xgen_dated", False):
+        return
+    build = getattr(engine, "build_payload", None)
+    post = getattr(engine, "post_extract_results", None)
+    try:
+        if getattr(engine, "name", None) == "bing" and callable(build):
+
+            def _build(*args: Any, **kwargs: Any) -> Any:
+                payload = build(*args, **kwargs)
+                if isinstance(payload, dict):
+                    payload.pop("qft", None)
+                    if bing_interval:
+                        payload["qft"] = f'interval="{bing_interval}"'
+                return payload
+
+            engine.build_payload = _build
+        if callable(post):
+
+            def _post(results: Any) -> Any:
+                raw = {id(r): getattr(r, "date", "") for r in results or ()}
+                out = post(results)
+                for r in out or ():
+                    published = _news_date(raw.get(id(r), getattr(r, "date", "")))
+                    r.date = published.isoformat() if published else ""
+                return out
+
+            engine.post_extract_results = _post
+        engine._xgen_dated = True
+    except (AttributeError, TypeError):
+        return
+
+
+def _default_ddg_news_sync(
+    ddgs_factory: Any,
+    query: str,
+    max_results: int,
+    region: Optional[str],
+    safesearch: str,
+    timelimit: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Blocking ddgs news body — runs inside ``asyncio.to_thread``."""
+    kwargs: Dict[str, Any] = {"safesearch": safesearch, "max_results": max_results}
+    if region:
+        kwargs["region"] = region
+    if timelimit:
+        kwargs["timelimit"] = timelimit
+    with ddgs_factory() as client:
+        return list(client.news(query, **kwargs))
+
+
 class DdgBackend:
     """DuckDuckGo backend via the optional ``ddgs`` package.
 
@@ -442,15 +648,19 @@ class DdgBackend:
     """
 
     name = "ddg"
+    #: Takes ``days``: a dated news search (:meth:`_search_news`).
+    supports_days = True
 
     def __init__(
         self,
         load_ddgs: Optional[Callable[[], Optional[Any]]] = None,
         search_sync: Optional[Callable[..., List[Dict[str, Any]]]] = None,
         extra_engines: Optional[Tuple[str, ...]] = None,
+        news_sync: Optional[Callable[..., List[Dict[str, Any]]]] = None,
     ) -> None:
         self._load_ddgs = load_ddgs or _load_ddgs
         self._search_sync = search_sync or _default_ddg_search_sync
+        self._news_sync = news_sync or _default_ddg_news_sync
         self._extra_engines = (
             _ddg_extra_engines(None) if extra_engines is None else tuple(extra_engines)
         )
@@ -458,6 +668,8 @@ class DdgBackend:
         self.notice: Optional[str] = None
         #: Per-engine outcome of the last search (empty when not observed).
         self.engines: Dict[str, Any] = {}
+        #: What the last search returned: ``"news"`` (dated) or ``"web"``.
+        self.mode = "web"
 
     async def search(
         self,
@@ -465,6 +677,7 @@ class DdgBackend:
         max_results: int,
         region: str,
         safesearch: str,
+        days: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         ddgs_cls = self._load_ddgs()
         if ddgs_cls is None:
@@ -477,6 +690,14 @@ class DdgBackend:
             )
         self.notice = None
         self.engines = {}
+        self.mode = "web"
+        if days:
+            hits = await self._search_news(ddgs_cls, query, max_results, region, safesearch, days)
+            if hits:
+                self.mode = "news"
+                return hits
+            # No dated news in the window: the web results below say so in
+            # the tool's header (their dates are unknown).
         args = (ddgs_cls, query, max_results, region, safesearch)
         raw, watch = await self._attempt(*args)
         first_raw: List[Dict[str, Any]] = []
@@ -532,6 +753,53 @@ class DdgBackend:
                 raise
             raw = []
         return list(raw or []), watch
+
+    async def _search_news(
+        self,
+        ddgs_cls: Any,
+        query: str,
+        max_results: int,
+        region: str,
+        safesearch: str,
+        days: int,
+    ) -> List[Dict[str, Any]]:
+        """News from the last ``days`` days, each with its date.
+
+        Hits dated before the window are dropped; undated ones are kept only
+        when an engine window applied (up to a month). An empty list means
+        "no dated news" and the caller falls back to the web search.
+        """
+        watch = _EngineWatch()
+
+        def _dated_ddgs(*args: Any, **kwargs: Any) -> Any:
+            client = ddgs_cls(*args, **kwargs)
+            _date_news_engines(client, days)
+            watch.attach(client)
+            return client
+
+        want = min(_NEWS_FETCH_CAP, max_results * _NEWS_OVERFETCH)
+        timelimit = _news_timelimit(days)
+        try:
+            raw = await asyncio.to_thread(
+                self._news_sync, _dated_ddgs, query, want, region, safesearch, timelimit
+            )
+        except Exception:
+            # ddgs raises when no news engine found anything — the web search
+            # still gets its turn.
+            logger.info("WebSearch: news search for %r found nothing", query, exc_info=True)
+            raw = []
+        if watch.seen:
+            self.engines = {**watch.outcome(), "category": "news"}
+        cutoff = (datetime.now().astimezone() - timedelta(days=days)).date()
+        kept: List[Dict[str, Any]] = []
+        for item in raw or []:
+            published = _news_date(item.get("date"))
+            if published is None and timelimit is None:
+                continue
+            if published is not None and published < cutoff:
+                continue
+            kept.append({**item, "date": published.isoformat() if published else ""})
+        return [_normalise_hit(i, r) for i, r in enumerate(kept[:max_results])]
 
 
 def _default_ddg_search_sync(
