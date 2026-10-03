@@ -550,25 +550,28 @@ def _news_timelimit(days: int) -> Optional[str]:
     return None
 
 
-def _date_news_engines(client: Any, days: int) -> None:
+def _date_news_engines(client: Any, days: int, found: Optional[List[Any]] = None) -> None:
     """Make ``client``'s news engines search ``days`` back and keep their real dates.
 
     Wraps the instance's ``_get_engines`` like :func:`_add_ddg_engines`; ddgs'
     classes stay as they are. bing gets the window it understands
     (``_BING_NEWS_INTERVALS``; none past a month), and every news engine's
     results get their date re-read from the engine's own text by
-    :func:`_news_date` — an ISO date, or empty when there is none.
+    :func:`_news_date` — an ISO date, or empty when there is none. With
+    ``found``, every result an engine returns is also put there (see
+    :meth:`DdgBackend._search_news` for why).
     """
     get_engines = getattr(client, "_get_engines", None)
     if not callable(get_engines):
         return
     interval = next((iv for limit, iv in _BING_NEWS_INTERVALS if days <= limit), None)
+    lock = threading.Lock()
 
     def _get_engines(category: Any, backend: Any, *args: Any, **kwargs: Any) -> Any:
         engines = get_engines(category, backend, *args, **kwargs)
         if category == "news":
             for engine in engines or ():
-                _date_news_engine(engine, interval)
+                _date_news_engine(engine, interval, found, lock)
         return engines
 
     try:
@@ -577,11 +580,17 @@ def _date_news_engines(client: Any, days: int) -> None:
         return
 
 
-def _date_news_engine(engine: Any, bing_interval: Optional[str]) -> None:
+def _date_news_engine(
+    engine: Any,
+    bing_interval: Optional[str],
+    found: Optional[List[Any]] = None,
+    lock: Optional[Any] = None,
+) -> None:
     if getattr(engine, "_xgen_dated", False):
         return
     build = getattr(engine, "build_payload", None)
     post = getattr(engine, "post_extract_results", None)
+    search = getattr(engine, "search", None)
     try:
         if getattr(engine, "name", None) == "bing" and callable(build):
 
@@ -605,9 +614,33 @@ def _date_news_engine(engine: Any, bing_interval: Optional[str]) -> None:
                 return out
 
             engine.post_extract_results = _post
+        if found is not None and lock is not None and callable(search):
+
+            def _search(*args: Any, **kwargs: Any) -> Any:
+                results = search(*args, **kwargs)
+                if results:
+                    with lock:
+                        found.extend(results)
+                return results
+
+            engine.search = _search
         engine._xgen_dated = True
     except (AttributeError, TypeError):
         return
+
+
+def _distinct_news(results: List[Any]) -> List[Dict[str, Any]]:
+    """Engine results (ddgs result objects or dicts) as dicts, one per URL, in arrival order."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for item in results:
+        row = dict(item) if isinstance(item, dict) else dict(vars(item))
+        url = str(row.get("url") or row.get("href") or "")
+        if url and url in seen:
+            continue
+        seen.add(url)
+        out.append(row)
+    return out
 
 
 def _default_ddg_news_sync(
@@ -770,10 +803,11 @@ class DdgBackend:
         "no dated news" and the caller falls back to the web search.
         """
         watch = _EngineWatch()
+        found: List[Any] = []
 
         def _dated_ddgs(*args: Any, **kwargs: Any) -> Any:
             client = ddgs_cls(*args, **kwargs)
-            _date_news_engines(client, days)
+            _date_news_engines(client, days, found)
             watch.attach(client)
             return client
 
@@ -788,6 +822,12 @@ class DdgBackend:
             # still gets its turn.
             logger.info("WebSearch: news search for %r found nothing", query, exc_info=True)
             raw = []
+        if not raw and found:
+            # ddgs keeps an engine's results only if it finished before the first
+            # engine error (DDGS._search_sync waits FIRST_EXCEPTION, then stops
+            # collecting): on dev a duckduckgo timeout threw away bing's 6 hits
+            # and the search fell back to undated web results (2026-10-04).
+            raw = _distinct_news(found)
         if watch.seen:
             self.engines = {**watch.outcome(), "category": "news"}
         cutoff = (datetime.now().astimezone() - timedelta(days=days)).date()

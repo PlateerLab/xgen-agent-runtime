@@ -857,3 +857,95 @@ class TestDaysInput:
         )
         assert result.content.startswith("Search results for 'x'")
         assert "cannot filter by date" in result.content
+
+
+class _NewsHit:
+    """ddgs ``NewsResult`` stand-in (a dataclass there)."""
+
+    def __init__(self, title: str, url: str, date_text: str, source: str = "연합뉴스") -> None:
+        self.date, self.title, self.body, self.url, self.image, self.source = (
+            date_text,
+            title,
+            "본문",
+            url,
+            "",
+            source,
+        )
+
+
+class _NewsEngine:
+    category = "news"
+
+    def __init__(self, name: str, hits=None, error=None) -> None:
+        self.name, self._hits, self._error = name, list(hits or []), error
+
+    def build_payload(self, **kwargs):
+        return {}
+
+    def post_extract_results(self, results):
+        return results
+
+    def search(self, query, **kwargs):
+        if self._error is not None:
+            raise self._error
+        return self.post_extract_results(list(self._hits))
+
+
+def _dropping_ddgs(engines):
+    """ddgs 9.16 as seen on dev (2026-10-04): duckduckgo's timeout ends the collection,
+    bing's hits are dropped and the call raises although bing returned results."""
+
+    class _DDGS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _get_engines(self, category, backend):
+            return engines
+
+        def news(self, query, **kwargs):
+            for engine in self._get_engines("news", "auto"):
+                try:
+                    engine.search(query)
+                except Exception:
+                    pass
+            raise RuntimeError("operation timed out")
+
+    return _DDGS
+
+
+class TestNewsKeepsEngineResults:
+    @pytest.mark.asyncio
+    async def test_hits_an_engine_returned_survive_another_engines_error(self, monkeypatch):
+        monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", "")
+        bing = _NewsEngine(
+            "bing",
+            [
+                _NewsHit("fresh", "https://n.example/1", "2 days ago"),
+                _NewsHit("fresh again", "https://n.example/1", "2 days ago"),
+                _NewsHit("second", "https://n.example/2", "4 hours ago"),
+            ],
+        )
+        ddg = _NewsEngine("duckduckgo", error=RuntimeError("operation timed out"))
+        cls = _dropping_ddgs([bing, ddg])
+        monkeypatch.setattr(
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs", lambda: cls
+        )
+        result = await WebSearchTool().execute({"query": "q", "days": 30}, _ctx())
+        assert result.metadata["mode"] == "news"
+        assert [h["title"] for h in result.metadata["results"]] == ["fresh", "second"]
+        assert result.metadata["results"][0]["date"] == _ago(2)
+
+    @pytest.mark.asyncio
+    async def test_nothing_returned_still_falls_back_to_web(self, monkeypatch):
+        monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", "")
+        cls = _dropping_ddgs([_NewsEngine("duckduckgo", error=RuntimeError("timed out"))])
+        cls.text = lambda self, query, **kw: [{"title": "page", "href": "https://w.example", "body": "b"}]
+        monkeypatch.setattr(
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs", lambda: cls
+        )
+        result = await WebSearchTool().execute({"query": "q", "days": 30}, _ctx())
+        assert result.metadata["mode"] == "web"
+        assert "web results instead" in result.content

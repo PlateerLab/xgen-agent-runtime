@@ -4,6 +4,16 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.84.1] — 2026-10-04
+
+### Fixed — WebSearch `days`: 한 뉴스 엔진의 오류가 다른 엔진이 가져온 결과를 버리던 것
+
+ddgs 는 뉴스 엔진(bing·duckduckgo·yahoo)을 함께 돌리고, 첫 엔진 오류가 나면 그때까지 끝난 엔진의 결과만 모은다
+(`DDGS._search_sync` 가 FIRST_EXCEPTION 으로 기다린 뒤 수집을 끝낸다). dev 에서 duckduckgo 가 5초 만에 시간 초과로
+끝나면 늦게 도착한 bing 결과 6건이 버려지고, ddgs 가 TimeoutException 을 던져 검색이 날짜 없는 웹 결과로 넘어갔다.
+이제 뉴스 엔진이 돌려준 결과를 따로 받아 두고, ddgs 가 아무것도 주지 않으면 그 결과(URL 하나에 한 건)를 쓴다.
+엔진 결과가 정말 없으면 이전처럼 웹 결과로 넘어간다.
+
 ## [4.84.0] — 2026-10-03
 
 ### Added — WebSearch `days`: 최근 N일 뉴스만, 기사마다 날짜와 매체
