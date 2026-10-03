@@ -616,3 +616,244 @@ class TestExtraEngines:
             assert sorted(names[2:]) == ["brave", "yahoo", "yandex"]
         assert [e.name for e in client._get_engines("news", "auto")] == [e.name for e in engines]
         assert [e.name for e in client._get_engines("text", "brave")] == [e.name for e in engines]
+
+
+# ---------------------------------------------------------------------------
+# days → dated news search
+# ---------------------------------------------------------------------------
+
+from datetime import date, datetime, timedelta, timezone  # noqa: E402
+
+from xgen_agent_runtime.tools.built_in import _web_search_backends as wsb  # noqa: E402
+
+_NOW = datetime(2026, 10, 3, 22, 0, tzinfo=timezone(timedelta(hours=9)))
+
+
+class TestNewsDate:
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("2026. 9. 28.", date(2026, 9, 28)),  # bing kr-kr — ddgs reads 2026 days ago
+            ("2026년 9월 28일", date(2026, 9, 28)),
+            ("4 hours ago", date(2026, 10, 3)),  # ddgs reads four days ago
+            ("1 day ago", date(2026, 10, 2)),
+            ("Opinion12 days ago", date(2026, 9, 21)),  # ddgs leaves it as is
+            ("an hour ago", date(2026, 10, 3)),
+            ("3시간 전", date(2026, 10, 3)),
+            ("2일 전", date(2026, 10, 1)),
+            ("8/30/2026", date(2026, 8, 30)),
+            ("Opinion9/13/2026", date(2026, 9, 13)),
+            ("Sep 28, 2026", date(2026, 9, 28)),
+            ("2026-09-28T13:55:33+00:00", date(2026, 9, 28)),
+            ("2026-09-28", date(2026, 9, 28)),
+            ("yesterday", date(2026, 10, 2)),
+            ("", None),
+            ("Opinion", None),
+            ("2026. 13. 40.", None),
+        ],
+    )
+    def test_reads_what_the_engines_show(self, raw, expected):
+        assert wsb._news_date(raw, now=_NOW) == expected
+
+    def test_epoch_seconds(self):
+        ts = int(datetime(2026, 9, 28, 3, 0, tzinfo=timezone.utc).timestamp())
+        assert wsb._news_date(ts, now=_NOW) == date(2026, 9, 28)
+        assert wsb._news_date(str(ts), now=_NOW) == date(2026, 9, 28)
+
+
+class _R:
+    def __init__(self, raw: str) -> None:
+        self.date = raw
+
+
+class _Bing:
+    """bing news as ddgs builds it: d → interval 4 (an hour), dates read the ddgs way."""
+
+    name = "bing"
+
+    def build_payload(self, **kwargs):
+        return {"q": kwargs.get("query"), "qft": 'interval="4"'}
+
+    def post_extract_results(self, results):
+        for r in results:
+            r.date = "2021-03-17T13:55:33+00:00"  # what ddgs makes of "2026. 9. 28."
+        return results
+
+
+class _OneEngineClient:
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+
+    def _get_engines(self, category, backend):
+        return [self.engine]
+
+
+class TestNewsEngines:
+    @pytest.mark.parametrize("days, tl", [(1, "d"), (7, "w"), (30, "m"), (31, "m"), (90, None)])
+    def test_timelimit(self, days, tl):
+        assert wsb._news_timelimit(days) == tl
+
+    @pytest.mark.parametrize(
+        "days, qft",
+        [(1, 'interval="7"'), (7, 'interval="8"'), (30, 'interval="9"'), (90, None)],
+    )
+    def test_bing_gets_the_window_it_understands(self, days, qft):
+        client = _OneEngineClient(_Bing())
+        wsb._date_news_engines(client, days)
+        engine = client._get_engines("news", "auto")[0]
+        assert engine.build_payload(query="q").get("qft") == qft
+
+    def test_dates_are_read_from_the_engine_text(self):
+        client = _OneEngineClient(_Bing())
+        wsb._date_news_engines(client, 30)
+        engine = client._get_engines("news", "auto")[0]
+        out = engine.post_extract_results([_R("2026. 9. 28."), _R("no date")])
+        assert [r.date for r in out] == ["2026-09-28", ""]
+
+    def test_text_engines_are_left_alone(self):
+        engine = _Bing()
+        client = _OneEngineClient(engine)
+        wsb._date_news_engines(client, 30)
+        client._get_engines("text", "auto")
+        assert engine.build_payload(query="q")["qft"] == 'interval="4"'
+
+
+def _ago(days: int) -> str:
+    return (datetime.now().astimezone() - timedelta(days=days)).date().isoformat()
+
+
+def _news_ddgs(news_items=(), text_items=(), news_error=None):
+    calls: List[Any] = []
+
+    class _DDGS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _get_engines(self, category, backend):
+            return []
+
+        def news(self, query, **kwargs):
+            calls.append(("news", kwargs))
+            if news_error is not None:
+                raise news_error
+            return [dict(item) for item in news_items]
+
+        def text(self, query, **kwargs):
+            calls.append(("text", kwargs))
+            return [dict(item) for item in text_items]
+
+    _DDGS.calls = calls
+    return _DDGS
+
+
+@pytest.fixture
+def news_ddgs(monkeypatch):
+    monkeypatch.setenv("GENY_WEBSEARCH_DDG_EXTRA_ENGINES", "")
+
+    def _install(**kwargs):
+        cls = _news_ddgs(**kwargs)
+        monkeypatch.setattr(
+            "xgen_agent_runtime.tools.built_in.web_search_tool._load_ddgs", lambda: cls
+        )
+        return cls
+
+    return _install
+
+
+def _news(title: str, published: str, source: str = "연합뉴스") -> Dict[str, Any]:
+    return {
+        "title": title,
+        "url": f"https://news.example/{title}",
+        "body": "본문",
+        "date": published,
+        "source": source,
+    }
+
+
+class TestDaysInput:
+    def test_schema_has_days(self):
+        prop = WebSearchTool().input_schema["properties"]["days"]
+        assert prop["type"] == "integer" and prop["exclusiveMinimum"] == 0
+
+    @pytest.mark.asyncio
+    async def test_days_searches_dated_news_in_the_window(self, news_ddgs):
+        cls = news_ddgs(
+            news_items=[
+                _news("fresh", _ago(3)),
+                _news("old", _ago(100)),
+                _news("undated", ""),
+            ]
+        )
+        result = await WebSearchTool().execute({"query": "신제품 출시", "days": 30}, _ctx())
+        assert not result.is_error
+        assert result.content.startswith("News from the last 30 days for '신제품 출시'")
+        assert f"   {_ago(3)} · 연합뉴스" in result.content
+        assert "old" not in result.content and "undated" in result.content
+        assert result.metadata["mode"] == "news" and result.metadata["days"] == 30
+        assert cls.calls == [
+            ("news", {"safesearch": "moderate", "max_results": 20, "timelimit": "m"})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_longer_than_a_month_filters_by_date_only(self, news_ddgs):
+        cls = news_ddgs(news_items=[_news("q2", _ago(60)), _news("old", _ago(120)), _news("undated", "")])
+        result = await WebSearchTool().execute({"query": "실적", "days": 90}, _ctx())
+        assert "q2" in result.content
+        assert "old" not in result.content and "undated" not in result.content
+        assert "timelimit" not in cls.calls[0][1]
+
+    @pytest.mark.asyncio
+    async def test_no_news_falls_back_to_web_and_says_so(self, news_ddgs):
+        cls = news_ddgs(
+            news_items=[_news("old", _ago(400))],
+            text_items=[{"title": "page", "href": "https://w.example", "body": "b"}],
+        )
+        result = await WebSearchTool().execute({"query": "site:mfds.go.kr 공지", "days": 30}, _ctx())
+        assert result.content.startswith(
+            "No news from the last 30 days for 'site:mfds.go.kr 공지'; web results instead"
+        )
+        assert result.metadata["mode"] == "web"
+        assert [c[0] for c in cls.calls] == ["news", "text"]
+
+    @pytest.mark.asyncio
+    async def test_news_failure_falls_back_to_web(self, news_ddgs):
+        news_ddgs(
+            news_error=RuntimeError("No results found."),
+            text_items=[{"title": "page", "href": "https://w.example", "body": "b"}],
+        )
+        result = await WebSearchTool().execute({"query": "x", "days": 7}, _ctx())
+        assert not result.is_error and "web results instead" in result.content
+
+    @pytest.mark.asyncio
+    async def test_without_days_nothing_changes(self, news_ddgs):
+        cls = news_ddgs(text_items=[{"title": "page", "href": "https://w.example", "body": "b"}])
+        result = await WebSearchTool().execute({"query": "x"}, _ctx())
+        assert result.content.startswith("Search results for 'x'")
+        assert [c[0] for c in cls.calls] == ["text"] and "mode" not in result.metadata
+
+    @pytest.mark.asyncio
+    async def test_days_must_be_a_number(self, news_ddgs):
+        news_ddgs()
+        result = await WebSearchTool().execute({"query": "x", "days": "recent"}, _ctx())
+        assert result.is_error and "whole number of days" in result.content
+
+    @pytest.mark.asyncio
+    async def test_backend_without_dates_says_days_was_ignored(self, monkeypatch):
+        class _Plain:
+            name = "searxng"
+
+            async def search(self, query, max_results, region, safesearch):
+                return [{"rank": 0, "title": "t", "url": "https://u.example", "snippet": "s"}]
+
+        monkeypatch.setattr(
+            "xgen_agent_runtime.tools.built_in.web_search_tool.build_backend",
+            lambda *a, **k: _Plain(),
+        )
+        result = await WebSearchTool().execute(
+            {"query": "x", "days": 7, "backend": "searxng"}, _ctx()
+        )
+        assert result.content.startswith("Search results for 'x'")
+        assert "cannot filter by date" in result.content
