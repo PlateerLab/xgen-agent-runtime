@@ -488,21 +488,24 @@ def split_tool_uses(
 def canonical_messages_to_openai(
     messages: List[Dict[str, Any]],
     system: Any = "",
+    system_role: str = "developer",
 ) -> List[Dict[str, Any]]:
     """Canonical messages + system → OpenAI messages.
 
     Key transformations:
-      - system → prepend as {"role": "developer"} message
+      - system → prepend as a ``system_role`` message — ``developer`` for
+        OpenAI itself, ``system`` for OpenAI-compatible servers (the role
+        is OpenAI's own; DeepSeek rejects it with 422)
       - assistant tool_use blocks → message.tool_calls array
       - user tool_result blocks → separate {"role": "tool"} messages
     """
     result: List[Dict[str, Any]] = []
 
-    # System prompt → developer role message
+    # System prompt → one leading message in the caller's role
     if system:
         sys_text = blocks_to_text(system)
         if sys_text:
-            result.append({"role": "developer", "content": sys_text})
+            result.append({"role": system_role, "content": sys_text})
 
     for msg in messages:
         role = msg.get("role", "user")
