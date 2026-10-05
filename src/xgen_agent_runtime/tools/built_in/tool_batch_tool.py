@@ -205,7 +205,7 @@ class ToolBatchTool(Tool):
                     cached = repeat_guard.skip_identical(tc, shared)
                     if cached is not None:
                         return cached
-                _emit_call_start(emit, tc)
+                _emit_call_start(emit, tc, registry)
                 t0 = time.monotonic()
                 try:
                     res = await router.route(tool_name, tc["tool_input"], context)
@@ -215,7 +215,7 @@ class ToolBatchTool(Tool):
                 result = res.to_api_format(tc["tool_use_id"])
                 if not isinstance(result.get("content"), str):
                     result["content"] = _text_of(res)
-                _emit_call_complete(emit, tc, result, int((time.monotonic() - t0) * 1000))
+                _emit_call_complete(emit, tc, result, int((time.monotonic() - t0) * 1000), registry)
                 return result
 
         results = await asyncio.gather(*(_one(tc) for tc in calls))

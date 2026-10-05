@@ -64,7 +64,8 @@ from typing import Any, Dict, FrozenSet, List
 #: (4.71.0 — Stage 12/13 and sub-agent orchestration removed). The members
 #: stay (removal is a major-version change) but nothing emits them any more;
 #: see :data:`RETIRED_EVENT_TYPES`.
-EVENT_CATALOG_VERSION = 16
+#: v17: ``tool.call_start`` / ``tool.call_complete`` gain ``capabilities`` / ``origin``.
+EVENT_CATALOG_VERSION = 17
 
 
 class EventTypes(str, Enum):
@@ -673,11 +674,15 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "tool_use_id": "str",
         "name": "str",
         "input": "dict",
+        "capabilities": "dict — {read_only, destructive, network_egress, idempotent} from Tool.capabilities(input); absent when the executor's registry does not know the tool",
+        "origin": "str — tool_origin(): builtin / adapted / device / memory / mcp / ''",
     },
     EventTypes.TOOL_CALL_COMPLETE: {
         "tool_use_id": "str",
         "name": "str",
         "is_error": "bool",
+        "capabilities": "dict — same as tool.call_start",
+        "origin": "str — same as tool.call_start",
         "duration_ms": "int",
     },
     EventTypes.TOOL_REVIEW_FLAG: {

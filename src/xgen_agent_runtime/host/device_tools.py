@@ -21,11 +21,12 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.host.local_folders import device_tool_name, model_tool_name
 from xgen_agent_runtime.tools import Tool, ToolResult, build_tool
-from xgen_agent_runtime.tools.base import with_origin
+from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 
 logger = logging.getLogger("xgen_agent_runtime.host.device_tools")
 
@@ -150,6 +151,20 @@ def to_tool_result(name: str, payload: Any) -> ToolResult:
         return ToolResult(content=str(result))
 
 
+def capabilities_from_annotations(annotations: Any) -> Optional[ToolCapabilities]:
+    """MCP 어댑터와 같은 규칙으로 옮기되 파괴 · 병렬은 기본값으로 둔다. 주석이 없으면 None."""
+    if not isinstance(annotations, dict) or not annotations:
+        return None
+    from xgen_agent_runtime.tools.mcp.adapter import annotations_to_capabilities
+
+    base = ToolCapabilities()
+    return replace(
+        annotations_to_capabilities(annotations),
+        concurrency_safe=base.concurrency_safe,
+        destructive=base.destructive,
+    )
+
+
 def build_device_tool(
     *,
     server: str,
@@ -157,6 +172,7 @@ def build_device_tool(
     description: str,
     input_schema: Any,
     call: DeviceCall,
+    annotations: Any = None,
 ) -> Tool:
     """기기 카탈로그 한 줄 → 런타임 도구. 모델 이름은 :func:`model_tool_name` 이 정한다."""
     name = model_tool_name(server, tool)
@@ -182,6 +198,7 @@ def build_device_tool(
             description=str(description or f"Device tool {tool} on {server}"),
             input_schema=schema,
             execute=_execute,
+            capabilities=capabilities_from_annotations(annotations),
         ),
         "device",
     )
@@ -213,5 +230,6 @@ __all__ = [
     "WRONG_MACHINE",
     "build_device_guide",
     "build_device_tool",
+    "capabilities_from_annotations",
     "to_tool_result",
 ]

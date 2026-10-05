@@ -200,6 +200,8 @@ def _model_vision(provider: str, model: str, override: Any = None) -> bool:
             exc_info=True,
         )
         return False
+
+
 def _host_turn_notes(host: Any) -> List[str]:
     """호스트의 이번 턴 안내(OPTIONAL 동기 훅 ``turn_notes``). 없거나 실패하면 빈 목록."""
     probe = getattr(host, "turn_notes", None)
