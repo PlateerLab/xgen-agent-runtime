@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import re
+import shlex
 import signal
 import sys
-from typing import Any, Dict, FrozenSet, Mapping, Optional
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import (
     HOST_IS_EXECUTION_TARGET,
     Tool,
+    ToolCapabilities,
     ToolContext,
     ToolResult,
 )
@@ -279,6 +282,713 @@ def _detached_process_reason(command: str) -> Optional[str]:
 _MAX_TIMEOUT_MS = 600_000  # 10 minutes
 _MAX_OUTPUT = 100_000  # characters
 
+# ── 셸 명령 분류 (BashTool.capabilities) ───────────────────────────────────────
+# 실패-닫힘: 모든 구간이 아는 읽기 프로그램이고 쓰기 흔적이 없을 때만 읽기 전용이다.
+
+#: 이보다 긴 명령은 분석하지 않고 읽기 전용이 아니라고 본다.
+_CLASSIFY_MAX_CHARS = 20_000
+
+#: 인자와 상관없이 읽기만 하는 프로그램(소문자).
+_READ_ONLY_PROGRAMS = frozenset(
+    {
+        "ls",
+        "dir",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "egrep",
+        "fgrep",
+        "ag",
+        "ack",
+        "wc",
+        "echo",
+        "printf",
+        "pwd",
+        "which",
+        "whereis",
+        "type",
+        "printenv",
+        "cal",
+        "whoami",
+        "id",
+        "uname",
+        "df",
+        "du",
+        "stat",
+        "cut",
+        "tr",
+        "diff",
+        "cmp",
+        "comm",
+        "md5sum",
+        "sha1sum",
+        "sha256sum",
+        "sha512sum",
+        "basename",
+        "dirname",
+        "realpath",
+        "readlink",
+        "test",
+        "[",
+        "true",
+        "false",
+        "jq",
+        "hexdump",
+        "od",
+        "strings",
+        "column",
+        "nl",
+        "paste",
+        "fold",
+        "seq",
+        "ps",
+        "pgrep",
+        "lsof",
+        "free",
+        "uptime",
+        "nproc",
+        "lscpu",
+        "lsblk",
+        "ping",
+        "nslookup",
+        "dig",
+        "host",
+        "traceroute",
+        "netstat",
+        "ss",
+        "help",
+        "tac",
+        "rev",
+        "expr",
+        "bc",
+        "sleep",
+        "wait",
+        "locale",
+        "getconf",
+        "lsb_release",
+        "last",
+        "w",
+        "who",
+        "zcat",
+        "bzcat",
+        "xzcat",
+        "base64",
+        "cd",
+        "pushd",
+        "popd",
+        "export",
+        "set",
+        "unset",
+        "get-childitem",
+        "get-content",
+        "get-item",
+        "get-location",
+        "select-string",
+        "get-date",
+        "get-process",
+        "write-output",
+        "write-host",
+        "test-path",
+        "resolve-path",
+        "get-command",
+        "measure-object",
+        "select-object",
+        "where-object",
+        "format-table",
+        "format-list",
+        "out-string",
+        "convertto-json",
+        "convertfrom-json",
+        "sort-object",
+        "get-help",
+        "get-member",
+        "findstr",
+        "where",
+        "tasklist",
+        "systeminfo",
+        "ver",
+        "ipconfig",
+    }
+)
+_EGRESS_PROGRAMS = frozenset(
+    {
+        "curl",
+        "wget",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "ping",
+        "nslookup",
+        "dig",
+        "host",
+        "traceroute",
+        "nc",
+        "netcat",
+        "telnet",
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "iwr",
+        "irm",
+    }
+)
+_PKG_MANAGERS = frozenset(
+    {
+        "pip",
+        "pip3",
+        "npm",
+        "pnpm",
+        "yarn",
+        "apt",
+        "apt-get",
+        "apk",
+        "conda",
+        "uv",
+        "brew",
+        "yum",
+        "dnf",
+        "cargo",
+        "pipx",
+        "gem",
+        "go",
+        "poetry",
+        "choco",
+        "winget",
+    }
+)
+_PKG_READ_ONLY = frozenset(
+    {
+        "show",
+        "list",
+        "freeze",
+        "search",
+        "info",
+        "ls",
+        "view",
+        "outdated",
+        "why",
+        "version",
+        "--version",
+        "-v",
+        "-V",
+        "help",
+        "--help",
+    }
+)
+#: 저장소(레지스트리)에 닿지 않는 하위 명령. 그 밖은 바깥 연결로 본다.
+_PKG_LOCAL = frozenset(
+    {"", "list", "ls", "freeze", "why", "env", "version", "--version", "-v", "-V", "help", "--help"}
+)
+_DOCKER_EGRESS = frozenset({"pull", "push", "login", "search", "build", "run"})
+_GIT_READ_ONLY = frozenset(
+    {
+        "log",
+        "status",
+        "diff",
+        "show",
+        "rev-parse",
+        "ls-files",
+        "ls-tree",
+        "blame",
+        "describe",
+        "shortlog",
+        "grep",
+        "cat-file",
+        "rev-list",
+        "name-rev",
+        "var",
+        "version",
+        "--version",
+        "check-ignore",
+        "merge-base",
+        "ls-remote",
+        "count-objects",
+        "whatchanged",
+    }
+)
+_GIT_EGRESS = frozenset({"clone", "fetch", "pull", "push", "ls-remote", "submodule"})
+_DOCKER_READ_ONLY = frozenset(
+    {
+        "ps",
+        "images",
+        "logs",
+        "inspect",
+        "version",
+        "info",
+        "stats",
+        "top",
+        "port",
+        "diff",
+        "history",
+        "search",
+        "events",
+        "--version",
+    }
+)
+_KUBECTL_READ_ONLY = frozenset(
+    {
+        "get",
+        "describe",
+        "logs",
+        "top",
+        "version",
+        "cluster-info",
+        "api-resources",
+        "explain",
+        "diff",
+    }
+)
+_PYTHONS = frozenset({"python", "python3", "python2", "py"})
+_INTERPRETERS = (
+    frozenset(
+        {
+            "node",
+            "ruby",
+            "perl",
+            "php",
+            "bash",
+            "sh",
+            "zsh",
+            "dash",
+            "ksh",
+            "fish",
+            "pwsh",
+            "powershell",
+            "cmd",
+            "rscript",
+            "deno",
+            "bun",
+            "lua",
+            "tclsh",
+            "osascript",
+        }
+    )
+    | _PYTHONS
+)
+_WRAPPERS = frozenset({"time", "nohup", "command", "exec", "busybox"})
+#: 권한을 올리는 명령. 뒤의 명령과 상관없이 읽기 전용이 아니다.
+_ELEVATE = frozenset({"sudo", "doas", "su", "runas", "gsudo"})
+#: 파이썬 인라인 코드의 쓰기 · 실행 흔적.
+_PY_WRITE_RE = re.compile(
+    r"\bto_(?:excel|csv|json|parquet|pickle|sql|feather|hdf)\(|\.save(?:fig)?\(|\bwrite_(?:text|bytes)\(|\.write\("
+    r"|\bopen\([^)]*[\"'][^\"']*[wax+]"
+    r"|\bos\.(?:remove|unlink|rename|rmdir|removedirs|makedirs|mkdir|replace|chmod|chown|symlink|link|system|popen|exec\w*|spawn\w*|kill)\("
+    r"|\bshutil\.|\bsubprocess\b|\bpathlib\b[^\n]*\.(?:write_text|write_bytes|unlink|rename|mkdir|touch|rmdir)\("
+    r"|\.(?:write_text|write_bytes|unlink|touch|rmdir|mkdir|rename|replace)\(|\beval\(|\bexec\(|\b__import__\(",
+    re.IGNORECASE,
+)
+#: 바깥으로 나가는 흔적(인라인 코드 · 명령 텍스트).
+_NET_RE = re.compile(
+    r"\brequests\.(?:get|post|put|delete|patch|head|request|session)\b|\burlopen\(|\burllib\.request\b|\bhttpx\."
+    r"|\baiohttp\.|\bfetch\(|\bsocket\.",
+    re.IGNORECASE,
+)
+_HEREDOC_RE = re.compile(
+    r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)\n(.*?)\n[ \t]*\2[ \t]*(?:\n|$)", re.DOTALL
+)
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+#: 앞에 붙여도 실행할 코드를 바꾸지 않는 환경 변수(그 밖의 변수는 LD_PRELOAD · PAGER 처럼 다른 코드를 부를 수 있다).
+_SAFE_ENV = frozenset(
+    {"LANG", "LANGUAGE", "TZ", "NO_COLOR", "FORCE_COLOR", "CLICOLOR", "COLUMNS", "LINES", "TERM"}
+)
+_SAFE_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "nul", "$null"})
+
+
+def _scan_shell(text: str) -> Tuple[List[str], bool]:
+    """따옴표 밖의 연산자로 구간을 나누고, 치환 · 묶음 · 파일 리다이렉트 · 닫히지 않은 따옴표가 있으면 unsafe."""
+    segs: List[str] = []
+    buf: List[str] = []
+    unsafe = False
+    quote = ""
+    i, n = 0, len(text)
+
+    def flush() -> None:
+        s = "".join(buf).strip()
+        if s:
+            segs.append(s)
+        buf.clear()
+
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            buf.append(c)
+            quote = "" if c == "'" else quote
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            buf.append(text[i : i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            if c == '"':
+                quote = ""
+            elif c == "`" or text.startswith("$(", i):
+                unsafe = True
+            buf.append(c)
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            buf.append(c)
+            i += 1
+            continue
+        if c == "#" and (i == 0 or text[i - 1] in " \t\n;|&"):
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "`" or c in "{}" or text.startswith("$(", i) or text.startswith("<(", i):
+            unsafe = True
+        if c == ">" or text.startswith("&>", i):
+            j = i + (2 if c == "&" else 1)
+            if j < n and text[j] in ">|":
+                j += 1
+            if c == ">" and j < n and text[j] == "&":  # >&2 · >&- 는 스트림 복제
+                buf.append(text[i : j + 1])
+                i = j + 1
+                continue
+            k = j
+            while k < n and text[k] in " \t":
+                k += 1
+            m = re.match(r"[^\s;|&<>()]+", text[k:])
+            target = (m.group(0) if m else "").strip("'\"").lower()
+            if target not in _SAFE_SINKS:
+                unsafe = True
+            buf.append(text[i:k])
+            i = k
+            continue
+        two = text[i : i + 2]
+        if two in ("||", "&&", "|&"):
+            flush()
+            i += 2
+            continue
+        if c in "|;&\n":
+            flush()
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    if quote:
+        unsafe = True
+    flush()
+    return segs, unsafe
+
+
+def _safe_assignment(word: str) -> bool:
+    name = word.split("=", 1)[0]
+    return name in _SAFE_ENV or name.startswith("LC_")
+
+
+def _strip_wrappers(tokens: List[str]) -> Tuple[str, List[str]]:
+    """앞의 환경 변수 · 감싸는 명령을 벗긴 프로그램(소문자 basename)과 인자."""
+    t = list(tokens)
+    while t:
+        head = t[0]
+        if _ASSIGN_RE.match(head):
+            if not _safe_assignment(head):
+                return "=", []
+            t.pop(0)
+            continue
+        name = head.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if name.endswith(".exe"):
+            name = name[:-4]
+        if name in _WRAPPERS:
+            t.pop(0)
+            continue
+        if name == "env":
+            rest = t[1:]
+            while rest and (rest[0].startswith("-") or _ASSIGN_RE.match(rest[0])):
+                if _ASSIGN_RE.match(rest[0]) and not _safe_assignment(rest[0]):
+                    return "=", []
+                if rest[0] in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
+                    rest = rest[2:]
+                else:
+                    rest = rest[1:]
+            if not rest:
+                return "env", []
+            t = rest
+            continue
+        if name == "nice":
+            t = t[1:]
+            if t and t[0] == "-n":
+                t = t[2:]
+            elif t and re.fullmatch(r"-\d+", t[0]):
+                t = t[1:]
+            continue
+        if name in ("timeout", "stdbuf"):
+            t = t[1:]
+            while t and t[0].startswith("-"):
+                t = t[2:] if t[0] in ("-s", "--signal", "-k", "--kill-after") else t[1:]
+            if name == "timeout" and t:
+                t = t[1:]  # 시간
+            continue
+        return name, t[1:]
+    return "", []
+
+
+def _positional(args: List[str]) -> List[str]:
+    return [a for a in args if not a.startswith("-")]
+
+
+def _has_flag(args: List[str], *names: str, short: str = "") -> bool:
+    """``--name`` / ``--name=…`` / 짧은 플래그 묶음(``-sSLo``) 안의 글자."""
+    for a in args:
+        if a == "--":
+            break
+        for nm in names:
+            if a == nm or a.startswith(nm + "="):
+                return True
+        if (
+            short
+            and a.startswith("-")
+            and not a.startswith("--")
+            and any(ch in a[1:] for ch in short)
+        ):
+            return True
+    return False
+
+
+def _args_read_only(prog: str, args: List[str], stdin_code: str) -> bool:
+    pos = _positional(args)
+    if prog in _READ_ONLY_PROGRAMS:
+        return True
+    if prog == "env":
+        return not args
+    if prog in ("less", "more"):
+        return not any(a.startswith("+") for a in args)
+    if prog == "rg":
+        return not _has_flag(args, "--pre")
+    if prog == "file":
+        return not _has_flag(args, "--compile", short="C")
+    if prog == "xxd":
+        return len(pos) <= 1
+    if prog == "tree":
+        return not _has_flag(args, short="o")
+    if prog == "man":
+        return not _has_flag(args, "--pager", "--html", short="PH")
+    if prog == "date":
+        return not _has_flag(args, "--set", short="s")
+    if prog == "hostname":
+        return not pos
+    if prog in ("sort",):
+        return not _has_flag(args, "--output", "--compress-program", short="o")
+    if prog == "uniq":
+        return len(pos) <= 1
+    if prog == "iconv":
+        return not _has_flag(args, "--output", short="o")
+    if prog == "yq":
+        return not _has_flag(args, "--inplace", short="i")
+    if prog in ("awk", "gawk", "mawk", "nawk"):
+        if _has_flag(args, "--file", "--inplace", short="f") or any(a == "-i" for a in args):
+            return False
+        program = pos[0] if pos else ""
+        return not re.search(r"system\s*\(|>|\||getline|fflush|close\s*\(", program)
+    if prog == "sed":
+        if _has_flag(args, "--in-place", "--file", short="if"):
+            return False
+        script = " ".join(
+            pos[:1] + [a for i, a in enumerate(args) if i and args[i - 1] in ("-e", "--expression")]
+        )
+        return not re.search(r"(?:^|[;}\s/])[wWe](?:\s|$)|/[gpIiMm0-9]*w\s", script)
+    if prog == "find":
+        return not any(
+            a
+            in (
+                "-delete",
+                "-exec",
+                "-execdir",
+                "-ok",
+                "-okdir",
+                "-fprint",
+                "-fprint0",
+                "-fprintf",
+                "-fls",
+            )
+            for a in args
+        )
+    if prog == "tar":
+        if _has_flag(
+            args,
+            "--delete",
+            "--extract",
+            "--get",
+            "--create",
+            "--append",
+            "--update",
+            "--concatenate",
+            "--to-command",
+            "--checkpoint-action",
+            "--use-compress-program",
+            "--info-script",
+            "--new-volume-script",
+            "--rsh-command",
+            short="IF",
+        ):
+            return False
+        mode = args[0].lstrip("-") if args and not args[0].startswith("--") else ""
+        return ("t" in mode or _has_flag(args, "--list", short="t")) and not any(
+            ch in mode for ch in "xcruAIF"
+        )
+    if prog in ("unzip",):
+        return _has_flag(args, short="lZ") or "-l" in args
+    if prog == "zipinfo":
+        return True
+    if prog == "git":
+        sub = pos[0] if pos else ""
+        rest = args[args.index(sub) + 1 :] if sub in args else []
+        if _has_flag(args, "--output", "-o"):
+            return False
+        if sub == "branch":
+            return not _positional(rest) or _has_flag(rest, "--list", short="l")
+        if sub == "tag":
+            return not _positional(rest) or _has_flag(rest, "--list", short="l")
+        if sub == "remote":
+            return not rest or rest[0] in ("-v", "--verbose", "show", "get-url")
+        if sub == "config":
+            return _has_flag(rest, "--get", "--get-all", "--get-regexp", "--list", short="l")
+        if sub == "stash":
+            return bool(rest) and rest[0] in ("list", "show")
+        if sub == "reflog":
+            return not rest or rest[0] == "show"
+        if _has_flag(rest, "--ext-diff", "--textconv") or (
+            sub == "grep" and _has_flag(rest, "--open-files-in-pager", short="O")
+        ):
+            return False
+        return sub in _GIT_READ_ONLY
+    if prog == "docker":
+        sub = pos[0] if pos else ""
+        if sub == "compose":
+            return any(a in ("ps", "logs", "config", "ls", "images") for a in pos[1:2])
+        return sub in _DOCKER_READ_ONLY
+    if prog == "kubectl":
+        sub = pos[0] if pos else ""
+        if sub == "config":
+            return any(
+                a in ("view", "get-contexts", "current-context", "get-clusters") for a in pos[1:2]
+            )
+        return sub in _KUBECTL_READ_ONLY
+    if prog in _PKG_MANAGERS:
+        sub = pos[0] if pos else (args[0] if args else "")
+        if prog == "go" and sub == "env":
+            return not _has_flag(args, "-w", "-u")
+        return sub in _PKG_READ_ONLY
+    if prog == "curl":
+        if _has_flag(
+            args,
+            "--output",
+            "--remote-name",
+            "--remote-name-all",
+            "--upload-file",
+            "--data",
+            "--data-raw",
+            "--data-binary",
+            "--data-urlencode",
+            "--json",
+            "--form",
+            "--config",
+            "--cookie-jar",
+            "--dump-header",
+            "--trace",
+            "--trace-ascii",
+            "--stderr",
+            short="oOTdFKcD",
+        ):
+            return False
+        for i, a in enumerate(args):
+            if a in ("-X", "--request") and i + 1 < len(args):
+                if args[i + 1].upper() not in ("GET", "HEAD"):
+                    return False
+            elif a.startswith("-X") and len(a) > 2 and a[2:].upper() not in ("GET", "HEAD"):
+                return False
+        return True
+    if prog == "wget":
+        for i, a in enumerate(args):
+            if a in ("-O", "--output-document") and i + 1 < len(args) and args[i + 1] == "-":
+                return True
+            if a in ("-O-", "-qO-", "--output-document=-", "--spider"):
+                return True
+        return False
+    if prog in ("invoke-webrequest", "invoke-restmethod", "iwr", "irm"):
+        low = [a.lower() for a in args]
+        if "-outfile" in low or "-infile" in low or "-body" in low:
+            return False
+        for i, a in enumerate(low):
+            if a == "-method" and i + 1 < len(low) and low[i + 1] not in ("get", "head"):
+                return False
+        return True
+    if prog in _PYTHONS:
+        if _has_flag(args, "--version", "--help", short="Vh") and not pos and "-c" not in args:
+            return True
+        if "-c" in args:
+            i = args.index("-c")
+            code = args[i + 1] if i + 1 < len(args) else ""
+            return bool(code) and not _PY_WRITE_RE.search(code)
+        if stdin_code and (not pos or pos == ["-"]):
+            return not _PY_WRITE_RE.search(stdin_code)
+        return False  # 스크립트 · 모듈 실행은 안을 모른다
+    if prog in _INTERPRETERS:
+        return _has_flag(args, "--version", "--help") and len(args) == 1
+    return False
+
+
+def _egress(prog: str, args: List[str], code: str) -> bool:
+    pos = _positional(args)
+    if prog in _EGRESS_PROGRAMS:
+        return True
+    if prog == "git":
+        return bool(pos) and pos[0] in _GIT_EGRESS
+    if prog in _PKG_MANAGERS:
+        return (pos[0] if pos else (args[0] if args else "")) not in _PKG_LOCAL
+    if prog == "docker":
+        return bool(pos) and pos[0] in _DOCKER_EGRESS
+    if prog == "kubectl":
+        return not (pos and pos[0] == "config")
+    if prog in _PYTHONS or prog in _INTERPRETERS:
+        return bool(_NET_RE.search(" ".join(args) + "\n" + code))
+    return False
+
+
+@functools.lru_cache(maxsize=512)
+def _classify(command: str) -> Tuple[bool, bool]:
+    if len(command) > _CLASSIFY_MAX_CHARS:
+        return False, bool(_NET_RE.search(command[:_CLASSIFY_MAX_CHARS]))
+    bodies: List[str] = []
+
+    def take(m: "re.Match[str]") -> str:
+        bodies.append(m.group(4))
+        # 같은 줄의 나머지(리다이렉트 · 파이프)는 남긴다
+        return "<<" + m.group(2) + m.group(3) + "\n"
+
+    text = _HEREDOC_RE.sub(take, command)
+    stdin_code = "\n".join(bodies)
+    segments, unsafe = _scan_shell(text)
+    read_only = bool(segments) and not unsafe
+    egress = False
+    for seg in segments:
+        try:
+            tokens = shlex.split(seg, posix=True)
+        except ValueError:
+            read_only = False
+            continue
+        tokens = [t for t in tokens if not re.fullmatch(r"<<-?\w+|<<<?", t)]
+        prog, args = _strip_wrappers(tokens)
+        if not prog:
+            continue
+        egress = egress or _egress(prog, args, stdin_code)
+        if prog in _ELEVATE or not _args_read_only(prog, args, stdin_code):
+            read_only = False
+    return read_only, egress
+
+
+def classify_shell_command(command: str) -> ToolCapabilities:
+    """읽기 전용 · 바깥 연결만 판정한다. 셸은 작업 디렉터리 · 환경을 공유하므로 병렬은 늘 끈다."""
+    read_only, egress = _classify(str(command or ""))
+    return ToolCapabilities(
+        concurrency_safe=False,
+        read_only=read_only,
+        network_egress=egress,
+    )
+
 
 async def _finish_result(
     *,
@@ -430,6 +1140,9 @@ class BashTool(Tool):
             },
             "required": ["command"],
         }
+
+    def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
+        return classify_shell_command(str((input or {}).get("command") or ""))
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         command = input.get("command", "").strip()

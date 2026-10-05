@@ -366,7 +366,7 @@ class StreamingToolExecutor(ToolExecutor):
         """Shared execution body — routes, times, emits events, stores result."""
         call = self._calls[tuid]
         on_event = getattr(self, "_on_event", None)
-        _emit_call_start(on_event, call)
+        _emit_call_start(on_event, call, self._registry)
         t0 = time.monotonic()
         assert self._router is not None, "router must be bound before dispatch"
         result = await self._router.route(
@@ -396,6 +396,6 @@ class StreamingToolExecutor(ToolExecutor):
                     exc_info=True,
                 )
         result_dict = result.to_api_format(tuid)
-        _emit_call_complete(on_event, call, result_dict, duration_ms)
+        _emit_call_complete(on_event, call, result_dict, duration_ms, self._registry)
         self._results[tuid] = result_dict
         return result_dict

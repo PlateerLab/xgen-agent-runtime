@@ -15,7 +15,7 @@ MCP_TOOL_PREFIX_FORMAT = "mcp__{server}__{tool}"
 MCP_TOOL_PREFIX = "mcp__"
 
 
-def _annotations_to_capabilities(annotations: Dict[str, Any]) -> ToolCapabilities:
+def annotations_to_capabilities(annotations: Dict[str, Any]) -> ToolCapabilities:
     """Translate MCP tool annotations into :class:`ToolCapabilities`.
 
     The MCP spec defines four optional behavioural hints on each tool's
@@ -113,11 +113,11 @@ class MCPToolAdapter(Tool):
 
         Lets PartitionExecutor / StreamingToolExecutor parallelise
         read-only MCP tools instead of treating every external tool
-        as fail-closed unsafe. See ``_annotations_to_capabilities``
+        as fail-closed unsafe. See ``annotations_to_capabilities``
         for the mapping.
         """
         annotations = self._definition.get("annotations") or {}
-        return _annotations_to_capabilities(annotations)
+        return annotations_to_capabilities(annotations)
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         """Execute the tool via the MCP server.

@@ -72,6 +72,9 @@ def sends_every_schema(value: object) -> bool:
 # 메모리·작업·위임·커넥터)에 흩어져 있고, 각자가 자기 판단으로 ``core=True`` 를
 # 쓰면 표면은 아무도 의도하지 않은 모양이 된다.
 
+#: 도구를 찾기만 하는 호출(실제 작업이 아니다).
+TURN_ONE_DISCOVERY = frozenset({"ToolSearch"})
+
 #: 첫 턴에 스키마까지 보이는 도구.
 #:
 #: 각 줄은 **입구 하나**다. 패밀리 전체를 올리는 줄은 없다 — 기본 명령만 예외인데,
@@ -86,7 +89,7 @@ TURN_ONE_TOOLS = frozenset(
         "Glob",
         "Grep",
         # 2. 도구 발견 — 아래 계층 전부로 가는 문.
-        "ToolSearch",
+        *TURN_ONE_DISCOVERY,
         # 2-b. 목록 작업 — 같은 도구를 여러 입력으로 한 왕복에. 첫 턴에 보여야
         #      항목마다 따로 부르는 습관(왕복 N회)이 처음부터 생기지 않는다.
         "ToolBatch",
