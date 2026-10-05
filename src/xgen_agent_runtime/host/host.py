@@ -251,3 +251,6 @@ class HostServices(Protocol):
     #: Only names the device in the per-turn folder note ("the user's Mac").
     #: Absent method → the note says "device".
     def local_device_platform(self) -> str: ...
+
+    #: **OPTIONAL** (sync): notes for this turn only, sent after the folder note, never in history.
+    def turn_notes(self) -> List[str]: ...
