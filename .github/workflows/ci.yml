@@ -127,22 +127,16 @@ jobs:
       # Ignore the single CVE so the audit keeps catching real issues
       # in our dependency tree. Revisit once pip ships a fix.
       # 의존성은 서비스(xgen-workflow)가 지금 설치하는 정확한 버전으로 고정한다(4.74.0).
-      # 아래는 그 설치 버전에 이미 있는 알려진 취약점이다 — 올리는 것은 서비스 전체에
-      # 닿는 별도 결정이라 여기서 몰래 올리지 않는다:
-      # - asyncssh 2.23.1: 2.24+ 는 cryptography>=48 을 요구하는데 플랫폼은 46.0.7 고정.
-      # - langchain / langchain-anthropic / langsmith / pydantic-settings / python-multipart:
-      #   xgen-doc2chunk 가 끌어오는 것으로, 워크플로가 같은 버전을 정확히 고정해 쓴다.
-      # 버전을 올릴 때 이 목록도 함께 줄인다.
+      # 4.84.2 에서 asyncssh(2.24.1)·python-multipart(0.0.32)·pydantic-settings(2.14.2)·langsmith(0.8.18)를
+      # 보안 수정판으로 올렸다. 아래 셋만 남는다 — xgen-doc2chunk 가 끌어오는 langchain 계열로, 고치려면
+      # langchain-core 1.4·langgraph 1.2 로 계열 전체를 올려야 해서(서비스의 LLM 경로 전반) 따로 다룬다:
+      # - langchain 1.2.18(PYSEC-2026-2192, 1.3.9), langchain-anthropic 1.3.1(PYSEC-2026-2556, 1.4.6),
+      #   langgraph-sdk 0.3.15(CVE-2026-104873, 0.4.4)
       - run: >-
           pip-audit --ignore-vuln CVE-2026-3219
-          --ignore-vuln CVE-2026-62949
           --ignore-vuln PYSEC-2026-2192
           --ignore-vuln PYSEC-2026-2556
-          --ignore-vuln CVE-2026-59152
-          --ignore-vuln CVE-2026-58203
-          --ignore-vuln PYSEC-2026-3040
-          --ignore-vuln PYSEC-2026-3036
-          --ignore-vuln PYSEC-2026-3037
+          --ignore-vuln CVE-2026-104873
 
   build:
     name: Build package

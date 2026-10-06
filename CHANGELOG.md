@@ -4,6 +4,15 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.84.2] — 2026-10-06
+
+### Security — 의존성 보안 수정판
+
+- `xgen-doc2chunk` 0.4.3 → 0.4.5: python-multipart 0.0.32, langsmith 0.8.18, pydantic-settings 2.14.2, psutil 7.2.2.
+- `asyncssh` 2.23.1 → 2.24.1: 서비스가 cryptography 50 으로 올라가 2.24(cryptography>=48 요구)를 받을 수 있게 됐다.
+- CI pip-audit 무시 목록을 실제로 남는 것만으로 — pip 자신과, langchain 계열 셋(langchain·langchain-anthropic·
+  langgraph-sdk). 셋은 langchain-core 1.4·langgraph 1.2 로 계열 전체를 올려야 해서 따로 다룬다.
+
 ## [4.84.1] — 2026-10-04
 
 ### Fixed — WebSearch `days`: 한 뉴스 엔진의 오류가 다른 엔진이 가져온 결과를 버리던 것
