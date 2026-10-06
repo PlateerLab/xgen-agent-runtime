@@ -4,6 +4,18 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.84.3] - 2026-10-06
+
+### Changed: `xgen-doc2chunk` 0.4.5 → 0.5.0 (워크시트 처리 개편)
+
+ParseDocument 가 엑셀·CSV 를 제대로 읽는다.
+
+- 엑셀은 앞 1,000행·100열만, CSV 는 100,000행까지만 읽던 것을 끝까지 읽는다.
+- 표시 서식(15.3%, 2026년 10월 6일, ₩1,234.50)을 적용하고, 계산값 없이 저장된 수식은 `=B2*C2` 로 남긴다.
+- 병합 머리글은 한 줄로 편다(`1월 목표`). 표는 언제나 마크다운이다.
+- `.xlsm`·`.xltx`·`.xltm` 도 읽는다.
+- CSV 빈 칸이 앞 셀·윗 셀 값을 받던 것을 고쳤다.
+
 ## [4.84.2] — 2026-10-06
 
 ### Security — 의존성 보안 수정판
