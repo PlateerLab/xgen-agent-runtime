@@ -62,6 +62,13 @@ FOLDER_NOTE = (
     "{tools} before saying it does not exist."
 )
 
+#: 사용자 기기 접속(host.user_pc) 경로 — sandbox 도구가 연결 폴더의 경로를 받았을 때. 경로가 그 기기
+#: 폴더의 것이라는 확실한 사실만 말한다("없음" 결과에 기기를 보라고 미는 안내는 이 경로에 없다).
+USER_PC_WRONG_MACHINE_NOTE = (
+    '[Wrong machine] {path} is inside the connected folder "{name}" on the user\'s device{device}. '
+    'Your sandbox tools cannot reach it; UserPc with folder="{name}" can.'
+)
+
 #: sandbox 도구가 기기 폴더의 경로를 받았을 때.
 WRONG_MACHINE_NOTE = (
     '[Wrong machine] {path} is inside the folder "{name}" on the user\'s {device}. Your sandbox tools '
@@ -169,6 +176,9 @@ def annotate(
     from xgen_agent_runtime.host.local_folders import SHARED_FOLDERS_KEY
 
     names = list(registry_names)
+    facts_any = state_shared.get(SHARED_FOLDERS_KEY)
+    if isinstance(facts_any, dict) and facts_any.get("user_pc"):
+        return _annotate_user_pc(tool_calls, results, names, facts_any)
     # 옛 앱(폴더 목록을 보내지 않는 커넥터)은 입구가 있고 폴더 도구는 그 뒤에 숨어 있다 — 입구를 가리킨다.
     gate = local_gate(names)
     device_tools = None if gate else device_file_tools(names)
@@ -221,4 +231,44 @@ def annotate(
             used += 1
             added += 1
     state_shared[NOTES_KEY] = used
+    return added
+
+
+def _annotate_user_pc(
+    tool_calls: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+    names: List[str],
+    facts: Dict[str, Any],
+) -> int:
+    """사용자 기기 접속 경로 — sandbox 도구가 연결 폴더의 경로를 받았을 때만 사실 한 줄을 붙인다."""
+    from xgen_agent_runtime.host.user_pc import TOOL_NAME
+
+    if TOOL_NAME not in names:
+        return 0
+    calls = {str(tc.get("tool_use_id") or ""): tc for tc in tool_calls}
+    added = 0
+    for result in results:
+        tc = calls.get(str(result.get("tool_use_id") or "")) or {}
+        tool_name = str(tc.get("tool_name") or "")
+        if tool_name not in SANDBOX_FILE_TOOLS:
+            continue
+        if "[Wrong machine]" in _text(result):
+            continue
+        hit = _device_hit(tool_name, tc.get("tool_input"), facts)
+        if hit is None:
+            continue
+        path, name = hit
+        device = next(
+            (
+                str(f.get("device") or "")
+                for f in facts.get("folders") or []
+                if isinstance(f, dict) and str(f.get("name") or "") == name
+            ),
+            "",
+        )
+        note = USER_PC_WRONG_MACHINE_NOTE.format(
+            path=path, name=name, device=f' "{device}"' if device else ""
+        )
+        if _append(result, note):
+            added += 1
     return added

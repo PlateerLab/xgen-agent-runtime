@@ -350,7 +350,7 @@ class BashTool(Tool):
             "server, where all your work runs. Commands start in your working folder; you "
             "can read and write there and install what you need (`pip install ...`, "
             "`npm install ...`). It is a Linux shell: use bash/sh syntax. It cannot reach "
-            "the user's own devices — for folders the user connected, use the device tools. "
+            "the user's own devices; folders the user connected are reached with UserPc. "
             "Returns stdout, stderr, and exit code; a configurable timeout applies."
         )
 

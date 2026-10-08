@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.85.0] - 2026-10-08
+
+### Added: 사용자 PC 접속 도구 `UserPc` (host.user_pc)
+
+대화에 연결된 기기 폴더에 닿는 길을 도구 하나로 모았다. 원격 셸로 그 폴더에 들어간 것처럼 명령을
+보내고(run), 파일은 get·put 으로만 sandbox 와 오가며, 오래 걸리는 명령은 작업(job)으로 이어 본다.
+
+- 호스트가 선택 훅 `user_pc_connection()` 으로 접속(연결 폴더 목록 + 기기 호출 함수)을 주면 이 규칙으로
+  돈다. 기기의 폴더 도구(ReadFile·WriteFile·ListDir·SearchFiles·DeleteFile·Shell·ShellJob·Open·Clipboard·
+  Notify·TakePhoto·OpenFile·CopyToWorkspace·CopyFromWorkspace·LocalControl)는 모델에게 보이지 않고, 기록 속
+  옛 호출은 평문으로 바뀐다. 훅이 없는 호스트는 예전 규칙 그대로다.
+- 여러 기기의 폴더를 함께 다룬다. 폴더가 여럿이면 `folder` 로 고르고, 없으면 고를 수 있는 이름을 돌려준다.
+- 판정은 도구가 지킨다: 꺼진 기기·명령을 받지 못하는 기기는 기다리지 않고 거절, 한 턴에서 응답하지 않은
+  기기는 같은 턴에 다시 기다리지 않음, 호출마다 시한, 폴더 밖 경로 거절(폴더의 절대 경로는 상대로 받는다).
+- 턴 안내는 연결 폴더의 사실만 적는다(이름·기기·OS·셸·경로·켜짐). "Two machines" 문단과 sandbox 의
+  "없음" 결과에 기기를 보라고 붙이던 안내는 이 경로에 없다. sandbox 도구가 연결 폴더의 경로를 받았을 때만
+  어느 폴더의 것인지 한 줄을 붙인다.
+- Bash 설명의 "use the device tools" 를 "reached with UserPc" 로.
+
 ## [4.84.3] - 2026-10-06
 
 ### Changed: `xgen-doc2chunk` 0.4.5 → 0.5.0 (워크시트 처리 개편)

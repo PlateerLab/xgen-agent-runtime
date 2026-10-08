@@ -25,6 +25,7 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
 from xgen_agent_runtime.host import local_folders as _local_folders
+from xgen_agent_runtime.host import user_pc as _user_pc
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 
@@ -136,6 +137,23 @@ def _folder_device_info(host: Any) -> Dict[str, Any]:
     except Exception:  # noqa: BLE001 — 안내 한 줄 때문에 턴을 깨지 않는다
         return {}
     return dict(info) if isinstance(info, dict) else {}
+
+
+def _user_pc_connection(host: Any) -> Optional[Any]:
+    """이번 턴의 사용자 기기 접속 — 호스트가 주면(OPTIONAL 훅 ``user_pc_connection``).
+
+    None 이면 예전 기기 도구 규칙(host.local_folders)으로 돈다. 접속 객체를 주면 폴더가 없어도
+    새 규칙이다: 기기의 폴더 도구는 보이지 않고, 연결 폴더가 있으면 UserPc 가 붙는다.
+    """
+    probe = getattr(host, "user_pc_connection", None)
+    if not callable(probe):
+        return None
+    try:
+        conn = probe()
+    except Exception:  # noqa: BLE001 — 접속을 못 만들면 예전 규칙으로(턴은 깨지 않는다)
+        logger.warning("agents/geny: 사용자 기기 접속을 만들지 못함 (예전 규칙으로)", exc_info=True)
+        return None
+    return conn if isinstance(conn, _user_pc.UserPcConnection) else None
 
 
 def _local_device_platform(host: Any) -> Optional[str]:
@@ -300,15 +318,21 @@ class AgentTurnExecutor:
             # host.local_folders 한 곳이다. 옛 앱·웹(None)은 예전 규칙 그대로다.
             _folders = _local_folders.parse_local_folders(kwargs.get("local_folders"))
             _device_tool_names: List[str] = []
+            # 사용자 기기 접속(host.user_pc) — 호스트가 주면 연결 폴더는 UserPc 하나로 닿고, 기기의
+            # 폴더 도구(파일·셸·복사…)는 모델에게 보이지 않는다. 주지 않으면 예전 규칙 그대로다.
+            _pc = _user_pc_connection(host)
             try:
                 # client_surface 게이트(host 내부): 대화 출처가 앱일 때만 기기 도구를
                 # 준다 (web 대화엔 앱이 연결돼 있어도 no-op).
                 connector_tools = host.build_connector_mcp_tools(
                     kwargs.get("user_id"), kwargs.get("client_surface")
                 )
-                connector_tools = _local_folders.filter_device_tools(
-                    connector_tools or [], _folders
-                )
+                if _pc is not None:
+                    connector_tools = _user_pc.without_folder_tools(connector_tools or [])
+                else:
+                    connector_tools = _local_folders.filter_device_tools(
+                        connector_tools or [], _folders
+                    )
                 _device_tool_names = [getattr(t, "name", "") or "" for t in connector_tools]
                 if connector_tools:
                     # 기기 도구도 계층을 지킨다 — 브라우저 조작 6종은 BrowserGuide 뒤에
@@ -330,23 +354,44 @@ class AgentTurnExecutor:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("agents/geny: 기기 도구 주입 실패 (무시): %s", exc)
-            #: 이번 턴에 폴더 도구가 하나도 없는가 — 그러면 기록 속 옛 폴더 도구 호출을
-            #: 요청 사본에서 평문으로 바꾼다(없는 도구를 다시 부르거나 옛 경로를 믿지 않게).
-            _retire_device_calls = not any(
-                _local_folders.is_folder_tool(n) for n in _device_tool_names
-            )
             _turn_notes: List[str] = []
-            _folder_info = _folder_device_info(host) if _folders else {}
-            _folder_platform = _local_device_platform(host) if _folders is not None else None
-            _folder_note = _local_folders.turn_note(
-                _folders,
-                available_tools=_device_tool_names,
-                platform=_folder_platform,
-                device_name=str(_folder_info.get("name") or "") or None,
-                remote=bool(_folder_info.get("remote")),
-            )
-            if _folder_note:
-                _turn_notes.append(_folder_note)
+            if _pc is not None:
+                if _pc.folders:
+                    registry = adapt_tools(
+                        [_user_pc.build_user_pc_tool(_pc)],
+                        result_sink=result_sink,
+                        registry=registry,
+                        core=True,
+                    )
+                    _turn_notes.append(_user_pc.turn_note(_pc.folders))
+                    logger.info(
+                        "agents/geny: UserPc 연결 폴더 %d개 (기기 %d대)",
+                        len(_pc.folders),
+                        len({f.device_id for f in _pc.folders}),
+                    )
+                elif _folders is not None:
+                    # 기기 앱에서 보낸 턴인데 연결 폴더가 없다 — 사실과 연결하는 법만 적는다.
+                    _turn_notes.append(_user_pc.no_folder_note())
+                #: 기기의 폴더 도구는 이 경로에서 한 번도 보이지 않는다 — 기록 속 옛 호출은 늘
+                #: 평문으로 바꾼다. 연결 폴더가 없는 턴이면 지난 UserPc 호출도 같다.
+                _retire_device_calls = True
+            else:
+                #: 이번 턴에 폴더 도구가 하나도 없는가 — 그러면 기록 속 옛 폴더 도구 호출을
+                #: 요청 사본에서 평문으로 바꾼다(없는 도구를 다시 부르거나 옛 경로를 믿지 않게).
+                _retire_device_calls = not any(
+                    _local_folders.is_folder_tool(n) for n in _device_tool_names
+                )
+                _folder_info = _folder_device_info(host) if _folders else {}
+                _folder_platform = _local_device_platform(host) if _folders is not None else None
+                _folder_note = _local_folders.turn_note(
+                    _folders,
+                    available_tools=_device_tool_names,
+                    platform=_folder_platform,
+                    device_name=str(_folder_info.get("name") or "") or None,
+                    remote=bool(_folder_info.get("remote")),
+                )
+                if _folder_note:
+                    _turn_notes.append(_folder_note)
             if registry:
                 logger.info(
                     "agents/geny: %d tool(s) registered (%d deferred) from Tools/Context ports",
@@ -363,15 +408,22 @@ class AgentTurnExecutor:
             if _turn_notes:
                 state.shared[SharedKeys.TURN_NOTES] = _turn_notes
             if _retire_device_calls:
-                state.shared[SharedKeys.RETIRED_TOOL_CALLS] = _local_folders.retired_calls_spec()
-            _folder_facts = _local_folders.shared_folder_facts(
-                _folders,
-                device=(
-                    f'{_local_folders.device_label(_folder_platform)} "{_folder_info.get("name")}"'
-                    if _folder_info.get("name")
-                    else _local_folders.device_label(_folder_platform)
-                ),
-            )
+                state.shared[SharedKeys.RETIRED_TOOL_CALLS] = (
+                    _user_pc.retired_calls_spec(has_folders=bool(_pc.folders))
+                    if _pc is not None
+                    else _local_folders.retired_calls_spec()
+                )
+            if _pc is not None:
+                _folder_facts = _user_pc.shared_folder_facts(_pc.folders)
+            else:
+                _folder_facts = _local_folders.shared_folder_facts(
+                    _folders,
+                    device=(
+                        f'{_local_folders.device_label(_folder_platform)} "{_folder_info.get("name")}"'
+                        if _folder_info.get("name")
+                        else _local_folders.device_label(_folder_platform)
+                    ),
+                )
             if _folder_facts:
                 # sandbox 도구가 기기 경로를 받거나 "없음" 을 돌려줄 때 기기 도구를 가리키는 안내가 읽는다
                 # (stages/s10_tool/second_machine).

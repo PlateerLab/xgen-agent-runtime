@@ -93,7 +93,7 @@ def test_inherit_opt_in_applies_on_windows_too():
 
 
 def test_description_names_the_one_machine_it_runs_on():
-    """Bash 는 sandbox 에서만 돈다 — 사용자 기기 폴더는 기기 도구의 일이라고 설명이 말한다."""
+    """Bash 는 sandbox 에서만 돈다 — 사용자 기기 폴더는 UserPc 의 일이라고 설명이 말한다."""
     desc = BashTool().description
     assert "sandbox" in desc
-    assert "cannot reach the user's own devices" in desc and "device tools" in desc
+    assert "cannot reach the user's own devices" in desc and "UserPc" in desc
