@@ -10,6 +10,7 @@ xgen_agent_runtime.host.* 로 repoint 하면 같은 본체가 로컬에서 돈�
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from dataclasses import replace
@@ -182,6 +183,29 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
         logger.warning("agents/geny: tool_result_filter 훅 실패 — 필터 없이 진행", exc_info=True)
         return None
     return result_filter if callable(result_filter) else None
+
+
+def _host_turn_notes(host: Any) -> List[str]:
+    """호스트의 이번 턴 안내(OPTIONAL 동기 훅 ``turn_notes``). 없거나 실패하면 빈 목록."""
+    probe = getattr(host, "turn_notes", None)
+    if not callable(probe):
+        return []
+    try:
+        notes = probe()
+    except Exception:  # noqa: BLE001 - 안내 때문에 턴을 깨지 않는다
+        logger.warning("agents/geny: 호스트 턴 안내 실패 (무시)", exc_info=True)
+        return []
+    if inspect.iscoroutine(notes):
+        notes.close()  # 기다리지 않은 코루틴 경고를 막는다
+        logger.warning(
+            "agents/geny: 호스트 턴 안내 훅이 비동기라 무시합니다 (동기 함수여야 합니다)"
+        )
+        return []
+    if isinstance(notes, str):
+        notes = [notes]
+    if not isinstance(notes, (list, tuple)):
+        return []
+    return [str(n).strip() for n in notes if str(n or "").strip()]
 
 
 class AgentTurnExecutor:
@@ -392,6 +416,7 @@ class AgentTurnExecutor:
                 )
                 if _folder_note:
                     _turn_notes.append(_folder_note)
+            _turn_notes.extend(_host_turn_notes(host))
             if registry:
                 logger.info(
                     "agents/geny: %d tool(s) registered (%d deferred) from Tools/Context ports",

@@ -4,6 +4,51 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.86.0] — 2026-10-09
+
+### Added — 호스트가 이번 턴 안내를 턴 노트로 넘기는 선택 훅 `turn_notes()`
+
+호스트가 턴마다 바뀌는 글(예: 에이전트 기억이 이번 질문에 고른 답·지도)을 넘길 자리가 Context 포트뿐이었다.
+그 길은 사용자 메시지 본문이 되어 대화 기록·대화 노트·실행 카드·사실 추출·기억 검색어에 사용자 말로 남는다.
+`HostServices.turn_notes()`(OPTIONAL, 동기 함수)가 돌려준 문자열을 실행기의 폴더 안내 뒤에 `SharedKeys.TURN_NOTES` 로
+붙인다. 폴더 안내와 같이 요청 사본에만 실리고 기록에는 남지 않는다. 훅이 없거나 실패하거나 비동기면 예전과 같다(안내 없음).
+
+### Added — 도구 호출 사건이 그 호출의 성격을 싣는다 (`capabilities` · `origin`, 사건 목록 v17)
+
+`tool.call_start` · `tool.call_complete` 에 도구가 스스로 말하는 능력(`Tool.capabilities(input)`)과 출처(`tool_origin`)를
+싣는다. 받는 쪽(호스트 실행 기록 · 기억)이 도구 이름표를 들고 "읽기인지 쓰기인지" 를 다시 추측하지 않는다. 파티션 ·
+순차 · 병렬 · 스트리밍 실행기와 ToolBatch 항목 모두 싣는다. 실행기에 레지스트리가 없거나 도구를 모르면 비워 보낸다(CLI
+백엔드는 싣지 않는다).
+
+이 판이 새로 채우는 능력은 **읽기 전용(read_only)과 바깥 연결(network_egress)**이다(기기 도구는 MCP 주석의 멱등 표시도
+옮긴다). 파괴(destructive) · 병렬(concurrency_safe)은 권한 확인 · 계획 모드 · 병렬 실행을 바꾸므로 지금까지의 값을 그대로 둔다.
+
+- `BashTool.capabilities(input)` · `classify_shell_command`: 명령마다 답한다. 실패-닫힘 - 따옴표 밖의 모든 구간이 아는
+  읽기 프로그램이고, 그 프로그램을 쓰기로 바꾸는 플래그(`sed -i` · `sort -o` · `find -delete/-exec` · `git branch 새이름` ·
+  `curl -o/-X POST/--data` …)가 없고, 파일로 쓰는 리다이렉트(`>` `>>` `2>` `&>`) · 명령 치환 · 프로세스 치환 · 묶음(`{ }`)
+  · 다른 셸이나 인터프리터에 넘기는 코드(`bash -c` · `node -e` …)가 없을 때만 읽기 전용이다. 파이썬 인라인 코드
+  (`-c` · 히어독)는 쓰기 흔적을 본다. 권한을 올리는 명령(sudo 등)과, 언어 · 시간대 같은 것 말고 다른 환경 변수를 앞에 붙인
+  명령(`LD_PRELOAD=…` · `PAGER=…`)은 읽기 전용이 아니다. 2만 자가 넘는 명령은 분석하지
+  않는다(읽기 전용 아님). 결과는 명령 문자열로 캐시한다. 파괴 · 병렬 여부는 기본값.
+- 기기 도구(`host/device_tools.capabilities_from_annotations`): MCP 도구 주석을 MCP 어댑터와 같은 규칙
+  (`tools.mcp.adapter.annotations_to_capabilities`, 이전 이름 `_annotations_to_capabilities` 를 공개로)으로 옮기되
+  파괴 · 병렬은 기본값으로 둔다. 주석이 없으면 기본 능력.
+- 포트 도구(`host/tools.py`): LangChain 도구의 `metadata` · 호출 가능 사전의 `capabilities` 에 적힌 `read_only` ·
+  `network_egress` 를 읽는다(호스트 노드가 적는다). `read_only` 가 없으면 기본 능력.
+- `host/tool_exposure.TURN_ONE_DISCOVERY`(= ToolSearch): 턴 1 표 안의 도구 발견 묶음에 이름을 붙였다. 표의 내용은 같다.
+  호스트가 "도구를 찾은 호출은 한 일이 아니다" 를 가릴 때 읽는다. ToolBatch 는 안에서 실제 도구가 돌아 넣지 않는다.
+
+### Fixed — 호스트가 `set_hooks` 로 붙인 기억 hooks 가 자동 검색에 먹지 않던 것
+
+runner · pipeline 이 검색기(`MemoryAwareRetriever`)를 hooks 없이 만들어, 저장소에 `set_hooks` 로 붙인 `MemoryHooks` 가
+자동 검색에 쓰이지 않았다. 이제 검색기가 저장소의 hooks(`memory.provider.provider_hooks`, MemoryHooks 일 때만)를 받는다.
+`set_hooks` 를 부르는 호스트는 hooks 의 모든 검색 설정(제외 분류 · 결과 수 · 주입 예산 · slim_mode · 층별 예산 …)이
+적용된다. 생성자로 hooks 를 받은 저장소도 같다. hooks 는 파이프라인을 지을 때 한 번 읽으므로 그 전에 붙여야 한다. hooks 를
+주지 않은 저장소는 기본 `MemoryHooks()` 라 검색 결과가 그대로다.
+
+자동 검색에서 뺄 분류(`search_exclude_categories`)가 있으면 키워드 · 벡터 층이 다섯 배를 받아 거른 뒤 결과 수만큼 자른다.
+뺀 분류가 저장소의 대부분일 때 상위 k 가 전부 그 분류라 거르고 나면 비던 것을 막는다. 기억 도구(`memory_search`)로
+직접 찾는 길은 영향이 없다.
 ## [4.85.0] - 2026-10-08
 
 ### Added: 사용자 PC 접속 도구 `UserPc` (host.user_pc)

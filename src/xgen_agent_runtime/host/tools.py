@@ -21,7 +21,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.tools import Tool, ToolRegistry, ToolResult, build_tool
-from xgen_agent_runtime.tools.base import with_origin
+from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 
 logger = logging.getLogger("editor.geny_bridge.tools")
 
@@ -190,6 +190,16 @@ def _denied_result(name: str, denied: str, result_sink: Optional[Dict[str, str]]
     return ToolResult(content=text, is_error=True)
 
 
+def _capabilities_of(meta: Any) -> Optional[ToolCapabilities]:
+    """노드가 적은 ``read_only`` · ``network_egress`` 만 옮긴다(파괴 · 병렬은 기본값). ``read_only`` 가 없으면 None."""
+    if not isinstance(meta, dict) or "read_only" not in meta:
+        return None
+    return ToolCapabilities(
+        read_only=meta.get("read_only") is True,
+        network_egress=meta.get("network_egress") is True,
+    )
+
+
 def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: Any = ()) -> Tool:
     original = str(getattr(lc_tool, "name", "") or type(lc_tool).__name__)
     name = _sanitize_name(original, taken)
@@ -230,6 +240,7 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: 
             description=description,
             input_schema=_json_schema_of(lc_tool),
             execute=_execute,
+            capabilities=_capabilities_of(getattr(lc_tool, "metadata", None)),
         ),
         "adapted",
     )
@@ -268,7 +279,13 @@ def _wrap_callable_dict(
         return ToolResult(content=text)
 
     return with_origin(
-        build_tool(name=name, description=description, input_schema=input_schema, execute=_execute),
+        build_tool(
+            name=name,
+            description=description,
+            input_schema=input_schema,
+            execute=_execute,
+            capabilities=_capabilities_of(spec.get("capabilities")),
+        ),
         "adapted",
     )
 

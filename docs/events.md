@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-30.
-> Catalogue version: **16** · events: **140**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-06.
+> Catalogue version: **17** · events: **140**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -716,6 +716,8 @@ Enum member: `EventTypes.TOOL_CALL_START`
 | `tool_use_id` | str |
 | `name` | str |
 | `input` | dict |
+| `capabilities` | dict — {read_only, destructive, network_egress, idempotent} from Tool.capabilities(input); absent when the executor's registry does not know the tool |
+| `origin` | str — tool_origin(): builtin / adapted / device / memory / mcp / '' |
 
 ### `tool.call_complete`
 
@@ -726,6 +728,8 @@ Enum member: `EventTypes.TOOL_CALL_COMPLETE`
 | `tool_use_id` | str |
 | `name` | str |
 | `is_error` | bool |
+| `capabilities` | dict — same as tool.call_start |
+| `origin` | str — same as tool.call_start |
 | `duration_ms` | int |
 
 ### `tool.repeat_failure`
