@@ -526,10 +526,14 @@ class AgentTurnExecutor:
                 system_prompt = system_prompt + "\n\n" + _env_block
             if _tools_reach_model and kwargs.get("system_prompt") != "":
                 # 왕복 수가 곧 비용이다 — 병렬 호출·일괄 스크립트·출력 최소화 원칙.
+                # 진행 메모까지 사용자 언어로 쓰라는 원칙도 같은 턴에 붙는다.
                 # 사용자가 시스템 프롬프트를 명시적으로 비운 턴에는 붙이지 않는다.
-                from xgen_agent_runtime.host._constants import EFFICIENCY_PROMPT_BLOCK
+                from xgen_agent_runtime.host._constants import (
+                    EFFICIENCY_PROMPT_BLOCK,
+                    USER_LANGUAGE_PROMPT_BLOCK,
+                )
 
-                system_prompt = system_prompt + EFFICIENCY_PROMPT_BLOCK
+                system_prompt = system_prompt + EFFICIENCY_PROMPT_BLOCK + USER_LANGUAGE_PROMPT_BLOCK
             # ── 자기진화(self-evolution) 판정 ────────────────────────────────
             # ★ 보안: 배포(deploy_)·게스트(guest_)·고정본 실행에서는 절대 허용하지 않는다. 그
             # 실행은 워크플로 OWNER user_id 로 돌아 write-access 검사를 통과하므로,
