@@ -259,6 +259,14 @@ class LLMSummaryCompactor(SummaryCompactor):
                 messages=[{"role": "user", "content": prompt}],
                 purpose="s02.compact",
             )
+            # 압축도 모델을 부른 것이다: 메인 루프 밖 호출이라 보조 사용량으로 남긴다.
+            # (백그라운드 압축은 state 대신 그림자를 받는다. 기록이 압축을 깨면 안 된다.)
+            _record_aux = getattr(state, "add_aux_usage", None)
+            if callable(_record_aux):
+                try:
+                    _record_aux("compact", getattr(resp, "usage", None))
+                except Exception:  # noqa: BLE001
+                    pass
             summary_text = (resp.text or "").strip()
             if not summary_text:
                 summary_text = self._summary_text or (

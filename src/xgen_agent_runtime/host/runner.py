@@ -1053,16 +1053,25 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
          "cache_read_tokens": int|None, "cache_creation_tokens": int|None,
          "total_cost_usd": float|None, "model": str|None, "provider": str|None,
          "calls": int, "first_call_prompt_tokens": int, "max_call_prompt_tokens": int,
-         "harness": {"components": {name: int}, "fast_path": {...}}  # 있을 때만
+         "harness": {"components": {name: int}, "fast_path": {...}},  # 있을 때만
+         "auxiliary": {"input_tokens": int, "output_tokens": int,      # 있을 때만
+                       "cache_read_tokens": int, "cache_creation_tokens": int,
+                       "calls": int, "by_purpose": {purpose: {...같은 네 값과 calls}}}
         }
 
+    위 최상위 토큰 값은 메인 루프 호출만이다(예전과 같다). ``auxiliary`` 는 메인 루프 밖에서 모델을 부른
+    보조 호출(대화 압축 등, ``state.aux_usage_entries()``)의 합이다. 같은 클라이언트라 provider 의 캐시 규칙도 같다.
+    호스트가 과금·한도에 더할지 정한다.
+
     사용량이 전혀 기록되지 않은 턴(API 호출 0회 — 가드 거절·즉시 오류)은
-    ``None`` — 호출자는 이때 usage 청크를 내지 않는다.
+    ``None`` 이고, 호출자는 이때 usage 청크를 내지 않는다. 보조 호출만 있었던 턴은 메인 값이 0 인 페이로드다.
     """
     from xgen_agent_runtime.core.state import TokenUsage
 
     calls = list(getattr(state, "turn_token_usage", None) or [])
-    if not calls:
+    entries = state.aux_usage_entries() if hasattr(state, "aux_usage_entries") else []
+    auxiliary = aux_usage_summary(entries)
+    if not calls and auxiliary is None:
         return None
     total = TokenUsage()
     for u in calls:
@@ -1119,7 +1128,41 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
     harness = harness_summary(state)
     if harness:
         usage["harness"] = harness
+    if auxiliary is not None:
+        usage["auxiliary"] = auxiliary
     return usage
+
+
+def aux_usage_summary(entries: Any) -> Optional[Dict[str, Any]]:
+    """보조 호출 ``(purpose, TokenUsage)`` 목록 → ``auxiliary`` 페이로드. 없으면 None."""
+    from xgen_agent_runtime.core.state import TokenUsage
+
+    keys = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
+    total = {k: 0 for k in keys}
+    total["calls"] = 0
+    by_purpose: Dict[str, Dict[str, int]] = {}
+    for entry in entries or ():
+        try:
+            purpose, u = entry
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(u, TokenUsage):
+            continue
+        vals = (
+            int(u.input_tokens or 0),
+            int(u.output_tokens or 0),
+            int(u.cache_read_input_tokens or 0),
+            int(u.cache_creation_input_tokens or 0),
+        )
+        bucket = by_purpose.setdefault(str(purpose or "auxiliary"), {**{k: 0 for k in keys}, "calls": 0})
+        for k, v in zip(keys, vals):
+            total[k] += v
+            bucket[k] += v
+        total["calls"] += 1
+        bucket["calls"] += 1
+    if not total["calls"]:
+        return None
+    return {**total, "by_purpose": by_purpose}
 
 
 def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) -> bool:
