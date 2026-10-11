@@ -1154,7 +1154,9 @@ def aux_usage_summary(entries: Any) -> Optional[Dict[str, Any]]:
             int(u.cache_read_input_tokens or 0),
             int(u.cache_creation_input_tokens or 0),
         )
-        bucket = by_purpose.setdefault(str(purpose or "auxiliary"), {**{k: 0 for k in keys}, "calls": 0})
+        bucket = by_purpose.setdefault(
+            str(purpose or "auxiliary"), {**{k: 0 for k in keys}, "calls": 0}
+        )
         for k, v in zip(keys, vals):
             total[k] += v
             bucket[k] += v
