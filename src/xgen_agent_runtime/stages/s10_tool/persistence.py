@@ -50,9 +50,33 @@ def _render_content(content: Any) -> str:
     """
     if isinstance(content, str):
         return content
+    if isinstance(content, list) and any(_is_image(b) for b in content):
+        # 이미지 블록은 글자가 아니다 — base64 를 글자 수로 세면 보통 크기 렌더(PNG 75KB 이상)가
+        # 전부 10만 자를 넘어 "잘렸다" 미리보기로 바뀌고, 모델은 그림 대신 base64 앞머리를 받는다
+        # (2026-10-11 dev: 도면 렌더 Read 5회 모두 잘림). 그림 크기는 Read 의 bound_image 가
+        # 이미 묶는다. context_prune._content_size 처럼 이미지 밖의 내용만 센다.
+        return "\n".join(_render_block(b) for b in content)
     if isinstance(content, (list, dict)):
         return json.dumps(content, ensure_ascii=False, default=str)
     return str(content)
+
+
+def _is_image(block: Any) -> bool:
+    return isinstance(block, dict) and block.get("type") in ("image", "image_url")
+
+
+def _render_block(block: Any) -> str:
+    if _is_image(block):
+        return "[image]"
+    if (
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ):
+        return block["text"]
+    if isinstance(block, str):
+        return block
+    return json.dumps(block, ensure_ascii=False, default=str)
 
 
 def _reachable(path: str, context: Any) -> bool:
