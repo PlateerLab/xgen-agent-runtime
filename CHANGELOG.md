@@ -4,6 +4,26 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.86.1] - 2026-10-11
+
+### Fixed: 보통 크기 그림이 결과 길이 상한에 걸려 모델에게 안 가던 것
+
+4.86.0 의 Read 는 그림을 이미지 블록으로 건네지만, Stage 10 의 결과 길이 상한(`max_result_chars`, 기본
+10만 자)이 리스트 결과를 JSON 으로 통째 세면서 base64 까지 글자로 셌다. 그래서 base64 가 10만 자를 넘는
+그림(PNG 약 75KB 이상 — 에이전트가 PDF 를 2배로 렌더한 도면, 화면 캡처, 고해상도 차트가 다 여기 든다)은
+`[tool result truncated: … chars > 100000 limit]` 미리보기로 바뀌어 모델이 base64 앞머리만 받았다.
+dev(2026-10-11) 도면 대조 대화에서 렌더 그림 Read 5회가 모두 잘렸다. 4.86.0 실험 케이스는 30KB 안팎이라
+이 상한을 건드리지 못했다.
+
+- `persistence._render_content` 가 이미지 블록이 섞인 리스트는 이미지를 `[image]` 로 세고 나머지 블록만
+  잰다(`context_prune._content_size`·`core.token_estimate` 와 같은 규칙). 그림 크기는 Read 의
+  `bound_image`(긴 변 1568px·4MB)가 이미 묶는다. 이미지가 없는 리스트·문자열·dict 는 예전과 같다.
+- 글자 부분이 상한을 넘으면 예전처럼 저장하고, 미리보기에 base64 가 들어가지 않는다.
+
+실험실(Qwen 3.8, 실제 크기 그림 base64 10만~19만 자): 설계 1(도면 2배 렌더) + 보류 2(2560x1440 캡처,
+2400x1600 차트). 4.86.1 은 6/6 정답·Read 1회·18~25초, 4.86.0 은 정답은 냈지만 13~25회·210~260초를 OCR·
+픽셀 분석으로 돌았고 그림에 없는 연도("2024 Q2")를 지어냈다.
+
 ## [4.86.0] - 2026-10-11
 
 ### Added: Read 가 이미지를 보는 모델에게 그림으로 건넨다
