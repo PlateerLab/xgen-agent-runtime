@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.87.1] - 2026-10-11
+
+### Fixed: 도구 사이 진행 메모가 영어로 나오던 것
+
+도구 호출 사이에 모델이 쓰는 짧은 진행 메모("Let me check...")도 스트림으로 사용자 화면에 그대로 나간다.
+한국어로 시켰는데 이 메모가 영어로 나오는 일이 긴 작업에서 잦았다. dev 실사용(21일, qwen3.8-27b, 벤치
+에이전트 제외)에서 모델 호출 10회 이상인 대화 6개 중 4개, 3~9회 14개 중 4개였고, 업무는 예측·광고 심의·
+행사 기획·안내서·고객문의·문서 생성 6종이었다. 최종 답은 0건. 첫 메모가 영어면 이후 메모도 영어로 굳는다.
+runtime 에는 "사용자 언어로 쓰라" 는 공용 원칙이 없었다(메모리 노트용 문구만 있음).
+
+- `USER_LANGUAGE_PROMPT_BLOCK`: 도구 루프 턴에 `EFFICIENCY_PROMPT_BLOCK` 과 같은 조건으로 붙는다(도구가 모델에
+  닿고, 사용자가 시스템 프롬프트를 비우지 않은 턴). 도구 사이 메모까지 사용자 언어로 쓰고, 코드·명령·파일
+  이름·인용 원문은 그대로 둔다.
+- 로컬 실험실(같은 모델·dev 노드 설정)에서는 기준선에서도 영어 메모가 재현되지 않았다(약 20회, 메모 0/30여 개).
+  수정판의 메모·최종 답은 전부 한국어였다. 효과는 dev 실사용 집계로 확인한다.
+
 ## [4.87.0] - 2026-10-11
 
 ### Added: 보조 호출 사용량을 `turn_usage` 의 `auxiliary` 로 낸다
