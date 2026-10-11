@@ -102,6 +102,22 @@ def _error_text(result_dict: Dict[str, Any]) -> str:
     return ""
 
 
+def _blocks_text(blocks: List[Any]) -> str:
+    """블록 목록(글 + 이미지) 결과를 사람이 읽을 글로 — 이미지는 ``[image]`` 한 낱말.
+
+    목록을 ``str()`` 로 찍으면 작업 과정·기록에 파이썬 표기와 Base64 가 그대로 찍혔다.
+    """
+    parts: List[str] = []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "image":
+            parts.append("[image]")
+        elif isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+        else:
+            parts.append(str(block))
+    return "\n".join(p for p in parts if p).strip()
+
+
 def _result_text(result_dict: Dict[str, Any]) -> str:
     """성공한 도구가 낸 결과. 없으면 빈 문자열.
 
@@ -112,6 +128,8 @@ def _result_text(result_dict: Dict[str, Any]) -> str:
         value = result_dict.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()[:_RESULT_TEXT_CAP]
+        if isinstance(value, list) and value:
+            return _blocks_text(value)[:_RESULT_TEXT_CAP]
         if value not in (None, "", [], {}):
             return str(value)[:_RESULT_TEXT_CAP]
     return ""

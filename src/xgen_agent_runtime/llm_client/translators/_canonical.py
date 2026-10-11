@@ -14,15 +14,13 @@ from __future__ import annotations
 
 import base64
 import json
-import io
-import warnings
 import os
 from pathlib import Path
-from PIL import Image, ImageOps
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from xgen_agent_runtime.core.file_blocks import file_block_pointer
+from xgen_agent_runtime.core.images import bound_image
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -195,29 +193,11 @@ def materialize_local_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
         max_bytes = 20 * 1024 * 1024
     if path.stat().st_size > max_bytes:
         raise ValueError(f"image exceeds {max_bytes // (1024 * 1024)} MiB: {path.name}")
-    data = path.read_bytes()
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as original:
-                mime = Image.MIME.get(original.format or "", "")
-                if mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
-                    raise ValueError("unsupported image format")
-                original.load()
-                # Keep the original in the workspace. Only the provider copy is
-                # bounded; Base64 adds another third to the request size.
-                if max(original.size) > 2048 or len(data) > 4 * 1024 * 1024:
-                    resized = ImageOps.exif_transpose(original).convert("RGB")
-                    resized.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                    output = io.BytesIO()
-                    resized.save(output, format="JPEG", quality=85, optimize=True)
-                    data, mime = output.getvalue(), "image/jpeg"
-    except (
-        OSError,
-        ValueError,
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-    ) as exc:
+        # Keep the original in the workspace. Only the provider copy is
+        # bounded; Base64 adds another third to the request size.
+        data, mime = bound_image(path.read_bytes())
+    except (OSError, ValueError) as exc:
         raise ValueError(f"unsupported or invalid image: {path.name}") from exc
     return {
         **block,
