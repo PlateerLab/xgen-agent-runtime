@@ -103,30 +103,32 @@ _BUDGET_MARGIN_RATIO = 0.02
 _BUDGET_MARGIN_MIN = 1024
 
 
-# 카탈로그(capabilities.max_context) 조회 캐시 — (provider, model) → (조회 시각, 값|None).
+# 카탈로그(capabilities) 조회 캐시 — (provider, model) → (조회 시각, capabilities|None).
 # 실패(None)도 캐시해 DB 장애 시 실행마다 재시도하지 않는다.
 _CATALOG_WINDOW_TTL_SEC = 300
-_catalog_window_cache: Dict[Tuple[str, str], Tuple[float, Optional[int]]] = {}
+_catalog_caps_cache: Dict[Tuple[str, str], Tuple[float, Optional[Dict[str, Any]]]] = {}
 
 # agent provider 표기 → llm_model_catalog.provider 정규화 (catalog_reader 와 동일 규칙)
 _PROVIDER_TO_CATALOG_ID = {"gemini": "google"}
 
 
-def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optional[int]:
-    """`llm_model_catalog.capabilities.max_context` 조회 (TTL 캐시, fail-open).
+def _catalog_capabilities(
+    provider: Optional[str], model: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """`llm_model_catalog.capabilities` 조회 (TTL 캐시, fail-open).
 
-    public 모델(openai/anthropic/google/bedrock)의 윈도우 관리 진실은 어드민 카탈로그 DB.
-    DB/컨테이너 불가 환경(테스트 등)에서는 조용히 None → 정적 fallback.
+    public 모델(openai/anthropic/google/bedrock)의 윈도우·이미지 입력 같은 능력의 관리 진실은
+    어드민 카탈로그 DB. DB/컨테이너 불가 환경(테스트 등)에서는 조용히 None → 정적 fallback.
     """
     if not provider or not model:
         return None
     key = (provider, model)
-    cached = _catalog_window_cache.get(key)
+    cached = _catalog_caps_cache.get(key)
     now = time.time()
     if cached and now - cached[0] < _CATALOG_WINDOW_TTL_SEC:
         return cached[1]
 
-    win: Optional[int] = None
+    caps: Optional[Dict[str, Any]] = None
     try:
         from app_container import app_container  # noqa: PLC0415 — lazy (테스트/도구 환경 방어)
 
@@ -138,23 +140,29 @@ def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optio
             (catalog_provider, model),
         )
         if rows:
-            caps = rows[0].get("capabilities")
-            if isinstance(caps, str):
-                caps = json.loads(caps)
-            max_context = (caps or {}).get("max_context")
-            if isinstance(max_context, (int, float)) and max_context > 0:
-                win = int(max_context)
-                logger.info(
-                    "[TOKEN_BUDGET] 카탈로그 max_context: %s/%s → %s tokens",
-                    catalog_provider,
-                    model,
-                    f"{win:,}",
-                )
+            raw = rows[0].get("capabilities")
+            if isinstance(raw, str):
+                raw = json.loads(raw)
+            caps = raw if isinstance(raw, dict) else None
     except Exception as e:
-        logger.debug("[TOKEN_BUDGET] 카탈로그 max_context 조회 실패(%s/%s): %s", provider, model, e)
+        logger.debug(
+            "[TOKEN_BUDGET] 카탈로그 capabilities 조회 실패(%s/%s): %s", provider, model, e
+        )
 
-    _catalog_window_cache[key] = (now, win)
-    return win
+    _catalog_caps_cache[key] = (now, caps)
+    return caps
+
+
+def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optional[int]:
+    """`llm_model_catalog.capabilities.max_context` (없으면 None)."""
+    max_context = (_catalog_capabilities(provider, model) or {}).get("max_context")
+    if isinstance(max_context, (int, float)) and max_context > 0:
+        win = int(max_context)
+        logger.info(
+            "[TOKEN_BUDGET] 카탈로그 max_context: %s/%s → %s tokens", provider, model, f"{win:,}"
+        )
+        return win
+    return None
 
 
 def resolve_context_window(
@@ -208,6 +216,63 @@ def resolve_context_window(
             return best_win
 
     return _PROVIDER_DEFAULT_WINDOW.get((provider or "").lower(), DEFAULT_CONTEXT_WINDOW)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 이미지 입력 — 모델이 그림을 볼 수 있는가. Read 가 이미지를 모델에게 건넬지("보여 준다"),
+# "이 모델은 못 본다" 고 말할지를 가른다. 못 보는 모델에 그림을 보내면 provider 가 400 으로
+# 턴을 깨므로 모르면 **못 본다** 쪽이다.
+#   1) 노드 파라미터 override (bool)
+#   2) llm_model_catalog.capabilities.supports_vision (bool) — 배포마다 다르다(같은 이름도
+#      서빙한 체크포인트가 글 전용일 수 있다). 자체 서빙(vLLM) 모델은 여기서만 켠다.
+#   3) 공개 API 모델 계열의 접두 테이블 (fallback, longest-prefix wins)
+# ─────────────────────────────────────────────────────────────────────────
+_MODEL_VISION: List[Tuple[str, bool]] = [
+    ("claude-3-5-haiku", False),
+    ("claude", True),
+    ("gpt-4o", True),
+    ("gpt-4.1", True),
+    ("gpt-4-turbo", True),
+    ("gpt-5", True),
+    ("o1-mini", False),
+    ("o3-mini", False),
+    ("o1", True),
+    ("o3", True),
+    ("o4", True),
+    ("gemini", True),
+]
+#: provider 자체가 이미지 입력을 받는 CLI 백엔드 (모델 이름이 sonnet/opus 같은 별칭이다).
+_PROVIDER_VISION = {"claude_code": True}
+
+
+def resolve_supports_vision(
+    provider: Optional[str],
+    model: Optional[str],
+    override: Any = None,
+) -> bool:
+    """모델이 이미지 입력을 받는가 — 모르면 False."""
+    if isinstance(override, bool):
+        return override
+    caps = _catalog_capabilities((provider or "").lower().strip(), model) or {}
+    for key in ("supports_vision", "vision"):
+        if isinstance(caps.get(key), bool):
+            return bool(caps[key])
+    prov = (provider or "").lower().strip()
+    if prov in _PROVIDER_VISION:
+        return _PROVIDER_VISION[prov]
+    name = (model or "").lower().strip()
+    if not name:
+        return False
+    if "-vl" in name or "vl-" in name:
+        return True
+    # 이름 앞이나 구분자(. / :) 뒤에서 시작하는 것만 — 'apac.anthropic.claude-…', 'openai/gpt-4.1'.
+    # 그냥 포함으로 보면 'o1'·'o3' 같은 짧은 접두가 엉뚱한 이름 속에서 걸린다.
+    segments = [name] + [name[i + 1 :] for i, ch in enumerate(name) if ch in "./:"]
+    best_len, best = -1, None
+    for prefix, vision in _MODEL_VISION:
+        if any(seg.startswith(prefix) for seg in segments) and len(prefix) > best_len:
+            best_len, best = len(prefix), vision
+    return bool(best)
 
 
 def effective_input_budget(

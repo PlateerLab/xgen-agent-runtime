@@ -4,6 +4,35 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.86.0] - 2026-10-11
+
+### Added: Read 가 이미지를 보는 모델에게 그림으로 건넨다
+
+예전 Read 는 이미지 파일에 어느 모델에게나 `[Image file: 이름, 크기, 형식]` 한 줄만 돌려줬다. 그림을 보는
+모델도 파일 이름만 받았고, 그 사실을 들은 적이 없었다. dev 30일(2026-10-11) Qwen 대화 24개가 그림을 Read 한
+뒤 OCR(38회)·픽셀 분석(71회) 코드로 우회했고, 광고 영상 프레임 35장을 Read 하고 이름만 받은 대화는 "프레임
+31장을 뽑아 화면 문구까지 전부 확인했습니다" 라고 답했다. 그 모델(qwen3.8-27b)은 그림을 본다.
+
+- 보는 모델: 글 머리(`[Image file: …] The image is attached below.`) + 이미지 블록. 긴 변 1568px·4MB 를 넘으면
+  JPEG 로 줄인 사본만 보낸다(원본은 그대로). OpenAI 호환 서버에는 기존 번역기가 tool 메시지 뒤 user
+  메시지로 옮긴다. 오래된 그림은 기존 정리(context_prune)가 표지로 바꾼다.
+- 못 보는 모델: "이 모델은 그림을 볼 수 없다 — 내용을 짐작하거나 묘사하지 말 것, 글이 필요하면 OCR 도구가
+  있으면 쓰고 없으면 사용자에게 말할 것". 깨진 파일은 보내지 않는다. SVG 는 글로 읽는다.
+- 모델이 그림을 보는가(`host.token_budget.resolve_supports_vision`): 노드 파라미터 `supports_vision` →
+  어드민 카탈로그 `capabilities.supports_vision`(또는 `vision`) → 공개 API 모델 계열 표(claude·gpt-4o/4.1/5·
+  o1/o3/o4·gemini·이름에 `-vl`) → 모르면 못 본다. 못 보는 모델에 그림을 보내면 provider 가 400 으로 턴을
+  깨므로 기본이 "못 본다" 다. **자체 서빙(vLLM) 모델은 같은 이름도 서빙한 체크포인트마다 다르므로 카탈로그에서만
+  켠다** — 배포 환경에서 `supports_vision: true` 를 넣어야 동작한다.
+- 이미지 크기 상한은 `core.images.bound_image` 하나로 — 첨부(provider 요청 직전)와 Read 가 같은 규칙.
+- 도구 결과가 블록 목록(글 + 그림)이면 작업 과정·기록에 쓰는 결과 글을 글 + `[image]` 로 만든다. 예전엔
+  `str(list)` 로 파이썬 표기와 Base64 가 찍혔다(화면 캡처 같은 기기 도구도 같았다).
+
+실험실(harness-bench lab, qwen3.8-27b, 같은 파이프라인): 설계 2갈래(영상 프레임 문구·도면 치수) + 보류 3갈래
+(영수증 합계·막대 차트 비교·글 없는 도형 색) × 2회. 이번 판 10/10 정답, 평균 도구 1.1회·15초. 이전 판은 끝난
+9회 중 2회만 정답(도형 — 픽셀 분석으로), 2회는 지어낸 답("LAB V", 없는 도면 치수 "4HOLE Ø8·두께 10mm"),
+나머지는 우회 코드로 맥락·시간 초과, 평균 도구 11회·250초. 못 보는 모델로 둔 판은 지어낸 답 0회(2회는 "읽을
+수 없다" 고 말함, 2회는 픽셀 분석으로 정답).
+
 ## [4.85.0] - 2026-10-08
 
 ### Added: 사용자 PC 접속 도구 `UserPc` (host.user_pc)

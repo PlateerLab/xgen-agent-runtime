@@ -28,6 +28,7 @@ from xgen_agent_runtime.host import local_folders as _local_folders
 from xgen_agent_runtime.host import user_pc as _user_pc
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
+from xgen_agent_runtime.tools.built_in.read_tool import MODEL_VISION_KEY
 
 
 #: 턴 안에서 MCP 도구 목록을 다시 읽지 않는 CLI 백엔드 — 계층 노출(문 뒤에 숨긴 도구)을 쓸 수 없다.
@@ -182,6 +183,22 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
         logger.warning("agents/geny: tool_result_filter 훅 실패 — 필터 없이 진행", exc_info=True)
         return None
     return result_filter if callable(result_filter) else None
+
+
+def _model_vision(provider: str, model: str, override: Any = None) -> bool:
+    """이 턴의 모델이 그림을 보는가. 해석이 실패하면 못 본다(그림을 안 보내는 쪽이 턴을 안 깬다)."""
+    try:
+        from xgen_agent_runtime.host.token_budget import resolve_supports_vision
+
+        return resolve_supports_vision(provider, model, override)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents/geny: 이미지 입력 해석 실패(%s/%s) — 못 보는 모델로 둔다",
+            provider,
+            model,
+            exc_info=True,
+        )
+        return False
 
 
 class AgentTurnExecutor:
@@ -779,6 +796,11 @@ class AgentTurnExecutor:
             _result_filter = _tool_result_filter(host)
             if _result_filter is not None and run_tool_context is not None:
                 run_tool_context.result_filter = _result_filter
+            # 이 턴의 모델이 그림을 보는가 — Read 가 이미지를 건넬지 "못 본다" 고 말할지 가른다
+            # (노드 파라미터 → 카탈로그 supports_vision → 공개 모델 계열, 모르면 못 본다).
+            _vision = _model_vision(provider, model, kwargs.get("supports_vision"))
+            if run_tool_context is not None:
+                run_tool_context.metadata[MODEL_VISION_KEY] = _vision
 
             llm_client = None
             cli_cleanup = None
@@ -801,6 +823,7 @@ class AgentTurnExecutor:
                     if _result_filter is not None:
                         # run_tool_context 가 없으면 표면이 제 컨텍스트를 만든다 — 거기에도 싣는다.
                         _tool_surface.tool_context.result_filter = _result_filter
+                    _tool_surface.tool_context.metadata[MODEL_VISION_KEY] = _vision
                     kwargs["_tool_surface"] = _tool_surface
                     # 숨김 목록 — SDK 는 Stage 3 이 붙이는 글을 같은 함수로 만들어 붙인다.
                     _catalog = deferred_catalog_text(registry)

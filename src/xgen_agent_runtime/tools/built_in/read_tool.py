@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import mimetypes
 import os
 from pathlib import PurePosixPath
 from typing import Any, Dict
 
+from xgen_agent_runtime.core.images import bound_image
 from xgen_agent_runtime.tools.built_in._file_witness import witnessed_mutation
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.fs import tool_fs
@@ -37,11 +39,57 @@ def _binary_note(name: str, size: int) -> str:
     return note
 
 
+#: 모델에게 건네는 그림의 긴 변 상한 — 공개 비전 모델들도 이보다 큰 그림은 줄여서 본다. 세부가
+#: 필요하면 모델이 잘라서(Bash) 다시 읽는다.
+_IMAGE_MAX_EDGE = 1568
+
+#: 호스트가 ``ToolContext.metadata`` 에 싣는 "이 턴의 모델이 그림을 보는가" (host.turn_executor).
+MODEL_VISION_KEY = "model_vision"
+
+_NO_VISION = (
+    "The current model cannot view images, so the content of this image is NOT available to you. "
+    "Do not describe or guess what it shows. If you need text from it, use an OCR tool if one is "
+    "available; otherwise tell the user this model cannot look at images."
+)
+
+
+def _image_result(name: str, raw: bytes, mime: str, context: ToolContext) -> ToolResult:
+    """이미지 파일 — 그림을 보는 모델에게는 그림을, 못 보는 모델에게는 못 본다는 사실을.
+
+    예전엔 어느 모델에게나 ``[Image file: …]`` 한 줄만 돌려줬다. 그림을 보는 모델(Qwen 3.8·Claude·GPT)도
+    파일 이름만 받고 "프레임 31장을 확인했다" 고 답하거나 OCR·픽셀 분석 코드로 우회했다(dev 30일
+    Qwen 24대화 — Read 36회, OCR 38회·픽셀 71회, 2026-10-11 감사).
+    """
+    head = f"[Image file: {name}, {len(raw)} bytes, type={mime}]"
+    if not (context.metadata or {}).get(MODEL_VISION_KEY):
+        return ToolResult(content=f"{head} {_NO_VISION}")
+    try:
+        data, sent_mime = bound_image(raw, max_edge=_IMAGE_MAX_EDGE)
+    except ValueError:
+        return ToolResult(
+            content=f"{head} The image could not be decoded (unsupported format or corrupt)."
+        )
+    return ToolResult(
+        content=[
+            {"type": "text", "text": f"{head} The image is attached below."},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": sent_mime,
+                    "data": base64.b64encode(data).decode("ascii"),
+                },
+            },
+        ]
+    )
+
+
 class ReadTool(Tool):
     """Read a file from the local filesystem.
 
     Returns content with line numbers (cat -n format).
-    Detects binary files and refuses to read them (except images).
+    Detects binary files and refuses to read them. Images go to the model as images when it can
+    see them (``MODEL_VISION_KEY``), otherwise a note says it cannot.
     """
 
     @property
@@ -52,7 +100,8 @@ class ReadTool(Tool):
     def description(self) -> str:
         return (
             "Read a file in your sandbox. Returns content with line numbers. "
-            "Use offset and limit to read specific portions of large files."
+            "Use offset and limit to read specific portions of large files. "
+            "Image files (PNG, JPEG, WebP, GIF) are shown to you as images if your model can see them."
         )
 
     @property
@@ -119,8 +168,9 @@ class ReadTool(Tool):
             return ToolResult(content=f"Read error: {e}", is_error=True)
 
         mime, _ = mimetypes.guess_type(name)
-        if mime and mime.startswith("image/"):
-            return ToolResult(content=f"[Image file: {name}, {len(raw)} bytes, type={mime}]")
+        # SVG 는 글(XML)이다 — 그림 길로 보내지 않고 아래에서 글로 읽는다.
+        if mime and mime.startswith("image/") and mime != "image/svg+xml":
+            return _image_result(name, raw, mime, context)
 
         if b"\x00" in raw[:8192]:
             return ToolResult(content=_binary_note(name, len(raw)))
