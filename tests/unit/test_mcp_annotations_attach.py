@@ -9,7 +9,7 @@ import pytest
 
 from xgen_agent_runtime.tools.base import ToolCapabilities
 from tests._fixtures.manifest_entries import required_stage_entries
-from xgen_agent_runtime.tools.mcp.adapter import MCPToolAdapter, _annotations_to_capabilities
+from xgen_agent_runtime.tools.mcp.adapter import MCPToolAdapter, annotations_to_capabilities
 from xgen_agent_runtime.tools.mcp.manager import (
     MCPServerConfig,
     MCPServerConnection,
@@ -25,7 +25,7 @@ from xgen_agent_runtime.tools.mcp.state import MCPConnectionState
 
 class TestAnnotationsToCapabilities:
     def test_empty_falls_back_to_default(self):
-        caps = _annotations_to_capabilities({})
+        caps = annotations_to_capabilities({})
         # Default is fail-closed: not concurrency-safe.
         assert caps.concurrency_safe is False
         assert caps.read_only is False
@@ -34,29 +34,29 @@ class TestAnnotationsToCapabilities:
         assert caps.network_egress is False
 
     def test_read_only_implies_concurrency_safe(self):
-        caps = _annotations_to_capabilities({"readOnlyHint": True})
+        caps = annotations_to_capabilities({"readOnlyHint": True})
         assert caps.read_only is True
         assert caps.concurrency_safe is True
 
     def test_destructive_overrides_read_only(self):
         """If a server inconsistently sets BOTH readOnly and destructive,
         we must err on the side of caution and serialise."""
-        caps = _annotations_to_capabilities(
+        caps = annotations_to_capabilities(
             {"readOnlyHint": True, "destructiveHint": True}
         )
         assert caps.destructive is True
         assert caps.concurrency_safe is False
 
     def test_idempotent_propagates(self):
-        caps = _annotations_to_capabilities({"idempotentHint": True})
+        caps = annotations_to_capabilities({"idempotentHint": True})
         assert caps.idempotent is True
 
     def test_open_world_means_network_egress(self):
-        caps = _annotations_to_capabilities({"openWorldHint": True})
+        caps = annotations_to_capabilities({"openWorldHint": True})
         assert caps.network_egress is True
 
     def test_full_combination(self):
-        caps = _annotations_to_capabilities(
+        caps = annotations_to_capabilities(
             {
                 "readOnlyHint": True,
                 "idempotentHint": True,
