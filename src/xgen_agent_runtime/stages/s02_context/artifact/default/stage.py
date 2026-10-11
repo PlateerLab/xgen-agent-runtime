@@ -62,9 +62,15 @@ class _CompactionShadow:
         self.context_window_budget = getattr(state, "context_window_budget", 200_000)
         self.shared: Dict[str, Any] = {}
         self.events: List[tuple] = []
+        #: 압축 호출의 보조 사용량. 결과를 받을 때 실제 state 로 옮긴다(이벤트와 같다).
+        self.aux_usage: List[tuple] = []
 
     def add_event(self, event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
         self.events.append((event_type, dict(data or {})))
+
+    def add_aux_usage(self, purpose: str, usage: Any) -> None:
+        if usage is not None:
+            self.aux_usage.append((purpose, usage))
 
 
 class ContextStage(Stage[Any, Any]):
@@ -639,6 +645,9 @@ class ContextStage(Stage[Any, Any]):
         if task.cancelled() or task.exception() is not None:
             return False  # already logged by the done-callback
         shadow: _CompactionShadow = task.result()
+        # 요약을 버리더라도 모델은 이미 불렀다: 사용량은 먼저 옮긴다.
+        for purpose, usage in shadow.aux_usage:
+            state.add_aux_usage(purpose, usage)
 
         n = int(info["len"])
         msgs = state.messages

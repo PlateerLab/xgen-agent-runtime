@@ -191,6 +191,10 @@ class PipelineState:
     # turn's total_cost_usd into it at turn end (2.2.0, audit §3.3).
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     turn_token_usage: List[TokenUsage] = field(default_factory=list)
+    # 보조 호출(대화 압축처럼 메인 루프 밖에서 state.llm_client 를 직접 부르는 호출)의 사용량.
+    # (purpose, TokenUsage) 목록. turn_token_usage 와 섞지 않는다: 그쪽은 반복 한도·예산 판정이
+    # "모델 왕복" 으로 읽는다. 호스트는 turn_usage 의 ``auxiliary`` 로 받아 과금·한도에 더한다.
+    _turn_aux_usage: List[Any] = field(default_factory=list, repr=False)
     total_cost_usd: float = 0.0
     session_cost_usd: float = 0.0
     cost_budget_usd: Optional[float] = None
@@ -387,6 +391,7 @@ class PipelineState:
         # accumulator; the previous turn's value was already folded
         # into session_cost_usd at turn end by the pipeline.
         self.turn_token_usage = []
+        self._turn_aux_usage = []
         self.total_cost_usd = 0.0
         self._turn_event_counts = {}
         # Event log — per-turn to bound growth (run_stream re-emits
@@ -472,6 +477,15 @@ class PipelineState:
             "executor.tool_calls_total",
         ):
             self.shared.pop(key, None)
+
+    def add_aux_usage(self, purpose: str, usage: Any) -> None:
+        """보조 호출 한 번의 사용량을 남긴다 (``turn_usage`` 의 ``auxiliary``). usage 가 없으면 무시."""
+        if isinstance(usage, TokenUsage):
+            self._turn_aux_usage.append((str(purpose or "auxiliary"), usage))
+
+    def aux_usage_entries(self) -> List[Any]:
+        """이번 턴 보조 호출의 ``(purpose, TokenUsage)`` 목록 (begin_turn 이 비운다)."""
+        return list(self._turn_aux_usage)
 
     def add_event(self, event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Append an event to the log and forward it to the pipeline.

@@ -4,6 +4,23 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.87.0] - 2026-10-11
+
+### Added: 보조 호출 사용량을 `turn_usage` 의 `auxiliary` 로 낸다
+
+턴 사용량(`usage` 청크·`usage_sink`)은 메인 루프 호출(Stage 7 이 세는 모델 왕복)만 합산했다. 그래서 대화가
+길어져 Stage 2 가 모델로 압축(`s02.compact`)한 호출은 어디에도 남지 않았고, 호스트(XGEN)의 토큰 한도·사용량
+집계에서 빠졌다. 압축 한 번은 오래된 대화 전체를 읽으므로 작지 않다.
+
+- `PipelineState.add_aux_usage(purpose, usage)`·`aux_usage_entries()`: 메인 루프 밖 호출의 사용량을 턴 단위로
+  남긴다(`begin_turn` 이 비운다). 공개 필드는 늘리지 않았다(비공개 `_turn_aux_usage`).
+- `LLMSummaryCompactor` 가 압축 응답의 사용량을 `compact` 로 남긴다. 백그라운드 압축은 그림자 state 에 모았다가
+  결과를 받을 때 실제 state 로 옮긴다(요약을 버리는 경우에도, 모델은 이미 불렀으므로).
+- `turn_usage` 에 `auxiliary: {input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, calls,
+  by_purpose}` 가 붙는다(있을 때만). 최상위 값은 예전과 같다(메인 루프만, 반복 한도·예산이 읽는 값). 보조
+  호출만 있었던 턴도 이제 usage 를 낸다(메인 값 0).
+- 스킬 fork 실행기는 호스트가 붙일 때만 모델을 부른다(XGEN 은 붙이지 않는다). 그래서 이번에 다루지 않았다.
+
 ## [4.86.1] - 2026-10-11
 
 ### Fixed: 보통 크기 그림이 결과 길이 상한에 걸려 모델에게 안 가던 것
