@@ -356,6 +356,16 @@ def test_efficiency_block_mentions_round_trips_and_batching() -> None:
     assert "round trip" in text and "parallel" in text and "one script" in text
 
 
+def test_user_language_block_covers_notes_between_tool_calls() -> None:
+    from xgen_agent_runtime.host._constants import USER_LANGUAGE_PROMPT_BLOCK
+
+    text = USER_LANGUAGE_PROMPT_BLOCK.lower()
+    # 최종 답만이 아니라 도구 사이 진행 메모도 사용자 언어로(10-11 dev: 영어 메모 노출)
+    assert "between tool calls" in text and "language the user" in text
+    # 고유명은 번역하지 않는다 — 코드·명령·파일 이름·인용 원문
+    assert "file names" in text and "quoted" in text
+
+
 # ── 실행 오류는 인자별로 센다 (항목마다 정당한 같은 문구 실패) ─────────────
 
 

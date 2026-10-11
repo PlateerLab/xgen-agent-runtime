@@ -60,6 +60,20 @@ so the number of round trips is the cost. Finish the task in as few as possible:
   retrying; never repeat the same failing call."""
 
 
+#: 사용자 언어 원칙 — 효율 블록과 같은 턴(도구 루프)에 붙는다.
+#:
+#: 도구 호출 사이에 모델이 쓰는 짧은 진행 메모도 스트림으로 사용자 화면에 그대로
+#: 나간다. 실측 (2026-10-11 dev, qwen3.8-27b, 벤치 제외 21일): 한국어로 시킨 대화 중
+#: 도구를 10회 넘게 쓴 6개 중 4개, 3~9회 14개 중 4개에서 진행 메모가 영어였다
+#: ("Let me check..."). 업무 6종(예측·광고·행사·안내서·고객문의·문서), 최종 답은 0건.
+USER_LANGUAGE_PROMPT_BLOCK = """
+
+# Language
+Everything you write is shown to the user as it streams, including short notes
+between tool calls. Write all of it in the language the user is writing in. Keep
+code, commands, file names and quoted source text as they are."""
+
+
 #: 내장 메모리 시스템 프롬프트 블록 — 메모리 provider 가 붙은 턴에만 붙는다.
 #:
 #: 철학: **일반화된 지침만** — 도구 목록/시그니처/"MUST call" 드릴은 금지다.
