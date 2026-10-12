@@ -121,15 +121,16 @@ _MIN_HISTORY_CONTEXT_TOKENS = 256
 def _compacted_history_floor(window: int) -> int:
     """압축 뒤 이력(체크포인트)이 차지할 수 있는 최대 토큰: 요약 + 원문으로 남기는 사용자 말 + 머리글.
 
-    5,000 고정이었을 때는 큰 창에서 체크포인트(사용자 말만 창의 8%, 최대 2만)가 그보다 커서, 입력 맞춤이
-    받아들인 질문과 RAG 를 압축으로도 담지 못했다.
+    5,000 고정이었을 때는 큰 창에서 체크포인트(사용자 말만 창의 8%, 최대 2만)가 그보다 커서 입력 맞춤이
+    받아들인 질문과 RAG 를 압축으로도 담지 못했고, 작은 창(8k 체크포인트 상한 약 2.3k)에서는 반대로 질문을
+    필요 이상 잘랐다.
     """
     try:
         from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
             checkpoint_tokens_bound,
         )
 
-        return max(_COMPACTED_HISTORY_FLOOR, checkpoint_tokens_bound(window))
+        return checkpoint_tokens_bound(window)
     except Exception:  # noqa: BLE001 (fail-open)
         return _COMPACTED_HISTORY_FLOOR
 
@@ -246,6 +247,7 @@ def fit_input_to_budget(
     reserved_tokens: int = 0,
     history_compressible: bool = True,
     history_context: str = "",
+    extra_overhead_text: str = "",
 ) -> BudgetFit:
     """이번 턴의 입력측을 유효 예산 안으로 맞춘다.
 
@@ -267,8 +269,11 @@ def fit_input_to_budget(
         접혀 CLI 도 줄이지 못한다): 넘치면 **가장 오래된 이력부터** 빼고(마지막 두 메시지는 남김),
         그다음 가변분을 줄인다. 잘린 이력은 ``BudgetFit.history`` 로 돌려준다.
 
-    ``history_context``: 메모리 노드가 넘긴 이전 대화 문자열. 시스템 프롬프트 끝에 붙어 압축이 줄일 수
+    ``history_context``: 메모리 노드가 넘긴 이전 대화 문자열. 이번 턴 안내로 요청에 붙어 압축이 줄일 수
     없으므로 여기서 가장 먼저 줄인다(맞춘 값은 ``BudgetFit.history_context``).
+
+    ``extra_overhead_text``: 맞춤 이후 Stage 3 이 요청에 더 붙이는 글(숨긴 도구 목록, 이번 턴 안내). 세지
+    않으면 맞춘 요청이 guard 의 한도를 넘었다(2026-10-12 검토: 32k 창에서 목록과 안내 1.3k 토큰).
 
     ``reserved_tokens``: fit **이후** 턴 중에 system 으로 주입되는 것들(내장 메모리 등)의 선예약분.
 
@@ -300,6 +305,8 @@ def fit_input_to_budget(
         )
         budget = max(1, budget - max(0, int(reserved_tokens)))
         sys_t = count_text_tokens(system_prompt, provider, model)
+        if extra_overhead_text:
+            sys_t += count_text_tokens(extra_overhead_text, provider, model)
         tools_t = _estimate_tools_tokens(registry, provider, model)
         hist_t = count_messages_tokens(history, provider, model) if history else 0
         text_t = count_text_tokens(text, provider, model)

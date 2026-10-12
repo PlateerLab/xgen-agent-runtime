@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.core.config import ModelConfig
@@ -192,6 +192,9 @@ _CLIP_TOOL_RESULT_TAIL = 500
 #: Verbatim user messages kept beside the summary: share of the window, with an absolute cap.
 _PINNED_RATIO = 0.08
 _PINNED_MAX_TOKENS = 20_000
+#: The request being worked on may take up to this share of the compaction target (or the pinned
+#: budget, if larger).
+_CURRENT_REQUEST_SHARE = 0.5
 #: Summary length (output tokens): window/16, between these bounds.
 _SUMMARY_MIN_TOKENS = 1_024
 _SUMMARY_MAX_TOKENS = 4_096
@@ -201,8 +204,9 @@ _OPENAI_FAMILY = ("openai", "azure", "azure_foundry")
 
 
 def checkpoint_tokens_bound(window: int) -> int:
-    """The most a checkpoint message can take for this window: the summary, the verbatim user
-    messages (and the current request) within their budget, and the intro/ack framing."""
+    """The most a checkpoint message can take for this window apart from the request being worked
+    on (which the host counts as the question itself): the summary, the earlier user messages kept
+    verbatim within their budget, and the intro/ack framing."""
     window = max(0, int(window or 0))
     summary = min(_SUMMARY_MAX_TOKENS, max(_SUMMARY_MIN_TOKENS, window // 16))
     pinned = min(int(window * _PINNED_RATIO), _PINNED_MAX_TOKENS)
@@ -251,15 +255,59 @@ def _is_ack(message: Any) -> bool:
     )
 
 
+#: User-role messages the runtime itself adds (Stage 16's deliverable check, the turn input budget
+#: note). They are instructions to the model, not something the person asked.
+_RUNTIME_NOTE_PREFIXES = ("[Deliverable check", "[Turn budget")
+#: Content blocks that are attachments rather than words.
+_ATTACHMENT_TYPES = ("image", "document", "image_url", "input_image")
+
+
+def _is_runtime_note(message: Any) -> bool:
+    return _message_text(message).lstrip().startswith(_RUNTIME_NOTE_PREFIXES)
+
+
 def _is_real_user(message: Any) -> bool:
-    """A user message a person wrote (not a tool result, not a checkpoint)."""
+    """A user message a person wrote (not a tool result, a checkpoint, or a runtime note)."""
     return (
         isinstance(message, dict)
         and message.get("role") == "user"
         and not _is_tool_result_only(message)
         and not _is_checkpoint(message)
+        and not _is_runtime_note(message)
         and bool(_message_text(message).strip())
     )
+
+
+def _has_tool_result(message: Any) -> bool:
+    """A user message carrying any tool result (alone, or mixed with text a host appended)."""
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    return any(b.get("type") == "tool_result" for b in _content_blocks(message.get("content")))
+
+
+def _attachments(message: Any) -> List[Dict[str, Any]]:
+    if not isinstance(message, dict):
+        return []
+    return [
+        b for b in _content_blocks(message.get("content")) if b.get("type") in _ATTACHMENT_TYPES
+    ]
+
+
+def _summary_length_tokens(window: int) -> int:
+    """How long a summary may be for this window (output tokens, without reasoning headroom)."""
+    return min(_SUMMARY_MAX_TOKENS, max(_SUMMARY_MIN_TOKENS, int(window) // 16))
+
+
+def _clip_tokens(state: PipelineState, text: str, tokens: int) -> str:
+    """:func:`_clip` with a TOKEN budget (head and tail kept). Characters are not tokens: a
+    character limit equal to a token budget kept a third of an English summary."""
+    from xgen_agent_runtime.core.token_estimate import estimate_text_scaled
+
+    text = str(text or "")
+    cost = estimate_text_scaled(state, text)
+    if cost <= tokens or not text:
+        return text
+    return _clip(text, max(400, int(len(text) * tokens / cost * 0.95)))
 
 
 def _clip(text: str, limit: int, tail: int = 0) -> str:
@@ -333,6 +381,8 @@ class CompactionPlan:
     pinned: List[str]
     #: The request this turn is working on, when it falls inside the summarized region.
     current_request: str = ""
+    #: Images and documents of that request, carried into the checkpoint as they are.
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class LLMSummaryCompactor(SummaryCompactor):
@@ -419,20 +469,40 @@ class LLMSummaryCompactor(SummaryCompactor):
             return None
         window = window_of(state)
         target = int(target_tokens or input_budget_of(state) * TARGET_RATIO)
-        provider = str(getattr(self._client_getter(state), "provider", "") or "")
 
-        # Minimal tail: the last message; when it is a tool result, also the call it answers.
+        # Pins carried from an earlier checkpoint are valid only while that checkpoint still heads
+        # the history: a host that keeps the state object but swaps in another conversation must
+        # not get the old conversation's words pinned into the new checkpoint.
+        has_checkpoint = _is_checkpoint(msgs[0])
+        carried = (
+            [str(t) for t in (state.shared.get(PINNED_USERS_KEY) or []) if str(t).strip()]
+            if has_checkpoint
+            else []
+        )
+        carried_current = (
+            str(state.shared.get(CURRENT_REQUEST_KEY) or "").strip() if has_checkpoint else ""
+        )
+
+        # Minimal tail: the last message; when it carries tool results, also the call they answer.
         cut = n - 1
-        if _is_tool_result_only(msgs[cut]) and cut > 0 and msgs[cut - 1].get("role") == "assistant":
+        if _has_tool_result(msgs[cut]) and cut > 0 and msgs[cut - 1].get("role") == "assistant":
             cut -= 1
 
         pinned_budget = min(int(window * _PINNED_RATIO), _PINNED_MAX_TOKENS)
+        # The request being worked on is the most important text in the checkpoint: it gets its own,
+        # larger budget (it used to share the 8% with every earlier message and was cut first).
+        current_budget = max(pinned_budget, int(target * _CURRENT_REQUEST_SHARE))
+        # Room the checkpoint needs: the summary's length (not the reasoning headroom of the summary
+        # call) and the user's own words, never more than they actually wrote.
+        user_tokens = sum(
+            estimate_text_scaled(state, _message_text(m)) for m in msgs[:cut] if _is_real_user(m)
+        ) + sum(estimate_text_scaled(state, t) for t in carried + [carried_current] if t)
         budget = (
             target
             - estimate_overhead_tokens(state)
-            - self._summary_tokens(window, provider)
+            - _summary_length_tokens(window)
             - 400
-            - pinned_budget
+            - min(user_tokens, pinned_budget + current_budget)
         )
         kept_tokens = estimate_messages_scaled(state, msgs[cut:])
         while cut > 0 and (n - (cut - 1)) <= max(1, self._keep_recent):
@@ -441,8 +511,8 @@ class LLMSummaryCompactor(SummaryCompactor):
                 break
             kept_tokens += t
             cut -= 1
-        # Never open the kept part on a tool result whose call is being summarized.
-        while cut < n - 1 and _is_tool_result_only(msgs[cut]):
+        # Never open the kept part on a message with tool results whose call is being summarized.
+        while cut < n - 1 and _has_tool_result(msgs[cut]):
             cut += 1
         if cut <= 0:
             return None
@@ -457,42 +527,46 @@ class LLMSummaryCompactor(SummaryCompactor):
         if not new_material:
             return None  # only an earlier checkpoint would be summarized again
 
-        carried = [str(t) for t in (state.shared.get(PINNED_USERS_KEY) or []) if str(t).strip()]
-        carried_current = str(state.shared.get(CURRENT_REQUEST_KEY) or "").strip()
         last_real = next((m for m in reversed(msgs) if _is_real_user(m)), None)
+        attachments: List[Dict[str, Any]] = []
         if last_real is not None:
             # The newest thing the user wrote is the request being worked on; it is shown on its own
-            # when it is summarized, and stays verbatim in the kept tail otherwise. A request carried
-            # from an earlier compaction is now just an earlier message.
-            current = (
-                _message_text(last_real).strip() if any(last_real is r for r in region) else ""
-            )
+            # (with its attachments) when it is summarized, and stays verbatim in the kept tail
+            # otherwise. A request carried from an earlier compaction is now an earlier message.
+            if any(last_real is r for r in region):
+                current = _message_text(last_real).strip()
+                attachments = _attachments(last_real)
+            else:
+                current = ""
             if carried_current:
                 carried.append(carried_current)
         else:
             # Every message the user wrote is already inside an earlier checkpoint: the request
-            # being worked on is the one that checkpoint carried.
+            # being worked on (and its attachments) is the one that checkpoint carried.
             current = carried_current
+            if has_checkpoint:
+                attachments = _attachments(msgs[0])
 
         candidates = carried + [_message_text(m).strip() for m in new_material if _is_real_user(m)]
         if current and candidates and candidates[-1] == current:
             candidates = candidates[:-1]  # shown separately as the request being worked on
+        if current:
+            current = _clip_tokens(state, current, current_budget)
         pinned: List[str] = []
-        used = estimate_text_scaled(state, current) if current else 0
+        used = 0
         for text in reversed(candidates):  # newest first
             cost = estimate_text_scaled(state, text)
             if used + cost > pinned_budget:
                 break
             pinned.insert(0, text)
             used += cost
-        if current and estimate_text_scaled(state, current) > pinned_budget:
-            current = _clip(current, max(400, int(pinned_budget)))
 
         return CompactionPlan(
             cut=cut,
             region_tokens=estimate_messages_scaled(state, new_material),
             pinned=pinned,
             current_request=current,
+            attachments=attachments,
         )
 
     # ── transcript ───────────────────────────────────────────────────
@@ -505,7 +579,11 @@ class LLMSummaryCompactor(SummaryCompactor):
         head: List[str] = []
         body = rendered
         if region and _is_checkpoint(region[0]):
-            head = [_clip("\n".join(rendered[0]), max(2_000, int(budget_tokens * 0.3)))]
+            # The earlier summary is folded into this one, so the summarizer must read all of it
+            # when it can (a token budget, not characters: the old character limit kept a third).
+            head = [
+                _clip_tokens(state, "\n".join(rendered[0]), max(2_000, int(budget_tokens * 0.4)))
+            ]
             body = rendered[1:]
         lines = [line for chunk in body for line in chunk]
         used = sum(estimate_text_scaled(state, h) for h in head)
@@ -523,7 +601,7 @@ class LLMSummaryCompactor(SummaryCompactor):
 
     # ── fallbacks ────────────────────────────────────────────────────
 
-    def _digest(self, region: List[Any], old_count: int) -> str:
+    def _digest(self, state: PipelineState, region: List[Any], old_count: int) -> str:
         """Deterministic stand-in when no model summary could be made: no call, no invention."""
         lines = [
             self._summary_text
@@ -538,7 +616,14 @@ class LLMSummaryCompactor(SummaryCompactor):
             if not isinstance(m, dict):
                 continue
             if _is_checkpoint(m):
-                lines.append("Earlier checkpoint:\n" + _clip(_message_text(m).strip(), 3_000))
+                from xgen_agent_runtime.core.compaction import window_of
+
+                # The earlier summary is the best record of what came before: keep as much of it
+                # as a summary may take (it used to be cut to 3,000 characters on every digest).
+                earlier = _clip_tokens(
+                    state, _message_text(m).strip(), _summary_length_tokens(window_of(state))
+                )
+                lines.append("Earlier checkpoint:\n" + earlier)
                 continue
             for block in _content_blocks(m.get("content")):
                 if block.get("type") == "tool_use":
@@ -684,13 +769,16 @@ class LLMSummaryCompactor(SummaryCompactor):
             summary, cfg, attempts = await self._summarize(state, region, resolve, client)
         request["model_calls"] = attempts
         if summary is None:
+            if client is None or resolve is None:
+                # No model wired counts as a failed attempt (core.compaction stops re-planning).
+                request["source"] = "unavailable"
             if not hard:
                 state.add_event(
                     "context.compaction_deferred",
                     {"compactor": self.name, "reason": "no summary", "attempts": attempts},
                 )
                 return  # soft pressure: losing history is worse than waiting for the guard
-            summary = self._digest(region, old_count)
+            summary = self._digest(state, region, old_count)
             source = "digest"
         else:
             source = "model"
@@ -703,7 +791,13 @@ class LLMSummaryCompactor(SummaryCompactor):
             )
         if outline.current_request:
             sections.append("The request being worked on, verbatim:\n" + outline.current_request)
-        head: List[Dict[str, Any]] = [{"role": "user", "content": "\n\n".join(sections)}]
+        text = "\n\n".join(sections)
+        # The request's images and documents ride along as they are: a summary cannot carry them,
+        # and the model would otherwise answer about a PDF it no longer has.
+        content: Any = (
+            [{"type": "text", "text": text}, *outline.attachments] if outline.attachments else text
+        )
+        head: List[Dict[str, Any]] = [{"role": "user", "content": content}]
         if kept and isinstance(kept[0], dict) and kept[0].get("role") == "user":
             head.append({"role": "assistant", "content": CHECKPOINT_ACK})
         state.messages = head + strip_leading_orphan_tool_results(kept)

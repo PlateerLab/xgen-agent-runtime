@@ -218,6 +218,13 @@ def _trim_result(block: Dict[str, Any], keep: int) -> int:
             else:
                 budget -= len(text)
         if dropped > 0:
+            # Drop the text parts the trim emptied (providers reject empty text blocks), keeping
+            # every non-text part and at least one text part for the marker.
+            emptied = [p for p in _result_text_parts(block) if not p.get("text")]
+            if emptied and len(emptied) < len(_result_text_parts(block)):
+                block["content"] = [b for b in content if not any(b is e for e in emptied)]
+            elif emptied:
+                block["content"] = [b for b in content if not any(b is e for e in emptied[1:])]
             parts = _result_text_parts(block)
             if parts:
                 parts[-1]["text"] += f"\n… [{dropped} chars trimmed during context compaction]"
@@ -226,17 +233,24 @@ def _trim_result(block: Dict[str, Any], keep: int) -> int:
 
 
 def shrink_tool_results(
-    messages: List[Dict[str, Any]], factor: float, *, min_keep: int = 300
+    messages: List[Dict[str, Any]],
+    factor: float,
+    *,
+    min_keep: int = 300,
+    strip_images: bool = False,
 ) -> Dict[str, int]:
     """Shorten every tool_result in *messages* to ``factor`` of its text, in place (head kept, with
-    the usual marker). The last resort under hard pressure: one round of parallel tool calls can
-    return more than the window even when each result is within its own cap, and the protected tail
-    is exactly where those results sit. Returns ``{"trimmed", "chars_saved"}``."""
-    trimmed = saved = 0
+    the usual marker); with ``strip_images`` also replace the images inside results with a marker.
+    The last resort under hard pressure: one round of parallel tool calls can return more than the
+    window even when each result is within its own cap, and the protected tail is exactly where
+    those results sit. Returns ``{"trimmed", "chars_saved", "images_stripped"}``."""
+    trimmed = saved = images = 0
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
         for block in _iter_tool_results(msg):
+            if strip_images and isinstance(block.get("content"), list):
+                images += _strip_images_in(block["content"])
             size = _content_size(block)
             keep = max(min_keep, int(size * max(0.0, factor)))
             if size > keep:
@@ -244,7 +258,37 @@ def shrink_tool_results(
                 if removed > 0:
                     trimmed += 1
                     saved += removed
-    return {"trimmed": trimmed, "chars_saved": saved}
+    return {"trimmed": trimmed, "chars_saved": saved, "images_stripped": images}
+
+
+def current_request_index(messages: List[Dict[str, Any]]) -> int:
+    """Index of the newest user message that is not only tool results (the request being answered,
+    or a checkpoint carrying it), or -1."""
+    for i in range(len(messages or []) - 1, -1, -1):
+        msg = messages[i]
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if (
+            isinstance(content, list)
+            and content
+            and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+        ):
+            continue
+        return i
+    return -1
+
+
+def strip_current_attachments(messages: List[Dict[str, Any]]) -> int:
+    """Remove the images and documents of the request being answered. The very last resort under
+    hard pressure, after everything else; returns how many were removed."""
+    idx = current_request_index(messages)
+    if idx < 0:
+        return 0
+    content = messages[idx].get("content")
+    if not isinstance(content, list):
+        return 0
+    return _strip_images_in(content, documents=True)
 
 
 def prune_messages(
@@ -257,6 +301,7 @@ def prune_messages(
     input_trim_over_chars: int = DEFAULT_INPUT_TRIM_OVER_CHARS,
     input_trim_keep_chars: int = DEFAULT_INPUT_TRIM_KEEP_CHARS,
     strip_documents: bool = False,
+    protect_current_request: bool = True,
 ) -> PruneMetrics:
     """Run the deterministic prune over *messages* in place.
 
@@ -267,6 +312,10 @@ def prune_messages(
 
     ``strip_documents``: attached PDFs are often what the request is about, so they are removed only
     under hard pressure (``core.compaction`` passes it with the aggressive profile).
+
+    ``protect_current_request``: the images and documents of the request being answered
+    (:func:`current_request_index`) are never stripped here, however many tool rounds followed it.
+    ``core.compaction`` removes them only as the very last resort (:func:`strip_current_attachments`).
     """
     metrics = PruneMetrics(deduped=0, images_stripped=0, trimmed=0, inputs_trimmed=0, chars_saved=0)
     if not messages:
@@ -296,12 +345,13 @@ def prune_messages(
                 seen.add(digest)
 
     # Pass 2 — stale-region cleanup: image stripping + oversize trimming.
+    current = current_request_index(messages) if protect_current_request else -1
     for mi in range(cutoff):
         msg = messages[mi]
         if not isinstance(msg, dict):
             continue
         content = msg.get("content")
-        if isinstance(content, list):
+        if isinstance(content, list) and mi != current:
             metrics["images_stripped"] += _strip_images_in(content, documents=strip_documents)
         if msg.get("role") == "assistant":
             saved_inputs = _trim_tool_inputs(msg, input_trim_over_chars, input_trim_keep_chars)

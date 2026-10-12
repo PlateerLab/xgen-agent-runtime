@@ -146,23 +146,35 @@ def _thinking_off(request: Optional[APIRequest]) -> bool:
     return request is not None and getattr(request, "thinking_level", None) == "off"
 
 
+#: Process-private fallback folder (``mkdtemp``), used when the shared per-user name is taken.
+_FALLBACK_PROMPT_FOLDER: Optional[str] = None
+
+
 def _private_prompt_folder() -> str:
-    """``<tmp>/xgen-claude-code-system-<uid>``, created 0700 and verified to be ours and private."""
+    """``<tmp>/xgen-claude-code-system-<uid>``, created 0700 and verified (POSIX) to be ours and
+    private. If another local user already holds that name (a directory or a symlink), a fresh
+    ``mkdtemp`` folder of this process is used instead, so the long prompt still has a home."""
     import stat
     import tempfile
 
+    global _FALLBACK_PROMPT_FOLDER
     uid = os.getuid() if hasattr(os, "getuid") else None
     folder = os.path.join(
         tempfile.gettempdir(), f"xgen-claude-code-system-{uid if uid is not None else 'user'}"
     )
-    os.makedirs(folder, mode=0o700, exist_ok=True)
-    if uid is not None:
-        info = os.lstat(folder)
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
-            raise OSError(f"{folder} is not a directory owned by this user")
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            os.chmod(folder, 0o700)
-    return folder
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        if uid is not None:
+            info = os.lstat(folder)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+                raise OSError(f"{folder} is not a directory owned by this user")
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                os.chmod(folder, 0o700)
+        return folder
+    except OSError:
+        if _FALLBACK_PROMPT_FOLDER is None or not os.path.isdir(_FALLBACK_PROMPT_FOLDER):
+            _FALLBACK_PROMPT_FOLDER = tempfile.mkdtemp(prefix="xgen-claude-code-system-")
+        return _FALLBACK_PROMPT_FOLDER
 
 
 class ClaudeCodeCLIClient(BaseClient):

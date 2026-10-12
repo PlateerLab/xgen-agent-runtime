@@ -13,9 +13,10 @@ Every trigger goes through :func:`run_compaction`:
 
 What the runner guarantees (4.89.0)
 -----------------------------------
-* **Cheap first.** The deterministic prune (dedupe repeated tool output, drop stale images/PDFs,
-  trim stale large results and tool inputs) runs before any model call. Under hard pressure it
-  runs again with a smaller protected tail.
+* **Cheap first.** The deterministic prune (dedupe repeated tool output, drop stale images, trim
+  stale large results and tool inputs) runs before any model call. Under hard pressure the
+  compactor runs next, and only if the request still does not fit come the losses: the aggressive
+  prune, the newest tool results shortened, and last the attachments of the request itself.
 * **One summary per request.** Stage 2, Stage 4 and the guard can all see pressure before the same
   API call; only the first may summarize. A second summary of ``[summary, ack, two messages]``
   removes nothing and costs a model call (2026-10-12: observed re-summarizing every iteration).
@@ -299,37 +300,71 @@ def _prune(state: PipelineState, *, aggressive: bool, trigger: str) -> Dict[str,
     return metrics
 
 
+#: Attribute on the state holding a background summary task (Stage 2, hosts that keep a state across
+#: turns). Not in ``state.shared``, which may be serialized.
+BACKGROUND_TASK_ATTR = "_context_background_task"
+
+
+def background_summary_running(state: Any) -> bool:
+    """True while a background summary scheduled by Stage 2 has not finished."""
+    task = getattr(state, BACKGROUND_TASK_ATTR, None)
+    done = getattr(task, "done", None)
+    return callable(done) and not done()
+
+
+def _plan_reason(
+    state: PipelineState, compactor: Any, target_tokens: Optional[int]
+) -> Optional[str]:
+    """Why the compactor's own plan is not worth a model call, or ``None``."""
+    plan = getattr(compactor, "plan", None)
+    if not callable(plan):
+        return None
+    try:
+        outline = plan(state, target_tokens)
+    except Exception:  # noqa: BLE001 (a planning bug must not stop compaction)
+        logger.debug("compactor plan failed", exc_info=True)
+        return None
+    if outline is None:
+        return "nothing_to_summarize"
+    region = _int(getattr(outline, "region_tokens", 0))
+    if region < min_summary_region(window_of(state)):
+        return "summary_region_too_small"
+    return None
+
+
 def _llm_gate(
     state: PipelineState, compactor: Any, *, trigger: str, target_tokens: Optional[int], hard: bool
 ) -> Optional[str]:
-    """Why a model-backed compactor must NOT run now (``None`` = go ahead)."""
-    if not getattr(compactor, "uses_llm", False):
+    """Why a model-backed compactor must NOT run now (``None`` = go ahead).
+
+    Only a person asking (``/compact``) bypasses the policy. A Stage 16 "requested" compaction is
+    the loop's own pressure signal and obeys the same limits (it used to bypass them all and could
+    summarize on every iteration of a turn that compaction could not bring under the threshold).
+    Under hard pressure the limits do not stop relief (the runner falls back to the digest), but a
+    region too small to matter is still not summarized: summarizing one question made the request
+    bigger (2026-10-12 review).
+    """
+    if not getattr(compactor, "uses_llm", False) or trigger == "manual":
         return None
     shared = state.shared
-    # Only a person asking (/compact) bypasses the policy. A Stage 16 "requested" compaction is the
-    # loop's own pressure signal and obeys the same limits (it used to bypass them all and could
-    # summarize on every iteration of a turn that compaction could not bring under the threshold).
-    explicit = trigger == "manual"
-    if not explicit and _int(shared.get(LLM_COMPACTIONS_KEY)) >= MAX_LLM_COMPACTIONS_PER_TURN:
+    if not hard:
+        if _int(shared.get(LLM_COMPACTIONS_KEY)) >= MAX_LLM_COMPACTIONS_PER_TURN:
+            return "turn_compaction_limit"
+        if _int(shared.get(LLM_FAILURES_KEY)) >= MAX_SUMMARY_FAILURES:
+            return "summary_model_failing"
+        if summarized_for_this_call(state):
+            return "already_summarized_for_this_request"
+        if background_summary_running(state):
+            # The summary of this history is already being made; a synchronous one now would be
+            # thrown away with it (the prefix check) and cost a call.
+            return "background_summary_running"
+    reason = _plan_reason(state, compactor, target_tokens)
+    if reason is not None:
+        return reason
+    if hard and _int(shared.get(LLM_COMPACTIONS_KEY)) >= MAX_LLM_COMPACTIONS_PER_TURN:
         return "turn_compaction_limit"
-    if not explicit and _int(shared.get(LLM_FAILURES_KEY)) >= MAX_SUMMARY_FAILURES:
+    if hard and _int(shared.get(LLM_FAILURES_KEY)) >= MAX_SUMMARY_FAILURES:
         return "summary_model_failing"
-    # Soft pressure only: a guard or a provider overflow after a summary means that summary was not
-    # enough for THIS request, and the request cannot go out as it is.
-    if not explicit and not hard and summarized_for_this_call(state):
-        return "already_summarized_for_this_request"
-    plan = getattr(compactor, "plan", None)
-    if callable(plan) and not hard and not explicit:
-        try:
-            outline = plan(state, target_tokens)
-        except Exception:  # noqa: BLE001 (a planning bug must not stop compaction)
-            logger.debug("compactor plan failed", exc_info=True)
-            return None
-        if outline is None:
-            return "nothing_to_summarize"
-        region = _int(getattr(outline, "region_tokens", 0))
-        if region < min_summary_region(window_of(state)):
-            return "summary_region_too_small"
     return None
 
 
@@ -349,14 +384,17 @@ async def run_compaction(
     compaction is needed, so the compactor always runs (aiming at :data:`TARGET_RATIO` of the
     input budget). A ``manual`` trigger (``/compact``) always runs the compactor too.
 
-    ``hard`` marks pressure the request cannot survive (guard, provider overflow): the prune runs
-    aggressively, the small-region skip is off, and a compactor that cannot reach its model falls
-    back to a deterministic digest instead of leaving the history unchanged.
+    ``hard`` marks pressure the request cannot survive (guard, provider overflow). The compactor
+    runs first, on the history as it is (the summarizer reads tool results before they are cut);
+    a compactor that cannot reach its model falls back to a deterministic digest. Only if the
+    request is still over the input budget does the last-resort relief run, cheapest loss first:
+    the aggressive prune (older images and documents, stale results cut short), then the remaining
+    tool results shortened in proportion, then the attachments of the request being answered.
 
-    Emits ``context.compacted`` (and ``context.compaction_skipped`` when the policy declined) and,
-    when a provider exposes ``record_compaction`` and the compactor does not persist its own
-    snapshot, records the snapshot. Never raises: compaction is best-effort relief, not a
-    correctness gate; failures are logged as events and swallowed.
+    Emits ``context.compacted`` (and ``context.compaction_skipped`` when nothing changed or the
+    policy declined) and, when a provider exposes ``record_compaction`` and the compactor does not
+    persist its own snapshot, records the snapshot. Never raises: compaction is best-effort relief,
+    not a correctness gate; failures are logged as events and swallowed.
     """
     before_list = list(state.messages or [])
     before_msgs = len(before_list)
@@ -366,39 +404,13 @@ async def run_compaction(
         target_tokens = int(input_budget_of(state) * TARGET_RATIO)
 
     _prune(state, aggressive=False, trigger=trigger)
-    if hard and estimate_prompt_tokens(state) > target_tokens:
-        _prune(state, aggressive=True, trigger=trigger)
-
     after_prune = estimate_prompt_tokens(state)
     if prune_may_suffice and after_prune <= target_tokens:
-        state.add_event(
-            "context.compacted",
-            {
-                "strategy": "prune",
-                "trigger": trigger,
-                "messages_before": before_msgs,
-                "messages_after": len(state.messages or []),
-                "saved_tokens_estimate": max(0, before_tokens - after_prune),
-                "tokens_after_estimate": after_prune,
-                "target_tokens": target_tokens,
-                "target_met": True,
-            },
-        )
-        return {
-            "ok": True,
-            "before_messages": before_msgs,
-            "after_messages": len(state.messages or []),
-            "replaced": 0,
-            "saved_tokens_estimate": max(0, before_tokens - after_prune),
-            "after_tokens_estimate": after_prune,
-            "target_tokens": target_tokens,
-            "target_met": True,
-            "summarized": False,
-        }
+        return _report_prune(state, trigger, before_msgs, before_tokens, after_prune, target_tokens)
 
     skip = _llm_gate(state, compactor, trigger=trigger, target_tokens=target_tokens, hard=hard)
     digest_only = False
-    if skip in ("turn_compaction_limit", "summary_model_failing") and hard:
+    if hard and skip in ("turn_compaction_limit", "summary_model_failing"):
         # Out of model summaries for this turn (or the summary model keeps failing), yet the request
         # cannot go out as it is: the compactor relieves it with its deterministic digest.
         skip, digest_only = None, True
@@ -413,105 +425,92 @@ async def run_compaction(
                 "target_tokens": target_tokens,
             },
         )
-        return {
-            "ok": True,
-            "skipped": skip,
-            "before_messages": before_msgs,
-            "after_messages": len(state.messages or []),
-            "replaced": 0,
-            "saved_tokens_estimate": max(0, before_tokens - after_prune),
-            "after_tokens_estimate": after_prune,
-            "target_tokens": target_tokens,
-            "target_met": after_prune <= target_tokens,
-            "summarized": False,
-        }
-
-    request: Dict[str, Any] = {
-        "trigger": trigger,
-        "target_tokens": target_tokens,
-        "hard": bool(hard),
-        "digest_only": digest_only,
-    }
-    state.shared[COMPACTION_CONTEXT_KEY] = request
-    try:
-        await compactor.compact(state)
-    except Exception as exc:  # noqa: BLE001 (best effort)
-        _count_attempt(state, compactor, request)
-        state.add_event(
-            "context.compaction_failed",
-            {"compactor": _compactor_name(compactor), "trigger": trigger, "error": str(exc)},
-        )
-        logger.warning("Compaction (%s) failed: %s", trigger, exc)
-        return {"ok": False, "before_messages": before_msgs, "after_messages": before_msgs}
-    finally:
-        state.shared.pop(COMPACTION_CONTEXT_KEY, None)
-    _count_attempt(state, compactor, request)
-
-    after_list = list(state.messages or [])
-    changed = len(after_list) != before_msgs or any(
-        a is not b for a, b in zip(after_list, before_list)
-    )
-    if changed:
-        # Keep every recorder's watermark valid across the shrink (audit D3) and remember what
-        # they have not recorded yet.
-        reconcile_recorded_index(before_list, after_list, state.metadata)
-        state.shared.pop("_prompt_tokens_memo", None)
-    if hard:
-        _fit_tool_results(state, trigger)
-    if not changed and estimate_prompt_tokens(state) < before_tokens:
-        # The compactor left the list alone but the prune (or the tool-result fit) shrank it in
-        # place: report that relief.
-        now = estimate_prompt_tokens(state)
-        state.add_event(
-            "context.compacted",
-            {
-                "strategy": "prune",
-                "trigger": trigger,
-                "messages_before": before_msgs,
-                "messages_after": before_msgs,
-                "saved_tokens_estimate": before_tokens - now,
-                "tokens_after_estimate": now,
+        if not hard:
+            return {
+                "ok": True,
+                "skipped": skip,
+                "before_messages": before_msgs,
+                "after_messages": len(state.messages or []),
+                "replaced": 0,
+                "saved_tokens_estimate": max(0, before_tokens - after_prune),
+                "after_tokens_estimate": after_prune,
                 "target_tokens": target_tokens,
-                "target_met": now <= target_tokens,
-            },
+                "target_met": after_prune <= target_tokens,
+                "summarized": False,
+            }
+
+    changed = False
+    after_list = before_list
+    if skip is None:
+        request: Dict[str, Any] = {
+            "trigger": trigger,
+            "target_tokens": target_tokens,
+            "hard": bool(hard),
+            "digest_only": digest_only,
+        }
+        state.shared[COMPACTION_CONTEXT_KEY] = request
+        try:
+            await compactor.compact(state)
+        except Exception as exc:  # noqa: BLE001 (best effort)
+            _count_attempt(state, compactor, request)
+            state.add_event(
+                "context.compaction_failed",
+                {"compactor": _compactor_name(compactor), "trigger": trigger, "error": str(exc)},
+            )
+            logger.warning("Compaction (%s) failed: %s", trigger, exc)
+            if hard:
+                _relieve_hard(state, trigger)
+            return {"ok": False, "before_messages": before_msgs, "after_messages": before_msgs}
+        finally:
+            state.shared.pop(COMPACTION_CONTEXT_KEY, None)
+        _count_attempt(state, compactor, request)
+
+        after_list = list(state.messages or [])
+        changed = len(after_list) != before_msgs or any(
+            a is not b for a, b in zip(after_list, before_list)
         )
+        if changed:
+            # Keep every recorder's watermark valid across the shrink (audit D3) and remember what
+            # they have not recorded yet.
+            reconcile_recorded_index(before_list, after_list, state.metadata)
+            state.shared.pop("_prompt_tokens_memo", None)
+
+    if hard:
+        _relieve_hard(state, trigger)
+
+    if not changed:
+        now = estimate_prompt_tokens(state)
+        if now < before_tokens:
+            # The compactor left the list alone but the prune (or the hard relief) shrank it in
+            # place: report that relief.
+            return _report_prune(state, trigger, before_msgs, before_tokens, now, target_tokens)
+        if skip is None:
+            # Nothing changed (a soft summary that did not come back, nothing to cut): not a
+            # compaction. Reporting it as ``context.compacted`` made hosts over-count compactions.
+            state.add_event(
+                "context.compaction_skipped",
+                {
+                    "strategy": _compactor_name(compactor),
+                    "trigger": trigger,
+                    "reason": "no_change",
+                    "tokens_estimate": now,
+                    "target_tokens": target_tokens,
+                },
+            )
         return {
             "ok": True,
+            "skipped": skip or "no_change",
             "before_messages": before_msgs,
             "after_messages": before_msgs,
             "replaced": 0,
-            "saved_tokens_estimate": before_tokens - now,
+            "saved_tokens_estimate": max(0, before_tokens - now),
             "after_tokens_estimate": now,
             "target_tokens": target_tokens,
             "target_met": now <= target_tokens,
             "summarized": False,
         }
-    elif not changed:
-        # Nothing changed (a soft summary that did not come back, nothing to cut): not a compaction.
-        # Reporting it as ``context.compacted`` made hosts that count compactions over-count.
-        state.add_event(
-            "context.compaction_skipped",
-            {
-                "strategy": _compactor_name(compactor),
-                "trigger": trigger,
-                "reason": "no_change",
-                "tokens_estimate": after_prune,
-                "target_tokens": target_tokens,
-            },
-        )
-        return {
-            "ok": True,
-            "skipped": "no_change",
-            "before_messages": before_msgs,
-            "after_messages": before_msgs,
-            "replaced": 0,
-            "saved_tokens_estimate": max(0, before_tokens - after_prune),
-            "after_tokens_estimate": after_prune,
-            "target_tokens": target_tokens,
-            "target_met": after_prune <= target_tokens,
-            "summarized": False,
-        }
 
+    after_list = list(state.messages or [])
     after_msgs = len(after_list)
     after_tokens = estimate_prompt_tokens(state)
     replaced = max(0, before_msgs - after_msgs)
@@ -544,8 +543,7 @@ async def run_compaction(
 
     # Persist the snapshot unless the compactor already does it itself.
     if (
-        changed
-        and replaced > 0
+        replaced > 0
         and provider is not None
         and not getattr(compactor, "persists_own_compaction", False)
         and hasattr(provider, "record_compaction")
@@ -559,7 +557,7 @@ async def run_compaction(
                 session_id=getattr(state, "session_id", "") or "",
                 trigger=trigger,
             )
-        except Exception as exc:  # noqa: BLE001 — best effort
+        except Exception as exc:  # noqa: BLE001 (best effort)
             state.add_event(
                 "context.compaction_record_failed",
                 {"compactor": _compactor_name(compactor), "error": str(exc)},
@@ -579,59 +577,148 @@ async def run_compaction(
     }
 
 
+def _report_prune(
+    state: PipelineState,
+    trigger: str,
+    before_msgs: int,
+    before_tokens: int,
+    now: int,
+    target_tokens: int,
+) -> dict:
+    """``context.compacted`` (strategy ``prune``) for relief made in place, without the compactor."""
+    state.add_event(
+        "context.compacted",
+        {
+            "strategy": "prune",
+            "trigger": trigger,
+            "messages_before": before_msgs,
+            "messages_after": len(state.messages or []),
+            "saved_tokens_estimate": max(0, before_tokens - now),
+            "tokens_after_estimate": now,
+            "target_tokens": target_tokens,
+            "target_met": now <= target_tokens,
+        },
+    )
+    return {
+        "ok": True,
+        "before_messages": before_msgs,
+        "after_messages": len(state.messages or []),
+        "replaced": 0,
+        "saved_tokens_estimate": max(0, before_tokens - now),
+        "after_tokens_estimate": now,
+        "target_tokens": target_tokens,
+        "target_met": now <= target_tokens,
+        "summarized": False,
+    }
+
+
 #: Under hard pressure the request must end up below this share of the input budget.
 _HARD_FIT_RATIO = 0.95
 
 
-def _fit_tool_results(state: PipelineState, trigger: str) -> int:
-    """Last resort under hard pressure: when the request still does not fit after the prune and the
-    compactor, shorten the tool results that are left (the newest ones, in the protected tail) in
-    proportion. One round of parallel tool calls can return more than the window even when each
-    result is within its own cap; before this the guard rejected the turn. Returns results trimmed.
-    """
+def _relieve_hard(state: PipelineState, trigger: str) -> None:
+    """Last-resort relief under hard pressure, cheapest loss first, each step only while the
+    request is still over the input budget: the aggressive prune, then the remaining tool results
+    in proportion (:func:`_fit_tool_results`), then the attachments of the request being answered."""
     limit = int(input_budget_of(state) * _HARD_FIT_RATIO)
-    estimate = estimate_prompt_tokens(state)
-    if estimate <= limit:
-        return 0
-    from xgen_agent_runtime.core.context_prune import shrink_tool_results
-    from xgen_agent_runtime.core.token_estimate import estimate_messages_scaled
+    if estimate_prompt_tokens(state) <= limit:
+        return
+    _prune(state, aggressive=True, trigger=trigger)
+    if estimate_prompt_tokens(state) <= limit:
+        return
+    _fit_tool_results(state, trigger, limit)
+    if estimate_prompt_tokens(state) <= limit:
+        return
+    from xgen_agent_runtime.core.context_prune import strip_current_attachments
 
-    results = [
-        block
-        for message in state.messages or []
-        if isinstance(message, dict) and isinstance(message.get("content"), list)
-        for block in message["content"]
-        if isinstance(block, dict) and block.get("type") == "tool_result"
-    ]
-    result_tokens = estimate_messages_scaled(state, [{"role": "user", "content": results}])
-    if result_tokens <= 0:
-        return 0
-    keep = max(0.02, (result_tokens - (estimate - limit)) / result_tokens * 0.9)
-    if keep >= 1.0:
-        return 0
-    metrics = shrink_tool_results(state.messages or [], keep)
-    if metrics["trimmed"]:
+    removed = strip_current_attachments(state.messages or [])
+    if removed:
         state.shared.pop("_prompt_tokens_memo", None)
         state.add_event(
             "context.pruned",
             {
                 "trigger": trigger,
                 "aggressive": True,
-                "results_fitted": metrics["trimmed"],
-                "chars_saved": metrics["chars_saved"],
+                "deduped": 0,
+                "images_stripped": removed,
+                "trimmed": 0,
+                "inputs_trimmed": 0,
+                "chars_saved": 0,
+                "current_attachments_stripped": removed,
+            },
+        )
+
+
+def _fit_tool_results(state: PipelineState, trigger: str, limit: int) -> int:
+    """Shorten the tool results that are left (the newest ones, in the protected tail) so the
+    request fits ``limit``: images inside results first, then text in proportion. One round of
+    parallel tool calls can return more than the window even when each result is within its own
+    cap; before this the guard rejected the turn. Does nothing when even cutting every result to a
+    stub could not close the gap (the guard then rejects with the results intact). Returns results
+    changed.
+    """
+    from xgen_agent_runtime.core.context_prune import shrink_tool_results
+    from xgen_agent_runtime.core.token_estimate import estimate_messages_scaled
+
+    estimate = estimate_prompt_tokens(state)
+    if estimate <= limit:
+        return 0
+
+    def _results() -> List[Any]:
+        return [
+            block
+            for message in state.messages or []
+            if isinstance(message, dict) and isinstance(message.get("content"), list)
+            for block in message["content"]
+            if isinstance(block, dict) and block.get("type") == "tool_result"
+        ]
+
+    result_tokens = estimate_messages_scaled(state, [{"role": "user", "content": _results()}])
+    if result_tokens <= 0 or result_tokens * 0.95 < estimate - limit:
+        return 0
+    totals = {"trimmed": 0, "chars_saved": 0, "images_stripped": 0}
+    metrics = shrink_tool_results(state.messages or [], 1.0, strip_images=True)
+    for key in totals:
+        totals[key] += metrics.get(key, 0)
+    if metrics["images_stripped"]:
+        state.shared.pop("_prompt_tokens_memo", None)
+    estimate_mid = estimate_prompt_tokens(state)
+    if estimate_mid > limit:
+        result_tokens = estimate_messages_scaled(state, [{"role": "user", "content": _results()}])
+        if result_tokens > 0:
+            keep = max(0.02, (result_tokens - (estimate_mid - limit)) / result_tokens * 0.9)
+            if keep < 1.0:
+                metrics = shrink_tool_results(state.messages or [], keep)
+                for key in totals:
+                    totals[key] += metrics.get(key, 0)
+    changed = totals["trimmed"] + totals["images_stripped"]
+    if changed:
+        state.shared.pop("_prompt_tokens_memo", None)
+        state.add_event(
+            "context.pruned",
+            {
+                "trigger": trigger,
+                "aggressive": True,
+                "deduped": 0,
+                "images_stripped": totals["images_stripped"],
+                "trimmed": totals["trimmed"],
+                "inputs_trimmed": 0,
+                "chars_saved": totals["chars_saved"],
+                "results_fitted": totals["trimmed"],
                 "tokens_before": estimate,
                 "tokens_after": estimate_prompt_tokens(state),
             },
         )
-    return metrics["trimmed"]
+    return changed
 
 
 def _count_attempt(state: PipelineState, compactor: Any, request: Dict[str, Any]) -> None:
     """Book a compactor run against the per-request and per-turn limits.
 
     A model-backed compactor reports the summary calls it made (``model_calls``) and what replaced
-    the history (``source``). Any call (successful or not) uses up this request's one soft summary
-    and one of the turn's attempts; a call that did not produce a model summary counts as a failure.
+    the history (``source``: ``"model"``, ``"digest"``, or ``"unavailable"`` when no model is wired).
+    Any call (successful or not) uses up this request's one soft summary and one of the turn's
+    attempts; a call that did not produce a model summary, or no model at all, counts as a failure.
     Before this, only a run that changed the history was counted, so a failing summary model was
     retried by Stage 2 and Stage 4 on every request (2026-10-12 review: 20 failed calls in a turn).
     """
@@ -645,10 +732,10 @@ def _count_attempt(state: PipelineState, compactor: Any, request: Dict[str, Any]
     shared[SUMMARIZED_AT_KEY] = _int(shared.get(API_CALLS_KEY))
     if calls > 0:
         shared[LLM_COMPACTIONS_KEY] = _int(shared.get(LLM_COMPACTIONS_KEY)) + 1
-        if source == "model":
-            shared[LLM_FAILURES_KEY] = 0
-        else:
-            shared[LLM_FAILURES_KEY] = _int(shared.get(LLM_FAILURES_KEY)) + 1
+    if source == "model":
+        shared[LLM_FAILURES_KEY] = 0
+    elif calls > 0 or source == "unavailable":
+        shared[LLM_FAILURES_KEY] = _int(shared.get(LLM_FAILURES_KEY)) + 1
 
 
 async def relieve_if_over(
@@ -683,6 +770,8 @@ __all__ = [
     "LLM_FAILURES_KEY",
     "output_reserve",
     "input_budget_of",
+    "BACKGROUND_TASK_ATTR",
+    "background_summary_running",
     "RECORDED_INDEX_KEYS",
     "PENDING_RECORDS_KEY",
     "RECORDER_STM",

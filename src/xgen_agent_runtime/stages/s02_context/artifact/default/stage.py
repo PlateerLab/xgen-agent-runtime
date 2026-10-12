@@ -686,7 +686,14 @@ class ContextStage(Stage[Any, Any]):
             "task": task,
             "len": snapshot_len,
             "message_ids": snapshot_ids,
+            # Which run scheduled it: a failure collected in a later turn belongs to that turn.
+            "run": getattr(state, "_run_count", 0),
         }
+        # Every soft check (this stage, Stage 4, the internal loop) sees the summary in flight and
+        # does not make a second, synchronous one of the same history (core.compaction gate).
+        from xgen_agent_runtime.core.compaction import BACKGROUND_TASK_ATTR
+
+        setattr(state, BACKGROUND_TASK_ATTR, task)
         # This request's summary is in flight: Stage 4's proactive check must not summarize the
         # same request synchronously (it did, and the background result was then discarded). The
         # attempt counts against the turn's limit now, whether or not its result is ever applied.
@@ -713,6 +720,14 @@ class ContextStage(Stage[Any, Any]):
         if not task.done():
             return False
         self._bg_compaction = None
+        from xgen_agent_runtime.core.compaction import (
+            BACKGROUND_TASK_ATTR,
+            COMPACTION_CONTEXT_KEY,
+            LLM_FAILURES_KEY,
+        )
+
+        if getattr(state, BACKGROUND_TASK_ATTR, None) is task:
+            setattr(state, BACKGROUND_TASK_ATTR, None)
         if task.cancelled() or task.exception() is not None:
             return False  # already logged by the done-callback
         shadow: _CompactionShadow = task.result()
@@ -720,11 +735,11 @@ class ContextStage(Stage[Any, Any]):
         for purpose, usage in shadow.aux_usage:
             state.add_aux_usage(purpose, usage)
         # A background summary that called the model and came back empty is a failed attempt, like
-        # a synchronous one (core.compaction counts those toward the soft-pressure cut-off).
-        from xgen_agent_runtime.core.compaction import COMPACTION_CONTEXT_KEY, LLM_FAILURES_KEY
-
+        # a synchronous one, but only for the turn that scheduled it (a new turn starts clean).
         report = shadow.shared.get(COMPACTION_CONTEXT_KEY) or {}
-        if int(report.get("model_calls") or 0) > 0:
+        if int(report.get("model_calls") or 0) > 0 and info.get("run") == getattr(
+            state, "_run_count", 0
+        ):
             if report.get("source") == "model":
                 state.shared[LLM_FAILURES_KEY] = 0
             else:
@@ -733,12 +748,18 @@ class ContextStage(Stage[Any, Any]):
         n = int(info["len"])
         msgs = state.messages
         current_prefix_ids = tuple(id(message) for message in msgs[:n])
-        if len(msgs) < n or n == 0 or current_prefix_ids != info["message_ids"]:
-            # Prefix rewritten since the snapshot (e.g. the Stage 4 guard
-            # compacted synchronously) — the summary no longer matches.
+        if (
+            len(msgs) < n
+            or n == 0
+            or current_prefix_ids != info["message_ids"]
+            or len(shadow.messages) >= n
+        ):
+            # Not applied: the prefix was rewritten since the snapshot (a synchronous guard
+            # compaction), or the compactor changed nothing (its summary failed, or there was
+            # nothing to cut). Its events still tell what happened.
+            for event_type, data in shadow.events:
+                state.add_event(event_type, data)
             return False
-        if len(shadow.messages) >= n:
-            return False  # compactor was a no-op (below its keep threshold)
 
         before = len(msgs)
         replaced = before - (len(shadow.messages) + (before - n))

@@ -310,6 +310,7 @@ async def test_hard_pressure_past_the_turn_limit_uses_the_digest():
     state.model = "fake"
     client = _SummaryClient()
     state.llm_client = client
+    state.context_window_budget = 8_000  # the region must be worth summarizing (min_summary_region)
     state.messages = _conversation(30, "long message " * 30)
     state.shared[LLM_COMPACTIONS_KEY] = MAX_LLM_COMPACTIONS_PER_TURN
 
@@ -770,3 +771,333 @@ def test_claude_code_prompt_file_is_private(tmp_path, monkeypatch):
     path = argv[argv.index("--system-prompt-file") + 1]
     assert stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode) == 0o700
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+# ── review round 2 (2026-10-12): host and clients ───────────────────
+
+
+def test_host_fit_counts_what_stage_3_adds_later():
+    from xgen_agent_runtime.host.context_budget import fit_input_to_budget
+
+    kwargs = dict(
+        text="질문",
+        rag_block="참조 문서 " * 40_000,
+        system_prompt="system",
+        history=None,
+        registry=None,
+        provider="vllm",
+        model="m",
+        max_tokens=8_192,
+        window=32_000,
+    )
+    plain = fit_input_to_budget(**kwargs)
+    with_notes = fit_input_to_budget(**kwargs, extra_overhead_text="숨긴 도구 목록과 이번 턴 안내 " * 300)
+    assert len(with_notes.rag_block) < len(plain.rag_block)
+
+
+def test_window_fit_keeps_images_and_error_headers_and_covers_toolbatch():
+    from xgen_agent_runtime.stages.s10_tool.persistence import maybe_persist_large_result
+    from xgen_agent_runtime.tools.base import ToolCapabilities, ToolContext, ToolResult
+
+    class _View:
+        context_window_budget = 8_192
+        max_tokens = 1_024
+
+    context = ToolContext(storage_path=None, state_view=_View())
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0K"}}
+    mixed = maybe_persist_large_result(
+        ToolResult(content=[{"type": "text", "text": "가나다라 " * 5_000}, image]),
+        tool_use_id="t1",
+        tool_name="Read",
+        capabilities=ToolCapabilities(max_result_chars=100_000),
+        context=context,
+    )
+    assert image in mixed.content and "clipped" in mixed.content[0]["text"]
+
+    error = maybe_persist_large_result(
+        ToolResult(content={"error": {"code": "db_timeout", "message": "query timed out"}, "log": "줄 " * 20_000}, is_error=True),
+        tool_use_id="t2",
+        tool_name="Query",
+        capabilities=ToolCapabilities(max_result_chars=100_000),
+        context=context,
+    )
+    assert error.display_text.startswith("ERROR db_timeout: query timed out") and error.is_error
+
+    batch = maybe_persist_large_result(
+        ToolResult(content="결과 " * 20_000),
+        tool_use_id="t3",
+        tool_name="ToolBatch",
+        capabilities=ToolCapabilities(max_result_chars=0),
+        context=context,
+    )
+    assert batch.display_text and "clipped" in batch.display_text
+
+
+def test_window_fit_stays_under_the_cap_when_head_and_tail_are_denser():
+    from xgen_agent_runtime.stages.s10_tool.persistence import _clip_to_tokens, _view_tokens
+
+    text = "한국어 머리말 " * 2_000 + "plain english middle part " * 20_000 + "한국어 꼬리말 " * 2_000
+    assert _view_tokens(_clip_to_tokens(text, 4_000)) <= 4_000
+
+
+def test_window_fit_never_raises():
+    from xgen_agent_runtime.stages.s10_tool.persistence import maybe_persist_large_result
+    from xgen_agent_runtime.tools.base import ToolCapabilities, ToolContext, ToolResult
+
+    class _Broken:
+        @property
+        def context_window_budget(self):
+            raise RuntimeError("boom")
+
+    result = ToolResult(content="ok")
+    out = maybe_persist_large_result(
+        result,
+        tool_use_id="t1",
+        tool_name="Read",
+        capabilities=ToolCapabilities(max_result_chars=100_000),
+        context=ToolContext(storage_path=None, state_view=_Broken()),
+    )
+    assert out.content == "ok"
+
+
+def test_truncation_converges_on_mixed_density_text():
+    from xgen_agent_runtime.host.token_budget import count_text_tokens, truncate_text_to_token_budget
+
+    text = "한국어 머리말 " * 3_000 + "english middle " * 30_000 + "한국어 꼬리말 " * 3_000
+    for budget in (256, 1_024, 4_000):
+        out, cut = truncate_text_to_token_budget(text, budget, provider="vllm", model="m")
+        assert cut and count_text_tokens(out, "vllm", "m") <= budget
+
+
+def test_vllm_without_a_probe_does_not_use_the_native_window():
+    from xgen_agent_runtime.host.token_budget import resolve_context_window
+
+    assert resolve_context_window("vllm", "google/gemma-3-27b-it") == 32_768
+
+
+def test_claude_code_prompt_folder_falls_back_when_the_name_is_taken(tmp_path, monkeypatch):
+    import os
+    import tempfile
+
+    from xgen_agent_runtime.llm_client import claude_code
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(claude_code, "_FALLBACK_PROMPT_FOLDER", None)
+    taken = tmp_path / f"xgen-claude-code-system-{os.getuid()}"
+    taken.symlink_to(tmp_path)  # someone else's link squatting the name
+    folder = claude_code._private_prompt_folder()
+    assert folder != str(taken) and os.path.isdir(folder)
+
+
+# ── review round 2 (2026-10-12): core policy ────────────────────────
+
+_PDF = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0x"}}
+_IMG = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0K"}}
+
+
+@pytest.mark.asyncio
+async def test_a_summarized_request_keeps_its_attachments():
+    state = PipelineState()
+    state.model = "fake"
+    state.llm_client = _SummaryClient()
+    state.messages = [{"role": "user", "content": [_PDF, _IMG, {"type": "text", "text": "계약서를 검토해 줘"}]}]
+    for i in range(10):
+        state.messages += [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x" * 50}]},
+        ]
+    compactor = _llm_compactor(keep_recent=2)
+    await compactor.compact(state)
+    head = state.messages[0]["content"]
+    assert isinstance(head, list) and _PDF in head and _IMG in head
+    # and again when the next compaction folds this checkpoint
+    for i in range(10, 20):
+        state.messages += [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x" * 50}]},
+        ]
+    await compactor.compact(state)
+    head = state.messages[0]["content"]
+    assert _PDF in head and "계약서를 검토해 줘" in head[0]["text"]
+
+
+def test_cost_prune_keeps_the_current_requests_image_after_many_rounds():
+    from xgen_agent_runtime.core.context_prune import prune_messages, strip_current_attachments
+
+    messages = [{"role": "user", "content": [_IMG, {"type": "text", "text": "이 그림을 설명해 줘"}]}]
+    for i in range(8):
+        messages += [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"}]},
+        ]
+    prune_messages(messages)
+    prune_messages(messages, strip_documents=True, protect_last=2)
+    assert messages[0]["content"][0] == _IMG
+    assert strip_current_attachments(messages) == 1  # the very last resort removes it
+
+
+@pytest.mark.asyncio
+async def test_hard_pressure_summarizes_before_it_strips_the_requests_pdf():
+    state = PipelineState()
+    state.model = "fake"
+    state.llm_client = _SummaryClient()
+    state.context_window_budget = 32_000
+    state.max_tokens = 4_096
+    state.messages = [{"role": "user", "content": [_PDF, {"type": "text", "text": "요약해 줘"}]}]
+    for i in range(12):
+        state.messages += [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "결과 " * 900}]},
+        ]
+    await run_compaction(state, _llm_compactor(keep_recent=2), trigger="overflow", hard=True)
+    assert _PDF in state.messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_running_background_summary_blocks_soft_summaries_of_later_requests():
+    from xgen_agent_runtime.core.compaction import BACKGROUND_TASK_ATTR
+
+    class _Running:
+        def done(self):
+            return False
+
+    state = PipelineState()
+    state.model = "fake"
+    client = _SummaryClient()
+    state.llm_client = client
+    state.context_window_budget = 8_000
+    state.messages = _conversation(40, "long message " * 30)
+    setattr(state, BACKGROUND_TASK_ATTR, _Running())
+    note_api_call(state)
+    out = await run_compaction(state, _llm_compactor(), trigger="proactive", target_tokens=10)
+    assert out.get("skipped") == "background_summary_running" and client.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_the_earlier_checkpoint_is_folded_whole_when_it_fits():
+    state = PipelineState()
+    state.model = "fake"
+    client = _SummaryClient()
+    prompts = []
+    real = client.create_message
+
+    async def _capture(**kwargs):
+        prompts.append(kwargs["messages"][0]["content"])
+        return await real(**kwargs)
+
+    client.create_message = _capture
+    state.llm_client = client
+    state.context_window_budget = 32_000
+    facts = "\n".join(f"- Fact {i}: scripts/deploy_{i}.sh must run with --region eu-west-{i}" for i in range(110))
+    state.messages = [
+        {"role": "user", "content": f"{CHECKPOINT_MARKER} earlier summary\n{facts}"},
+        {"role": "assistant", "content": "Understood. I have the checkpoint summary and will continue from it."},
+    ] + _conversation(20)
+    await _llm_compactor(keep_recent=2).compact(state)
+    assert all(f"Fact {i}:" in prompts[0] for i in range(110))
+
+
+def test_runtime_notes_are_not_the_users_request():
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import _is_real_user
+    from xgen_agent_runtime.stages.s16_loop.completion_review import _REVIEW_HEADER
+    from xgen_agent_runtime.stages.s16_loop.turn_budget import _SOFT_NOTE
+
+    assert not _is_real_user({"role": "user", "content": _REVIEW_HEADER + "\nfile.csv: MISSING"})
+    assert not _is_real_user({"role": "user", "content": _SOFT_NOTE.format(used=1, hard=2)})
+    assert _is_real_user({"role": "user", "content": "[참고] 이 표를 정리해 줘"})
+
+
+@pytest.mark.asyncio
+async def test_pins_of_a_replaced_conversation_are_not_carried():
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import PINNED_USERS_KEY
+
+    state = PipelineState()
+    state.model = "fake"
+    state.llm_client = _SummaryClient()
+    state.shared[PINNED_USERS_KEY] = ["OLD CONVERSATION SECRET"]
+    state.messages = _conversation(20)  # a different conversation, no checkpoint at the head
+    await _llm_compactor().compact(state)
+    assert "OLD CONVERSATION SECRET" not in state.messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_no_model_wired_counts_as_a_failure():
+    from xgen_agent_runtime.core.compaction import LLM_FAILURES_KEY
+
+    state = PipelineState()
+    state.context_window_budget = 8_000
+    state.messages = _conversation(40, "long message " * 30)
+    compactor = LLMSummaryCompactor(keep_recent=4)  # no override, no state.model: no model
+    await run_compaction(state, compactor, trigger="proactive", target_tokens=10)
+    assert state.shared[LLM_FAILURES_KEY] == 1
+
+
+@pytest.mark.asyncio
+async def test_kept_tail_never_opens_on_a_mixed_tool_result_message():
+    state = PipelineState()
+    state.model = "fake"
+    state.llm_client = _SummaryClient()
+    state.messages = _conversation(10) + [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}, {"type": "text", "text": "host note"}]},
+        {"role": "assistant", "content": "done"},
+    ]
+    await _llm_compactor(keep_recent=2).compact(state)
+    for message in state.messages:
+        blocks = message["content"] if isinstance(message["content"], list) else []
+        if any(b.get("type") == "tool_result" for b in blocks):
+            index = state.messages.index(message)
+            assert any(b.get("type") == "tool_use" for b in state.messages[index - 1]["content"])
+
+
+def test_fit_leaves_results_alone_when_it_cannot_close_the_gap_and_strips_result_images():
+    from xgen_agent_runtime.core.compaction import _fit_tool_results
+
+    state = PipelineState()
+    state.context_window_budget = 32_000
+    state.max_tokens = 4_096
+    state.messages = [{"role": "user", "content": "질문 " * 40_000}] + [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "결과 " * 2_000}]},
+    ]
+    before = state.messages[-1]["content"][0]["content"]
+    assert _fit_tool_results(state, "guard", 10_000) == 0  # hopeless: the question alone is over
+    assert state.messages[-1]["content"][0]["content"] == before
+
+    state.messages = [{"role": "user", "content": "질문"}]
+    for i in range(14):
+        state.messages += [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"i{i}", "name": "read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"i{i}", "content": [_IMG, {"type": "text", "text": "a"}]}]},
+        ]
+    state.shared.pop("_prompt_tokens_memo", None)
+    assert _fit_tool_results(state, "guard", 10_000) > 0
+    assert estimate_prompt_tokens(state) <= 10_000
+
+
+def test_trimmed_results_keep_no_empty_text_parts():
+    from xgen_agent_runtime.core.context_prune import shrink_tool_results
+
+    block = {"type": "tool_result", "tool_use_id": "t", "content": [{"type": "text", "text": "a" * 2_000} for _ in range(4)]}
+    shrink_tool_results([{"role": "user", "content": [block]}], 0.1)
+    assert all(part.get("text") for part in block["content"])
+
+
+def test_estimate_sees_an_in_place_edit_of_the_newest_message():
+    state = PipelineState()
+    state.messages = _conversation(3)
+    before = estimate_prompt_tokens(state)
+    state.messages[-1]["content"] = state.messages[-1]["content"] + " 추가된 긴 안내 " * 100
+    assert estimate_prompt_tokens(state) > before
+
+
+def test_guard_default_headroom_is_the_policys_answer_reserve():
+    from xgen_agent_runtime.core.compaction import output_reserve
+    from xgen_agent_runtime.stages.s04_guard.artifact.default.guards import TokenBudgetGuard
+
+    state = PipelineState()
+    state.context_window_budget = 32_000
+    state.max_tokens = 8_192
+    state.messages = [{"role": "user", "content": "가" * 30_000}]
+    result = TokenBudgetGuard().check(state)
+    assert not result.passed and f"need {output_reserve(32_000, 8_192)}" in result.message

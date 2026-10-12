@@ -142,7 +142,12 @@ _WINDOW_CAP_FLOOR_TOKENS = 1_000
 
 
 def _window_cap_tokens(context: ToolContext) -> Optional[int]:
-    """Tokens a single result may take in this turn's request, or ``None`` if the window is unknown."""
+    """Tokens a single result may take in this turn's request, or ``None`` if the window is unknown.
+
+    A quarter of the INPUT budget (the window minus the room kept for the answer,
+    ``core.compaction.input_budget_of``): on an 8k model with ``max_tokens`` 8192 a quarter of the
+    window was half of what the request could hold.
+    """
     state = getattr(context, "state_view", None)
     try:
         window = int(getattr(state, "context_window_budget", 0) or 0)
@@ -150,7 +155,15 @@ def _window_cap_tokens(context: ToolContext) -> Optional[int]:
         window = 0
     if window <= 0:
         return None
-    return max(_WINDOW_CAP_FLOOR_TOKENS, int(window * _WINDOW_SHARE))
+    from xgen_agent_runtime.core.compaction import input_budget_of
+
+    return max(_WINDOW_CAP_FLOOR_TOKENS, int(input_budget_of(state) * _WINDOW_SHARE))
+
+
+#: Above this many characters the token estimate is taken from a sample (head and tail) and
+#: scaled: a per-character count of a multi-megabyte result blocked the event loop for seconds.
+_SAMPLE_OVER_CHARS = 200_000
+_SAMPLE_CHARS = 100_000
 
 
 def _view_tokens(text: str) -> int:
@@ -163,50 +176,97 @@ def _view_tokens(text: str) -> int:
         estimate_tokens_cached,
     )
 
-    return int(estimate_tokens_cached(text) * DEFAULT_PROVIDER_FACTOR * SAFETY_MULTIPLIER)
+    if len(text) > _SAMPLE_OVER_CHARS:
+        sample = text[:_SAMPLE_CHARS] + text[-_SAMPLE_CHARS:]
+        raw = estimate_tokens_cached(sample) * len(text) / len(sample)
+    else:
+        raw = estimate_tokens_cached(text)
+    return int(raw * DEFAULT_PROVIDER_FACTOR * SAFETY_MULTIPLIER)
 
 
-def _clip_inline(body: str, keep_chars: int, *, saved_at: str = "") -> str:
-    """Head and tail of ``body`` within about ``keep_chars`` chars, with an explicit marker."""
-    tail = keep_chars // 4
-    head = max(0, keep_chars - tail)
+def _clip_marker(total_chars: int, saved_at: str) -> str:
     where = (
         f"The full result is saved at: {saved_at}"
         if saved_at
         else "Re-run with a narrower query (a line range, a filter) if you need the omitted part"
     )
     return (
-        f"[tool result clipped to fit this model's context window: {len(body)} chars, the middle "
-        f"is omitted. {where}.]\n"
-        f"{body[:head]}\n…\n{body[-tail:] if tail else ''}"
+        f"[tool result clipped to fit this model's context window: {total_chars} chars, the middle "
+        f"is omitted. {where}.]"
     )
+
+
+def _clip_to_tokens(text: str, cap: int) -> str:
+    """Head and tail of ``text`` whose estimate is within ``cap`` tokens (re-measured: the head and
+    tail can be denser than the average)."""
+    tokens = _view_tokens(text)
+    if tokens <= cap:
+        return text
+    keep = max(200, int(len(text) * cap / tokens * 0.95))
+    clipped = text
+    for _ in range(6):
+        tail = keep // 4
+        head = max(0, keep - tail)
+        clipped = f"{text[:head]}\n…\n{text[-tail:] if tail else ''}"
+        measured = _view_tokens(clipped)
+        if measured <= cap or keep <= 200:
+            break
+        keep = max(200, int(keep * min(0.9, cap / measured * 0.95)))
+    return clipped
+
+
+def _error_header(content: Any) -> str:
+    """The first line ``ToolResult.to_api_format`` gives a structured error, kept through a clip."""
+    if isinstance(content, dict):
+        err = content.get("error")
+        if (
+            isinstance(err, dict)
+            and isinstance(err.get("code"), str)
+            and isinstance(err.get("message"), str)
+        ):
+            return f"ERROR {err['code']}: {err['message']}"
+    return ""
 
 
 def _fit_to_window(result: ToolResult, *, tool_name: str, context: ToolContext) -> ToolResult:
     """Clip what the model will read (``display_text`` when set, else the content) to a quarter of
-    the context window. The tool's own character cap ignores the model: 100k chars is 25k-100k
-    tokens, so on a 32k-window model one result could overflow the request by itself."""
+    the input budget. The tool's own character cap ignores the model: 100k chars is 25k-100k tokens,
+    so on a 32k-window model one result could overflow the request by itself.
+
+    Text is clipped head-and-tail; image blocks in a block-list result are kept as they are (they
+    are counted separately). A structured error keeps its ``ERROR <code>: <message>`` line.
+    """
     cap = _window_cap_tokens(context)
     if cap is None:
         return result
-    view = (
-        result.display_text if result.display_text is not None else _render_content(result.content)
-    )
-    tokens = _view_tokens(view)
-    if tokens <= cap:
-        return result
-    keep = max(400, int(len(view) * cap / tokens * 0.95))
     saved_at = ""
     if result.persist_full and _reachable(result.persist_full, context):
         saved_at = result.persist_full
-    _LOG.info(
-        "tool %s result ~%d tokens > window cap %d; clipping to %d chars",
-        tool_name,
-        tokens,
-        cap,
-        keep,
+
+    if result.display_text is None and isinstance(result.content, list):
+        texts = [b for b in result.content if isinstance(b, dict) and b.get("type") == "text"]
+        joined = "\n".join(str(b.get("text") or "") for b in texts)
+        if not texts or _view_tokens(joined) <= cap:
+            return result
+        clipped = _clip_to_tokens(joined, cap)
+        kept = [b for b in result.content if not (isinstance(b, dict) and b.get("type") == "text")]
+        _LOG.info("tool %s result text over window cap %d; clipping (images kept)", tool_name, cap)
+        marker = _clip_marker(len(joined), saved_at)
+        return replace(result, content=[{"type": "text", "text": f"{marker}\n{clipped}"}] + kept)
+
+    view = (
+        result.display_text if result.display_text is not None else _render_content(result.content)
     )
-    return replace(result, display_text=_clip_inline(view, keep, saved_at=saved_at))
+    if _view_tokens(view) <= cap:
+        return result
+    header = _error_header(result.content) if result.display_text is None else ""
+    clipped = _clip_to_tokens(view, cap)
+    _LOG.info(
+        "tool %s result over window cap %d; clipping to %d chars", tool_name, cap, len(clipped)
+    )
+    lines = [header] if header else []
+    lines += [_clip_marker(len(view), saved_at), clipped]
+    return replace(result, display_text="\n".join(lines))
 
 
 def maybe_persist_large_result(
@@ -218,18 +278,26 @@ def maybe_persist_large_result(
     context: ToolContext,
 ) -> ToolResult:
     """Apply the tool's character cap (:func:`_persist_over_tool_cap`), then bound what the model
-    reads by the context window (:func:`_fit_to_window`, 4.89.0). ``max_result_chars`` of 0 or
-    below opts out of both."""
-    if capabilities.max_result_chars <= 0:
-        return result
-    out = _persist_over_tool_cap(
-        result,
-        tool_use_id=tool_use_id,
-        tool_name=tool_name,
-        capabilities=capabilities,
-        context=context,
-    )
-    return _fit_to_window(out, tool_name=tool_name, context=context)
+    reads by the context window (:func:`_fit_to_window`, 4.89.0).
+
+    ``max_result_chars`` of 0 (ToolBatch) or below opts out of the tool's own cap only: the window
+    bound protects the request and applies to every tool. Never raises: a failure here returns the
+    result as it was (the turn must not die in result bookkeeping).
+    """
+    out = result
+    if capabilities.max_result_chars > 0:
+        out = _persist_over_tool_cap(
+            result,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            capabilities=capabilities,
+            context=context,
+        )
+    try:
+        return _fit_to_window(out, tool_name=tool_name, context=context)
+    except Exception:  # noqa: BLE001 (fail-open)
+        _LOG.warning("tool %s: window fit failed; result left as is", tool_name, exc_info=True)
+        return out
 
 
 def _persist_over_tool_cap(

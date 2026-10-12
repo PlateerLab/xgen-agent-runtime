@@ -675,7 +675,8 @@ def build_pipeline(
 
         # The same reserve the compaction policy measures its input budget against, so the 80%
         # trigger always comes before the guard (core.compaction.output_reserve).
-        headroom = output_reserve(int(context_window_budget or 0), int(max_tokens))
+        # An unknown window is the policy's default (core.compaction.window_of), not "no cap".
+        headroom = output_reserve(int(context_window_budget or 0) or 200_000, int(max_tokens))
         builder.with_guard(guards=[TokenBudgetGuard(min_remaining_tokens=headroom)])
 
     if memory_provider is not None:

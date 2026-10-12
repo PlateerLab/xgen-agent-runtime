@@ -319,6 +319,7 @@ Enum member: `EventTypes.CONTEXT_PRUNED`
 | `chars_saved` | int — text chars removed (images excluded) |
 | `aggressive` | bool? — the hard-pressure profile (guard / overflow) |
 | `results_fitted` | int? — tool results shortened in proportion so a hard-pressure request fits |
+| `current_attachments_stripped` | int? — images/documents of the request itself removed (the very last resort) |
 | `trigger` | str? — cost (Stage 2 token threshold) \| the compaction trigger it ran under |
 | `threshold_tokens` | int? — the prune_over_tokens threshold that fired (cost trigger) |
 | `tokens_before` | int? — projected prompt tokens before the pass (cost trigger) |
@@ -389,7 +390,7 @@ Enum member: `EventTypes.CONTEXT_COMPACTION_SKIPPED`
 |---|---|
 | `strategy` | str — compactor name/class |
 | `trigger` | str |
-| `reason` | str — turn_compaction_limit \| summary_model_failing \| already_summarized_for_this_request \| nothing_to_summarize \| summary_region_too_small \| no_change |
+| `reason` | str — turn_compaction_limit \| summary_model_failing \| already_summarized_for_this_request \| background_summary_running \| nothing_to_summarize \| summary_region_too_small \| no_change |
 | `tokens_estimate` | int? |
 | `target_tokens` | int |
 

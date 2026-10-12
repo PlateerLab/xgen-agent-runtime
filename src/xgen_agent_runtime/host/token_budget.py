@@ -237,7 +237,9 @@ def resolve_context_window(
     if prov == "codex":
         # Codex CLI 는 모델의 API 창(gpt-5.5 1.05M)과 무관하게 자기 창(272k 입력)으로 돈다.
         return _PROVIDER_DEFAULT_WINDOW["codex"]
-    if name:
+    if name and prov != "vllm":
+        # 자체 서빙(vLLM)은 표를 쓰지 않는다: 같은 모델도 --max-model-len 을 줄여 띄우는 일이 흔해 모델의
+        # 원래 창은 과대다. 서버 실측(위) → 카탈로그 → vLLM 기본값 순이다.
         # 이름 앞이나 구분자(. / :) 뒤에서 시작하는 접두만: 'apac.anthropic.claude-…',
         # 'meta.llama3-1-70b-…', 'Qwen/…'. 그냥 포함으로 보면 'o1' 같은 짧은 접두가 엉뚱한 이름 속에서
         # 걸린다. 가장 긴 접두가 이긴다.
@@ -487,13 +489,15 @@ def truncate_text_to_token_budget(
     )
     keep = max(1, int((max_tokens - notice_tokens) / scale) - 1)
 
-    for _ in range(4):
+    # 앞과 뒤의 글 밀도가 전체 평균과 다를 수 있다(영어 본문 + 한국어 머리말): 잰 값에 비례해 줄여 맞춘다.
+    for _ in range(8):
         front_budget = max(1, int(keep * front_ratio))
         back_budget = max(1, keep - front_budget)
         truncated = _cut_middle(text, front_budget, back_budget, omit_notice)
-        if count_text_tokens(truncated, provider, model) <= max_tokens or keep <= 1:
+        counted = count_text_tokens(truncated, provider, model)
+        if counted <= max_tokens or keep <= 1:
             return truncated, True
-        keep = max(1, int(keep * 0.9))
+        keep = max(1, int(keep * min(0.9, max_tokens / counted * 0.95)))
     return truncated, True
 
 

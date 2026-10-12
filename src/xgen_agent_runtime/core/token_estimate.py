@@ -269,6 +269,9 @@ def _estimate_fingerprint(state: Any) -> tuple:
         len(messages),
         id(messages[0]) if messages else 0,
         id(messages[-1]) if messages else 0,
+        # In-place edits of the newest message (Stage 16 appends its turn-budget note into the last
+        # tool result) keep every length the same; its content signature catches them.
+        _signature(messages[-1]) if messages else 0,
         sys_len,
         len(_turn_context(state)),
         len(tools),
