@@ -671,13 +671,10 @@ def build_pipeline(
             TokenBudgetGuard,
         )
 
-        from xgen_agent_runtime.core.compaction import output_reserve
-
-        # The same reserve the compaction policy measures its input budget against, so the 80%
-        # trigger always comes before the guard (core.compaction.output_reserve).
-        # An unknown window is the policy's default (core.compaction.window_of), not "no cap".
-        headroom = output_reserve(int(context_window_budget or 0) or 200_000, int(max_tokens))
-        builder.with_guard(guards=[TokenBudgetGuard(min_remaining_tokens=headroom)])
+        # The guard's default headroom (0) is the reserve the compaction policy measures its input
+        # budget against (core.compaction.output_reserve), computed from the state at every check:
+        # the 80% trigger always comes before the guard, also after an overflow lowered the window.
+        builder.with_guard(guards=[TokenBudgetGuard()])
 
     if memory_provider is not None:
         # ⚠ 스테이지 등록이 선행 조건 — attach_runtime 의 슬롯 배선은 스테이지가

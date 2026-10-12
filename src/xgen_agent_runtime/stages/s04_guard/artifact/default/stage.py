@@ -279,7 +279,7 @@ class GuardStage(Stage[Any, Any]):
         )
         # Lazy import: keeps the guard stage import-light and avoids a
         # core→stage cycle at module load.
-        from xgen_agent_runtime.core.compaction import TARGET_RATIO, input_budget_of, run_compaction
+        from xgen_agent_runtime.core.compaction import TARGET_RATIO, run_compaction, soft_level
 
         outcome = await run_compaction(
             state,
@@ -287,7 +287,7 @@ class GuardStage(Stage[Any, Any]):
             trigger="guard",
             provider=self._memory_provider,
             # A prune that already lands here is enough; otherwise summarize down to it.
-            target_tokens=int(input_budget_of(state) * TARGET_RATIO),
+            target_tokens=soft_level(state, TARGET_RATIO),
             # The request cannot go out as it is: aggressive prune, no small-region skip, and a
             # deterministic digest if the model summary fails.
             hard=True,

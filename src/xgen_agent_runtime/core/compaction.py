@@ -254,6 +254,44 @@ def input_budget_of(state: Any) -> int:
     return max(1, window - output_reserve(window, _int(getattr(state, "max_tokens", 0))))
 
 
+def fixed_tokens(state: Any) -> int:
+    """What no compaction can remove from the next request: the system prompt, tool schemas and turn
+    context, and the attachments of the request being answered (a checkpoint carries those too)."""
+    from xgen_agent_runtime.core.context_prune import ATTACHMENT_TYPES, current_request_span
+    from xgen_agent_runtime.core.token_estimate import (
+        estimate_messages_scaled,
+        estimate_overhead_tokens,
+    )
+
+    messages = state.messages or []
+    blocks = [
+        b
+        for i in current_request_span(messages)
+        if isinstance(messages[i].get("content"), list)
+        for b in messages[i]["content"]
+        if isinstance(b, dict) and b.get("type") in ATTACHMENT_TYPES
+    ]
+    attached = (
+        estimate_messages_scaled(state, [{"role": "user", "content": blocks}]) if blocks else 0
+    )
+    return estimate_overhead_tokens(state) + attached
+
+
+def soft_level(state: Any, ratio: float) -> int:
+    """``ratio`` of the room compaction can actually work with: the fixed part (:func:`fixed_tokens`)
+    plus ``ratio`` of what the input budget leaves after it.
+
+    The proactive trigger is ``soft_level(PROACTIVE_RATIO)`` and the target
+    ``soft_level(TARGET_RATIO)``. Measured on the whole budget, a large attached PDF kept every
+    request above the trigger right after a summary, so the turn summarized on every request
+    (2026-10-12 review: 6 summaries on 6 requests). With a small fixed part this is about the plain
+    share of the budget.
+    """
+    budget = input_budget_of(state)
+    fixed = min(budget, fixed_tokens(state))
+    return fixed + int((budget - fixed) * ratio)
+
+
 def _compactor_name(compactor: Any) -> str:
     return str(getattr(compactor, "name", None) or type(compactor).__name__)
 
@@ -300,16 +338,22 @@ def _prune(state: PipelineState, *, aggressive: bool, trigger: str) -> Dict[str,
     return metrics
 
 
-#: Attribute on the state holding a background summary task (Stage 2, hosts that keep a state across
-#: turns). Not in ``state.shared``, which may be serialized.
-BACKGROUND_TASK_ATTR = "_context_background_task"
+#: ``state.shared`` slot: wall-clock time until which a background summary scheduled by Stage 2
+#: (hosts that keep a state across turns) counts as running. A plain number, so the state stays
+#: copyable and picklable; Stage 2 clears it when it collects or cancels the summary, and it expires
+#: on its own if the stage never comes back.
+BACKGROUND_UNTIL_KEY = "_context_background_until"
+#: How long a background summary may count as running at most.
+BACKGROUND_MAX_SECONDS = 300.0
 
 
 def background_summary_running(state: Any) -> bool:
-    """True while a background summary scheduled by Stage 2 has not finished."""
-    task = getattr(state, BACKGROUND_TASK_ATTR, None)
-    done = getattr(task, "done", None)
-    return callable(done) and not done()
+    """True while a background summary scheduled by Stage 2 has not been collected."""
+    import time
+
+    shared = getattr(state, "shared", None)
+    until = shared.get(BACKGROUND_UNTIL_KEY) if isinstance(shared, dict) else None
+    return isinstance(until, (int, float)) and until > time.time()
 
 
 def _plan_reason(
@@ -401,7 +445,7 @@ async def run_compaction(
     before_tokens = estimate_prompt_tokens(state)
     prune_may_suffice = target_tokens is not None and trigger != "manual"
     if target_tokens is None:
-        target_tokens = int(input_budget_of(state) * TARGET_RATIO)
+        target_tokens = soft_level(state, TARGET_RATIO)
 
     _prune(state, aggressive=False, trigger=trigger)
     after_prune = estimate_prompt_tokens(state)
@@ -460,7 +504,20 @@ async def run_compaction(
             logger.warning("Compaction (%s) failed: %s", trigger, exc)
             if hard:
                 _relieve_hard(state, trigger)
-            return {"ok": False, "before_messages": before_msgs, "after_messages": before_msgs}
+            now = estimate_prompt_tokens(state)
+            # The prune and the hard relief may still have made the request fit: report that, so the
+            # guard re-checks and Stage 6 retries instead of failing a request that now fits.
+            return {
+                "ok": now < before_tokens,
+                "before_messages": before_msgs,
+                "after_messages": len(state.messages or []),
+                "replaced": 0,
+                "saved_tokens_estimate": max(0, before_tokens - now),
+                "after_tokens_estimate": now,
+                "target_tokens": target_tokens,
+                "target_met": now <= target_tokens,
+                "summarized": False,
+            }
         finally:
             state.shared.pop(COMPACTION_CONTEXT_KEY, None)
         _count_attempt(state, compactor, request)
@@ -627,13 +684,23 @@ def _relieve_hard(state: PipelineState, trigger: str) -> None:
     if estimate_prompt_tokens(state) <= limit:
         return
     _fit_tool_results(state, trigger, limit)
-    if estimate_prompt_tokens(state) <= limit:
+    estimate = estimate_prompt_tokens(state)
+    if estimate <= limit:
         return
     from xgen_agent_runtime.core.context_prune import strip_current_attachments
 
-    removed = strip_current_attachments(state.messages or [])
-    if removed:
+    # The request's own attachments, one at a time and only if removing them can close the gap: a
+    # request over by a few hundred tokens lost every image, and one that could not fit anyway lost
+    # them before the guard rejected it.
+    attached = fixed_tokens(state) - _overhead_only(state)
+    if attached <= 0 or estimate - attached > limit:
+        return
+    removed = 0
+    while estimate > limit and strip_current_attachments(state.messages or [], limit=1):
+        removed += 1
         state.shared.pop("_prompt_tokens_memo", None)
+        estimate = estimate_prompt_tokens(state)
+    if removed:
         state.add_event(
             "context.pruned",
             {
@@ -647,6 +714,12 @@ def _relieve_hard(state: PipelineState, trigger: str) -> None:
                 "current_attachments_stripped": removed,
             },
         )
+
+
+def _overhead_only(state: PipelineState) -> int:
+    from xgen_agent_runtime.core.token_estimate import estimate_overhead_tokens
+
+    return estimate_overhead_tokens(state)
 
 
 def _fit_tool_results(state: PipelineState, trigger: str, limit: int) -> int:
@@ -682,15 +755,24 @@ def _fit_tool_results(state: PipelineState, trigger: str, limit: int) -> int:
         totals[key] += metrics.get(key, 0)
     if metrics["images_stripped"]:
         state.shared.pop("_prompt_tokens_memo", None)
-    estimate_mid = estimate_prompt_tokens(state)
-    if estimate_mid > limit:
+    # Text in proportion, re-measured: the cut is by characters, and a result whose head is denser
+    # than its tail (a Korean body with an ASCII footer) needs another pass.
+    for _ in range(3):
+        estimate_mid = estimate_prompt_tokens(state)
+        if estimate_mid <= limit:
+            break
         result_tokens = estimate_messages_scaled(state, [{"role": "user", "content": _results()}])
-        if result_tokens > 0:
-            keep = max(0.02, (result_tokens - (estimate_mid - limit)) / result_tokens * 0.9)
-            if keep < 1.0:
-                metrics = shrink_tool_results(state.messages or [], keep)
-                for key in totals:
-                    totals[key] += metrics.get(key, 0)
+        if result_tokens <= 0:
+            break
+        keep = max(0.02, (result_tokens - (estimate_mid - limit)) / result_tokens * 0.9)
+        if keep >= 1.0:
+            break
+        metrics = shrink_tool_results(state.messages or [], keep)
+        for key in totals:
+            totals[key] += metrics.get(key, 0)
+        state.shared.pop("_prompt_tokens_memo", None)
+        if not metrics.get("trimmed"):
+            break
     changed = totals["trimmed"] + totals["images_stripped"]
     if changed:
         state.shared.pop("_prompt_tokens_memo", None)
@@ -747,18 +829,17 @@ async def relieve_if_over(
     ratio: float = PROACTIVE_RATIO,
 ) -> Optional[dict]:
     """Proactive check shared by Stage 2, Stage 4 and the internal tool loop: compact when the
-    estimate crosses ``ratio`` of the input budget, down to :data:`TARGET_RATIO` of it."""
+    estimate crosses :func:`soft_level` at ``ratio``, down to the target level."""
     if compactor is None:
         return None
-    budget = input_budget_of(state)
-    if estimate_prompt_tokens(state) <= budget * ratio:
+    if estimate_prompt_tokens(state) <= soft_level(state, ratio):
         return None
     return await run_compaction(
         state,
         compactor,
         trigger=trigger,
         provider=provider,
-        target_tokens=int(budget * TARGET_RATIO),
+        target_tokens=soft_level(state, TARGET_RATIO),
     )
 
 
@@ -770,8 +851,10 @@ __all__ = [
     "LLM_FAILURES_KEY",
     "output_reserve",
     "input_budget_of",
-    "BACKGROUND_TASK_ATTR",
+    "BACKGROUND_UNTIL_KEY",
     "background_summary_running",
+    "fixed_tokens",
+    "soft_level",
     "RECORDED_INDEX_KEYS",
     "PENDING_RECORDS_KEY",
     "RECORDER_STM",

@@ -1014,10 +1014,9 @@ class AgentTurnExecutor:
                 vllm_probe=host.fetch_vllm_max_model_len,
             )
             # 메모리 노드가 (최근 메시지, 이전 대화 문자열) 로 보낸 둘째 칸: 최근 N개(기본 2개)보다
-            # 앞선 대화다. 이번 턴 안내(턴 노트)로 요청 사본에 붙인다(아래 맞춤 뒤). 옛 agent_xgen 은
-            # 시스템 프롬프트 끝에 붙였는데, 그 자리는 매 턴 바뀌어 프롬프트 캐시와 Claude Code 예열
-            # 프로세스를 매번 깬다. 노드 기본값이 10만 자라 먼저 창의 일정 몫 안으로 줄이고, 입력 맞춤이
-            # 남는 자리에 맞춰 한 번 더 줄인다(이번 질문·RAG 보다 먼저, 가장 최근 쪽이 남는다).
+            # 앞선 대화다. 아래 맞춤 뒤에 API 백엔드는 시스템 프롬프트 끝에(옛 agent_xgen 과 같다), CLI
+            # 백엔드는 이번 턴 안내로 붙인다. 노드 기본값이 10만 자라 먼저 창의 일정 몫 안으로 줄이고,
+            # 입력 맞춤이 남는 자리에 맞춰 한 번 더 줄인다(이번 질문·RAG 보다 먼저, 가장 최근 쪽이 남는다).
             _history_ctx = history_context(kwargs.get("memory"))
             if _history_ctx:
                 _history_ctx = fit_history_context(_history_ctx, budget_window, provider, model)
@@ -1034,17 +1033,17 @@ class AgentTurnExecutor:
             if provider == "claude_code":
                 # CLI 는 자기 도구 스키마를 더하고 답 몫을 따로 잡는다(관측: maxOutputTokens 32,000).
                 _late_reserve += 12_000 + max(0, 32_000 - max_tokens_val)
-            # Stage 3 이 맞춤 뒤에 요청에 붙이는 글: 숨긴 도구 목록과 이번 턴 안내.
-            _extra_overhead = "\n\n".join(
-                str(n) for n in (state.shared.get(SharedKeys.TURN_NOTES) or [])
-            )
-            if _tools_reach_model and registry is not None:
+            # Stage 3 이 맞춤 뒤에 요청에 붙이는 글: 이번 턴 안내와(SDK 경로) 숨긴 도구 목록. CLI 경로는
+            # 목록을 위에서 이미 시스템 프롬프트에 붙였다.
+            _late_parts = [str(n) for n in (state.shared.get(SharedKeys.TURN_NOTES) or [])]
+            if _tools_reach_model and registry is not None and not _is_cli:
                 try:
                     from xgen_agent_runtime.tools.catalog import deferred_catalog_text
 
-                    _extra_overhead = _extra_overhead + "\n\n" + deferred_catalog_text(registry)
+                    _late_parts.append(deferred_catalog_text(registry))
                 except Exception:  # noqa: BLE001 (an estimate input, never a gate)
                     pass
+            _extra_overhead = "\n\n".join(p for p in _late_parts if p)
             if enable_compaction and budget_window > 0:
 
                 def _fit(_text: str):
@@ -1100,11 +1099,23 @@ class AgentTurnExecutor:
                         fit.total_before,
                     )
 
-            if _history_ctx:
+            if _history_ctx and _is_cli:
+                # CLI: 시스템 프롬프트는 argv(또는 파일)로 가서 매 턴 바뀌면 예열 프로세스를 못 쓴다.
+                # 이번 턴 안내로 요청 사본에 붙인다.
                 _notes = [str(n) for n in (state.shared.get(SharedKeys.TURN_NOTES) or [])]
                 state.shared[SharedKeys.TURN_NOTES] = _notes + [_history_ctx]
                 logger.info(
                     "agents/geny: 메모리 노드의 이전 대화 %d자를 이번 턴 안내로 붙임",
+                    len(_history_ctx),
+                )
+            elif _history_ctx:
+                # API: 시스템 프롬프트 끝(옛 agent_xgen 과 같은 자리). 한 턴의 여러 호출에서 접두 캐시에
+                # 들어간다(요청 사본의 턴 안내는 매 호출 다시 읽힌다).
+                system_prompt = (
+                    (system_prompt + "\n\n" + _history_ctx) if system_prompt else _history_ctx
+                )
+                logger.info(
+                    "agents/geny: 메모리 노드의 이전 대화 %d자를 시스템 프롬프트에 붙임",
                     len(_history_ctx),
                 )
 

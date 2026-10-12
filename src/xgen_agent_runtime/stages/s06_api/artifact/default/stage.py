@@ -610,8 +610,8 @@ class APIStage(Stage[Any, APIResponse]):
             return False
         from xgen_agent_runtime.core.compaction import (
             TARGET_RATIO,
-            input_budget_of,
             run_compaction,
+            soft_level,
             window_of,
         )
         from xgen_agent_runtime.core.errors import parse_overflow_limit, parse_overflow_tokens
@@ -642,7 +642,7 @@ class APIStage(Stage[Any, APIResponse]):
                 "provider_limit": limit,
             },
         )
-        if 0 < reported <= int(input_budget_of(state) * TARGET_RATIO):
+        if 0 < reported <= soft_level(state, TARGET_RATIO):
             # The messages are already small: the request was too long because of the room asked
             # for the answer (vLLM counts max_tokens: "100 in the messages, 8192 in the completion").
             # Compacting cannot fix that, so do not pay for a summary and a doomed retry.

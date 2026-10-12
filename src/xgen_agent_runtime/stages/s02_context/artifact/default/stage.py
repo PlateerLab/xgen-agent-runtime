@@ -8,15 +8,18 @@ from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.core.compaction import (
     API_CALLS_KEY,
+    BACKGROUND_MAX_SECONDS,
+    BACKGROUND_UNTIL_KEY,
     PROACTIVE_RATIO,
     SUMMARIZED_AT_KEY,
     TARGET_RATIO,
-    input_budget_of,
     reconcile_recorded_index,
     run_compaction,
+    soft_level,
     summarized_for_this_call,
     window_of,
 )
+
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.slot import StrategySlot
@@ -55,6 +58,10 @@ from xgen_agent_runtime.stages.s02_context.artifact.default.retrievers import (
 
 logger = logging.getLogger(__name__)
 
+
+#: ``state.shared`` counter of turns this state has run (advanced at each turn's first pass, not on a
+#: continuation slice): a background summary's failure is booked only in the turn that scheduled it.
+_TURN_SEQ_KEY = "_context_turn_seq"
 
 #: ``state.shared`` keys the background summary reads, and (for the pinned/current ones) writes back.
 _SHADOW_SHARED_KEYS = (
@@ -456,6 +463,7 @@ class ContextStage(Stage[Any, Any]):
         if state.iteration == 0 and not state._is_continuation_slice:
             state.metadata.pop("memory_context", None)
             state.metadata.pop("memory_pinned", None)
+            state.shared[_TURN_SEQ_KEY] = int(state.shared.get(_TURN_SEQ_KEY) or 0) + 1
 
         # TTFT program (finding B2): retrieval results are only injected
         # into the prompt at iteration 0 (below) — later tool-loop
@@ -553,12 +561,12 @@ class ContextStage(Stage[Any, Any]):
             if await self._apply_bg_compaction(state):
                 state.shared.pop("_prompt_tokens_memo", None)
                 estimated_tokens = estimate_prompt_tokens(state)
-            budget = input_budget_of(state)
             if forced_request:
                 # A Stage-16 token dimension (or /compact) requested maintenance for pending
                 # work. Run synchronously: deferring again would let the next Stage-4/API boundary
                 # hit the hard ceiling.
                 self.cancel_bg_compaction()
+                state.shared.pop(BACKGROUND_UNTIL_KEY, None)
                 manual = (
                     isinstance(forced_request, dict) and forced_request.get("source") == "manual"
                 )
@@ -567,15 +575,15 @@ class ContextStage(Stage[Any, Any]):
                     self._compactor,
                     trigger="manual" if manual else "requested",
                     provider=self._provider,
-                    target_tokens=int(budget * TARGET_RATIO),
+                    target_tokens=soft_level(state, TARGET_RATIO),
                 )
                 state.shared.pop("_prompt_tokens_memo", None)
                 estimated_tokens = estimate_prompt_tokens(state)
-            elif estimated_tokens > budget * PROACTIVE_RATIO:
+            elif estimated_tokens > soft_level(state, PROACTIVE_RATIO):
                 defer_to_background = (
                     self._background_compaction
                     and isinstance(self._compactor, LLMSummaryCompactor)
-                    and estimated_tokens <= budget * 0.9
+                    and estimated_tokens <= soft_level(state, 0.9)
                     and not summarized_for_this_call(state)
                 )
                 if defer_to_background:
@@ -586,7 +594,7 @@ class ContextStage(Stage[Any, Any]):
                         self._compactor,
                         trigger="proactive",
                         provider=self._provider,
-                        target_tokens=int(budget * TARGET_RATIO),
+                        target_tokens=soft_level(state, TARGET_RATIO),
                     )
                     estimated_tokens = estimate_prompt_tokens(state)
         elif forced_request:
@@ -642,7 +650,7 @@ class ContextStage(Stage[Any, Any]):
             return
         from xgen_agent_runtime.core.compaction import COMPACTION_CONTEXT_KEY, _llm_gate
 
-        target = int(input_budget_of(state) * TARGET_RATIO)
+        target = soft_level(state, TARGET_RATIO)
         # Same policy as the synchronous path: turn limit, once per request, region worth a call.
         skip = _llm_gate(
             state, self._compactor, trigger="background", target_tokens=target, hard=False
@@ -686,14 +694,14 @@ class ContextStage(Stage[Any, Any]):
             "task": task,
             "len": snapshot_len,
             "message_ids": snapshot_ids,
-            # Which run scheduled it: a failure collected in a later turn belongs to that turn.
-            "run": getattr(state, "_run_count", 0),
+            # Which turn scheduled it: a failure collected in a later turn belongs to that turn.
+            "turn": state.shared.get(_TURN_SEQ_KEY),
         }
         # Every soft check (this stage, Stage 4, the internal loop) sees the summary in flight and
         # does not make a second, synchronous one of the same history (core.compaction gate).
-        from xgen_agent_runtime.core.compaction import BACKGROUND_TASK_ATTR
+        import time
 
-        setattr(state, BACKGROUND_TASK_ATTR, task)
+        state.shared[BACKGROUND_UNTIL_KEY] = time.time() + BACKGROUND_MAX_SECONDS
         # This request's summary is in flight: Stage 4's proactive check must not summarize the
         # same request synchronously (it did, and the background result was then discarded). The
         # attempt counts against the turn's limit now, whether or not its result is ever applied.
@@ -720,14 +728,9 @@ class ContextStage(Stage[Any, Any]):
         if not task.done():
             return False
         self._bg_compaction = None
-        from xgen_agent_runtime.core.compaction import (
-            BACKGROUND_TASK_ATTR,
-            COMPACTION_CONTEXT_KEY,
-            LLM_FAILURES_KEY,
-        )
+        from xgen_agent_runtime.core.compaction import COMPACTION_CONTEXT_KEY, LLM_FAILURES_KEY
 
-        if getattr(state, BACKGROUND_TASK_ATTR, None) is task:
-            setattr(state, BACKGROUND_TASK_ATTR, None)
+        state.shared.pop(BACKGROUND_UNTIL_KEY, None)
         if task.cancelled() or task.exception() is not None:
             return False  # already logged by the done-callback
         shadow: _CompactionShadow = task.result()
@@ -737,8 +740,8 @@ class ContextStage(Stage[Any, Any]):
         # A background summary that called the model and came back empty is a failed attempt, like
         # a synchronous one, but only for the turn that scheduled it (a new turn starts clean).
         report = shadow.shared.get(COMPACTION_CONTEXT_KEY) or {}
-        if int(report.get("model_calls") or 0) > 0 and info.get("run") == getattr(
-            state, "_run_count", 0
+        if int(report.get("model_calls") or 0) > 0 and info.get("turn") == state.shared.get(
+            _TURN_SEQ_KEY
         ):
             if report.get("source") == "model":
                 state.shared[LLM_FAILURES_KEY] = 0
@@ -802,6 +805,12 @@ class ContextStage(Stage[Any, Any]):
             summary_head = ""
             if state.messages and isinstance(state.messages[0], dict):
                 head_content = state.messages[0].get("content", "")
+                if isinstance(head_content, list):  # a checkpoint carrying attachments
+                    head_content = "\n".join(
+                        str(b.get("text") or "")
+                        for b in head_content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
                 summary_head = head_content if isinstance(head_content, str) else ""
             try:
                 await self._provider.record_compaction(

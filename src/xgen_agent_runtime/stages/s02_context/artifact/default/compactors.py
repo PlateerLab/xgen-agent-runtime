@@ -8,6 +8,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.core.config import ModelConfig
+
+# User-role messages the runtime itself adds, and which blocks are attachments: one definition,
+# shared with the prune.
+from xgen_agent_runtime.core.context_prune import (
+    ATTACHMENT_TYPES as _ATTACHMENT_TYPES,
+    RUNTIME_NOTE_PREFIXES as _RUNTIME_NOTE_PREFIXES,
+)
 from xgen_agent_runtime.core.message_repair import strip_leading_orphan_tool_results
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.state import PipelineState
@@ -255,26 +262,20 @@ def _is_ack(message: Any) -> bool:
     )
 
 
-#: User-role messages the runtime itself adds (Stage 16's deliverable check, the turn input budget
-#: note). They are instructions to the model, not something the person asked.
-_RUNTIME_NOTE_PREFIXES = ("[Deliverable check", "[Turn budget")
-#: Content blocks that are attachments rather than words.
-_ATTACHMENT_TYPES = ("image", "document", "image_url", "input_image")
-
-
 def _is_runtime_note(message: Any) -> bool:
     return _message_text(message).lstrip().startswith(_RUNTIME_NOTE_PREFIXES)
 
 
 def _is_real_user(message: Any) -> bool:
-    """A user message a person wrote (not a tool result, a checkpoint, or a runtime note)."""
+    """A user message a person sent (not a tool result, a checkpoint, or a runtime note): words, or
+    attachments alone (an image-only request is still the request)."""
     return (
         isinstance(message, dict)
         and message.get("role") == "user"
         and not _is_tool_result_only(message)
         and not _is_checkpoint(message)
         and not _is_runtime_note(message)
-        and bool(_message_text(message).strip())
+        and (bool(_message_text(message).strip()) or bool(_attachments(message)))
     )
 
 
@@ -352,6 +353,10 @@ def _render_block(role: str, block: Dict[str, Any]) -> List[str]:
         return [f"{role}: [image]"]
     if btype == "document":
         return [f"{role}: [document]"]
+    if btype == "file":
+        where = block.get("workspace_path") or block.get("path") or block.get("url") or ""
+        name = block.get("name") or "file"
+        return [f"{role}: [file {name}{f' at {where}' if where else ''}]"]
     return []
 
 
@@ -456,7 +461,7 @@ class LLMSummaryCompactor(SummaryCompactor):
         self, state: PipelineState, target_tokens: Optional[int] = None
     ) -> Optional[CompactionPlan]:
         """Where to cut, what to pin. ``None`` when there is nothing to summarize."""
-        from xgen_agent_runtime.core.compaction import TARGET_RATIO, input_budget_of, window_of
+        from xgen_agent_runtime.core.compaction import TARGET_RATIO, soft_level, window_of
         from xgen_agent_runtime.core.token_estimate import (
             estimate_messages_scaled,
             estimate_overhead_tokens,
@@ -468,7 +473,7 @@ class LLMSummaryCompactor(SummaryCompactor):
         if n <= 1:
             return None
         window = window_of(state)
-        target = int(target_tokens or input_budget_of(state) * TARGET_RATIO)
+        target = int(target_tokens or soft_level(state, TARGET_RATIO))
 
         # Pins carried from an earlier checkpoint are valid only while that checkpoint still heads
         # the history: a host that keeps the state object but swaps in another conversation must
@@ -527,17 +532,21 @@ class LLMSummaryCompactor(SummaryCompactor):
         if not new_material:
             return None  # only an earlier checkpoint would be summarized again
 
-        last_real = next((m for m in reversed(msgs) if _is_real_user(m)), None)
+        last_index = next((i for i in range(n - 1, -1, -1) if _is_real_user(msgs[i])), -1)
+        last_real = msgs[last_index] if last_index >= 0 else None
         attachments: List[Dict[str, Any]] = []
         if last_real is not None:
-            # The newest thing the user wrote is the request being worked on; it is shown on its own
-            # (with its attachments) when it is summarized, and stays verbatim in the kept tail
-            # otherwise. A request carried from an earlier compaction is now an earlier message.
-            if any(last_real is r for r in region):
-                current = _message_text(last_real).strip()
-                attachments = _attachments(last_real)
-            else:
-                current = ""
+            # The newest thing the user sent is the request being worked on; it is shown on its own
+            # when it is summarized, and stays verbatim in the kept tail otherwise. A request carried
+            # from an earlier compaction is now an earlier message.
+            current = _message_text(last_real).strip() if last_index < cut else ""
+            # Its attachments, and those of the user messages sent right before it (a file first,
+            # the question in the next message), whenever the message holding them is summarized.
+            j = last_index
+            while j >= 0 and _is_real_user(msgs[j]):
+                if j < cut:
+                    attachments = _attachments(msgs[j]) + attachments
+                j -= 1
             if carried_current:
                 carried.append(carried_current)
         else:
@@ -547,7 +556,9 @@ class LLMSummaryCompactor(SummaryCompactor):
             if has_checkpoint:
                 attachments = _attachments(msgs[0])
 
-        candidates = carried + [_message_text(m).strip() for m in new_material if _is_real_user(m)]
+        candidates = carried + [
+            text for m in new_material if _is_real_user(m) and (text := _message_text(m).strip())
+        ]
         if current and candidates and candidates[-1] == current:
             candidates = candidates[:-1]  # shown separately as the request being worked on
         if current:

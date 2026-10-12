@@ -221,10 +221,10 @@ def _trim_result(block: Dict[str, Any], keep: int) -> int:
             # Drop the text parts the trim emptied (providers reject empty text blocks), keeping
             # every non-text part and at least one text part for the marker.
             emptied = [p for p in _result_text_parts(block) if not p.get("text")]
-            if emptied and len(emptied) < len(_result_text_parts(block)):
-                block["content"] = [b for b in content if not any(b is e for e in emptied)]
-            elif emptied:
-                block["content"] = [b for b in content if not any(b is e for e in emptied[1:])]
+            if emptied:
+                keep_one = len(emptied) == len(_result_text_parts(block))
+                drop = {id(e) for e in (emptied[1:] if keep_one else emptied)}
+                block["content"] = [b for b in content if id(b) not in drop]
             parts = _result_text_parts(block)
             if parts:
                 parts[-1]["text"] += f"\n… [{dropped} chars trimmed during context compaction]"
@@ -261,34 +261,87 @@ def shrink_tool_results(
     return {"trimmed": trimmed, "chars_saved": saved, "images_stripped": images}
 
 
+#: User-role messages the runtime itself adds (Stage 16's deliverable check, the turn input budget
+#: note): instructions to the model, never the person's request. Shared with the summary compactor.
+RUNTIME_NOTE_PREFIXES = ("[Deliverable check", "[Turn budget")
+#: Content blocks that are attachments rather than words.
+ATTACHMENT_TYPES = ("image", "document", "image_url", "input_image", "file")
+
+
+def _message_text(message: Dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(b.get("text") or "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
+def is_runtime_note(message: Any) -> bool:
+    return isinstance(message, dict) and _message_text(message).lstrip().startswith(
+        RUNTIME_NOTE_PREFIXES
+    )
+
+
+def _is_request_message(message: Any) -> bool:
+    if not isinstance(message, dict) or message.get("role") != "user" or is_runtime_note(message):
+        return False
+    content = message.get("content")
+    return not (
+        isinstance(content, list)
+        and content
+        and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    )
+
+
 def current_request_index(messages: List[Dict[str, Any]]) -> int:
-    """Index of the newest user message that is not only tool results (the request being answered,
-    or a checkpoint carrying it), or -1."""
+    """Index of the newest user message that is the person's request (not only tool results, not a
+    runtime note; a checkpoint carrying the request counts), or -1."""
     for i in range(len(messages or []) - 1, -1, -1):
-        msg = messages[i]
-        if not isinstance(msg, dict) or msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if (
-            isinstance(content, list)
-            and content
-            and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-        ):
-            continue
-        return i
+        if _is_request_message(messages[i]):
+            return i
     return -1
 
 
-def strip_current_attachments(messages: List[Dict[str, Any]]) -> int:
-    """Remove the images and documents of the request being answered. The very last resort under
-    hard pressure, after everything else; returns how many were removed."""
+def current_request_span(messages: List[Dict[str, Any]]) -> List[int]:
+    """The request being answered: :func:`current_request_index` and the user messages right before
+    it with no reply in between (a file sent first, the question in the next message)."""
     idx = current_request_index(messages)
     if idx < 0:
-        return 0
-    content = messages[idx].get("content")
-    if not isinstance(content, list):
-        return 0
-    return _strip_images_in(content, documents=True)
+        return []
+    span = [idx]
+    j = idx - 1
+    while j >= 0 and _is_request_message(messages[j]):
+        span.insert(0, j)
+        j -= 1
+    return span
+
+
+def strip_current_attachments(messages: List[Dict[str, Any]], *, limit: int = 0) -> int:
+    """Remove images and documents of the request being answered, at most ``limit`` (0 = all). The
+    very last resort under hard pressure; returns how many were removed."""
+    removed = 0
+    for idx in reversed(current_request_span(messages)):
+        content = messages[idx].get("content")
+        if not isinstance(content, list):
+            continue
+        for i, b in enumerate(content):
+            if limit and removed >= limit:
+                return removed
+            if not isinstance(b, dict) or b.get("type") not in ("image", "document"):
+                continue
+            if not (isinstance(b.get("source"), dict) and b["source"].get("type") == "base64"):
+                continue
+            content[i] = {
+                "type": "text",
+                "text": _IMAGE_NOTE if b["type"] == "image" else _DOCUMENT_NOTE,
+            }
+            removed += 1
+    return removed
 
 
 def prune_messages(
@@ -345,13 +398,13 @@ def prune_messages(
                 seen.add(digest)
 
     # Pass 2 — stale-region cleanup: image stripping + oversize trimming.
-    current = current_request_index(messages) if protect_current_request else -1
+    current = set(current_request_span(messages)) if protect_current_request else set()
     for mi in range(cutoff):
         msg = messages[mi]
         if not isinstance(msg, dict):
             continue
         content = msg.get("content")
-        if isinstance(content, list) and mi != current:
+        if isinstance(content, list) and mi not in current:
             metrics["images_stripped"] += _strip_images_in(content, documents=strip_documents)
         if msg.get("role") == "assistant":
             saved_inputs = _trim_tool_inputs(msg, input_trim_over_chars, input_trim_keep_chars)

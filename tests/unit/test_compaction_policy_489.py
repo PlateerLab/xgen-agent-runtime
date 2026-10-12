@@ -955,11 +955,11 @@ async def test_hard_pressure_summarizes_before_it_strips_the_requests_pdf():
 
 @pytest.mark.asyncio
 async def test_a_running_background_summary_blocks_soft_summaries_of_later_requests():
-    from xgen_agent_runtime.core.compaction import BACKGROUND_TASK_ATTR
+    import copy
+    import pickle
+    import time
 
-    class _Running:
-        def done(self):
-            return False
+    from xgen_agent_runtime.core.compaction import BACKGROUND_UNTIL_KEY
 
     state = PipelineState()
     state.model = "fake"
@@ -967,10 +967,13 @@ async def test_a_running_background_summary_blocks_soft_summaries_of_later_reque
     state.llm_client = client
     state.context_window_budget = 8_000
     state.messages = _conversation(40, "long message " * 30)
-    setattr(state, BACKGROUND_TASK_ATTR, _Running())
+    state.shared[BACKGROUND_UNTIL_KEY] = time.time() + 60
     note_api_call(state)
     out = await run_compaction(state, _llm_compactor(), trigger="proactive", target_tokens=10)
     assert out.get("skipped") == "background_summary_running" and client.calls == 0
+    # The marker is a plain number: the state can still be copied and pickled.
+    copy.deepcopy(state.shared)
+    pickle.dumps(state.shared)
 
 
 @pytest.mark.asyncio
@@ -1101,3 +1104,125 @@ def test_guard_default_headroom_is_the_policys_answer_reserve():
     state.messages = [{"role": "user", "content": "가" * 30_000}]
     result = TokenBudgetGuard().check(state)
     assert not result.passed and f"need {output_reserve(32_000, 8_192)}" in result.message
+
+
+# ── review round 3 (2026-10-12) ─────────────────────────────────────
+
+
+def test_thresholds_leave_room_above_a_large_attachment():
+    from xgen_agent_runtime.core.compaction import (
+        PROACTIVE_RATIO,
+        TARGET_RATIO,
+        input_budget_of,
+        soft_level,
+    )
+
+    pdf = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0x" + "/Type /Page " * 8}}
+    state = PipelineState()
+    state.context_window_budget = 64_000
+    state.max_tokens = 4_096
+    state.messages = [{"role": "user", "content": [pdf, {"type": "text", "text": "요약해 줘"}]}]
+    budget = input_budget_of(state)
+    trigger, target = soft_level(state, PROACTIVE_RATIO), soft_level(state, TARGET_RATIO)
+    # The trigger moves above the PDF, so a summary down to the target leaves room before the next.
+    assert trigger > budget * PROACTIVE_RATIO and target > budget * TARGET_RATIO
+    assert target < trigger <= budget
+
+
+@pytest.mark.asyncio
+async def test_a_stage_16_request_cancels_the_background_summary_and_runs():
+    import time
+
+    from xgen_agent_runtime.core.compaction import BACKGROUND_UNTIL_KEY
+    from xgen_agent_runtime.core.shared_keys import SharedKeys
+    from xgen_agent_runtime.stages.s02_context import ContextStage
+
+    state = PipelineState()
+    state.model = "fake"
+    client = _SummaryClient()
+    state.llm_client = client
+    state.context_window_budget = 8_000
+    state.messages = _conversation(40, "long message " * 30)
+    state.shared[BACKGROUND_UNTIL_KEY] = time.time() + 60
+    state.shared[SharedKeys.CONTEXT_COMPACTION_REQUEST] = {"source": "budget_aware"}
+    await ContextStage(compactor=_llm_compactor()).execute(None, state)
+    assert BACKGROUND_UNTIL_KEY not in state.shared and client.calls == 1
+
+
+def test_runtime_notes_are_not_the_request_for_the_prune_either():
+    from xgen_agent_runtime.core.context_prune import current_request_index, current_request_span
+    from xgen_agent_runtime.stages.s16_loop.completion_review import _REVIEW_HEADER
+
+    messages = [
+        {"role": "user", "content": [_PDF]},
+        {"role": "user", "content": [_IMG, {"type": "text", "text": "이 둘을 비교해 줘"}]},
+        {"role": "assistant", "content": "done"},
+        {"role": "user", "content": _REVIEW_HEADER + "\nreport.csv: MISSING"},
+    ]
+    assert current_request_index(messages) == 1
+    assert current_request_span(messages) == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_file_sent_before_the_question_survives_compaction():
+    state = PipelineState()
+    state.model = "fake"
+    state.llm_client = _SummaryClient()
+    file_block = {"type": "file", "name": "sales.xlsx", "workspace_path": "/workspace/sales.xlsx"}
+    state.messages = [
+        {"role": "user", "content": [_PDF, file_block]},
+        {"role": "user", "content": "첨부한 두 파일을 비교해 줘"},
+    ]
+    for i in range(10):
+        state.messages += [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x" * 50}]},
+        ]
+    await _llm_compactor(keep_recent=2).compact(state)
+    head = state.messages[0]["content"]
+    assert _PDF in head and file_block in head
+    assert "첨부한 두 파일을 비교해 줘" in head[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_the_requests_images_go_one_at_a_time_and_not_when_it_cannot_help():
+    from xgen_agent_runtime.core.compaction import _relieve_hard, input_budget_of
+
+    def _state(question_chars):
+        st = PipelineState()
+        st.context_window_budget = 16_000
+        st.max_tokens = 4_096
+        st.messages = [{"role": "user", "content": [_IMG, dict(_IMG), dict(_IMG), {"type": "text", "text": "가" * question_chars}]}]
+        return st
+
+    over_a_little = _state(1)
+    while estimate_prompt_tokens(over_a_little) <= int(input_budget_of(over_a_little) * 0.95):
+        over_a_little.messages[0]["content"][3]["text"] += "가" * 200
+        over_a_little.shared.pop("_prompt_tokens_memo", None)
+    _relieve_hard(over_a_little, "guard")
+    images = [b for b in over_a_little.messages[0]["content"] if b.get("type") == "image"]
+    assert len(images) == 2
+
+    hopeless = _state(40_000)
+    _relieve_hard(hopeless, "guard")
+    assert len([b for b in hopeless.messages[0]["content"] if b.get("type") == "image"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_relief_still_counts_when_the_compactor_raises():
+    class _Boom:
+        name = "boom"
+        uses_llm = False
+
+        async def compact(self, state):
+            raise RuntimeError("kaboom")
+
+    state = PipelineState()
+    state.context_window_budget = 16_000
+    state.max_tokens = 4_096
+    state.messages = [{"role": "user", "content": "질문"}] + [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "결과 " * 9_000}]},
+    ]
+    out = await run_compaction(state, _Boom(), trigger="guard", hard=True)
+    assert out["ok"] and out["saved_tokens_estimate"] > 0
