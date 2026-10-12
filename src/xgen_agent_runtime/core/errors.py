@@ -30,6 +30,7 @@ explicitly; the explicit code wins. The ``code`` attribute is always set
 (no ``None`` checks needed downstream).
 """
 
+import re
 from enum import Enum
 from typing import Optional
 
@@ -331,3 +332,88 @@ class MutationLocked(GenyExecutorError):
     ):
         super().__init__(message, code=code, cause=cause)
         self.stage_order = stage_order
+
+
+# ─────────────────────────────────────────────── context overflow detection ─
+
+#: Phrases providers use when the PROMPT is larger than the model accepts (lower-case). One list for
+#: every client: before 4.89.0 only the Anthropic client recognised an overflow, so OpenAI / vLLM /
+#: Azure / Gemini overflows were plain BAD_REQUEST and nothing tried to recover.
+CONTEXT_OVERFLOW_PHRASES: tuple = (
+    "maximum context length",  # OpenAI chat, vLLM, most OpenAI-compatible servers
+    "context_length_exceeded",  # OpenAI error code (Chat Completions / Responses)
+    "reduce the length of the messages",  # OpenAI
+    "prompt is too long",  # Anthropic
+    "exceed context limit",  # Anthropic: "input length and `max_tokens` exceed context limit"
+    "input length exceeds",
+    "input is too long",  # Bedrock
+    "exceeds the maximum number of tokens",  # Gemini (AI Studio)
+    "model only supports up to",  # Gemini on Vertex: "input token count is N but model only supports up to M"
+    "more than the max tokens limit",  # Gemini on Vertex: "Input request contains (N) tokens, which is more than ..."
+    "exceeds the context window",
+    "context window exceeded",
+    "longer than the model's context length",
+)
+
+
+def is_context_overflow_message(message: str) -> bool:
+    """True when an error message says the prompt does not fit the model's context window."""
+    text = str(message or "").lower()
+    return any(phrase in text for phrase in CONTEXT_OVERFLOW_PHRASES)
+
+
+_OVERFLOW_COUNT_PATTERNS = (
+    # Anthropic: "prompt is too long: 210000 tokens > 200000 maximum"
+    re.compile(r"prompt is too long:\s*([\d,]+)\s*tokens", re.I),
+    # Anthropic: "input length and `max_tokens` exceed context limit: 190000 + 21333 > 200000"
+    re.compile(r"exceed context limit:\s*([\d,]+)\s*\+", re.I),
+    # OpenAI: "However, your messages resulted in 140000 tokens"
+    re.compile(r"messages resulted in\s*([\d,]+)\s*tokens", re.I),
+    # vLLM / OpenAI: "you requested 40000 tokens (32000 in the messages, 8000 in the completion)"
+    re.compile(r"\(([\d,]+)\s*in the messages", re.I),
+    # vLLM >= 0.6: "your request has 40000 input tokens"
+    re.compile(r"request has\s*([\d,]+)\s*input tokens", re.I),
+    # Gemini: "The input token count (1234567) exceeds the maximum number of tokens allowed"
+    # Vertex: "... because the input token count is 1234567 but model only supports up to 1048576"
+    re.compile(r"input token count\s*(?:is\s*)?\(?\s*([\d,]+)", re.I),
+    # Vertex: "Input request contains (1234567) tokens, which is more than the max tokens limit"
+    re.compile(r"contains\s*\(\s*([\d,]+)\s*\)\s*tokens", re.I),
+)
+
+
+_OVERFLOW_LIMIT_PATTERNS = (
+    # Anthropic: "prompt is too long: 210000 tokens > 200000 maximum"
+    re.compile(r"tokens\s*>\s*([\d,]+)\s*maximum", re.I),
+    # Anthropic: "input length and `max_tokens` exceed context limit: 190000 + 21333 > 200000"
+    re.compile(r"exceed context limit:\s*[\d,]+\s*\+\s*[\d,]+\s*>\s*([\d,]+)", re.I),
+    # OpenAI / vLLM: "This model's maximum context length is 128000 tokens."
+    re.compile(r"maximum context length is\s*([\d,]+)", re.I),
+    # Gemini: "... exceeds the maximum number of tokens allowed (1048576)."
+    re.compile(r"maximum number of tokens allowed\s*\(?\s*([\d,]+)", re.I),
+    # Vertex: "... but model only supports up to 1048576."
+    re.compile(r"only supports up to\s*([\d,]+)", re.I),
+    # Vertex: "... more than the max tokens limit allowed (1048576)."
+    re.compile(r"max tokens limit(?:\s*allowed)?\s*\(?\s*([\d,]+)", re.I),
+)
+
+
+def _first_int(patterns: tuple, message: str) -> int:
+    text = str(message or "")
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match:
+            try:
+                return int(match.group(1).replace(",", ""))
+            except ValueError:
+                continue
+    return 0
+
+
+def parse_overflow_tokens(message: str) -> int:
+    """The prompt size a provider reported in its overflow error, or 0 when it said none."""
+    return _first_int(_OVERFLOW_COUNT_PATTERNS, message)
+
+
+def parse_overflow_limit(message: str) -> int:
+    """The context window a provider named in its overflow error, or 0 when it named none."""
+    return _first_int(_OVERFLOW_LIMIT_PATTERNS, message)

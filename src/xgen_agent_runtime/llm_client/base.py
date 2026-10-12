@@ -129,6 +129,18 @@ class ClientCapabilities:
         return bool(getattr(self, f"supports_{feature}", False))
 
 
+def prompt_tokens_with_cache(usage: Any) -> int:
+    """Anthropic-shaped usage (Anthropic, Bedrock, Claude Code CLI) reports cache reads and writes
+    OUTSIDE ``input_tokens``; the prompt the provider counted is their sum."""
+    total = 0
+    for name in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+        try:
+            total += int(getattr(usage, name, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 class BaseClient(ABC):
     """Abstract LLM client. Concrete subclasses live in this package."""
 
@@ -585,6 +597,18 @@ class BaseClient(ABC):
                         "message": message,
                     }
                 )
+
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """The FULL prompt size a response's usage says the provider counted.
+
+        OpenAI-shaped usage (OpenAI, Azure, vLLM, Gemini) already includes cached prompt tokens in
+        ``input_tokens``; :class:`AnthropicClient` overrides this because Anthropic reports cache
+        reads/writes separately. Stage 6 anchors the context estimate on this number.
+        """
+        try:
+            return int(getattr(usage, "input_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _classify_error(self, e: Exception) -> APIError:
         """Translate a vendor exception into a canonical :class:`APIError`.

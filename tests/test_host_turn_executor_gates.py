@@ -319,6 +319,7 @@ def test_opt_in_workspace_fast_path_is_wired_before_the_model_call(
                 text="partial snapshot",
                 rag_block=kwargs["rag_block"],
                 clamped=True,
+                input_clamped=True,
                 window=kwargs["window"],
                 budget=1,
                 total_before=999,

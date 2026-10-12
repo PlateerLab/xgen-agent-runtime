@@ -43,11 +43,16 @@ from xgen_agent_runtime.stages.s04_guard.artifact.default.stage import GuardStag
 
 
 class _KeepLastCompactor(HistoryCompactor):
-    """Trivial compactor: keep the last N messages. Records call count."""
+    """Trivial compactor: keep the last N messages. Records call count.
 
-    def __init__(self, keep_last: int = 2, *, persists_own: bool = False):
+    ``hard_only``: leave the history alone under soft pressure (the guard's proactive 80% pass)
+    so a test can reach the guard's own recovery path.
+    """
+
+    def __init__(self, keep_last: int = 2, *, persists_own: bool = False, hard_only: bool = False):
         self._keep_last = keep_last
         self.persists_own_compaction = persists_own
+        self._hard_only = hard_only
         self.calls = 0
 
     @property
@@ -55,7 +60,11 @@ class _KeepLastCompactor(HistoryCompactor):
         return "keep_last"
 
     async def compact(self, state: PipelineState) -> None:
+        from xgen_agent_runtime.core.compaction import COMPACTION_CONTEXT_KEY
+
         self.calls += 1
+        if self._hard_only and not (state.shared.get(COMPACTION_CONTEXT_KEY) or {}).get("hard"):
+            return
         if len(state.messages) > self._keep_last:
             state.messages = state.messages[-self._keep_last :]
 
@@ -82,12 +91,23 @@ def _events(state: PipelineState, etype: str):
 
 class TestEstimator:
     def test_sums_system_messages_tools(self):
+        system = "The system prompt explains the task. " * 100
+        messages = [{"role": "user", "content": "Please summarize the attached report. " * 200}]
+        tools = [{"name": "t", "description": "Reads a file from the workspace. " * 100}]
+
+        def _only(**parts):
+            st = PipelineState()
+            for key, value in parts.items():
+                setattr(st, key, value)
+            return estimate_prompt_tokens(st)
+
         s = PipelineState()
-        s.system = "x" * 4000  # ~1000 tok
-        s.messages = [{"role": "user", "content": "y" * 8000}]  # ~2000 tok
-        s.tools = [{"name": "t", "description": "z" * 4000}]  # ~1000+ tok
+        s.system, s.messages, s.tools = system, messages, tools
         est = estimate_prompt_tokens(s)
-        assert est >= 4000  # 1000 + 2000 + ~1000+
+        parts = [_only(system=system), _only(messages=messages), _only(tools=tools)]
+        assert all(p > 0 for p in parts)
+        # Each part counts in full (rounding aside): none is dropped from the projection.
+        assert est >= sum(parts) - 3
 
     def test_image_block_is_flat_not_base64_length(self):
         huge_b64 = "A" * 200_000  # would be ~50k tokens if counted literally
@@ -139,10 +159,12 @@ class TestGuardSignal:
 
 class TestGuardStageRecovery:
     @pytest.mark.asyncio
-    async def test_compact_then_recheck_passes(self):
+    async def test_proactive_relief_runs_before_the_guard(self):
+        """4.89.0: Stage 4 is the first point where the estimate includes the system prompt and
+        tools, so the 80% proactive pass runs here too: before the guard has to intervene."""
         s = PipelineState()
         s.context_window_budget = 5000
-        s.messages = _msgs(40)  # ~20000 projected, over
+        s.messages = _msgs(40)
         comp = _KeepLastCompactor(keep_last=2)
         stage = GuardStage(guards=[TokenBudgetGuard(min_remaining_tokens=500)])
         stage.attach_budget_recovery(comp)
@@ -151,6 +173,24 @@ class TestGuardStageRecovery:
 
         assert out == "IN"
         assert comp.calls == 1
+        assert len(s.messages) == 2
+        assert len(_events(s, "guard.check")) == 1
+        assert not _events(s, "guard.compacting")
+        assert _events(s, "context.compacted")[0]["data"]["trigger"] == "proactive"
+
+    @pytest.mark.asyncio
+    async def test_compact_then_recheck_passes(self):
+        s = PipelineState()
+        s.context_window_budget = 5000
+        s.messages = _msgs(40)  # ~20000 projected, over
+        comp = _KeepLastCompactor(keep_last=2, hard_only=True)
+        stage = GuardStage(guards=[TokenBudgetGuard(min_remaining_tokens=500)])
+        stage.attach_budget_recovery(comp)
+
+        out = await stage.execute("IN", s)
+
+        assert out == "IN"
+        assert comp.calls == 2  # the proactive pass (no relief here), then the guard's recovery
         assert len(s.messages) == 2
         # both the original check and the recheck were emitted
         checks = _events(s, "guard.check")
@@ -172,7 +212,7 @@ class TestGuardStageRecovery:
         with pytest.raises(GuardRejectError) as exc:
             await stage.execute("IN", s)
         assert exc.value.guard_name == "token_budget"
-        assert comp.calls == 1  # compacted once, then gave up
+        assert comp.calls == 2  # the proactive pass, one recovery, then gave up
 
     @pytest.mark.asyncio
     async def test_no_compactor_degrades_to_reject(self):
@@ -190,7 +230,7 @@ class TestGuardStageRecovery:
         s = PipelineState()
         s.context_window_budget = 5000
         s.messages = _msgs(40)
-        comp = _KeepLastCompactor(keep_last=2)
+        comp = _KeepLastCompactor(keep_last=2, hard_only=True)
         stage = GuardStage(
             guards=[TokenBudgetGuard(min_remaining_tokens=500)], fail_fast=False
         )
@@ -198,7 +238,7 @@ class TestGuardStageRecovery:
 
         out = await stage.execute("IN", s)
         assert out == "IN"
-        assert comp.calls == 1
+        assert comp.calls == 2
 
 
 # ── run_compaction helper ───────────────────────────────────────────

@@ -52,13 +52,20 @@ from xgen_agent_runtime.llm_client._cli_runtime import (
     aiter_bytes,
     detect_binary,
 )
-from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.base import (
+    BaseClient,
+    ClientCapabilities,
+    prompt_tokens_with_cache,
+)
 from xgen_agent_runtime.llm_client.translators._cli import (
     StreamJsonAccumulator,
     assemble_response_from_stream_json,
     build_stream_json_stdin,
     messages_have_images,
     claude_code_argv,
+    fits_argv,
+    flatten_messages_to_prompt,
+    system_prompt_text,
     resolve_auth_channel,
     parse_json_output_to_response,
 )
@@ -137,6 +144,37 @@ def _process_alive(proc: Any) -> bool:
 
 def _thinking_off(request: Optional[APIRequest]) -> bool:
     return request is not None and getattr(request, "thinking_level", None) == "off"
+
+
+#: Process-private fallback folder (``mkdtemp``), used when the shared per-user name is taken.
+_FALLBACK_PROMPT_FOLDER: Optional[str] = None
+
+
+def _private_prompt_folder() -> str:
+    """``<tmp>/xgen-claude-code-system-<uid>``, created 0700 and verified (POSIX) to be ours and
+    private. If another local user already holds that name (a directory or a symlink), a fresh
+    ``mkdtemp`` folder of this process is used instead, so the long prompt still has a home."""
+    import stat
+    import tempfile
+
+    global _FALLBACK_PROMPT_FOLDER
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    folder = os.path.join(
+        tempfile.gettempdir(), f"xgen-claude-code-system-{uid if uid is not None else 'user'}"
+    )
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        if uid is not None:
+            info = os.lstat(folder)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+                raise OSError(f"{folder} is not a directory owned by this user")
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                os.chmod(folder, 0o700)
+        return folder
+    except OSError:
+        if _FALLBACK_PROMPT_FOLDER is None or not os.path.isdir(_FALLBACK_PROMPT_FOLDER):
+            _FALLBACK_PROMPT_FOLDER = tempfile.mkdtemp(prefix="xgen-claude-code-system-")
+        return _FALLBACK_PROMPT_FOLDER
 
 
 class ClaudeCodeCLIClient(BaseClient):
@@ -510,9 +548,59 @@ class ClaudeCodeCLIClient(BaseClient):
             timeout_s=effective_timeout,
         )
 
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """The CLI reports Anthropic-shaped usage: cache reads/writes outside ``input_tokens``."""
+        return prompt_tokens_with_cache(usage)
+
+    def _system_prompt_file(self, request: APIRequest) -> str:
+        """Write a system prompt too long for argv to a file; ``""`` when it fits inline.
+
+        The name is the content hash, so the same prompt yields the same argv (the hot spare still
+        matches) and repeated turns reuse one file. The folder is private to this OS user (0700,
+        checked, not just requested) and files are 0600: a system prompt can carry the user's earlier
+        conversation. Files untouched for a day are removed on the next write.
+        """
+        text = system_prompt_text(request.system)
+        if not text or fits_argv(text):
+            return ""
+        import hashlib
+        import tempfile
+        import time
+
+        try:
+            folder = _private_prompt_folder()
+            path = os.path.join(folder, hashlib.sha256(text.encode("utf-8")).hexdigest() + ".md")
+            if os.path.exists(path):
+                os.utime(path)
+                return path
+            fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp")  # unique per call, 0600
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fp:
+                    fp.write(text)
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+            cutoff = time.time() - 86_400
+            for name in os.listdir(folder):
+                old = os.path.join(folder, name)
+                with contextlib.suppress(OSError):
+                    if old != path and os.path.getmtime(old) < cutoff:
+                        os.unlink(old)
+            return path
+        except OSError:
+            logger.error(
+                "claude_code: could not write the system prompt file; the prompt is too long for "
+                "the command line and the CLI will not start",
+                exc_info=True,
+            )
+            return ""
+
     def _build_argv(self, request: APIRequest) -> List[str]:
         return claude_code_argv(
             request,
+            system_prompt_file=self._system_prompt_file(request),
             bare_mode=self._bare_mode,
             auth_mode=self._auth_mode,
             has_api_key=bool(self._api_key),
@@ -698,6 +786,10 @@ class ClaudeCodeCLIClient(BaseClient):
         # non-stream vision call (e.g. screen-observation captioning) lost
         # its image and the model answered "I don't see an image".
         if not request.stream and messages_have_images(request.messages):
+            request = replace(request, stream=True)
+        # Same wire switch for a prompt too long to be one argv string (Linux 128 KiB per string):
+        # stream-json stdin has no such limit.
+        if not request.stream and not fits_argv(flatten_messages_to_prompt(request.messages)):
             request = replace(request, stream=True)
 
         cli_version = await self._ensure_cli_version()

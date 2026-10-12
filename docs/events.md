@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-11.
-> Catalogue version: **17** · events: **140**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-12.
+> Catalogue version: **17** · events: **143**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -297,11 +297,14 @@ Enum member: `EventTypes.CONTEXT_COMPACTED`
 
 | Field | Description |
 |---|---|
-| `strategy` | str — compactor name/class |
-| `trigger` | str? — proactive \| requested \| guard \| internal_loop \| background |
+| `strategy` | str — compactor name/class, or 'prune' when the deterministic pass alone met the target |
+| `trigger` | str? — proactive \| requested \| manual \| guard \| overflow \| internal_loop \| background |
 | `messages_before` | int? |
 | `messages_after` | int? |
 | `saved_tokens_estimate` | int? |
+| `tokens_after_estimate` | int? — projected prompt tokens after the relief |
+| `target_tokens` | int? — where the relief aimed (50% of the window by default) |
+| `target_met` | bool? |
 
 ### `context.pruned`
 
@@ -310,10 +313,14 @@ Enum member: `EventTypes.CONTEXT_PRUNED`
 | Field | Description |
 |---|---|
 | `deduped` | int — duplicate tool results rewritten to a back-reference |
-| `images_stripped` | int — stale base64 images replaced with a marker |
+| `images_stripped` | int — stale base64 images/documents replaced with a marker |
 | `trimmed` | int — oversized stale tool results shortened |
+| `inputs_trimmed` | int — oversized stale tool-call arguments shortened |
 | `chars_saved` | int — text chars removed (images excluded) |
-| `trigger` | str? — cost (Stage 2 token threshold) \| absent when run inside compaction |
+| `aggressive` | bool? — the hard-pressure profile (guard / overflow) |
+| `results_fitted` | int? — tool results shortened in proportion so a hard-pressure request fits |
+| `current_attachments_stripped` | int? — images/documents of the request itself removed (the very last resort) |
+| `trigger` | str? — cost (Stage 2 token threshold) \| the compaction trigger it ran under |
 | `threshold_tokens` | int? — the prune_over_tokens threshold that fired (cost trigger) |
 | `tokens_before` | int? — projected prompt tokens before the pass (cost trigger) |
 | `tokens_after` | int? — projected prompt tokens after the pass (cost trigger) |
@@ -374,6 +381,40 @@ Enum member: `EventTypes.CONTEXT_COMPACTION_TARGET_MISSED`
 | `trigger` | str — proactive \| requested \| guard |
 | `tokens_after_estimate` | int |
 | `target_tokens` | int |
+
+### `context.compaction_skipped`
+
+Enum member: `EventTypes.CONTEXT_COMPACTION_SKIPPED`
+
+| Field | Description |
+|---|---|
+| `strategy` | str — compactor name/class |
+| `trigger` | str |
+| `reason` | str — turn_compaction_limit \| summary_model_failing \| already_summarized_for_this_request \| background_summary_running \| nothing_to_summarize \| summary_region_too_small \| no_change |
+| `tokens_estimate` | int? |
+| `target_tokens` | int |
+
+### `context.compaction_deferred`
+
+Enum member: `EventTypes.CONTEXT_COMPACTION_DEFERRED`
+
+| Field | Description |
+|---|---|
+| `compactor` | str |
+| `reason` | str — why no summary was produced (soft pressure leaves the history unchanged) |
+| `attempts` | int — model calls tried |
+
+### `context.overflow`
+
+Enum member: `EventTypes.CONTEXT_OVERFLOW`
+
+| Field | Description |
+|---|---|
+| `message` | str — the provider's error, first 500 chars |
+| `reported_tokens` | int — prompt size the provider named, 0 when it named none |
+| `estimated_tokens` | int — our estimate for the rejected request |
+| `window` | int — the window we believed |
+| `provider_limit` | int — window the provider named, 0 when none (used for the rest of the turn when smaller) |
 
 ### `context.short_term_window`
 

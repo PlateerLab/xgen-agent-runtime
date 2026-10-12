@@ -102,6 +102,39 @@ def resolve_auth_channel(auth_mode: str, has_api_key: bool) -> str:
     return "api_key" if has_api_key else "oauth"
 
 
+#: One argv string must stay under Linux ``MAX_ARG_STRLEN`` (131,072 bytes). Above this the
+#: Claude Code client moves the system prompt to a file and the prompt to stdin. Windows caps the
+#: WHOLE command line at 32,767 characters (the desktop host runs the CLI there), and 8,191 when the
+#: binary is a ``.cmd`` shim run through cmd.exe, so the bar is much lower: the rest of the argv
+#: (MCP config, tool lists) needs room too.
+ARGV_SAFE_BYTES = 100_000
+ARGV_SAFE_CHARS_WINDOWS = 6_000
+
+
+def system_prompt_text(system: Any) -> str:
+    """The system prompt as one string (Anthropic-shaped blocks: text parts only)."""
+    if not system:
+        return ""
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        parts: List[str] = []
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "\n".join(parts)
+    return str(system)
+
+
+def fits_argv(text: str) -> bool:
+    """True when *text* is safe as a single argv string on this platform."""
+    import os
+
+    if os.name == "nt":
+        return len(text or "") <= ARGV_SAFE_CHARS_WINDOWS
+    return len((text or "").encode("utf-8")) <= ARGV_SAFE_BYTES
+
+
 def claude_code_argv(
     request: APIRequest,
     *,
@@ -115,8 +148,16 @@ def claude_code_argv(
     allow_tools: Sequence[str] = (),
     disallow_tools: Sequence[str] = (),
     extra_args: Sequence[str] = (),
+    system_prompt_file: str = "",
 ) -> List[str]:
     """Build the argv list (excluding the binary) for one Claude Code call.
+
+    ``system_prompt_file``: when set, the system prompt travels as
+    ``--system-prompt-file <path>`` instead of inline. Linux caps ONE argv
+    string at ``MAX_ARG_STRLEN`` (128 KiB); a long system prompt (a memory
+    node's earlier conversation, a large skill set: Korean is 3 bytes a
+    character) made ``exec`` fail with E2BIG before the CLI even started.
+    The client writes the file (:data:`ARGV_SAFE_BYTES`).
 
     The mapping is intentionally narrow — only flags Claude Code's
     ``--print`` mode honours. Fields the CLI does not accept (temperature,
@@ -183,18 +224,10 @@ def claude_code_argv(
         argv += ["--model", str(request.model)]
 
     # System prompt: --system-prompt fully replaces the CLI's default.
-    if request.system:
-        if isinstance(request.system, str):
-            sys_text = request.system
-        elif isinstance(request.system, list):
-            # Anthropic-shaped system blocks — flatten text only.
-            parts: List[str] = []
-            for block in request.system:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(str(block.get("text", "")))
-            sys_text = "\n".join(parts)
-        else:
-            sys_text = str(request.system)
+    if system_prompt_file:
+        argv += ["--system-prompt-file", system_prompt_file]
+    else:
+        sys_text = system_prompt_text(request.system)
         if sys_text:
             argv += ["--system-prompt", sys_text]
 

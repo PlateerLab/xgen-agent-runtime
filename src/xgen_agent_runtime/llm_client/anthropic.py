@@ -14,7 +14,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
 from xgen_agent_runtime.core.state import TokenUsage
-from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.base import (
+    BaseClient,
+    ClientCapabilities,
+    prompt_tokens_with_cache,
+)
 from xgen_agent_runtime.llm_client.translators import canonical_messages_to_anthropic
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
 
@@ -293,8 +297,9 @@ def _retry_kwargs_after_deprecation(
 # contains the substring ``token``, so the next thinking-shape drift
 # would have been diagnosed as "reduce your context" instead of "your
 # request shape is stale" (audit §3.4). The two categories drive very
-# different recovery: TOKEN_LIMIT tells s06 retry logic to compact the
-# conversation; BAD_REQUEST is fatal and should bubble immediately.
+# different recovery: TOKEN_LIMIT makes Stage 6 compact the conversation and
+# retry once (4.89.0: before that nothing acted on it and the turn failed);
+# BAD_REQUEST is fatal and should bubble immediately.
 #
 # Classify TOKEN_LIMIT only on phrases the live API actually anchors
 # overflow errors with, and short-circuit anything that *looks like a
@@ -308,6 +313,8 @@ _TOKEN_LIMIT_ANCHORS: tuple[str, ...] = (
     # The live API's combined-budget phrasing:
     # ``input length and `max_tokens` exceed context limit: …``
     "exceed context limit",
+    # Bedrock's phrasing for the same overflow.
+    "input is too long",
 )
 
 #: Substrings that mark a request-*validation* 400 (pydantic-style param
@@ -342,6 +349,10 @@ def _classify_bad_request_message(msg_lower: str) -> ErrorCategory:
 
 class AnthropicClient(BaseClient):
     """Real Anthropic API client using the official SDK."""
+
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """Anthropic (and Bedrock) report cache reads/writes OUTSIDE ``input_tokens``."""
+        return prompt_tokens_with_cache(usage)
 
     provider = "anthropic"
     capabilities = ClientCapabilities(

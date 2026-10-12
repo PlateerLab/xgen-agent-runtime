@@ -145,7 +145,11 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
             state.metadata.get(_ARCHIVED_KEY, state.metadata.get("memory.short_term_window_len", 0))
         )
         fresh: List[Tuple[str, str]] = []
-        for msg in messages[archived_upto:]:
+        # Messages a mid-turn compaction summarized away before the archive saw them come first.
+        # Peeked here, dropped only when the archive commits its watermark (a failed write retries).
+        from xgen_agent_runtime.core.compaction import RECORDER_ARCHIVE, peek_pending_records
+
+        for msg in peek_pending_records(state, RECORDER_ARCHIVE) + list(messages[archived_upto:]):
             role = str(msg.get("role", "")) if isinstance(msg, dict) else ""
             if role not in ("user", "assistant"):
                 continue
@@ -155,12 +159,15 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
         return fresh, len(messages)
 
     async def _archive(self, state: Any) -> None:
+        from xgen_agent_runtime.core.compaction import RECORDER_ARCHIVE, take_pending_records
+
         provider = self._provider
         if provider is None:
             return
         fresh, watermark = self._new_utterances(state)
         if not fresh:
             state.metadata[_ARCHIVED_KEY] = watermark
+            take_pending_records(state, RECORDER_ARCHIVE)
             return
 
         now = datetime.now()
@@ -239,6 +246,7 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
                 ),
             )
         state.metadata[_ARCHIVED_KEY] = watermark
+        take_pending_records(state, RECORDER_ARCHIVE)
 
     # ── strategy hook ────────────────────────────────────────────
     #: MemoryStage 경로 전체 상한(s) — 저장 백엔드가 어떤 상태든(테이블 미생성,

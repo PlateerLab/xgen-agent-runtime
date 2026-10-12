@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory, is_context_overflow_message
 from xgen_agent_runtime.core.state import TokenUsage
 from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.translators import (
@@ -473,9 +473,14 @@ class GoogleClient(BaseClient):
                     str(e), category=ErrorCategory.SERVER_ERROR, status_code=code, cause=e
                 )
             if code == 400 or status in ("INVALID_ARGUMENT", "FAILED_PRECONDITION"):
-                return APIError(
-                    str(e), category=ErrorCategory.BAD_REQUEST, status_code=code, cause=e
+                # "The input token count (N) exceeds the maximum number of tokens allowed (M)":
+                # TOKEN_LIMIT lets Stage 6 compact and retry once (4.89.0).
+                category = (
+                    ErrorCategory.TOKEN_LIMIT
+                    if is_context_overflow_message(str(e))
+                    else ErrorCategory.BAD_REQUEST
                 )
+                return APIError(str(e), category=category, status_code=code, cause=e)
             # Partition by class/range when the specific code is novel.
             if isinstance(e, genai_errors.ServerError) or (
                 isinstance(code, int) and 500 <= code < 600
@@ -515,7 +520,11 @@ class GoogleClient(BaseClient):
         if isinstance(e, gac_exceptions.DeadlineExceeded):
             return ErrorCategory.TIMEOUT
         if isinstance(e, gac_exceptions.InvalidArgument):
-            return ErrorCategory.BAD_REQUEST
+            return (
+                ErrorCategory.TOKEN_LIMIT
+                if is_context_overflow_message(str(e))
+                else ErrorCategory.BAD_REQUEST
+            )
         if isinstance(e, (gac_exceptions.ServiceUnavailable, gac_exceptions.InternalServerError)):
             return ErrorCategory.SERVER_ERROR
         return None
@@ -537,6 +546,8 @@ class GoogleClient(BaseClient):
             return APIError(str(e), category=ErrorCategory.AUTH, cause=e)
         if "unavailable" in error_str or "503" in error_str or "500" in error_str:
             return APIError(str(e), category=ErrorCategory.SERVER_ERROR, cause=e)
+        if is_context_overflow_message(error_str):
+            return APIError(str(e), category=ErrorCategory.TOKEN_LIMIT, cause=e)
         if "invalid argument" in error_str or "400" in error_str:
             return APIError(str(e), category=ErrorCategory.BAD_REQUEST, cause=e)
         return APIError(str(e), category=ErrorCategory.UNKNOWN, cause=e)
