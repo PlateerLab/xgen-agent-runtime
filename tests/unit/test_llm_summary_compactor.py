@@ -12,6 +12,7 @@ from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
 from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+    CHECKPOINT_MARKER,
     LLMSummaryCompactor,
     SummaryCompactor,
 )
@@ -62,7 +63,10 @@ async def test_no_override_falls_back_to_placeholder():
         client_getter=lambda s: s.llm_client,
     )
     await comp.compact(state)
-    assert len(state.messages) == 10 + 2
+    # 4.89.0: one checkpoint message + the 10 kept. The kept tail starts with an assistant
+    # message (msg 15), so no synthetic acknowledgement is needed to keep roles alternating.
+    assert len(state.messages) == 1 + 10
+    assert state.messages[1]["content"] == "msg 15"
     assert "[Summary of 15 previous messages" in state.messages[0]["content"]
 
 
@@ -78,7 +82,8 @@ async def test_override_and_client_triggers_llm_call():
         client_getter=lambda s: s.llm_client,
     )
     await comp.compact(state)
-    assert state.messages[0]["content"] == "REAL SUMMARY"
+    head = state.messages[0]["content"]
+    assert head.startswith(CHECKPOINT_MARKER) and "REAL SUMMARY" in head
     assert len(client.calls) == 1
     assert client.calls[0]["purpose"] == "s02.compact"
     events = [e for e in state.events if e["type"] == "memory.compaction.summarized"]

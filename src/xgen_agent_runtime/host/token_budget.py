@@ -25,7 +25,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from xgen_agent_runtime.host.token_estimator import estimate_tokens
+from xgen_agent_runtime.core.text_tokens import estimate_tokens, estimate_tokens_cached  # noqa: F401
 
 logger = logging.getLogger("token-budget")
 
@@ -35,16 +35,12 @@ logger = logging.getLogger("token-budget")
 #   tiktoken(o200k_base) 은 OpenAI 기준. 타 provider 는 토크나이저가 달라 토큰 수가
 #   더 많을 수 있으므로 보정계수로 *과대추정* 한다 (안전한 방향). 추가로 전역 안전마진.
 # ─────────────────────────────────────────────────────────────────────────
-_PROVIDER_TOKEN_FACTOR = {
-    "openai": 1.0,
-    "anthropic": 1.15,
-    "bedrock": 1.15,
-    "google": 1.20,
-    "vertex": 1.20,
-    "vllm": 1.20,
-}
-_DEFAULT_PROVIDER_FACTOR = 1.20
-_SAFETY_MULTIPLIER = 1.05  # 모든 추정에 5% 가산
+# 계수 표의 원본은 core.text_tokens 다(압축 판단도 같은 표를 쓴다). 여기 이름은 예전 호출부를 위한 별칭.
+from xgen_agent_runtime.core.text_tokens import (  # noqa: E402
+    DEFAULT_PROVIDER_FACTOR as _DEFAULT_PROVIDER_FACTOR,
+    PROVIDER_TOKEN_FACTOR as _PROVIDER_TOKEN_FACTOR,
+    SAFETY_MULTIPLIER as _SAFETY_MULTIPLIER,
+)
 
 # 이미지 1장당 근사 토큰 비용 (멀티모달). provider/해상도별로 다르나 보수적 상수.
 _IMAGE_TOKEN_COST = 1200
@@ -60,41 +56,77 @@ _IMAGE_TOKEN_COST = 1200
 #   - agent 노드의 context_window 파라미터는 언제나 최우선 override.
 # ─────────────────────────────────────────────────────────────────────────
 _MODEL_CONTEXT_WINDOW: List[Tuple[str, int]] = [
-    # OpenAI
+    # OpenAI. gpt-5 계열은 창이 400k 여도 **입력은 272k** 까지다(나머지는 출력 몫): 창 값을 400k 로
+    # 두면 유효 예산이 실제 입력 한도를 넘어 압축보다 provider 400 이 먼저 난다. 그래서 입력 한도를
+    # 창으로 쓴다. gpt-5.5 이후·gpt-6 은 1.05M 창에 출력 128k(2026-10-12 OpenAI 모델 문서 확인).
     ("gpt-4.1", 1_047_576),
     ("gpt-4o", 128_000),
     ("gpt-4-turbo", 128_000),
     ("gpt-4", 128_000),
     ("gpt-3.5", 16_385),
+    ("gpt-35-turbo", 16_385),  # Azure 배포 이름
     ("o1", 200_000),
     ("o3", 200_000),
     ("o4", 200_000),
-    ("gpt-5", 400_000),
-    # Anthropic / Bedrock Claude
+    ("gpt-5", 272_000),
+    ("gpt-5.5", 922_000),
+    ("gpt-6", 922_000),
+    # Anthropic / Bedrock / Vertex Claude. Opus 4.6 이후·Sonnet 4.6 이후·Haiku 5.5·Fable·Mythos 는
+    # 1M 이 기본이다(베타 헤더 불필요). 그 밖은 200k(2026-10-12 Anthropic 문서 확인).
     ("claude-3-5", 200_000),
     ("claude-3-7", 200_000),
     ("claude-3", 200_000),
     ("claude-sonnet-4", 200_000),
+    ("claude-sonnet-4-6", 1_000_000),
     ("claude-opus-4", 200_000),
+    ("claude-opus-4-6", 1_000_000),
+    ("claude-opus-4-7", 1_000_000),
+    ("claude-opus-4-8", 1_000_000),
     ("claude-haiku-4", 200_000),
     ("claude-4", 200_000),
+    ("claude-opus-5", 1_000_000),
+    ("claude-sonnet-5", 1_000_000),
+    ("claude-haiku-5", 1_000_000),
+    ("claude-fable", 1_000_000),
+    ("claude-mythos", 1_000_000),
     ("claude", 200_000),
-    # Google Gemini
+    # Google Gemini / Gemma (Gemma 는 gemini 접두에 걸리지 않으므로 provider 기본값 1M 으로 새지 않게)
     ("gemini-1.5", 1_048_576),
     ("gemini-2.0", 1_048_576),
     ("gemini-2.5", 1_048_576),
     ("gemini", 1_048_576),
+    ("gemma-3-1b", 32_768),
+    ("gemma-3", 131_072),
+    ("gemma-2", 8_192),
+    ("gemma", 8_192),
+    # Bedrock 의 Claude 밖 모델 (ID 는 "meta.llama3-1-…", "us.amazon.nova-pro-v1:0" 꼴: 구분자 뒤에서 잡힌다)
+    ("llama3-1", 128_000),
+    ("llama3-2", 128_000),
+    ("llama3-3", 128_000),
+    ("llama4", 128_000),
+    ("nova-micro", 128_000),
+    ("nova-lite", 300_000),
+    ("nova-pro", 300_000),
 ]
 
 # provider 기준 기본값 (모델 매칭 실패 시).
 _PROVIDER_DEFAULT_WINDOW = {
     "openai": 128_000,
+    # Azure 는 모델 이름이 배포 이름이라 표에 안 잡히는 일이 흔하다. 현행 배포 모델의 바닥.
+    "azure": 128_000,
+    "azure_foundry": 128_000,
     "anthropic": 200_000,
-    "bedrock": 200_000,
     "google": 1_048_576,
     "vertex": 1_048_576,
     "vllm": 32_768,
+    # CLI 백엔드: 모델 이름이 별칭(sonnet/opus)이라 표에 안 잡힌다. 런타임은 이 값으로 첫 메시지에
+    # 접어 넣는 지난 대화의 양만 맞춘다. 작게 잡으면 더 일찍 덜어낼 뿐 실패하지 않는다.
+    "claude_code": 200_000,
+    "codex": 272_000,
 }
+#: Bedrock 은 Claude 밖의 모델(Llama 8k~128k, Mistral 32k, Titan 8k)도 서빙한다. provider 기본값을
+#: Claude 의 200k 로 두면 작은 모델이 압축 전에 400 을 낸다. Claude 는 위 표에서 잡힌다.
+_BEDROCK_NON_CLAUDE_DEFAULT = 32_000
 # 완전 미상(provider 도 모름)일 때 보수적 기본값.
 DEFAULT_CONTEXT_WINDOW = 32_000
 
@@ -200,22 +232,26 @@ def resolve_context_window(
         return catalog_win
 
     name = (model or "").lower().strip()
+    if prov == "claude_code" and name.endswith("[1m]"):
+        return 1_000_000  # Claude Code 의 1M 별칭(opus[1m])
+    if prov == "codex":
+        # Codex CLI 는 모델의 API 창(gpt-5.5 1.05M)과 무관하게 자기 창(272k 입력)으로 돈다.
+        return _PROVIDER_DEFAULT_WINDOW["codex"]
     if name:
+        # 이름 앞이나 구분자(. / :) 뒤에서 시작하는 접두만: 'apac.anthropic.claude-…',
+        # 'meta.llama3-1-70b-…', 'Qwen/…'. 그냥 포함으로 보면 'o1' 같은 짧은 접두가 엉뚱한 이름 속에서
+        # 걸린다. 가장 긴 접두가 이긴다.
+        segments = [name] + [name[i + 1 :] for i, ch in enumerate(name) if ch in "./:"]
         best_len, best_win = -1, None
         for prefix, win in _MODEL_CONTEXT_WINDOW:
-            if name.startswith(prefix) and len(prefix) > best_len:
-                best_len, best_win = len(prefix), win
-        if best_win is not None:
-            return best_win
-        # 접두가 아니라 포함이라도 잡아본다 (예: 'apac.anthropic.claude-...').
-        best_len, best_win = -1, None
-        for prefix, win in _MODEL_CONTEXT_WINDOW:
-            if prefix in name and len(prefix) > best_len:
+            if len(prefix) > best_len and any(seg.startswith(prefix) for seg in segments):
                 best_len, best_win = len(prefix), win
         if best_win is not None:
             return best_win
 
-    return _PROVIDER_DEFAULT_WINDOW.get((provider or "").lower(), DEFAULT_CONTEXT_WINDOW)
+    if prov == "bedrock":
+        return _BEDROCK_NON_CLAUDE_DEFAULT
+    return _PROVIDER_DEFAULT_WINDOW.get(prov, DEFAULT_CONTEXT_WINDOW)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -298,7 +334,7 @@ def _raw_token_count(text: str) -> int:
     """보정 전 원시 토큰 수. 네트워크를 타지 않는다(:mod:`.token_estimator`)."""
     if not text:
         return 0
-    return estimate_tokens(text)
+    return estimate_tokens_cached(text)
 
 
 def count_text_tokens(

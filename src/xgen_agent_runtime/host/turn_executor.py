@@ -232,7 +232,7 @@ class AgentTurnExecutor:
         # node_name 은 워크플로 executor 가 kwargs 에 실어 준다(node_info nodeName)
         # = 노드의 self.nodeName. build_pipeline name= 에만 쓰인다.
         node_name = kwargs.get("node_name") or ""
-        from xgen_agent_runtime.host.memory import history_messages
+        from xgen_agent_runtime.host.memory import history_context, history_messages
         from xgen_agent_runtime.host.rag import collect_rag
         from xgen_agent_runtime.host.runner import (
             DEFAULT_MAX_CONTINUATION_SLICES,
@@ -990,70 +990,100 @@ class AgentTurnExecutor:
                     logger.warning("agents/geny: 요청 파일 첨부 실패 (건너뜀)", exc_info=True)
 
             # ── 컨텍스트 예산 (컨텍스트 자동 압축 토글) ─────────────────
-            # system_prompt 가 최종형이 된 지점 — 여기서 윈도우를 해석하고,
-            # 토글 ON 이면 입력측(text/rag)을 예산 안으로 맞춘 뒤 융합한다.
-            # 이력(preload)은 자르지 않는다: 그건 파이프라인 Stage 2/4 의 몫.
-            # claude_code 는 CLI 가 자체 컨텍스트를 관리하므로 전부 스킵.
+            # system_prompt 가 최종형이 된 지점: 여기서 윈도우를 해석하고, 토글 ON 이면 입력측
+            # (text/rag)을 예산 안으로 맞춘 뒤 융합한다. 이력은 백엔드마다 다르다:
+            #   API 백엔드: 파이프라인 압축(Stage 2/4/6)이 이력을 요약 체크포인트까지 줄이므로
+            #     이력은 그 바닥만큼만 센다(질문을 이력 때문에 자르지 않는다).
+            #   CLI 백엔드(claude_code·codex): 런타임 압축이 없고 이력은 첫 메시지 하나로 접혀
+            #     CLI 의 자체 압축도 못 줄인다. 넘치면 가장 오래된 이력부터 덜어 낸다.
+            from xgen_agent_runtime.host.context_budget import (
+                fit_history_context,
+                fit_input_to_budget,
+                memory_reserved_tokens,
+                resolve_window,
+            )
+
             enable_compaction = bool(kwargs.get("enable_compaction", True))
             max_tokens_val = int(kwargs.get("max_tokens", 8192))
-            budget_window = 0
             clamped = False
-            if provider not in _CLI_BACKENDS:
-                from xgen_agent_runtime.host.context_budget import (
-                    fit_input_to_budget,
-                    resolve_window,
+            budget_window = resolve_window(
+                provider,
+                model,
+                int(kwargs.get("context_window") or 0),
+                base_url=base_url,
+                vllm_probe=host.fetch_vllm_max_model_len,
+            )
+            # 메모리 노드가 (최근 메시지, 이전 대화 문자열) 로 보낸 둘째 칸: 최근 N개(기본 2개)보다
+            # 앞선 대화다. 옛 agent_xgen 처럼 시스템 프롬프트 끝에 붙인다. 노드 기본값이 10만 자라
+            # 창의 일정 몫 안으로 줄인다(가장 최근 쪽이 남는다).
+            _history_ctx = history_context(kwargs.get("memory"))
+            if _history_ctx:
+                _history_ctx = fit_history_context(_history_ctx, budget_window, provider, model)
+                system_prompt = (
+                    (system_prompt + "\n\n" + _history_ctx) if system_prompt else _history_ctx
                 )
+                logger.info(
+                    "agents/geny: 메모리 노드의 이전 대화 %d자를 시스템 프롬프트에 붙임",
+                    len(_history_ctx),
+                )
+            _memory_reserve = 0
+            if memory_provider is not None:
+                # 내장 메모리 주입(Stage 2)은 fit 이후 system 에 붙는다. 그만큼 미리 비워 둔다.
+                # 주입 상한은 build_pipeline 이 같은 창으로 줄인다(memory_inject_cap_chars).
+                from xgen_agent_runtime.memory.provider import MemoryHooks, provider_hooks
 
-                budget_window = resolve_window(
-                    provider,
-                    model,
-                    int(kwargs.get("context_window") or 0),
-                    base_url=base_url,
-                    vllm_probe=host.fetch_vllm_max_model_len,
-                )
-                if enable_compaction and budget_window > 0:
-                    fit = fit_input_to_budget(
-                        text=text,
+                _hooks = provider_hooks(memory_provider) or MemoryHooks()
+                _memory_reserve = memory_reserved_tokens(budget_window, _hooks.max_inject_chars)
+            if enable_compaction and budget_window > 0:
+
+                def _fit(_text: str):
+                    return fit_input_to_budget(
+                        text=_text,
                         rag_block=rag_block,
                         system_prompt=system_prompt,
                         history=state.messages,
-                        registry=registry,
+                        # CLI 도 다리(MCP)가 붙으면 XGEN 도구 스키마가 CLI 창을 쓴다. 같이 센다.
+                        registry=registry if _tools_reach_model else None,
                         provider=provider,
                         model=model,
                         max_tokens=max_tokens_val,
                         window=budget_window,
-                        # 내장 메모리 주입(Stage 2, 최대 10k자≈3k 토큰)은 fit
-                        # 이후 system 에 붙는다 — 예약 없이 꽉 채우면 넘친다.
-                        reserved_tokens=3_000 if memory_provider is not None else 0,
+                        reserved_tokens=_memory_reserve,
+                        history_compressible=not _is_cli,
                     )
-                    if fit.clamped:
-                        # A partial snapshot is not a snapshot. If budgeting
-                        # trims any of it, recompute from the original request
-                        # and keep the normal agent loop/witness semantics.
-                        if _fast_path is not None and _fast_path.active:
-                            _fast_path = None
-                            _fast_path_reason = "context_budget"
-                            fit = fit_input_to_budget(
-                                text=_fast_path_original_text,
-                                rag_block=rag_block,
-                                system_prompt=system_prompt,
-                                history=state.messages,
-                                registry=registry,
-                                provider=provider,
-                                model=model,
-                                max_tokens=max_tokens_val,
-                                window=budget_window,
-                                reserved_tokens=(3_000 if memory_provider is not None else 0),
-                            )
-                            logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
-                        text, rag_block, clamped = fit.text, fit.rag_block, fit.clamped
-                        if fit.clamped:
-                            logger.warning(
-                                "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
-                                fit.window,
-                                fit.budget,
-                                fit.total_before,
-                            )
+
+                fit = _fit(text)
+                if fit.clamped and _fast_path is not None and _fast_path.active:
+                    # A partial snapshot is not a snapshot. If budgeting
+                    # trims any of it, recompute from the original request
+                    # and keep the normal agent loop/witness semantics.
+                    _fast_path = None
+                    _fast_path_reason = "context_budget"
+                    fit = _fit(_fast_path_original_text)
+                    # 스냅숏을 붙인 판이 아니라 원래 요청으로 돌아간다(다시 맞춘 결과가 잘리지 않았어도).
+                    text, rag_block = fit.text, fit.rag_block
+                    logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
+                if fit.clamped:
+                    text, rag_block, clamped = fit.text, fit.rag_block, fit.clamped
+                    if fit.history is not None:
+                        # CLI: 덜어 낸 이력이 이번 턴의 이력이다. preload 워터마크도 새 길이로 맞춘다.
+                        # 기록 대상에서 빠지는 것은 여전히 "지난 대화" 전부다.
+                        from xgen_agent_runtime.host.conversation_archive import (
+                            _ARCHIVED_KEY,
+                            STM_RECORDED_KEY,
+                        )
+
+                        _dropped = len(state.messages) - len(fit.history)
+                        state.messages = list(fit.history)
+                        for _key in (STM_RECORDED_KEY, _ARCHIVED_KEY):
+                            if _key in state.metadata:
+                                state.metadata[_key] = max(0, int(state.metadata[_key]) - _dropped)
+                    logger.warning(
+                        "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
+                        fit.window,
+                        fit.budget,
+                        fit.total_before,
+                    )
 
             if _fast_path is not None and _fast_path.active:
                 register_snapshot_witnesses(state, _fast_path)
@@ -1167,12 +1197,12 @@ class AgentTurnExecutor:
                 tool_context=None if _is_cli else run_tool_context,
                 # run_tool_context 가 없는 턴(내장 도구 없음)에도 Stage 10 에 필터가 실리게.
                 tool_result_filter=None if _is_cli else _result_filter,
-                # 모델의 실제 윈도우 — 압축 임계(80%)·guard·루프 토큰-비 정지의
-                # 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
+                # 모델의 실제 윈도우: 압축 문턱(80%)·Stage 4 guard·넘침 복구·도구 결과
+                # 상한의 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
                 context_window_budget=budget_window,
-                # claude_code 는 CLI 가 자체 컨텍스트(오토-컴팩션)를 관리한다 —
-                # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게
-                # 되므로 CLI 백엔드에서는 항상 끈다 (파라미터 설명과 일치).
+                # CLI 백엔드(claude_code·codex)는 CLI 가 자체 컨텍스트(자동 압축)를 관리한다.
+                # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게 되므로 항상 끈다.
+                # 첫 메시지에 접히는 지난 대화는 위 예산 단계가 CLI 창에 맞춘다.
                 enable_compaction=(enable_compaction and provider not in _CLI_BACKENDS),
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).

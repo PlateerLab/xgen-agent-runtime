@@ -6,7 +6,13 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from xgen_agent_runtime.core.compaction import reconcile_recorded_index, run_compaction
+from xgen_agent_runtime.core.compaction import (
+    PROACTIVE_RATIO,
+    TARGET_RATIO,
+    reconcile_recorded_index,
+    run_compaction,
+    window_of,
+)
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.core.slot import StrategySlot
@@ -60,7 +66,14 @@ class _CompactionShadow:
         self.model = getattr(state, "model", "")
         self.llm_client = getattr(state, "llm_client", None)
         self.context_window_budget = getattr(state, "context_window_budget", 200_000)
-        self.shared: Dict[str, Any] = {}
+        # Planning reads the system prompt/tool size and the turn's calibration.
+        self.system = getattr(state, "system", "")
+        self.tools = list(getattr(state, "tools", None) or [])
+        self.shared: Dict[str, Any] = {
+            k: v
+            for k, v in (getattr(state, "shared", None) or {}).items()
+            if k in ("_prompt_tokens_calibration", "_compaction_pinned_users")
+        }
         self.events: List[tuple] = []
         #: 압축 호출의 보조 사용량. 결과를 받을 때 실제 state 로 옮긴다(이벤트와 같다).
         self.aux_usage: List[tuple] = []
@@ -377,6 +390,14 @@ class ContextStage(Stage[Any, Any]):
         cfg = WindowConfig.from_hooks(self._window_hooks())
         if not cfg.enabled:
             return
+        # 창은 대화 기록의 일부일 뿐이다. 작은 모델(vLLM 32k)에서 4만 자 창은 그것만으로 80% 압축
+        # 문턱을 넘어, 매 턴 첫 호출 전에 같은 지난 턴을 다시 요약했다. 창을 모델 창의 20% 안으로 둔다.
+        from xgen_agent_runtime.core.compaction import window_of
+        from xgen_agent_runtime.core.text_tokens import chars_for_tokens
+
+        cfg.max_chars = max(
+            1_000, min(cfg.max_chars, chars_for_tokens(int(window_of(state) * 0.2)))
+        )
         try:
             window, report = await asyncio.wait_for(
                 load_window(self._provider, cfg), timeout=self._retrieval_timeout_s or None
@@ -469,20 +490,16 @@ class ContextStage(Stage[Any, Any]):
                     )
                     state.metadata["memory_context"] = memory_text
 
-        # Proactive compaction: when the projected next-call context
-        # (system + messages + tools) crosses 80% of the window, compact
-        # so the Stage 4 token-budget guard's 95% safety net rarely has
-        # to. Both stages use ``estimate_prompt_tokens`` so compaction
-        # measurably lowers the same number the guard checks.
+        # Proactive compaction (4.89.0 policy, core.compaction): when the projected next call
+        # (system + messages + tools) crosses 80% of the window, relieve it down to 50%: deterministic
+        # prune first, a model summary only when that is not enough. Stage 4 runs the same
+        # check after Stage 3, which is the only place the FIRST iteration's estimate includes the
+        # system prompt and tools; whichever runs first marks the request so the other does not
+        # summarize it twice.
         #
-        # TTFT program (finding B3): an LLM-backed compactor is a whole
-        # second model round-trip that used to run synchronously in
-        # front of the first token. Now: a finished background summary
-        # is applied first (cheap list swap); if still over 80% but
-        # under the 90% hard line, the summary is computed in the
-        # BACKGROUND (overlapping this turn's generation) and applied
-        # at the next turn's Stage 2. Past 90% — or for cheap non-LLM
-        # compactors — compaction stays synchronous as the safety net.
+        # TTFT program (finding B3): a host that keeps its pipeline across turns may defer an
+        # LLM summary in the 80-90% band to the background (applied at the next turn's Stage 2).
+        # One-shot hosts turn that off (the result would always be discarded).
         estimated_tokens = estimate_prompt_tokens(state)
         forced_request = state.shared.pop(SharedKeys.CONTEXT_COMPACTION_REQUEST, None)
 
@@ -500,7 +517,10 @@ class ContextStage(Stage[Any, Any]):
                 except Exception:  # noqa: BLE001 — relief, never a gate
                     logger.debug("cost-triggered prune failed", exc_info=True)
                 else:
-                    if any(metrics.get(k) for k in ("deduped", "images_stripped", "trimmed")):
+                    if any(
+                        metrics.get(k)
+                        for k in ("deduped", "images_stripped", "trimmed", "inputs_trimmed")
+                    ):
                         state.shared.pop("_prompt_tokens_memo", None)
                         before = estimated_tokens
                         estimated_tokens = estimate_prompt_tokens(state)
@@ -519,22 +539,25 @@ class ContextStage(Stage[Any, Any]):
             if await self._apply_bg_compaction(state):
                 state.shared.pop("_prompt_tokens_memo", None)
                 estimated_tokens = estimate_prompt_tokens(state)
-            budget = state.context_window_budget
+            budget = window_of(state)
             if forced_request:
-                # A Stage-16 token dimension requested maintenance for
-                # pending work.  Run synchronously: deferring again would
-                # let the next Stage-4/API boundary hit the hard ceiling.
+                # A Stage-16 token dimension (or /compact) requested maintenance for pending
+                # work. Run synchronously: deferring again would let the next Stage-4/API boundary
+                # hit the hard ceiling.
                 self.cancel_bg_compaction()
+                manual = (
+                    isinstance(forced_request, dict) and forced_request.get("source") == "manual"
+                )
                 await run_compaction(
                     state,
                     self._compactor,
-                    trigger="requested",
+                    trigger="manual" if manual else "requested",
                     provider=self._provider,
-                    target_tokens=int(budget * 0.7),
+                    target_tokens=int(budget * TARGET_RATIO),
                 )
                 state.shared.pop("_prompt_tokens_memo", None)
                 estimated_tokens = estimate_prompt_tokens(state)
-            elif estimated_tokens > budget * 0.8:
+            elif estimated_tokens > budget * PROACTIVE_RATIO:
                 defer_to_background = (
                     self._background_compaction
                     and isinstance(self._compactor, LLMSummaryCompactor)
@@ -548,7 +571,7 @@ class ContextStage(Stage[Any, Any]):
                         self._compactor,
                         trigger="proactive",
                         provider=self._provider,
-                        target_tokens=int(budget * 0.7),
+                        target_tokens=int(budget * TARGET_RATIO),
                     )
                     estimated_tokens = estimate_prompt_tokens(state)
         elif forced_request:
@@ -602,7 +625,33 @@ class ContextStage(Stage[Any, Any]):
         snapshot_len = len(state.messages)
         if snapshot_len == 0:
             return
+        from xgen_agent_runtime.core.compaction import COMPACTION_CONTEXT_KEY, _llm_gate
+
+        target = int(window_of(state) * TARGET_RATIO)
+        # Same policy as the synchronous path: turn limit, once per request, region worth a call.
+        skip = _llm_gate(
+            state, self._compactor, trigger="background", target_tokens=target, hard=False
+        )
+        if skip is not None:
+            state.add_event(
+                "context.compaction_skipped",
+                {
+                    "strategy": str(
+                        getattr(self._compactor, "name", "") or type(self._compactor).__name__
+                    ),
+                    "trigger": "background",
+                    "reason": skip,
+                    "target_tokens": target,
+                },
+            )
+            return
         shadow = _CompactionShadow(state)
+        # Soft pressure: a failed background summary must leave history alone (no digest).
+        shadow.shared[COMPACTION_CONTEXT_KEY] = {
+            "trigger": "background",
+            "target_tokens": target,
+            "hard": False,
+        }
         snapshot_ids = tuple(id(message) for message in state.messages)
 
         async def _run() -> _CompactionShadow:
@@ -666,6 +715,16 @@ class ContextStage(Stage[Any, Any]):
         # Keep Stage-18's STM watermark valid across the background swap
         # (audit D3) — same contract as run_compaction's synchronous path.
         reconcile_recorded_index(before_list, list(state.messages), state.metadata)
+        # Count it like a synchronous summary: the turn limit and "already summarized for this
+        # request" see it, so the proactive check right after does not summarize again.
+        from xgen_agent_runtime.core.compaction import (
+            API_CALLS_KEY,
+            LLM_COMPACTIONS_KEY,
+            SUMMARIZED_AT_KEY,
+        )
+
+        state.shared[SUMMARIZED_AT_KEY] = int(state.shared.get(API_CALLS_KEY) or 0)
+        state.shared[LLM_COMPACTIONS_KEY] = int(state.shared.get(LLM_COMPACTIONS_KEY) or 0) + 1
         for event_type, data in shadow.events:
             state.add_event(event_type, data)
         compactor_name = str(getattr(self._compactor, "name", "") or type(self._compactor).__name__)

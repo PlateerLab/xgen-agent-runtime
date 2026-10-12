@@ -29,7 +29,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 from urllib.parse import urlsplit
 
-from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory, is_context_overflow_message
 from xgen_agent_runtime.core.state import TokenUsage
 from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.translators import (
@@ -1029,6 +1029,9 @@ class OpenAIClient(BaseClient):
                     category = (
                         ErrorCategory.RATE_LIMITED
                         if "rate" in code
+                        else ErrorCategory.TOKEN_LIMIT
+                        if code == "context_length_exceeded"
+                        or is_context_overflow_message(str(message))
                         else ErrorCategory.SERVER_ERROR
                         if code in ("server_error", "")
                         else ErrorCategory.BAD_REQUEST
@@ -1156,7 +1159,14 @@ class OpenAIClient(BaseClient):
         if isinstance(e, openai.AuthenticationError):
             return APIError(str(e), category=ErrorCategory.AUTH, status_code=401, cause=e)
         if isinstance(e, openai.BadRequestError):
-            return APIError(str(e), category=ErrorCategory.BAD_REQUEST, status_code=400, cause=e)
+            # The prompt did not fit: TOKEN_LIMIT lets Stage 6 compact and retry once (4.89.0).
+            # OpenAI, vLLM, Azure and OpenAI-compatible servers all land here.
+            category = (
+                ErrorCategory.TOKEN_LIMIT
+                if is_context_overflow_message(str(e))
+                else ErrorCategory.BAD_REQUEST
+            )
+            return APIError(str(e), category=category, status_code=400, cause=e)
         if isinstance(e, openai.InternalServerError):
             return APIError(str(e), category=ErrorCategory.SERVER_ERROR, status_code=500, cause=e)
         if isinstance(e, APIError):

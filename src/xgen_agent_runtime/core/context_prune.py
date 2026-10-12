@@ -61,7 +61,7 @@ import hashlib
 import json
 from typing import Any, Dict, List
 
-__all__ = ["DEFAULT_PRUNE_OVER_TOKENS", "prune_messages", "PruneMetrics"]
+__all__ = ["DEFAULT_PRUNE_OVER_TOKENS", "AGGRESSIVE", "prune_messages", "PruneMetrics"]
 
 #: Stage 2 runs the prune when the projected prompt exceeds this many tokens,
 #: regardless of the context window. See the module docstring for the evidence.
@@ -76,8 +76,24 @@ DEFAULT_TRIM_OVER_CHARS = 4000
 #: How much head text a trimmed output keeps.
 DEFAULT_TRIM_KEEP_CHARS = 600
 
+#: Stale tool-call INPUTS (Write/Edit file bodies, long commands) longer than this are trimmed too:
+#: a 40 KB file body in an old ``Write`` call is resent on every request otherwise.
+DEFAULT_INPUT_TRIM_OVER_CHARS = 4000
+DEFAULT_INPUT_TRIM_KEEP_CHARS = 400
+
+#: Settings for HARD pressure (the guard or a provider overflow: the request cannot go out as is):
+#: protect only the last exchange and trim harder. Still deterministic, still pair-safe.
+AGGRESSIVE = {
+    "protect_last": 2,
+    "trim_over_chars": 1000,
+    "trim_keep_chars": 300,
+    "input_trim_over_chars": 1000,
+    "input_trim_keep_chars": 200,
+}
+
 _DUP_NOTE = "[duplicate tool output — identical to a more recent result]"
 _IMAGE_NOTE = "[image removed during context compaction]"
+_DOCUMENT_NOTE = "[document removed during context compaction]"
 
 
 class PruneMetrics(Dict[str, int]):
@@ -125,22 +141,55 @@ def _content_size(block: Dict[str, Any]) -> int:
 
 
 def _strip_images_in(blocks: List[Any]) -> int:
-    """Replace base64 image blocks with a small text marker, recursing into
-    tool_result content lists. Returns the number of images removed."""
+    """Replace base64 image and document (PDF) blocks with a small text marker,
+    recursing into tool_result content lists. Returns the number removed."""
     removed = 0
     for i, b in enumerate(blocks):
         if not isinstance(b, dict):
             continue
+        btype = b.get("type")
         if (
-            b.get("type") == "image"
+            btype in ("image", "document")
             and isinstance(b.get("source"), dict)
             and b["source"].get("type") == "base64"
         ):
-            blocks[i] = {"type": "text", "text": _IMAGE_NOTE}
+            blocks[i] = {
+                "type": "text",
+                "text": _IMAGE_NOTE if btype == "image" else _DOCUMENT_NOTE,
+            }
             removed += 1
-        elif b.get("type") == "tool_result" and isinstance(b.get("content"), list):
+        elif btype == "tool_result" and isinstance(b.get("content"), list):
             removed += _strip_images_in(b["content"])
     return removed
+
+
+def _trim_tool_inputs(message: Dict[str, Any], over: int, keep: int) -> int:
+    """Shorten long string values inside stale ``tool_use`` inputs. Keeps the input a valid
+    object of the same keys (providers validate it), so pairing and schema shape survive.
+    Returns chars removed."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return 0
+    saved = 0
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        params = block.get("input")
+        if not isinstance(params, dict):
+            continue
+        trimmed: Dict[str, Any] = {}
+        for key, value in params.items():
+            if isinstance(value, str) and len(value) > over:
+                dropped = len(value) - keep
+                trimmed[key] = (
+                    value[:keep] + f"\n… [{dropped} chars trimmed during context compaction]"
+                )
+                saved += dropped
+        if trimmed:
+            # A new dict, not an in-place edit: the same input object may still be held by the
+            # tool-call record or a rollout recorder that must keep what was actually sent.
+            block["input"] = {**params, **trimmed}
+    return saved
 
 
 def _trim_result(block: Dict[str, Any], keep: int) -> int:
@@ -182,14 +231,16 @@ def prune_messages(
     min_dup_chars: int = DEFAULT_MIN_DUP_CHARS,
     trim_over_chars: int = DEFAULT_TRIM_OVER_CHARS,
     trim_keep_chars: int = DEFAULT_TRIM_KEEP_CHARS,
+    input_trim_over_chars: int = DEFAULT_INPUT_TRIM_OVER_CHARS,
+    input_trim_keep_chars: int = DEFAULT_INPUT_TRIM_KEEP_CHARS,
 ) -> PruneMetrics:
     """Run the deterministic prune over *messages* in place.
 
-    Returns metrics: ``deduped`` (results back-referenced), ``images_stripped``,
-    ``trimmed`` (oversized results shortened), ``chars_saved`` (text chars
-    removed, images excluded).
+    Returns metrics: ``deduped`` (results back-referenced), ``images_stripped`` (images and PDF
+    documents), ``trimmed`` (oversized results shortened), ``inputs_trimmed`` (stale tool calls
+    whose long input strings were shortened), ``chars_saved`` (text chars removed, images excluded).
     """
-    metrics = PruneMetrics(deduped=0, images_stripped=0, trimmed=0, chars_saved=0)
+    metrics = PruneMetrics(deduped=0, images_stripped=0, trimmed=0, inputs_trimmed=0, chars_saved=0)
     if not messages:
         return metrics
     cutoff = max(0, len(messages) - max(0, protect_last))
@@ -224,6 +275,11 @@ def prune_messages(
         content = msg.get("content")
         if isinstance(content, list):
             metrics["images_stripped"] += _strip_images_in(content)
+        if msg.get("role") == "assistant":
+            saved_inputs = _trim_tool_inputs(msg, input_trim_over_chars, input_trim_keep_chars)
+            if saved_inputs > 0:
+                metrics["inputs_trimmed"] += 1
+                metrics["chars_saved"] += saved_inputs
         for block in _iter_tool_results(msg):
             size = _content_size(block)
             if size > trim_over_chars:

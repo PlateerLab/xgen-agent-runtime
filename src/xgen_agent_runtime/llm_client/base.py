@@ -586,6 +586,18 @@ class BaseClient(ABC):
                     }
                 )
 
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """The FULL prompt size a response's usage says the provider counted.
+
+        OpenAI-shaped usage (OpenAI, Azure, vLLM, Gemini) already includes cached prompt tokens in
+        ``input_tokens``; :class:`AnthropicClient` overrides this because Anthropic reports cache
+        reads/writes separately. Stage 6 anchors the context estimate on this number.
+        """
+        try:
+            return int(getattr(usage, "input_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def _classify_error(self, e: Exception) -> APIError:
         """Translate a vendor exception into a canonical :class:`APIError`.
 

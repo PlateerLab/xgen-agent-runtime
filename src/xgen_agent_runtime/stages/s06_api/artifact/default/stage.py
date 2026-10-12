@@ -20,7 +20,9 @@ import asyncio
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
+from xgen_agent_runtime.core.compaction import note_api_call
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
+from xgen_agent_runtime.core.token_estimate import record_prompt_usage
 from xgen_agent_runtime.core.message_repair import (
     normalize_messages_for_request,
     retire_tool_calls_by_name,
@@ -494,26 +496,43 @@ class APIStage(Stage[Any, APIResponse]):
             t_request = time.monotonic()
             state.shared["_api_call_t0"] = t_request
             state.shared.pop("_api_ttft_emitted", None)
-            try:
+
+            async def _invoke() -> APIResponse:
                 if use_stream:
-                    response = await self._call_streaming_with_retry(
+                    return await self._call_streaming_with_retry(
                         client, cfg, state, extra_messages=extra_messages
                     )
-                else:
-                    response = await self._call_with_retry(
-                        client, cfg, state, extra_messages=extra_messages
-                    )
-                    state.add_event(
-                        "api.ttft",
-                        {
-                            "ttft_ms": round((time.monotonic() - t_request) * 1000.0, 1),
-                            "provider": getattr(client, "provider", ""),
-                            "model": cfg.model,
-                            "stream": False,
-                            "iteration": state.iteration,
-                            "first_visible": "complete",
-                        },
-                    )
+                result = await self._call_with_retry(
+                    client, cfg, state, extra_messages=extra_messages
+                )
+                state.add_event(
+                    "api.ttft",
+                    {
+                        "ttft_ms": round((time.monotonic() - t_request) * 1000.0, 1),
+                        "provider": getattr(client, "provider", ""),
+                        "model": cfg.model,
+                        "stream": False,
+                        "iteration": state.iteration,
+                        "first_visible": "complete",
+                    },
+                )
+                return result
+
+            try:
+                try:
+                    response = await _invoke()
+                except APIError as e:
+                    # The provider said the prompt does not fit (4.89.0): compact the history the
+                    # way the guard does and retry ONCE. Before 4.89.0 nothing acted on this and the
+                    # turn failed: the most common way a long Korean or tool-heavy turn died,
+                    # because the old estimate under-counted and the guard never fired.
+                    if not (
+                        e.category == ErrorCategory.TOKEN_LIMIT
+                        and not extra_messages
+                        and await self._recover_overflow(state, e)
+                    ):
+                        raise
+                    response = await _invoke()
             except APIError as e:
                 # Structured error envelope (2.2.0, audit §3.2 / Tier 1-1):
                 # before this event, a host UI that wanted "auth failed,
@@ -538,6 +557,15 @@ class APIStage(Stage[Any, APIResponse]):
                     error_payload["cli_version"] = str(cli_version)
                 state.add_event("api.error", error_payload)
                 raise
+            # The provider's own count of this prompt anchors every later size decision this turn
+            # (core.token_estimate). Only for the pipeline-mode call: an internal loop's call also
+            # carries ``extra_messages`` that are not in ``state.messages`` yet.
+            note_api_call(state)
+            if not extra_messages:
+                try:
+                    record_prompt_usage(state, client.prompt_tokens_from_usage(response.usage))
+                except Exception:  # noqa: BLE001 (an estimate anchor must never fail a call)
+                    pass
             state.add_event(
                 "api.response",
                 {
@@ -568,6 +596,65 @@ class APIStage(Stage[Any, APIResponse]):
         state.add_message("assistant", assistant_content)
 
         return response
+
+    async def _recover_overflow(self, state: PipelineState, error: APIError) -> bool:
+        """Compact after a provider "prompt too long" rejection. True when a retry is worthwhile.
+
+        Uses the Context stage's compactor (``state._context_compactor``: ``None`` when the host
+        turned compaction off, e.g. CLI backends) as hard pressure: aggressive prune, then a model
+        summary, falling back to a deterministic digest. Once per request: the caller retries once
+        and a second rejection propagates.
+        """
+        compactor = getattr(state, "_context_compactor", None)
+        if compactor is None:
+            return False
+        from xgen_agent_runtime.core.compaction import run_compaction, window_of
+        from xgen_agent_runtime.core.errors import parse_overflow_limit, parse_overflow_tokens
+        from xgen_agent_runtime.core.token_estimate import (
+            calibrate_from_overflow,
+            estimate_prompt_tokens,
+        )
+
+        reported = parse_overflow_tokens(str(error))
+        limit = parse_overflow_limit(str(error))
+        estimated = estimate_prompt_tokens(state)
+        believed = window_of(state)
+        # Measure the target against the provider's own count, not the estimate it just refuted.
+        calibrate_from_overflow(state, reported)
+        if 0 < limit < believed:
+            # The window table or catalog was wrong for this deployment (a Bedrock region without
+            # 1M, an Azure deployment of a smaller model). The provider's own number wins for the
+            # rest of the turn: otherwise compaction aims at a window that does not exist and the
+            # retry fails the same way.
+            state.context_window_budget = limit
+        state.add_event(
+            "context.overflow",
+            {
+                "message": str(error)[:500],
+                "reported_tokens": reported,
+                "estimated_tokens": estimated,
+                "window": believed,
+                "provider_limit": limit,
+            },
+        )
+        outcome = await run_compaction(
+            state,
+            compactor,
+            trigger="overflow",
+            provider=getattr(state, "_context_memory_provider", None),
+            # No target: the provider already said this request does not fit, so the compactor
+            # runs even when our (corrected) estimate says a prune would do. It aims at
+            # TARGET_RATIO of the (possibly corrected) window.
+            target_tokens=None,
+            hard=True,
+        )
+        shrunk = bool(outcome.get("ok")) and (
+            bool(outcome.get("summarized")) or int(outcome.get("saved_tokens_estimate") or 0) > 0
+        )
+        if shrunk:
+            # Anything rendered from the rejected attempt is discarded before the retry.
+            self._signal_stream_restart(state)
+        return shrunk
 
     def _build_request(self, state: PipelineState) -> APIRequest:
         """Assemble a canonical :class:`APIRequest` from state.

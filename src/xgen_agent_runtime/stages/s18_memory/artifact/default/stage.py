@@ -233,7 +233,15 @@ class MemoryStage(Stage[Any, Any]):
 
         # Incrementally record any newly-appended messages as STM turns.
         last_idx = _recorded_upto(state)
-        new_msgs = state.messages[last_idx:]
+        # Messages a mid-turn compaction summarized away before they were recorded come first.
+        from xgen_agent_runtime.core.compaction import (
+            RECORDER_STM,
+            peek_pending_records,
+            take_pending_records,
+        )
+
+        compacted = peek_pending_records(state, RECORDER_STM)
+        new_msgs = compacted + list(state.messages[last_idx:])
         for msg in new_msgs:
             # STM also stores dehydrated copies — base64 payloads stay only
             # in the live ``state.messages`` for the current pipeline run.
@@ -246,6 +254,8 @@ class MemoryStage(Stage[Any, Any]):
         if new_msgs:
             state.metadata[_STATE_LAST_RECORDED] = len(state.messages)
             state.metadata[_STRATEGY_RECORDED] = len(state.messages)
+            if compacted:
+                take_pending_records(state, RECORDER_STM)
 
         is_terminal = state.loop_decision in _TERMINAL_DECISIONS
         if is_terminal and self._hooks.should_record_execution(state):

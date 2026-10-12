@@ -33,7 +33,6 @@ from typing import Any, Dict, List, Optional, Set
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.state import PipelineState, TokenUsage
-from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
 from xgen_agent_runtime.stages.s06_api.interface import ToolLoopCall, ToolLoopStrategy
 from xgen_agent_runtime.stages.s06_api.types import APIResponse
 
@@ -425,19 +424,18 @@ class InternalAgenticLoop(ToolLoopStrategy):
                 inner_cost_usd += response.usage.cost_usd or 0.0
                 turns += 1
 
+                # Same policy as Stage 2/4 (core.compaction): over 80% of the window, relieve to 50%.
                 compactor = state._context_compactor
-                projected = estimate_prompt_tokens(state)
-                if compactor is not None and projected > state.context_window_budget * 0.8:
-                    from xgen_agent_runtime.core.compaction import run_compaction
+                if compactor is not None:
+                    from xgen_agent_runtime.core.compaction import relieve_if_over
 
-                    await run_compaction(
+                    if await relieve_if_over(
                         state,
                         compactor,
                         trigger="internal_loop",
                         provider=state._context_memory_provider,
-                        target_tokens=int(state.context_window_budget * 0.7),
-                    )
-                    state.shared.pop("_prompt_tokens_memo", None)
+                    ):
+                        state.shared.pop("_prompt_tokens_memo", None)
 
                 response = await call(None)
         except BaseException:

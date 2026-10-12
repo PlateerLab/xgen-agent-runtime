@@ -15,7 +15,10 @@ from xgen_agent_runtime.core.state import PipelineState, TokenUsage
 from xgen_agent_runtime.host.runner import turn_usage
 from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
-from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import LLMSummaryCompactor
+from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+    CHECKPOINT_MARKER,
+    LLMSummaryCompactor,
+)
 
 
 class _Client(BaseClient):
@@ -88,5 +91,7 @@ async def test_background_compaction_usage_moves_to_the_real_state():
         client_getter=lambda s: s.llm_client,
     )
     await comp.compact(shadow)
-    assert shadow.messages[0]["content"] == "RECAP", "기록이 압축을 깨지 않는다"
+    head = shadow.messages[0]["content"]
+    # 4.89.0: the summary sits inside the checkpoint message, after its intro.
+    assert head.startswith(CHECKPOINT_MARKER) and "RECAP" in head, "기록이 압축을 깨지 않는다"
     assert [p for p, _ in shadow.aux_usage] == ["compact"]

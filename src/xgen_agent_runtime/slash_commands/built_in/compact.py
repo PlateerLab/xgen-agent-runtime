@@ -1,8 +1,8 @@
-"""``/compact`` — manually trigger context summarization (Stage 19)."""
+"""``/compact``: summarize the conversation so far at the next model request."""
 
 from __future__ import annotations
 
-from xgen_agent_runtime.slash_commands.built_in._helpers import find_strategy, need_pipeline
+from xgen_agent_runtime.core.shared_keys import SharedKeys
 from xgen_agent_runtime.slash_commands.types import (
     SlashCategory,
     SlashCommand,
@@ -12,41 +12,31 @@ from xgen_agent_runtime.slash_commands.types import (
 
 
 class CompactCommand(SlashCommand):
+    """Queue a manual compaction on the live pipeline state.
+
+    Runtime compaction belongs to Stage 2 (``core.compaction.run_compaction``): it consumes
+    ``SharedKeys.CONTEXT_COMPACTION_REQUEST`` at the start of the next pass and summarizes
+    synchronously, ``trigger="manual"``: even when the context is not yet near the window.
+    The command only places that request; the host passes the state as
+    ``ctx.extras["state"]``. (Earlier versions looked for a "Stage 19 summarize strategy",
+    which no pipeline registers, so the command always reported failure.)
+    """
+
     name = "compact"
-    description = "Manually trigger context summarization (Stage 19)."
+    description = "Summarize the conversation so far before the next model request."
     category = SlashCategory.CONTROL
 
     async def execute(self, args, ctx: SlashContext) -> SlashResult:
-        early = need_pipeline(ctx)
-        if early is not None:
-            return early
-        summarizer = (
-            find_strategy(ctx.pipeline, "summarize_strategy")
-            or find_strategy(ctx.pipeline, "summarizer")
-            or find_strategy(ctx.pipeline, "summary_provider")
-        )
-        if summarizer is None:
-            return SlashResult(
-                content="No summarize strategy configured (Stage 19 inactive).",
-                success=False,
-            )
-        for method in ("summarize_now", "compact", "run"):
-            fn = getattr(summarizer, method, None)
-            if callable(fn):
-                try:
-                    result = fn()
-                    if hasattr(result, "__await__"):
-                        result = await result
-                except Exception as exc:  # noqa: BLE001
-                    return SlashResult(content=f"Compaction failed: {exc}", success=False)
-                tokens_saved = getattr(result, "tokens_compressed", None) if result else None
-                msg = "✓ Context summarized."
-                if tokens_saved:
-                    msg += f" ({tokens_saved} tokens compressed)"
-                return SlashResult(content=msg)
+        state = (ctx.extras or {}).get("state")
+        if state is None or not isinstance(getattr(state, "shared", None), dict):
+            return SlashResult(content="No active conversation state to compact.", success=False)
+        request = {"source": "manual", "iteration": int(getattr(state, "iteration", 0) or 0)}
+        state.shared[SharedKeys.CONTEXT_COMPACTION_REQUEST] = request
+        add_event = getattr(state, "add_event", None)
+        if callable(add_event):
+            add_event("context.compaction_requested", dict(request))
         return SlashResult(
-            content="Summarize strategy does not expose summarize_now / compact / run.",
-            success=False,
+            content="✓ The conversation will be summarized before the next model request."
         )
 
 

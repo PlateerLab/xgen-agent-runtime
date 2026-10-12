@@ -143,16 +143,40 @@ def test_guard_autowire_respects_disabled_flag() -> None:
     assert guard_on._budget_compactor is None, "재동기화가 기존 배선을 걷어내야 한다"
 
 
+class _InstantLLMClient:
+    """요약을 바로 돌려주는 가짜 클라이언트: 압축기는 모델이 있어야 요약한다(4.89.0: 모델 없이
+    약한 압박이면 이력을 그대로 두고 guard 에 맡긴다)."""
+
+    provider = "fake"
+
+    async def create_message(self, *, model_config, messages, purpose: str = ""):
+        class _Resp:
+            text = "요약: 이전 대화 내용."
+            usage = None
+
+        return _Resp()
+
+
 def _band_state(budget: int = 1_000) -> PipelineState:
-    """80–90% 구간의 상태 — 백그라운드 유예 경계를 정확히 밟는다."""
+    """80~90% 구간의 상태: 백그라운드 유예 경계를 정확히 밟는다.
+
+    길이를 고정하지 않고 추정기로 맞춘다. 추정기가 바뀌어도(4.89.0 한글 실측 보정) 전제가 그대로다.
+    """
     from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
 
     state = PipelineState()
     state.context_window_budget = budget
-    for i in range(20):
-        role = "user" if i % 2 == 0 else "assistant"
-        state.messages.append({"role": role, "content": f"m{i} " + ("가" * 165)})
-    est = estimate_prompt_tokens(state)
+    state.model = "fake"
+    state.llm_client = _InstantLLMClient()
+    est = 0
+    for size in range(1, 2_000):
+        state.messages = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i} " + ("가" * size)}
+            for i in range(20)
+        ]
+        est = estimate_prompt_tokens(state)
+        if est > budget * 0.8:
+            break
     assert budget * 0.8 < est <= budget * 0.9, f"테스트 전제 붕괴: est={est}"
     return state
 
@@ -160,8 +184,7 @@ def _band_state(budget: int = 1_000) -> PipelineState:
 def test_background_compaction_off_forces_sync() -> None:
     """원샷 호스트 계약: bg OFF → 80–90% 구간에서도 **즉시** 압축한다.
 
-    LLMSummaryCompactor 는 클라이언트가 없으면 정적 플레이스홀더로 강등되므로
-    (self-wire 폴백), 동기 경로가 네트워크 없이 완결된다.
+    상태에 가짜 클라이언트를 붙여(self-wire) 동기 경로가 네트워크 없이 완결된다.
     """
     from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
         LLMSummaryCompactor,

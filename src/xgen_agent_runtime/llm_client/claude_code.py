@@ -59,6 +59,9 @@ from xgen_agent_runtime.llm_client.translators._cli import (
     build_stream_json_stdin,
     messages_have_images,
     claude_code_argv,
+    fits_argv,
+    flatten_messages_to_prompt,
+    system_prompt_text,
     resolve_auth_channel,
     parse_json_output_to_response,
 )
@@ -510,9 +513,48 @@ class ClaudeCodeCLIClient(BaseClient):
             timeout_s=effective_timeout,
         )
 
+    def _system_prompt_file(self, request: APIRequest) -> str:
+        """Write a system prompt too long for argv to a file; ``""`` when it fits inline.
+
+        The name is the content hash, so the same prompt yields the same argv (the hot spare
+        still matches) and repeated turns reuse one file. Files untouched for a day are removed
+        on the next write.
+        """
+        text = system_prompt_text(request.system)
+        if not text or fits_argv(text):
+            return ""
+        import hashlib
+        import tempfile
+        import time
+
+        folder = os.path.join(tempfile.gettempdir(), "xgen-claude-code-system")
+        try:
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            path = os.path.join(folder, hashlib.sha256(text.encode("utf-8")).hexdigest() + ".md")
+            if os.path.exists(path):
+                os.utime(path)
+            else:
+                tmp = f"{path}.{os.getpid()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as fp:
+                    fp.write(text)
+                os.replace(tmp, path)
+                cutoff = time.time() - 86_400
+                for name in os.listdir(folder):
+                    old = os.path.join(folder, name)
+                    with contextlib.suppress(OSError):
+                        if old != path and os.path.getmtime(old) < cutoff:
+                            os.unlink(old)
+            return path
+        except OSError:
+            logger.warning(
+                "claude_code: system prompt file write failed, sending inline", exc_info=True
+            )
+            return ""
+
     def _build_argv(self, request: APIRequest) -> List[str]:
         return claude_code_argv(
             request,
+            system_prompt_file=self._system_prompt_file(request),
             bare_mode=self._bare_mode,
             auth_mode=self._auth_mode,
             has_api_key=bool(self._api_key),
@@ -698,6 +740,10 @@ class ClaudeCodeCLIClient(BaseClient):
         # non-stream vision call (e.g. screen-observation captioning) lost
         # its image and the model answered "I don't see an image".
         if not request.stream and messages_have_images(request.messages):
+            request = replace(request, stream=True)
+        # Same wire switch for a prompt too long to be one argv string (Linux 128 KiB per string):
+        # stream-json stdin has no such limit.
+        if not request.stream and not fits_argv(flatten_messages_to_prompt(request.messages)):
             request = replace(request, stream=True)
 
         cli_version = await self._ensure_cli_version()

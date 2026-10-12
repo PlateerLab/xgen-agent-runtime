@@ -132,6 +132,9 @@ class EventTypes(str, Enum):
     CONTEXT_COMPACTION_SCHEDULED = "context.compaction_scheduled"
     CONTEXT_COMPACTION_REQUESTED = "context.compaction_requested"
     CONTEXT_COMPACTION_TARGET_MISSED = "context.compaction_target_missed"
+    CONTEXT_COMPACTION_SKIPPED = "context.compaction_skipped"
+    CONTEXT_COMPACTION_DEFERRED = "context.compaction_deferred"
+    CONTEXT_OVERFLOW = "context.overflow"
     #: 단기 기억 창(4.36.0) — 호스트가 이력을 preload 하지 않은 턴에서 STM 의 최근 논리 턴을
     #: messages 앞에 되살렸다(가까운 턴은 도구까지, 먼 턴은 대화만).
     CONTEXT_SHORT_TERM_WINDOW = "context.short_term_window"
@@ -451,18 +454,42 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "degraded": "list[str] — 예산 강등 단계",
     },
     EventTypes.CONTEXT_COMPACTED: {
-        "strategy": "str — compactor name/class",
-        "trigger": "str? — proactive | requested | guard | internal_loop | background",
+        "strategy": "str — compactor name/class, or 'prune' when the deterministic pass alone met the target",
+        "trigger": "str? — proactive | requested | manual | guard | overflow | internal_loop | background",
         "messages_before": "int?",
         "messages_after": "int?",
         "saved_tokens_estimate": "int?",
+        "tokens_after_estimate": "int? — projected prompt tokens after the relief",
+        "target_tokens": "int? — where the relief aimed (50% of the window by default)",
+        "target_met": "bool?",
+    },
+    EventTypes.CONTEXT_COMPACTION_SKIPPED: {
+        "strategy": "str — compactor name/class",
+        "trigger": "str",
+        "reason": "str — turn_compaction_limit | already_summarized_for_this_request | nothing_to_summarize | summary_region_too_small",
+        "tokens_estimate": "int?",
+        "target_tokens": "int",
+    },
+    EventTypes.CONTEXT_COMPACTION_DEFERRED: {
+        "compactor": "str",
+        "reason": "str — why no summary was produced (soft pressure leaves the history unchanged)",
+        "attempts": "int — model calls tried",
+    },
+    EventTypes.CONTEXT_OVERFLOW: {
+        "message": "str — the provider's error, first 500 chars",
+        "reported_tokens": "int — prompt size the provider named, 0 when it named none",
+        "estimated_tokens": "int — our estimate for the rejected request",
+        "window": "int — the window we believed",
+        "provider_limit": "int — window the provider named, 0 when none (used for the rest of the turn when smaller)",
     },
     EventTypes.CONTEXT_PRUNED: {
         "deduped": "int — duplicate tool results rewritten to a back-reference",
-        "images_stripped": "int — stale base64 images replaced with a marker",
+        "images_stripped": "int — stale base64 images/documents replaced with a marker",
         "trimmed": "int — oversized stale tool results shortened",
+        "inputs_trimmed": "int — oversized stale tool-call arguments shortened",
         "chars_saved": "int — text chars removed (images excluded)",
-        "trigger": "str? — cost (Stage 2 token threshold) | absent when run inside compaction",
+        "aggressive": "bool? — the hard-pressure profile (guard / overflow)",
+        "trigger": "str? — cost (Stage 2 token threshold) | the compaction trigger it ran under",
         "threshold_tokens": "int? — the prune_over_tokens threshold that fired (cost trigger)",
         "tokens_before": "int? — projected prompt tokens before the pass (cost trigger)",
         "tokens_after": "int? — projected prompt tokens after the pass (cost trigger)",

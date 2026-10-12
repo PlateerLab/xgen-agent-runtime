@@ -547,16 +547,18 @@ def build_pipeline(
     executor 기본값(200k)이 쓰이는데, 작은 윈도우 모델(vLLM 32k 등)에서는
     압축이 트리거되기 전에 provider 400 이 먼저 난다 — 호출자(agent_geny)가
     token_budget 헬퍼로 해석한 실측/카탈로그 값을 반드시 넘겨야 한다.
-    Stage 2(80% proactive)·Stage 4 guard·Stage 16 토큰-비 루프 정지가 전부
-    이 값을 기준으로 동작한다.
+    Stage 2(80% proactive)·Stage 4 guard·Stage 6 넘침 복구·Stage 10 도구 결과
+    상한·내장 메모리 주입 상한이 전부 이 값을 기준으로 동작한다.
 
     ``enable_compaction`` — 노드의 "컨텍스트 자동 압축" 토글.
     True(기본): Stage 2 가 **항상** 등록되고(메모리 유무 무관 — 압축은 메모리
-    기능이 아니다) LLMSummaryCompactor 로 80% 초과 시 같은 모델 요약-압축,
-    Stage 4 에 TokenBudgetGuard 가 등록되어 예산 부족 시 compact→1회 재검사
-    (auto-wire 는 Pipeline._init_state). False: 압축 전면 꺼짐 — Stage 2 는
-    메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·요약·
-    guard 회복까지 전부 스킵, executor 3.3.0 계약), guard 미등록.
+    기능이 아니다) 다음 요청 추정이 창의 80% 를 넘으면 LLMSummaryCompactor 가
+    50% 까지 같은 모델로 요약해 체크포인트로 바꾼다(core.compaction). Stage 4
+    TokenBudgetGuard 는 예산 부족 시 강하게 압축(공격적 정리 + 요약, 실패하면
+    결정적 다이제스트)한 뒤 1회 재검사하고, Stage 6 은 provider 의 "prompt too
+    long" 거절에 같은 강한 압축 후 1회 재시도한다. False: 압축 전면 꺼짐.
+    Stage 2 는 메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·
+    요약·guard 회복까지 전부 스킵), guard 미등록.
 
     ``prune_over_tokens`` — 결정적 prune 의 **비용 트리거** (4.35.0,
     core/context_prune.py). 예상 프롬프트가 이 토큰 수를 넘으면 매 반복 앞에서
@@ -777,10 +779,23 @@ def build_pipeline(
             )
 
             pipeline._memory_provider = memory_provider
+            retrieval_hooks = provider_hooks(memory_provider)
+            if context_window_budget and int(context_window_budget) > 0:
+                # 주입 상한(글자)을 창에 맞춘다. 기본 10,000자는 8k~32k 창에서 그것만으로 3분의 1을
+                # 넘는다. provider 의 hooks 는 그대로 두고 이 턴의 검색기만 줄인 판을 받는다.
+                import dataclasses
+
+                from xgen_agent_runtime.host.context_budget import memory_inject_cap_chars
+                from xgen_agent_runtime.memory.provider import MemoryHooks
+
+                base_hooks = retrieval_hooks or MemoryHooks()
+                cap = memory_inject_cap_chars(
+                    int(context_window_budget), base_hooks.max_inject_chars
+                )
+                if cap < base_hooks.max_inject_chars:
+                    retrieval_hooks = dataclasses.replace(base_hooks, max_inject_chars=cap)
             pipeline.attach_runtime(
-                memory_retriever=MemoryAwareRetriever(
-                    memory_provider, hooks=provider_hooks(memory_provider)
-                ),
+                memory_retriever=MemoryAwareRetriever(memory_provider, hooks=retrieval_hooks),
                 memory_strategy=ConversationArchivingStrategy(memory_provider),
                 system_builder=ComposablePromptBuilder(
                     blocks=[
@@ -1315,14 +1330,22 @@ def _record_unfinished_turn(
                 and not _is_tool_result_only(msg.get("content"))
             )
 
+        from xgen_agent_runtime.core.compaction import (
+            RECORDER_STM,
+            peek_pending_records,
+            take_pending_records,
+        )
+
         messages = list(state.messages)
         start = _recorded_upto(state)
-        pending = [m for m in messages[start:] if isinstance(m, dict)]
+        # Messages a mid-turn compaction summarized away (the user's question among them) first.
+        compacted = peek_pending_records(state, RECORDER_STM)
+        pending = compacted + [m for m in messages[start:] if isinstance(m, dict)]
         try:
             window_len = int(state.metadata.get(WINDOW_LEN_KEY, 0) or 0)
         except (TypeError, ValueError):
             window_len = 0
-        if not any(_asks(m) for m in messages[window_len:]):
+        if not any(_asks(m) for m in compacted + messages[window_len:]):
             question = TurnInput.from_raw(input_text).text.strip()
             if question:
                 pending.insert(0, {"role": "user", "content": question})
@@ -1338,6 +1361,7 @@ def _record_unfinished_turn(
         loop.run_until_complete(asyncio.wait_for(_write(), timeout=10.0))
         state.metadata[_STATE_LAST_RECORDED] = len(messages)
         state.metadata[_STRATEGY_RECORDED] = len(messages)
+        take_pending_records(state, RECORDER_STM)
         logger.info(
             "geny_bridge: unfinished turn kept in short-term memory (%s, %d messages)",
             reason,
