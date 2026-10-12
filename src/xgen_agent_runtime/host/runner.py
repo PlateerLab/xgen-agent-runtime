@@ -671,9 +671,11 @@ def build_pipeline(
             TokenBudgetGuard,
         )
 
-        headroom = max(4096, int(max_tokens) + 2048)
-        if context_window_budget and int(context_window_budget) > 0:
-            headroom = min(headroom, max(1024, int(context_window_budget) // 2))
+        from xgen_agent_runtime.core.compaction import output_reserve
+
+        # The same reserve the compaction policy measures its input budget against, so the 80%
+        # trigger always comes before the guard (core.compaction.output_reserve).
+        headroom = output_reserve(int(context_window_budget or 0), int(max_tokens))
         builder.with_guard(guards=[TokenBudgetGuard(min_remaining_tokens=headroom)])
 
     if memory_provider is not None:

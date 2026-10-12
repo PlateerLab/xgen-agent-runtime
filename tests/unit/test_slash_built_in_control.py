@@ -141,11 +141,13 @@ class TestCompact:
         state.messages = [
             {"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(12)
         ]
+        compactor = TruncateCompactor(keep_last=4)
+        state._context_compactor = compactor  # what Pipeline._init_state wires when compaction is on
         result = await CompactCommand().execute([], SlashContext(extras={"state": state}))
         assert result.success is True
         assert state.shared[SharedKeys.CONTEXT_COMPACTION_REQUEST]["source"] == "manual"
 
-        await ContextStage(compactor=TruncateCompactor(keep_last=4)).execute(None, state)
+        await ContextStage(compactor=compactor).execute(None, state)
 
         assert len(state.messages) < 12
         compacted = [e for e in state.events if e["type"] == "context.compacted"]
@@ -156,6 +158,14 @@ class TestCompact:
     async def test_without_a_state_reports_failure(self):
         result = await CompactCommand().execute([], SlashContext(pipeline=_FakePipeline()))
         assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_with_compaction_off_reports_failure(self):
+        from xgen_agent_runtime.core.state import PipelineState
+
+        result = await CompactCommand().execute([], SlashContext(extras={"state": PipelineState()}))
+        assert result.success is False
+        assert "turned off" in result.content
 
 
 # ── /config ──────────────────────────────────────────────────────────

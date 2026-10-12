@@ -129,6 +129,18 @@ class ClientCapabilities:
         return bool(getattr(self, f"supports_{feature}", False))
 
 
+def prompt_tokens_with_cache(usage: Any) -> int:
+    """Anthropic-shaped usage (Anthropic, Bedrock, Claude Code CLI) reports cache reads and writes
+    OUTSIDE ``input_tokens``; the prompt the provider counted is their sum."""
+    total = 0
+    for name in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+        try:
+            total += int(getattr(usage, name, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 class BaseClient(ABC):
     """Abstract LLM client. Concrete subclasses live in this package."""
 

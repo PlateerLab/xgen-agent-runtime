@@ -28,7 +28,9 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from typing import Any, Dict, List, Optional, Union
+import threading
+from collections import OrderedDict
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from xgen_agent_runtime.core.text_tokens import (
     SAFETY_MULTIPLIER,
@@ -49,6 +51,8 @@ _IMAGE_TYPES = frozenset({"image", "image_url", "input_image"})
 #: ``state.shared`` keys. Strings are the contract (hosts and tests may read them).
 _ESTIMATE_MEMO_KEY = "_prompt_tokens_memo"
 USAGE_ANCHOR_KEY = "_prompt_usage_anchor"
+#: An anchored estimate never drops below this share of the plain estimate.
+_ANCHOR_FLOOR = 0.8
 CALIBRATION_KEY = "_prompt_tokens_calibration"
 #: Calibration is clamped: one odd report must not make every later estimate absurd.
 _CALIBRATION_MIN = 0.9
@@ -138,11 +142,59 @@ def _estimate_content(content: Union[str, List[Any], Any]) -> int:
     return _estimate_text(str(content))
 
 
-def _raw_message(message: Any) -> int:
+#: Raw estimates of message and tool objects, keyed by ``id()`` and checked against a structural
+#: signature (hashes of every string inside, which Python caches on the string object). Counting is
+#: a per-character loop; without this every pass re-counted the whole history, and a long session
+#: spent hundreds of milliseconds per iteration on the event loop (2026-10-12 review: 330 ms for
+#: 6,000 messages, three passes per iteration). An in-place edit (the prune) changes the signature.
+_OBJECT_MEMO: "OrderedDict[int, Tuple[int, int]]" = OrderedDict()
+_OBJECT_MEMO_MAX = 65_536
+_object_memo_lock = threading.Lock()
+
+
+def _signature(value: Any, depth: int = 0) -> int:
+    if isinstance(value, str):
+        return hash(value)
+    if depth > 6:
+        return id(value)
+    if isinstance(value, dict):
+        return hash(tuple((k, _signature(v, depth + 1)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return hash(tuple(_signature(v, depth + 1) for v in value))
+    try:
+        return hash(value)
+    except TypeError:
+        return id(value)
+
+
+def _memoized(obj: Any, compute: Callable[[Any], int]) -> int:
+    if not isinstance(obj, (dict, list)):
+        return compute(obj)
+    key = id(obj)
+    sig = _signature(obj)
+    with _object_memo_lock:
+        hit = _OBJECT_MEMO.get(key)
+        if hit is not None and hit[0] == sig:
+            _OBJECT_MEMO.move_to_end(key)
+            return hit[1]
+    value = compute(obj)
+    with _object_memo_lock:
+        _OBJECT_MEMO[key] = (sig, value)
+        _OBJECT_MEMO.move_to_end(key)
+        while len(_OBJECT_MEMO) > _OBJECT_MEMO_MAX:
+            _OBJECT_MEMO.popitem(last=False)
+    return value
+
+
+def _raw_message_uncached(message: Any) -> int:
     if not isinstance(message, dict):
         return 0
     # +4: role/turn framing every provider adds per message.
     return _estimate_content(message.get("content", "")) + 4
+
+
+def _raw_message(message: Any) -> int:
+    return _memoized(message, _raw_message_uncached)
 
 
 def estimate_message_tokens(messages: List[Any]) -> int:
@@ -150,11 +202,31 @@ def estimate_message_tokens(messages: List[Any]) -> int:
     return sum(_raw_message(m) for m in (messages or []))
 
 
+def _raw_tool(tool: Any) -> int:
+    return _estimate_text(str(tool))
+
+
+#: ``state.shared`` slot Stage 3 fills with the turn's volatile context (date, retrieved memory, turn
+#: notes). Stage 6 adds it to the request copy, so it is part of every request's size.
+TURN_CONTEXT_KEY = "turn_context_text"
+
+
+def _turn_context(state: Any) -> str:
+    shared = getattr(state, "shared", None)
+    value = shared.get(TURN_CONTEXT_KEY) if isinstance(shared, dict) else None
+    return value if isinstance(value, str) else ""
+
+
 def _raw_system_and_tools(state: Any) -> int:
+    """Everything in the request besides ``state.messages``: system prompt, tool schemas, and the
+    turn context Stage 6 injects. Leaving the turn context out made the first provider report look
+    like a 2.5x under-count, and that calibration then inflated every later estimate until the
+    guard rejected requests that fit (2026-10-12 review)."""
     total = _estimate_content(getattr(state, "system", "") or "")
     tools = getattr(state, "tools", None)
     if tools:
-        total += sum(_estimate_text(str(tool)) for tool in tools)
+        total += sum(_memoized(tool, _raw_tool) for tool in tools)
+    total += _estimate_text(_turn_context(state))
     return total
 
 
@@ -198,6 +270,7 @@ def _estimate_fingerprint(state: Any) -> tuple:
         id(messages[0]) if messages else 0,
         id(messages[-1]) if messages else 0,
         sys_len,
+        len(_turn_context(state)),
         len(tools),
         id(anchor) if anchor is not None else 0,
         _calibration(state),
@@ -255,15 +328,19 @@ def estimate_prompt_tokens(state: Any) -> int:
         if isinstance(memo, tuple) and len(memo) == 2 and memo[0] == fingerprint:
             return memo[1]
 
-    total: Optional[int] = None
+    raw = _raw_system_and_tools(state) + estimate_message_tokens(
+        getattr(state, "messages", []) or []
+    )
+    total = int(raw * _scale(state) * _calibration(state))
     anchor = shared.get(USAGE_ANCHOR_KEY) if isinstance(shared, dict) else None
     if isinstance(anchor, dict):
-        total = _anchored(state, anchor)
-    if total is None:
-        raw = _raw_system_and_tools(state) + estimate_message_tokens(
-            getattr(state, "messages", []) or []
-        )
-        total = int(raw * _scale(state) * _calibration(state))
+        anchored = _anchored(state, anchor)
+        if anchored is not None:
+            # The anchor is exact for what the provider counted, but a large removal from that
+            # prefix (a stripped 60-page PDF) subtracts OUR per-page guess, which can exceed what
+            # the provider had counted and drive the result to zero. Never go far below the plain
+            # (calibrated) estimate.
+            total = max(anchored, int(total * _ANCHOR_FLOOR))
 
     if isinstance(shared, dict):
         shared[_ESTIMATE_MEMO_KEY] = (fingerprint, total)

@@ -156,8 +156,11 @@ CHECKPOINT_ACK = "Understood. I have the checkpoint summary and will continue fr
 #: Acks written by runtimes before 4.89.0: recognised so a later compaction folds them in too.
 _LEGACY_ACKS = ("Understood, I have the context from our previous conversation.",)
 
-#: ``state.shared`` slot carrying verbatim user messages across compactions within a turn.
+#: ``state.shared`` slot carrying verbatim earlier user messages across compactions.
 PINNED_USERS_KEY = "_compaction_pinned_users"
+#: ``state.shared`` slot carrying the request being worked on once it has been summarized away, so a
+#: second compaction still labels it as the current request instead of an earlier message.
+CURRENT_REQUEST_KEY = "_compaction_current_request"
 
 _SUMMARY_PROMPT = """You are compacting the history of an ongoing agent conversation because it no longer fits the model's context window. Write a handoff summary that lets the agent continue the work seamlessly WITHOUT the older messages.
 
@@ -195,6 +198,15 @@ _SUMMARY_MAX_TOKENS = 4_096
 #: OpenAI reasoning models spend completion tokens on reasoning before the text.
 _REASONING_HEADROOM = 4_096
 _OPENAI_FAMILY = ("openai", "azure", "azure_foundry")
+
+
+def checkpoint_tokens_bound(window: int) -> int:
+    """The most a checkpoint message can take for this window: the summary, the verbatim user
+    messages (and the current request) within their budget, and the intro/ack framing."""
+    window = max(0, int(window or 0))
+    summary = min(_SUMMARY_MAX_TOKENS, max(_SUMMARY_MIN_TOKENS, window // 16))
+    pinned = min(int(window * _PINNED_RATIO), _PINNED_MAX_TOKENS)
+    return summary + pinned + 600
 
 
 def _content_blocks(content: Any) -> list:
@@ -342,11 +354,16 @@ class LLMSummaryCompactor(SummaryCompactor):
 
     Failure
     -------
-    The summary call is retried once. If there is still no summary: under soft pressure (the
-    proactive 80% trigger) the history is left as it is: the guard still protects the request;
-    under hard pressure (guard, provider overflow, explicit request) a deterministic digest of the
-    summarized part replaces it. Before 4.89.0 any failure replaced the older history with a
-    one-line placeholder.
+    The summary call is retried once (with a shorter transcript when the summary request itself was
+    too long for the model). If there is still no summary: under soft pressure (the proactive
+    trigger, a Stage 16 request, ``/compact``) the history is left as it is and the guard still
+    protects the request; under hard pressure (guard, provider overflow, or a direct call without a
+    runner request) a deterministic digest of the summarized part replaces it. Before 4.89.0 any
+    failure replaced the older history with a one-line placeholder.
+
+    The compactor reports back into the runner's request dict (``core.compaction``): how many model
+    calls it made and whether a model summary or the digest replaced the history, so failed calls
+    count against the per-request and per-turn limits.
 
     No model wired (no ``state.model``/client, or a manifest without an override) counts as a
     failure without a call: the no-cost-by-default rule still holds.
@@ -389,7 +406,7 @@ class LLMSummaryCompactor(SummaryCompactor):
         self, state: PipelineState, target_tokens: Optional[int] = None
     ) -> Optional[CompactionPlan]:
         """Where to cut, what to pin. ``None`` when there is nothing to summarize."""
-        from xgen_agent_runtime.core.compaction import TARGET_RATIO, window_of
+        from xgen_agent_runtime.core.compaction import TARGET_RATIO, input_budget_of, window_of
         from xgen_agent_runtime.core.token_estimate import (
             estimate_messages_scaled,
             estimate_overhead_tokens,
@@ -401,7 +418,7 @@ class LLMSummaryCompactor(SummaryCompactor):
         if n <= 1:
             return None
         window = window_of(state)
-        target = int(target_tokens or window * TARGET_RATIO)
+        target = int(target_tokens or input_budget_of(state) * TARGET_RATIO)
         provider = str(getattr(self._client_getter(state), "provider", "") or "")
 
         # Minimal tail: the last message; when it is a tool result, also the call it answers.
@@ -440,13 +457,23 @@ class LLMSummaryCompactor(SummaryCompactor):
         if not new_material:
             return None  # only an earlier checkpoint would be summarized again
 
-        current = ""
-        for m in reversed(msgs):
-            if _is_real_user(m):
-                current = _message_text(m).strip() if any(m is r for r in region) else ""
-                break
+        carried = [str(t) for t in (state.shared.get(PINNED_USERS_KEY) or []) if str(t).strip()]
+        carried_current = str(state.shared.get(CURRENT_REQUEST_KEY) or "").strip()
+        last_real = next((m for m in reversed(msgs) if _is_real_user(m)), None)
+        if last_real is not None:
+            # The newest thing the user wrote is the request being worked on; it is shown on its own
+            # when it is summarized, and stays verbatim in the kept tail otherwise. A request carried
+            # from an earlier compaction is now just an earlier message.
+            current = (
+                _message_text(last_real).strip() if any(last_real is r for r in region) else ""
+            )
+            if carried_current:
+                carried.append(carried_current)
+        else:
+            # Every message the user wrote is already inside an earlier checkpoint: the request
+            # being worked on is the one that checkpoint carried.
+            current = carried_current
 
-        carried = list(state.shared.get(PINNED_USERS_KEY) or [])
         candidates = carried + [_message_text(m).strip() for m in new_material if _is_real_user(m)]
         if current and candidates and candidates[-1] == current:
             candidates = candidates[:-1]  # shown separately as the request being worked on
@@ -554,14 +581,23 @@ class LLMSummaryCompactor(SummaryCompactor):
         from dataclasses import replace as _replace
 
         from xgen_agent_runtime.core.compaction import window_of
+        from xgen_agent_runtime.core.errors import (
+            APIError,
+            ErrorCategory,
+            parse_overflow_limit,
+            parse_overflow_tokens,
+        )
+        from xgen_agent_runtime.core.token_estimate import CALIBRATION_KEY, estimate_text_scaled
 
         window = window_of(state)
         provider = str(getattr(client, "provider", "") or "")
         summary_tokens = self._summary_tokens(window, provider)
-        transcript_budget = max(2_000, min(int(window * 0.6), window - summary_tokens - 3_000))
-        transcript = self._transcript(state, region, transcript_budget)
+        # Our estimate is only as good as the calibration. Before the first provider report of a
+        # turn (every turn of a host that builds a fresh state) there is none, and a provider that
+        # counts 1.8x more turned a 60% transcript into a request the summarizer itself rejected.
+        share = 0.6 if CALIBRATION_KEY in (state.shared or {}) else 0.4
+        transcript_budget = max(1_000, min(int(window * share), window - summary_tokens - 3_000))
         words = max(300, min(1_500, summary_tokens // 3))
-        prompt = _SUMMARY_PROMPT.format(words=words, transcript=transcript)
 
         cfg = resolve(state)
         if getattr(cfg, "thinking_level", None):
@@ -573,6 +609,8 @@ class LLMSummaryCompactor(SummaryCompactor):
         attempts = 0
         for attempt in range(2):
             attempts = attempt + 1
+            transcript = self._transcript(state, region, transcript_budget)
+            prompt = _SUMMARY_PROMPT.format(words=words, transcript=transcript)
             try:
                 resp = await client.create_message(
                     model_config=cfg,
@@ -584,7 +622,21 @@ class LLMSummaryCompactor(SummaryCompactor):
                     "memory.compaction.llm_failed",
                     {"error": str(exc), "compactor": self.name, "attempt": attempts},
                 )
-                if attempt == 0:
+                if isinstance(exc, APIError) and exc.category == ErrorCategory.TOKEN_LIMIT:
+                    # The summary request itself did not fit. Sending the same prompt again fails
+                    # the same way: use the provider's numbers to shrink the transcript, and keep
+                    # the correction for every later estimate of this turn.
+                    reported = parse_overflow_tokens(str(exc))
+                    limit = parse_overflow_limit(str(exc)) or window
+                    sent = estimate_text_scaled(state, prompt)
+                    if reported > 0 and sent > 0 and isinstance(state.shared, dict):
+                        current = float(state.shared.get(CALIBRATION_KEY) or 1.0)
+                        state.shared[CALIBRATION_KEY] = min(
+                            2.5, max(current, current * reported / sent)
+                        )
+                    ratio = (limit - summary_tokens - 2_000) / reported if reported > 0 else 0.5
+                    transcript_budget = max(500, int(transcript_budget * min(0.8, max(0.1, ratio))))
+                elif attempt == 0:
                     await asyncio.sleep(1.0)
                 continue
             # The summary is a model call outside the main loop: report it as auxiliary usage.
@@ -630,6 +682,7 @@ class LLMSummaryCompactor(SummaryCompactor):
         # cannot go out as it is: relieve it without another model call.
         if client is not None and resolve is not None and not request.get("digest_only"):
             summary, cfg, attempts = await self._summarize(state, region, resolve, client)
+        request["model_calls"] = attempts
         if summary is None:
             if not hard:
                 state.add_event(
@@ -654,9 +707,12 @@ class LLMSummaryCompactor(SummaryCompactor):
         if kept and isinstance(kept[0], dict) and kept[0].get("role") == "user":
             head.append({"role": "assistant", "content": CHECKPOINT_ACK})
         state.messages = head + strip_leading_orphan_tool_results(kept)
-        state.shared[PINNED_USERS_KEY] = list(outline.pinned) + (
-            [outline.current_request] if outline.current_request else []
-        )
+        request["source"] = source
+        state.shared[PINNED_USERS_KEY] = list(outline.pinned)
+        if outline.current_request:
+            state.shared[CURRENT_REQUEST_KEY] = outline.current_request
+        else:
+            state.shared.pop(CURRENT_REQUEST_KEY, None)
         state.add_event(
             "memory.compaction.summarized",
             {

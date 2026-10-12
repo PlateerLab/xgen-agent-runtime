@@ -1014,18 +1014,12 @@ class AgentTurnExecutor:
                 vllm_probe=host.fetch_vllm_max_model_len,
             )
             # 메모리 노드가 (최근 메시지, 이전 대화 문자열) 로 보낸 둘째 칸: 최근 N개(기본 2개)보다
-            # 앞선 대화다. 옛 agent_xgen 처럼 시스템 프롬프트 끝에 붙인다. 노드 기본값이 10만 자라
-            # 창의 일정 몫 안으로 줄인다(가장 최근 쪽이 남는다).
+            # 앞선 대화다. 옛 agent_xgen 처럼 시스템 프롬프트 끝에 붙인다(아래 맞춤 뒤). 노드 기본값이
+            # 10만 자라 먼저 창의 일정 몫 안으로 줄이고, 입력 맞춤이 남는 자리에 맞춰 한 번 더 줄인다
+            # (이번 질문·RAG 보다 먼저, 가장 최근 쪽이 남는다).
             _history_ctx = history_context(kwargs.get("memory"))
             if _history_ctx:
                 _history_ctx = fit_history_context(_history_ctx, budget_window, provider, model)
-                system_prompt = (
-                    (system_prompt + "\n\n" + _history_ctx) if system_prompt else _history_ctx
-                )
-                logger.info(
-                    "agents/geny: 메모리 노드의 이전 대화 %d자를 시스템 프롬프트에 붙임",
-                    len(_history_ctx),
-                )
             _memory_reserve = 0
             if memory_provider is not None:
                 # 내장 메모리 주입(Stage 2)은 fit 이후 system 에 붙는다. 그만큼 미리 비워 둔다.
@@ -1050,10 +1044,11 @@ class AgentTurnExecutor:
                         window=budget_window,
                         reserved_tokens=_memory_reserve,
                         history_compressible=not _is_cli,
+                        history_context=_history_ctx,
                     )
 
                 fit = _fit(text)
-                if fit.clamped and _fast_path is not None and _fast_path.active:
+                if fit.input_clamped and _fast_path is not None and _fast_path.active:
                     # A partial snapshot is not a snapshot. If budgeting
                     # trims any of it, recompute from the original request
                     # and keep the normal agent loop/witness semantics.
@@ -1063,8 +1058,10 @@ class AgentTurnExecutor:
                     # 스냅숏을 붙인 판이 아니라 원래 요청으로 돌아간다(다시 맞춘 결과가 잘리지 않았어도).
                     text, rag_block = fit.text, fit.rag_block
                     logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
+                _history_ctx = fit.history_context
                 if fit.clamped:
-                    text, rag_block, clamped = fit.text, fit.rag_block, fit.clamped
+                    # 사용자에게 알리는 것은 사용자 입력(text·rag)이 잘렸을 때뿐이다.
+                    text, rag_block, clamped = fit.text, fit.rag_block, fit.input_clamped
                     if fit.history is not None:
                         # CLI: 덜어 낸 이력이 이번 턴의 이력이다. preload 워터마크도 새 길이로 맞춘다.
                         # 기록 대상에서 빠지는 것은 여전히 "지난 대화" 전부다.
@@ -1084,6 +1081,15 @@ class AgentTurnExecutor:
                         fit.budget,
                         fit.total_before,
                     )
+
+            if _history_ctx:
+                system_prompt = (
+                    (system_prompt + "\n\n" + _history_ctx) if system_prompt else _history_ctx
+                )
+                logger.info(
+                    "agents/geny: 메모리 노드의 이전 대화 %d자를 시스템 프롬프트에 붙임",
+                    len(_history_ctx),
+                )
 
             if _fast_path is not None and _fast_path.active:
                 register_snapshot_witnesses(state, _fast_path)

@@ -347,7 +347,9 @@ CONTEXT_OVERFLOW_PHRASES: tuple = (
     "exceed context limit",  # Anthropic: "input length and `max_tokens` exceed context limit"
     "input length exceeds",
     "input is too long",  # Bedrock
-    "exceeds the maximum number of tokens",  # Gemini
+    "exceeds the maximum number of tokens",  # Gemini (AI Studio)
+    "model only supports up to",  # Gemini on Vertex: "input token count is N but model only supports up to M"
+    "more than the max tokens limit",  # Gemini on Vertex: "Input request contains (N) tokens, which is more than ..."
     "exceeds the context window",
     "context window exceeded",
     "longer than the model's context length",
@@ -372,7 +374,10 @@ _OVERFLOW_COUNT_PATTERNS = (
     # vLLM >= 0.6: "your request has 40000 input tokens"
     re.compile(r"request has\s*([\d,]+)\s*input tokens", re.I),
     # Gemini: "The input token count (1234567) exceeds the maximum number of tokens allowed"
-    re.compile(r"input token count\s*\(?\s*([\d,]+)", re.I),
+    # Vertex: "... because the input token count is 1234567 but model only supports up to 1048576"
+    re.compile(r"input token count\s*(?:is\s*)?\(?\s*([\d,]+)", re.I),
+    # Vertex: "Input request contains (1234567) tokens, which is more than the max tokens limit"
+    re.compile(r"contains\s*\(\s*([\d,]+)\s*\)\s*tokens", re.I),
 )
 
 
@@ -385,6 +390,10 @@ _OVERFLOW_LIMIT_PATTERNS = (
     re.compile(r"maximum context length is\s*([\d,]+)", re.I),
     # Gemini: "... exceeds the maximum number of tokens allowed (1048576)."
     re.compile(r"maximum number of tokens allowed\s*\(?\s*([\d,]+)", re.I),
+    # Vertex: "... but model only supports up to 1048576."
+    re.compile(r"only supports up to\s*([\d,]+)", re.I),
+    # Vertex: "... more than the max tokens limit allowed (1048576)."
+    re.compile(r"max tokens limit(?:\s*allowed)?\s*\(?\s*([\d,]+)", re.I),
 )
 
 

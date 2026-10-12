@@ -52,7 +52,11 @@ from xgen_agent_runtime.llm_client._cli_runtime import (
     aiter_bytes,
     detect_binary,
 )
-from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.base import (
+    BaseClient,
+    ClientCapabilities,
+    prompt_tokens_with_cache,
+)
 from xgen_agent_runtime.llm_client.translators._cli import (
     StreamJsonAccumulator,
     assemble_response_from_stream_json,
@@ -140,6 +144,25 @@ def _process_alive(proc: Any) -> bool:
 
 def _thinking_off(request: Optional[APIRequest]) -> bool:
     return request is not None and getattr(request, "thinking_level", None) == "off"
+
+
+def _private_prompt_folder() -> str:
+    """``<tmp>/xgen-claude-code-system-<uid>``, created 0700 and verified to be ours and private."""
+    import stat
+    import tempfile
+
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    folder = os.path.join(
+        tempfile.gettempdir(), f"xgen-claude-code-system-{uid if uid is not None else 'user'}"
+    )
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    if uid is not None:
+        info = os.lstat(folder)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+            raise OSError(f"{folder} is not a directory owned by this user")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            os.chmod(folder, 0o700)
+    return folder
 
 
 class ClaudeCodeCLIClient(BaseClient):
@@ -513,12 +536,17 @@ class ClaudeCodeCLIClient(BaseClient):
             timeout_s=effective_timeout,
         )
 
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """The CLI reports Anthropic-shaped usage: cache reads/writes outside ``input_tokens``."""
+        return prompt_tokens_with_cache(usage)
+
     def _system_prompt_file(self, request: APIRequest) -> str:
         """Write a system prompt too long for argv to a file; ``""`` when it fits inline.
 
-        The name is the content hash, so the same prompt yields the same argv (the hot spare
-        still matches) and repeated turns reuse one file. Files untouched for a day are removed
-        on the next write.
+        The name is the content hash, so the same prompt yields the same argv (the hot spare still
+        matches) and repeated turns reuse one file. The folder is private to this OS user (0700,
+        checked, not just requested) and files are 0600: a system prompt can carry the user's earlier
+        conversation. Files untouched for a day are removed on the next write.
         """
         text = system_prompt_text(request.system)
         if not text or fits_argv(text):
@@ -527,27 +555,33 @@ class ClaudeCodeCLIClient(BaseClient):
         import tempfile
         import time
 
-        folder = os.path.join(tempfile.gettempdir(), "xgen-claude-code-system")
         try:
-            os.makedirs(folder, mode=0o700, exist_ok=True)
+            folder = _private_prompt_folder()
             path = os.path.join(folder, hashlib.sha256(text.encode("utf-8")).hexdigest() + ".md")
             if os.path.exists(path):
                 os.utime(path)
-            else:
-                tmp = f"{path}.{os.getpid()}.tmp"
-                with open(tmp, "w", encoding="utf-8") as fp:
+                return path
+            fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp")  # unique per call, 0600
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fp:
                     fp.write(text)
                 os.replace(tmp, path)
-                cutoff = time.time() - 86_400
-                for name in os.listdir(folder):
-                    old = os.path.join(folder, name)
-                    with contextlib.suppress(OSError):
-                        if old != path and os.path.getmtime(old) < cutoff:
-                            os.unlink(old)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+            cutoff = time.time() - 86_400
+            for name in os.listdir(folder):
+                old = os.path.join(folder, name)
+                with contextlib.suppress(OSError):
+                    if old != path and os.path.getmtime(old) < cutoff:
+                        os.unlink(old)
             return path
         except OSError:
-            logger.warning(
-                "claude_code: system prompt file write failed, sending inline", exc_info=True
+            logger.error(
+                "claude_code: could not write the system prompt file; the prompt is too long for "
+                "the command line and the CLI will not start",
+                exc_info=True,
             )
             return ""
 

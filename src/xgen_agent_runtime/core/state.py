@@ -442,6 +442,7 @@ class PipelineState:
             # 압축 정책의 턴 단위 계수(core/compaction.py): 턴당 요약 상한과 "이번 요청에 이미
             # 요약했다" 표시. 남겨 두면 재사용 상태에서 여섯 번째 요약 뒤로는 guard 회복조차 못 한다.
             "_context_llm_compactions",
+            "_context_llm_failures",
             "_context_summarized_at_call",
             "_context_api_calls",
         ):

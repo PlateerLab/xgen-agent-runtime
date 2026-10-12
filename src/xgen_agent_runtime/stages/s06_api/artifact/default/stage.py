@@ -608,7 +608,12 @@ class APIStage(Stage[Any, APIResponse]):
         compactor = getattr(state, "_context_compactor", None)
         if compactor is None:
             return False
-        from xgen_agent_runtime.core.compaction import run_compaction, window_of
+        from xgen_agent_runtime.core.compaction import (
+            TARGET_RATIO,
+            input_budget_of,
+            run_compaction,
+            window_of,
+        )
         from xgen_agent_runtime.core.errors import parse_overflow_limit, parse_overflow_tokens
         from xgen_agent_runtime.core.token_estimate import (
             calibrate_from_overflow,
@@ -637,6 +642,11 @@ class APIStage(Stage[Any, APIResponse]):
                 "provider_limit": limit,
             },
         )
+        if 0 < reported <= int(input_budget_of(state) * TARGET_RATIO):
+            # The messages are already small: the request was too long because of the room asked
+            # for the answer (vLLM counts max_tokens: "100 in the messages, 8192 in the completion").
+            # Compacting cannot fix that, so do not pay for a summary and a doomed retry.
+            return False
         outcome = await run_compaction(
             state,
             compactor,
@@ -644,7 +654,7 @@ class APIStage(Stage[Any, APIResponse]):
             provider=getattr(state, "_context_memory_provider", None),
             # No target: the provider already said this request does not fit, so the compactor
             # runs even when our (corrected) estimate says a prune would do. It aims at
-            # TARGET_RATIO of the (possibly corrected) window.
+            # TARGET_RATIO of the (possibly corrected) input budget.
             target_tokens=None,
             hard=True,
         )

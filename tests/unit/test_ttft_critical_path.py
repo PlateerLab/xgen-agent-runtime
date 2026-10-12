@@ -173,8 +173,11 @@ def _llm_compactor() -> LLMSummaryCompactor:
 
 
 def _band_messages(state: PipelineState, n: int, *, alternate: bool) -> None:
-    """Fill ``state`` to the 80~90% band of its window with ``n`` messages, sized by the estimator."""
-    budget = state.context_window_budget
+    """Fill ``state`` to the 80~90% band of its input budget (the window minus the answer's
+    reserve) with ``n`` messages, sized by the estimator."""
+    from xgen_agent_runtime.core.compaction import input_budget_of
+
+    budget = input_budget_of(state)
     est = 0
     for size in range(1, 4_000):
         state.messages = [

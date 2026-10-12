@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import threading
 import unicodedata
+from collections import OrderedDict
 from typing import Any
 
 __all__ = [
@@ -166,9 +168,12 @@ def provider_token_factor(provider: Any) -> float:
 
 #: 긴 글의 추정 캐시. 같은 글은 같은 값이다. (해시, 길이)로 찾는다. 파이썬 문자열은 해시를 객체에
 #: 저장하므로 두 번째부터는 상수 시간이다. 대화가 커지면 매 반복 같은 메시지를 다시 세던 비용이 사라진다.
+#: 최근에 쓴 것부터 남긴다(LRU). 들어온 순서로 비우면 긴 대화를 처음부터 훑을 때마다 상한을 넘는 순간
+#: 모든 조회가 빗나갔다(2026-10-12 검토: 긴 글 5,000개에서 한 번 훑는 데 1.9초).
 _CACHE_MIN_CHARS = 512
-_CACHE_MAX_ENTRIES = 4096
-_cache: dict = {}
+_CACHE_MAX_ENTRIES = 16_384
+_cache: "OrderedDict[tuple, int]" = OrderedDict()
+_cache_lock = threading.Lock()
 
 
 def estimate_tokens_cached(text: Any) -> int:
@@ -180,15 +185,16 @@ def estimate_tokens_cached(text: Any) -> int:
     if len(text) < _CACHE_MIN_CHARS:
         return estimate_tokens(text) if text else 0
     key = (hash(text), len(text))
-    hit = _cache.get(key)
-    if hit is not None:
-        return hit
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None:
+            _cache.move_to_end(key)
+            return hit
     value = estimate_tokens(text)
-    if len(_cache) >= _CACHE_MAX_ENTRIES:
-        # 가장 오래 들어온 것부터 비운다(dict 는 넣은 순서를 지킨다).
-        for _ in range(_CACHE_MAX_ENTRIES // 4):
-            _cache.pop(next(iter(_cache)))
-    _cache[key] = value
+    with _cache_lock:
+        _cache[key] = value
+        while len(_cache) > _CACHE_MAX_ENTRIES:
+            _cache.popitem(last=False)
     return value
 
 

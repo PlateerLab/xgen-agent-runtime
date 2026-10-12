@@ -14,7 +14,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
 from xgen_agent_runtime.core.state import TokenUsage
-from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.base import (
+    BaseClient,
+    ClientCapabilities,
+    prompt_tokens_with_cache,
+)
 from xgen_agent_runtime.llm_client.translators import canonical_messages_to_anthropic
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
 
@@ -348,13 +352,7 @@ class AnthropicClient(BaseClient):
 
     def prompt_tokens_from_usage(self, usage: Any) -> int:
         """Anthropic (and Bedrock) report cache reads/writes OUTSIDE ``input_tokens``."""
-        total = 0
-        for field in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
-            try:
-                total += int(getattr(usage, field, 0) or 0)
-            except (TypeError, ValueError):
-                continue
-        return total
+        return prompt_tokens_with_cache(usage)
 
     provider = "anthropic"
     capabilities = ClientCapabilities(

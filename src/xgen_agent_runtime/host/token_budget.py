@@ -69,6 +69,7 @@ _MODEL_CONTEXT_WINDOW: List[Tuple[str, int]] = [
     ("o3", 200_000),
     ("o4", 200_000),
     ("gpt-5", 272_000),
+    ("gpt-5-chat", 128_000),
     ("gpt-5.5", 922_000),
     ("gpt-6", 922_000),
     # Anthropic / Bedrock / Vertex Claude. Opus 4.6 이후·Sonnet 4.6 이후·Haiku 5.5·Fable·Mythos 는
@@ -95,18 +96,15 @@ _MODEL_CONTEXT_WINDOW: List[Tuple[str, int]] = [
     ("gemini-2.0", 1_048_576),
     ("gemini-2.5", 1_048_576),
     ("gemini", 1_048_576),
-    ("gemma-3-1b", 32_768),
+    ("gemma-4", 131_072),
     ("gemma-3", 131_072),
+    ("gemma-3-1b", 32_768),
+    ("gemma-3-270m", 32_768),
+    ("gemma-3n", 32_768),
     ("gemma-2", 8_192),
-    ("gemma", 8_192),
-    # Bedrock 의 Claude 밖 모델 (ID 는 "meta.llama3-1-…", "us.amazon.nova-pro-v1:0" 꼴: 구분자 뒤에서 잡힌다)
-    ("llama3-1", 128_000),
-    ("llama3-2", 128_000),
-    ("llama3-3", 128_000),
-    ("llama4", 128_000),
-    ("nova-micro", 128_000),
-    ("nova-lite", 300_000),
-    ("nova-pro", 300_000),
+    # 모르는 Gemma 판. 작게 잡으면 질문이 잘리고(8k 창 + max_tokens 8k 는 입력 자리가 없다), 크게 잡으면
+    # provider 가 한도를 말해 줄 때 넘침 복구가 창을 고친다. 중간값.
+    ("gemma", 32_768),
 ]
 
 # provider 기준 기본값 (모델 매칭 실패 시).
@@ -116,6 +114,9 @@ _PROVIDER_DEFAULT_WINDOW = {
     "azure": 128_000,
     "azure_foundry": 128_000,
     "anthropic": 200_000,
+    # BedrockClient 는 AnthropicClient 이고 Claude 만 부른다. 이름에 모델명이 없는 별칭(sonnet)·추론 프로필
+    # ARN 도 Claude 다.
+    "bedrock": 200_000,
     "google": 1_048_576,
     "vertex": 1_048_576,
     "vllm": 32_768,
@@ -124,9 +125,6 @@ _PROVIDER_DEFAULT_WINDOW = {
     "claude_code": 200_000,
     "codex": 272_000,
 }
-#: Bedrock 은 Claude 밖의 모델(Llama 8k~128k, Mistral 32k, Titan 8k)도 서빙한다. provider 기본값을
-#: Claude 의 200k 로 두면 작은 모델이 압축 전에 400 을 낸다. Claude 는 위 표에서 잡힌다.
-_BEDROCK_NON_CLAUDE_DEFAULT = 32_000
 # 완전 미상(provider 도 모름)일 때 보수적 기본값.
 DEFAULT_CONTEXT_WINDOW = 32_000
 
@@ -232,8 +230,10 @@ def resolve_context_window(
         return catalog_win
 
     name = (model or "").lower().strip()
-    if prov == "claude_code" and name.endswith("[1m]"):
-        return 1_000_000  # Claude Code 의 1M 별칭(opus[1m])
+    if prov == "claude_code":
+        # CLI 가 쓰는 창은 모델 이름이 아니라 CLI 와 요금제가 정한다(1M 은 [1m] 별칭으로 고를 때). 정식 ID 를
+        # 넘겨도 표의 API 창을 쓰지 않는다. 런타임은 이 값으로 첫 메시지에 접는 지난 대화만 맞춘다.
+        return 1_000_000 if name.endswith("[1m]") else _PROVIDER_DEFAULT_WINDOW["claude_code"]
     if prov == "codex":
         # Codex CLI 는 모델의 API 창(gpt-5.5 1.05M)과 무관하게 자기 창(272k 입력)으로 돈다.
         return _PROVIDER_DEFAULT_WINDOW["codex"]
@@ -244,14 +244,21 @@ def resolve_context_window(
         segments = [name] + [name[i + 1 :] for i, ch in enumerate(name) if ch in "./:"]
         best_len, best_win = -1, None
         for prefix, win in _MODEL_CONTEXT_WINDOW:
-            if len(prefix) > best_len and any(seg.startswith(prefix) for seg in segments):
+            if len(prefix) > best_len and any(_prefix_matches(seg, prefix) for seg in segments):
                 best_len, best_win = len(prefix), win
         if best_win is not None:
             return best_win
 
-    if prov == "bedrock":
-        return _BEDROCK_NON_CLAUDE_DEFAULT
     return _PROVIDER_DEFAULT_WINDOW.get(prov, DEFAULT_CONTEXT_WINDOW)
+
+
+def _prefix_matches(name: str, prefix: str) -> bool:
+    """``name`` starts with ``prefix`` and does not continue its number: 'gpt-5.5' is not a prefix
+    of 'gpt-5.50', 'claude-opus-4-6' is not one of 'claude-opus-4-60'."""
+    if not name.startswith(prefix):
+        return False
+    rest = name[len(prefix) :]
+    return not (rest and rest[0].isdigit() and prefix[-1:].isdigit())
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -309,6 +316,11 @@ def resolve_supports_vision(
         if any(seg.startswith(prefix) for seg in segments) and len(prefix) > best_len:
             best_len, best = len(prefix), vision
     return bool(best)
+
+
+def budget_margin(context_window: int) -> int:
+    """추정 오차에 남기는 안전마진: 창의 2%, 최소 1,024토큰."""
+    return max(_BUDGET_MARGIN_MIN, int(max(0, int(context_window or 0)) * _BUDGET_MARGIN_RATIO))
 
 
 def effective_input_budget(

@@ -16,7 +16,8 @@ class CompactCommand(SlashCommand):
 
     Runtime compaction belongs to Stage 2 (``core.compaction.run_compaction``): it consumes
     ``SharedKeys.CONTEXT_COMPACTION_REQUEST`` at the start of the next pass and summarizes
-    synchronously, ``trigger="manual"``: even when the context is not yet near the window.
+    synchronously, ``trigger="manual"``, even when the context is not yet near the window. If the
+    summary model fails the history is left unchanged (a manual request is soft pressure).
     The command only places that request; the host passes the state as
     ``ctx.extras["state"]``. (Earlier versions looked for a "Stage 19 summarize strategy",
     which no pipeline registers, so the command always reported failure.)
@@ -30,6 +31,12 @@ class CompactCommand(SlashCommand):
         state = (ctx.extras or {}).get("state")
         if state is None or not isinstance(getattr(state, "shared", None), dict):
             return SlashResult(content="No active conversation state to compact.", success=False)
+        if getattr(state, "_context_compactor", None) is None:
+            # Stage 2 would drop the request silently (compaction is off for this agent, e.g. a
+            # CLI backend that manages its own context).
+            return SlashResult(
+                content="Context compaction is turned off for this agent.", success=False
+            )
         request = {"source": "manual", "iteration": int(getattr(state, "iteration", 0) or 0)}
         state.shared[SharedKeys.CONTEXT_COMPACTION_REQUEST] = request
         add_event = getattr(state, "add_event", None)

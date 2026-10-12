@@ -158,16 +158,18 @@ class _InstantLLMClient:
 
 
 def _band_state(budget: int = 1_000) -> PipelineState:
-    """80~90% 구간의 상태: 백그라운드 유예 경계를 정확히 밟는다.
+    """80~90% 구간의 상태: 백그라운드 유예 경계를 정확히 밟는다(4.89.0: 창에서 답 몫을 뺀 입력 예산 기준).
 
     길이를 고정하지 않고 추정기로 맞춘다. 추정기가 바뀌어도(4.89.0 한글 실측 보정) 전제가 그대로다.
     """
+    from xgen_agent_runtime.core.compaction import input_budget_of
     from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
 
     state = PipelineState()
     state.context_window_budget = budget
     state.model = "fake"
     state.llm_client = _InstantLLMClient()
+    band = input_budget_of(state)
     est = 0
     for size in range(1, 2_000):
         state.messages = [
@@ -175,9 +177,9 @@ def _band_state(budget: int = 1_000) -> PipelineState:
             for i in range(20)
         ]
         est = estimate_prompt_tokens(state)
-        if est > budget * 0.8:
+        if est > band * 0.8:
             break
-    assert budget * 0.8 < est <= budget * 0.9, f"테스트 전제 붕괴: est={est}"
+    assert band * 0.8 < est <= band * 0.9, f"테스트 전제 붕괴: est={est} band={band}"
     return state
 
 

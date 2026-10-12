@@ -81,6 +81,8 @@ def _scan_rows(hooks: MemoryHooks) -> int:
 _EXCLUDED_OVERFETCH = 5
 #: 압축 기록이 쌓이는 노트 분류(``record_compaction``). 자동 검색 층에서 늘 빠진다.
 _COMPACTIONS_CATEGORY = "compactions"
+#: 그것만 빠질 때의 여유 배수.
+_COMPACTIONS_OVERFETCH = 2
 
 
 def _layer_cap(hooks: MemoryHooks, layer: str) -> int:
@@ -382,8 +384,10 @@ class MemoryAwareRetriever(MemoryRetriever):
         # memory_search tool calls are unaffected): screen-observation style
         # buffers can dominate a vault and drown real recall.
         _configured_excluded = set(getattr(hooks, "search_exclude_categories", ()) or ())
-        _fetch_k = (
-            hooks.max_results * _EXCLUDED_OVERFETCH if _configured_excluded else hooks.max_results
+        # Compaction records are always dropped (below), so always fetch a little more than k:
+        # otherwise every compaction note in the top k leaves the layer with fewer than k results.
+        _fetch_k = hooks.max_results * (
+            _EXCLUDED_OVERFETCH if _configured_excluded else _COMPACTIONS_OVERFETCH
         )
         # 압축 기록("compactions")은 늘 뺀다. 이 세션의 것은 체크포인트로 이미 messages 에 있고,
         # 지난 세션의 것은 같은 대화의 아카이브를 줄인 판이다. 자동 층에 올리면 같은 요약이 "관련

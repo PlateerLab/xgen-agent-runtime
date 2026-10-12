@@ -135,14 +135,14 @@ def _summarise(body: str, *, limit: int, path: str, reachable: bool) -> str:
     return f"[tool result truncated: {len(body)} chars > {limit} limit]\n{where}\nPreview:\n{peek}"
 
 
-#: Share of the context window one tool result may take before it is moved to disk.
+#: Share of the context window one tool result may take in the request (4.89.0).
 _WINDOW_SHARE = 0.25
-#: Never cap below this (a 4k-window model still gets a usable result).
-_WINDOW_CAP_FLOOR = 2_000
+#: Never cap below this many tokens (a 4k-window model still gets a usable result).
+_WINDOW_CAP_FLOOR_TOKENS = 1_000
 
 
-def _window_cap(context: ToolContext) -> Optional[int]:
-    """Characters a single result may keep inline for this turn's model, or ``None`` if unknown."""
+def _window_cap_tokens(context: ToolContext) -> Optional[int]:
+    """Tokens a single result may take in this turn's request, or ``None`` if the window is unknown."""
     state = getattr(context, "state_view", None)
     try:
         window = int(getattr(state, "context_window_budget", 0) or 0)
@@ -150,23 +150,89 @@ def _window_cap(context: ToolContext) -> Optional[int]:
         window = 0
     if window <= 0:
         return None
-    from xgen_agent_runtime.core.text_tokens import chars_for_tokens
-
-    return max(_WINDOW_CAP_FLOOR, chars_for_tokens(int(window * _WINDOW_SHARE)))
+    return max(_WINDOW_CAP_FLOOR_TOKENS, int(window * _WINDOW_SHARE))
 
 
-def _clip_inline(body: str, limit: int) -> str:
-    """Head and tail of ``body`` within ``limit`` chars, with an explicit marker."""
-    tail = limit // 4
-    head = max(0, limit - tail - 200)
+def _view_tokens(text: str) -> int:
+    """Script-aware token estimate of what the model will read, with the conservative factor (the
+    provider is not known here). Characters are not tokens: 100k chars of English is ~25k tokens,
+    of Korean ~100k."""
+    from xgen_agent_runtime.core.text_tokens import (
+        DEFAULT_PROVIDER_FACTOR,
+        SAFETY_MULTIPLIER,
+        estimate_tokens_cached,
+    )
+
+    return int(estimate_tokens_cached(text) * DEFAULT_PROVIDER_FACTOR * SAFETY_MULTIPLIER)
+
+
+def _clip_inline(body: str, keep_chars: int, *, saved_at: str = "") -> str:
+    """Head and tail of ``body`` within about ``keep_chars`` chars, with an explicit marker."""
+    tail = keep_chars // 4
+    head = max(0, keep_chars - tail)
+    where = (
+        f"The full result is saved at: {saved_at}"
+        if saved_at
+        else "Re-run with a narrower query (a line range, a filter) if you need the omitted part"
+    )
     return (
-        f"[tool result clipped: {len(body)} chars > {limit} for this model's context window; "
-        "the middle is omitted and no copy was kept: re-run with a narrower query if needed]\n"
+        f"[tool result clipped to fit this model's context window: {len(body)} chars, the middle "
+        f"is omitted. {where}.]\n"
         f"{body[:head]}\n…\n{body[-tail:] if tail else ''}"
     )
 
 
+def _fit_to_window(result: ToolResult, *, tool_name: str, context: ToolContext) -> ToolResult:
+    """Clip what the model will read (``display_text`` when set, else the content) to a quarter of
+    the context window. The tool's own character cap ignores the model: 100k chars is 25k-100k
+    tokens, so on a 32k-window model one result could overflow the request by itself."""
+    cap = _window_cap_tokens(context)
+    if cap is None:
+        return result
+    view = (
+        result.display_text if result.display_text is not None else _render_content(result.content)
+    )
+    tokens = _view_tokens(view)
+    if tokens <= cap:
+        return result
+    keep = max(400, int(len(view) * cap / tokens * 0.95))
+    saved_at = ""
+    if result.persist_full and _reachable(result.persist_full, context):
+        saved_at = result.persist_full
+    _LOG.info(
+        "tool %s result ~%d tokens > window cap %d; clipping to %d chars",
+        tool_name,
+        tokens,
+        cap,
+        keep,
+    )
+    return replace(result, display_text=_clip_inline(view, keep, saved_at=saved_at))
+
+
 def maybe_persist_large_result(
+    result: ToolResult,
+    *,
+    tool_use_id: str,
+    tool_name: str,
+    capabilities: ToolCapabilities,
+    context: ToolContext,
+) -> ToolResult:
+    """Apply the tool's character cap (:func:`_persist_over_tool_cap`), then bound what the model
+    reads by the context window (:func:`_fit_to_window`, 4.89.0). ``max_result_chars`` of 0 or
+    below opts out of both."""
+    if capabilities.max_result_chars <= 0:
+        return result
+    out = _persist_over_tool_cap(
+        result,
+        tool_use_id=tool_use_id,
+        tool_name=tool_name,
+        capabilities=capabilities,
+        context=context,
+    )
+    return _fit_to_window(out, tool_name=tool_name, context=context)
+
+
+def _persist_over_tool_cap(
     result: ToolResult,
     *,
     tool_use_id: str,
@@ -202,37 +268,19 @@ def maybe_persist_large_result(
         # Tool has already persisted externally; nothing to do.
         return result
 
-    # The tool's own cap ignores the model: 100k chars is ~25-90k tokens, so on a 32k-window model a
-    # single result used to overflow the request by itself. The effective cap is also bounded by a
-    # quarter of the context window (4.89.0).
-    window_cap = _window_cap(context)
-    limit = capabilities.max_result_chars
-    if window_cap is not None:
-        limit = min(limit, window_cap)
-
     rendered = _render_content(result.content)
-    if len(rendered) <= limit:
+    if len(rendered) <= capabilities.max_result_chars:
         return result
 
     storage_path = context.storage_path
     if not storage_path:
-        if window_cap is not None and len(rendered) > window_cap:
-            # No sink, and inlining would not fit the model: keep head and tail inline instead of
-            # sending a request the provider will reject.
-            _LOG.warning(
-                "tool %s returned %d chars (> window cap %d) and no storage_path; clipping inline",
-                tool_name,
-                len(rendered),
-                window_cap,
-            )
-            return replace(result, display_text=_clip_inline(rendered, window_cap))
         # No sink configured — log once per call so ops can spot misconfig,
         # but return the original result so correctness is preserved.
         _LOG.warning(
             "tool %s returned %d chars (> %d) but no storage_path; inlining the full payload",
             tool_name,
             len(rendered),
-            limit,
+            capabilities.max_result_chars,
         )
         return result
 
@@ -266,7 +314,7 @@ def maybe_persist_large_result(
     if summary is None:
         summary = _summarise(
             rendered,
-            limit=limit,
+            limit=capabilities.max_result_chars,
             path=target_path,
             reachable=_reachable(target_path, context),
         )

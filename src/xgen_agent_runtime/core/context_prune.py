@@ -140,16 +140,17 @@ def _content_size(block: Dict[str, Any]) -> int:
     return 0
 
 
-def _strip_images_in(blocks: List[Any]) -> int:
-    """Replace base64 image and document (PDF) blocks with a small text marker,
-    recursing into tool_result content lists. Returns the number removed."""
+def _strip_images_in(blocks: List[Any], *, documents: bool = False) -> int:
+    """Replace base64 image blocks (and, with ``documents``, PDF document blocks) with a small text
+    marker, recursing into tool_result content lists. Returns the number removed."""
     removed = 0
+    kinds = ("image", "document") if documents else ("image",)
     for i, b in enumerate(blocks):
         if not isinstance(b, dict):
             continue
         btype = b.get("type")
         if (
-            btype in ("image", "document")
+            btype in kinds
             and isinstance(b.get("source"), dict)
             and b["source"].get("type") == "base64"
         ):
@@ -159,7 +160,7 @@ def _strip_images_in(blocks: List[Any]) -> int:
             }
             removed += 1
         elif btype == "tool_result" and isinstance(b.get("content"), list):
-            removed += _strip_images_in(b["content"])
+            removed += _strip_images_in(b["content"], documents=documents)
     return removed
 
 
@@ -224,6 +225,28 @@ def _trim_result(block: Dict[str, Any], keep: int) -> int:
     return 0
 
 
+def shrink_tool_results(
+    messages: List[Dict[str, Any]], factor: float, *, min_keep: int = 300
+) -> Dict[str, int]:
+    """Shorten every tool_result in *messages* to ``factor`` of its text, in place (head kept, with
+    the usual marker). The last resort under hard pressure: one round of parallel tool calls can
+    return more than the window even when each result is within its own cap, and the protected tail
+    is exactly where those results sit. Returns ``{"trimmed", "chars_saved"}``."""
+    trimmed = saved = 0
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        for block in _iter_tool_results(msg):
+            size = _content_size(block)
+            keep = max(min_keep, int(size * max(0.0, factor)))
+            if size > keep:
+                removed = _trim_result(block, keep)
+                if removed > 0:
+                    trimmed += 1
+                    saved += removed
+    return {"trimmed": trimmed, "chars_saved": saved}
+
+
 def prune_messages(
     messages: List[Dict[str, Any]],
     *,
@@ -233,12 +256,17 @@ def prune_messages(
     trim_keep_chars: int = DEFAULT_TRIM_KEEP_CHARS,
     input_trim_over_chars: int = DEFAULT_INPUT_TRIM_OVER_CHARS,
     input_trim_keep_chars: int = DEFAULT_INPUT_TRIM_KEEP_CHARS,
+    strip_documents: bool = False,
 ) -> PruneMetrics:
     """Run the deterministic prune over *messages* in place.
 
-    Returns metrics: ``deduped`` (results back-referenced), ``images_stripped`` (images and PDF
-    documents), ``trimmed`` (oversized results shortened), ``inputs_trimmed`` (stale tool calls
-    whose long input strings were shortened), ``chars_saved`` (text chars removed, images excluded).
+    Returns metrics: ``deduped`` (results back-referenced), ``images_stripped`` (images, and PDF
+    documents when ``strip_documents``), ``trimmed`` (oversized results shortened),
+    ``inputs_trimmed`` (stale tool calls whose long input strings were shortened), ``chars_saved``
+    (text chars removed, images excluded).
+
+    ``strip_documents``: attached PDFs are often what the request is about, so they are removed only
+    under hard pressure (``core.compaction`` passes it with the aggressive profile).
     """
     metrics = PruneMetrics(deduped=0, images_stripped=0, trimmed=0, inputs_trimmed=0, chars_saved=0)
     if not messages:
@@ -274,7 +302,7 @@ def prune_messages(
             continue
         content = msg.get("content")
         if isinstance(content, list):
-            metrics["images_stripped"] += _strip_images_in(content)
+            metrics["images_stripped"] += _strip_images_in(content, documents=strip_documents)
         if msg.get("role") == "assistant":
             saved_inputs = _trim_tool_inputs(msg, input_trim_over_chars, input_trim_keep_chars)
             if saved_inputs > 0:

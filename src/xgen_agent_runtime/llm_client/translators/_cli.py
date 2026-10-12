@@ -103,8 +103,11 @@ def resolve_auth_channel(auth_mode: str, has_api_key: bool) -> str:
 
 
 #: One argv string must stay under Linux ``MAX_ARG_STRLEN`` (131,072 bytes). Above this the
-#: Claude Code client moves the system prompt to a file and the prompt to stdin.
+#: Claude Code client moves the system prompt to a file and the prompt to stdin. Windows caps the
+#: WHOLE command line at 32,767 characters (the desktop host runs the CLI there), so the bar is
+#: much lower: the rest of the argv (MCP config, tool lists) needs room too.
 ARGV_SAFE_BYTES = 100_000
+ARGV_SAFE_CHARS_WINDOWS = 12_000
 
 
 def system_prompt_text(system: Any) -> str:
@@ -123,7 +126,11 @@ def system_prompt_text(system: Any) -> str:
 
 
 def fits_argv(text: str) -> bool:
-    """True when *text* is safe as a single argv string."""
+    """True when *text* is safe as a single argv string on this platform."""
+    import os
+
+    if os.name == "nt":
+        return len(text or "") <= ARGV_SAFE_CHARS_WINDOWS
     return len((text or "").encode("utf-8")) <= ARGV_SAFE_BYTES
 
 

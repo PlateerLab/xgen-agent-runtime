@@ -42,6 +42,11 @@ class BudgetFit:
     clamped: bool
     #: 이력을 잘라야 했을 때(압축이 없는 CLI 백엔드)의 새 이력. ``None`` 이면 그대로.
     history: Optional[List[Any]] = None
+    #: 맞춘 뒤의 메모리 노드 이전 대화 문자열(잘리지 않았으면 받은 그대로).
+    history_context: str = ""
+    #: 사용자 입력(text·rag)이 잘렸는가. 이력·이전 대화 문자열만 줄었으면 False: 사용자에게 "입력 일부를
+    #: 생략했다" 고 알릴 일이 아니다.
+    input_clamped: bool = False
     #: 진단용 — provider 컨텍스트 오류와 대조할 압축 전 구성요소 추정치.
     window: int = 0
     budget: int = 0
@@ -106,9 +111,28 @@ def _estimate_tools_tokens(registry: Any, provider: str, model: str) -> int:
             return 0
 
 
-#: 파이프라인 압축이 이력을 최소한 이만큼은 남긴다(체크포인트 요약 + 여유). 입력 맞춤은 이력을
-#: 이 크기까지 줄어들 수 있는 것으로 본다. 이력 때문에 사용자의 새 질문을 자르지 않는다.
+#: 파이프라인 압축이 이력을 최소한 이만큼은 남긴다. 입력 맞춤은 이력을 이 크기까지 줄어들 수 있는
+#: 것으로 본다. 이력 때문에 사용자의 새 질문을 자르지 않는다.
 _COMPACTED_HISTORY_FLOOR = 5_000
+#: 이전 대화 문자열을 이보다 작게 줄일 바에는 뺀다(머리글만 남는다).
+_MIN_HISTORY_CONTEXT_TOKENS = 256
+
+
+def _compacted_history_floor(window: int) -> int:
+    """압축 뒤 이력(체크포인트)이 차지할 수 있는 최대 토큰: 요약 + 원문으로 남기는 사용자 말 + 머리글.
+
+    5,000 고정이었을 때는 큰 창에서 체크포인트(사용자 말만 창의 8%, 최대 2만)가 그보다 커서, 입력 맞춤이
+    받아들인 질문과 RAG 를 압축으로도 담지 못했다.
+    """
+    try:
+        from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+            checkpoint_tokens_bound,
+        )
+
+        return max(_COMPACTED_HISTORY_FLOOR, checkpoint_tokens_bound(window))
+    except Exception:  # noqa: BLE001 (fail-open)
+        return _COMPACTED_HISTORY_FLOOR
+
 
 #: 내장 메모리 주입(Stage 2 → 시스템 프롬프트의 Relevant Knowledge)이 창에서 차지할 수 있는 몫.
 #: 주입 상한은 글자(기본 10,000자)라 8k~32k 창에서는 그것만으로 창의 3분의 1을 넘었다.
@@ -147,20 +171,16 @@ def memory_reserved_tokens(window: int, configured_chars: int) -> int:
     return max(0, tokens)
 
 
-def fit_history_context(context: str, window: int, provider: str, model: str) -> str:
-    """메모리 노드의 이전 대화 문자열을 창의 :data:`HISTORY_CONTEXT_WINDOW_SHARE` 안으로.
-
-    문자열은 오래된 대화 → 최근 대화 순이라 넘치면 가운데를 줄인다(머리글과 가장 최근 대화가
-    남는다). 창을 모르면 그대로.
-    """
-    if not context or not window or window <= 0:
+def fit_history_context_tokens(context: str, tokens: int, provider: str, model: str) -> str:
+    """이전 대화 문자열을 ``tokens`` 안으로(머리글과 가장 최근 대화가 남게 가운데를 줄인다)."""
+    if not context:
         return context
     try:
         from xgen_agent_runtime.host.token_budget import truncate_text_to_token_budget
 
         fitted, _cut = truncate_text_to_token_budget(
             context,
-            max(256, int(window * HISTORY_CONTEXT_WINDOW_SHARE)),
+            max(_MIN_HISTORY_CONTEXT_TOKENS, int(tokens)),
             provider=provider,
             model=model,
             front_ratio=0.2,
@@ -170,6 +190,18 @@ def fit_history_context(context: str, window: int, provider: str, model: str) ->
     except Exception:  # noqa: BLE001 (fail-open)
         logger.warning("[GENY_BUDGET] 이전 대화 문자열 맞춤 실패: 그대로 둔다", exc_info=True)
         return context
+
+
+def fit_history_context(context: str, window: int, provider: str, model: str) -> str:
+    """메모리 노드의 이전 대화 문자열을 창의 :data:`HISTORY_CONTEXT_WINDOW_SHARE` 안으로. 창을 모르면 그대로.
+
+    입력 맞춤(:func:`fit_input_to_budget`)이 남는 자리에 맞춰 한 번 더 줄인다.
+    """
+    if not context or not window or window <= 0:
+        return context
+    return fit_history_context_tokens(
+        context, int(window * HISTORY_CONTEXT_WINDOW_SHARE), provider, model
+    )
 
 
 def _next_history_start(history: List[Any], start: int, keep_last: int = 2) -> int:
@@ -213,34 +245,48 @@ def fit_input_to_budget(
     window: int,
     reserved_tokens: int = 0,
     history_compressible: bool = True,
+    history_context: str = "",
 ) -> BudgetFit:
-    """이번 턴의 입력측(text + rag_block)을 유효 예산 안으로 맞춘다.
+    """이번 턴의 입력측을 유효 예산 안으로 맞춘다.
 
-    예산 = window − max_tokens(출력 예약) − 안전마진 − reserved_tokens.
+    예산 = window − 출력 예약(:func:`core.compaction.output_reserve`, Stage 4 guard 와 같은 값)
+    − 안전마진 − reserved_tokens. 예전에는 출력 예약을 max_tokens 로만 잡아 guard 가 요구하는 것보다
+    2,048토큰 더 채웠고, RAG 를 꽉 채운 턴은 provider 가 받았을 요청을 guard 가 거절했다.
+
     구성요소:
         overhead = system_prompt + tool 스키마(실제로 보내는 것)
         이력     = preload 된 지난 대화
-        가변분   = rag_block → text 순으로 truncate
+        가변분   = history_context → rag_block → text 순으로 줄인다
 
     이력의 몫(4.89.0):
         ``history_compressible=True`` (API 백엔드): 파이프라인 압축(Stage 2/4/6)이 이력을 요약
-        체크포인트 크기(:data:`_COMPACTED_HISTORY_FLOOR`)까지 줄일 수 있다. 그래서 RAG·질문의 자리를
-        정할 때 이력은 그 바닥만큼만 센다. 예전에는 이력 전체를 세어, 압축할 수 있는 지난 대화 때문에
-        압축할 수 없는 **이번 질문**을 1,024토큰까지 잘랐다.
+        체크포인트까지 줄일 수 있다. 그래서 RAG·질문의 자리를 정할 때 이력은 체크포인트가 차지할 수
+        있는 최대 크기(:func:`_compacted_history_floor`)만큼만 센다. 예전에는 이력 전체를 세어, 압축할 수
+        있는 지난 대화 때문에 압축할 수 없는 **이번 질문**을 1,024토큰까지 잘랐다.
         ``history_compressible=False`` (CLI 백엔드: 런타임 압축이 없고 지난 대화가 첫 메시지 하나로
         접혀 CLI 도 줄이지 못한다): 넘치면 **가장 오래된 이력부터** 빼고(마지막 두 메시지는 남김),
-        그다음 RAG, 마지막에 질문을 자른다. 잘린 이력은 ``BudgetFit.history`` 로 돌려준다.
+        그다음 가변분을 줄인다. 잘린 이력은 ``BudgetFit.history`` 로 돌려준다.
+
+    ``history_context``: 메모리 노드가 넘긴 이전 대화 문자열. 시스템 프롬프트 끝에 붙어 압축이 줄일 수
+    없으므로 여기서 가장 먼저 줄인다(맞춘 값은 ``BudgetFit.history_context``).
 
     ``reserved_tokens``: fit **이후** 턴 중에 system 으로 주입되는 것들(내장 메모리 등)의 선예약분.
 
-    fail-open: 어떤 예외도 입력을 그대로 돌려준다 — 예산 로직의 버그가
-    턴을 죽여선 안 된다 (agent_xgen 과 동일 원칙).
+    fail-open: 어떤 예외도 입력을 그대로 돌려준다. 예산 로직의 버그가 턴을 죽여선 안 된다.
     """
-    result = BudgetFit(text=text, rag_block=rag_block, clamped=False, window=window)
+    result = BudgetFit(
+        text=text,
+        rag_block=rag_block,
+        clamped=False,
+        window=window,
+        history_context=history_context,
+    )
     if not window or window <= 0:
         return result
     try:
+        from xgen_agent_runtime.core.compaction import output_reserve
         from xgen_agent_runtime.host.token_budget import (
+            budget_margin,
             count_message_tokens,
             count_messages_tokens,
             count_text_tokens,
@@ -248,28 +294,32 @@ def fit_input_to_budget(
             truncate_text_to_token_budget,
         )
 
-        budget = effective_input_budget(window, max_tokens)
+        budget = min(
+            effective_input_budget(window, max_tokens),
+            window - output_reserve(window, max_tokens) - budget_margin(window),
+        )
         budget = max(1, budget - max(0, int(reserved_tokens)))
         sys_t = count_text_tokens(system_prompt, provider, model)
         tools_t = _estimate_tools_tokens(registry, provider, model)
         hist_t = count_messages_tokens(history, provider, model) if history else 0
         text_t = count_text_tokens(text, provider, model)
         rag_t = count_text_tokens(rag_block, provider, model) if rag_block else 0
+        ctx_t = count_text_tokens(history_context, provider, model) if history_context else 0
 
-        total = sys_t + tools_t + hist_t + text_t + rag_t
+        total = sys_t + tools_t + hist_t + text_t + rag_t + ctx_t
         result.budget = budget
         result.total_before = total
         if total <= budget:
             return result
 
         if history_compressible:
-            hist_need = min(hist_t, _COMPACTED_HISTORY_FLOOR)
+            hist_need = min(hist_t, _compacted_history_floor(window))
         else:
             # 오래된 이력부터 뺀다. 이번 턴의 입력보다 먼저. 메시지별 토큰은 한 번만 센다.
             msgs = list(history or [])
             per = [count_message_tokens(m, provider, model) for m in msgs]
             start = 0
-            while sys_t + tools_t + hist_t + text_t + rag_t > budget:
+            while sys_t + tools_t + hist_t + text_t + rag_t + ctx_t > budget:
                 nxt = _next_history_start(msgs, start)
                 if nxt == start:
                     break
@@ -280,7 +330,7 @@ def fit_input_to_budget(
                 result.clamped = True
             hist_need = hist_t
 
-        if sys_t + tools_t + hist_need + text_t + rag_t <= budget:
+        if sys_t + tools_t + hist_need + text_t + rag_t + ctx_t <= budget:
             if history_compressible:
                 logger.info(
                     "[GENY_BUDGET] 입력 %d > 예산 %d: 이력(%d)은 파이프라인 압축에 맡기고 입력은 그대로",
@@ -291,18 +341,33 @@ def fit_input_to_budget(
             return result
 
         logger.warning(
-            "[GENY_BUDGET] 입력 %d > 예산 %d (window=%d sys=%d tools=%d hist=%d text=%d rag=%d) — clamp",
+            "[GENY_BUDGET] 입력 %d > 예산 %d (window=%d sys=%d tools=%d hist=%d ctx=%d text=%d rag=%d), clamp",
             total,
             budget,
             window,
             sys_t,
             tools_t,
             hist_t,
+            ctx_t,
             text_t,
             rag_t,
         )
 
         overhead = sys_t + tools_t + hist_need
+        # ── 0) 메모리 노드의 이전 대화 문자열: 가장 오래된 쪽부터 ──
+        if history_context:
+            room = budget - overhead - text_t - rag_t
+            if ctx_t > room:
+                new_ctx = (
+                    fit_history_context_tokens(history_context, room, provider, model)
+                    if room >= _MIN_HISTORY_CONTEXT_TOKENS
+                    else ""
+                )
+                result.history_context = new_ctx
+                result.clamped = True
+                ctx_t = count_text_tokens(new_ctx, provider, model) if new_ctx else 0
+        overhead += ctx_t
+
         # ── 1) RAG 블록 truncate (사용자 텍스트 보존) ──
         new_rag = rag_block
         if rag_block:
@@ -316,6 +381,7 @@ def fit_input_to_budget(
             if cut:
                 result.rag_block = new_rag
                 result.clamped = True
+                result.input_clamped = True
                 rag_t = count_text_tokens(new_rag, provider, model)
 
         # ── 2) 그래도 초과면 사용자 텍스트 truncate (최후 수단) ──
@@ -340,7 +406,8 @@ def fit_input_to_budget(
             if cut:
                 result.text = new_text
                 result.clamped = True
-    except Exception as exc:  # noqa: BLE001 — fail-open
+                result.input_clamped = True
+    except Exception as exc:  # noqa: BLE001 (fail-open)
         logger.warning("[GENY_BUDGET] 예산 적용 중 오류(무시하고 진행): %s", exc, exc_info=True)
     return result
 
