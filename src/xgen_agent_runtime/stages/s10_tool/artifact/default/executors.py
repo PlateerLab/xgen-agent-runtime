@@ -79,18 +79,28 @@ def _tool_facts(registry: Optional[ToolRegistry], tc: Dict[str, Any]) -> Dict[st
         return {}
     from xgen_agent_runtime.tools.base import tool_origin
 
+    calls = [(tool, tc.get("tool_input", {}))]
+    dispatch = getattr(tool, "dispatched_calls", None)
+    if callable(dispatch):
+        # 다른 도구를 대신 부르는 호출(ToolBatch)은 그 안쪽 호출들의 성격이다.
+        try:
+            calls = list(dispatch(tc.get("tool_input", {}), registry))
+        except Exception:  # noqa: BLE001
+            calls = []
+        if not calls:
+            return {"origin": tool_origin(tool)}
     try:
-        caps = tool.capabilities(tc.get("tool_input", {}))
+        caps = [inner.capabilities(inp) for inner, inp in calls]
     except Exception:  # noqa: BLE001 - 능력을 몰라도 호출은 막지 않는다
-        return {"origin": tool_origin(tool)}
+        return {"origin": tool_origin(calls[0][0])}
     return {
         "capabilities": {
-            "read_only": bool(caps.read_only),
-            "destructive": bool(caps.destructive),
-            "network_egress": bool(caps.network_egress),
-            "idempotent": bool(caps.idempotent),
+            "read_only": all(c.read_only for c in caps),
+            "destructive": any(c.destructive for c in caps),
+            "network_egress": any(c.network_egress for c in caps),
+            "idempotent": all(c.idempotent for c in caps),
         },
-        "origin": tool_origin(tool),
+        "origin": tool_origin(calls[0][0]),
     }
 
 

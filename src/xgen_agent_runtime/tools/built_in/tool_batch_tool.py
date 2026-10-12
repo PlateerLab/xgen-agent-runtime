@@ -30,7 +30,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.renamed import current_name
@@ -113,6 +113,28 @@ class ToolBatchTool(Tool):
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
         # 안쪽 도구의 성격을 알 수 없다 — 바깥은 보수적으로 직렬, 결과 상한은 이 도구가 관리.
         return ToolCapabilities(concurrency_safe=False, read_only=False, max_result_chars=0)
+
+    def dispatched_calls(
+        self, input: Dict[str, Any], registry: Any
+    ) -> List[Tuple[Tool, Dict[str, Any]]]:
+        """이 호출이 실제로 부르는 (도구, 입력) 목록. 호출 사건에 실을 성격은 안쪽 호출의 것이다.
+        안쪽 도구를 찾을 수 없으면 빈 목록(성격을 모른다)."""
+        tool_name = str((input or {}).get("tool") or "").strip()
+        inputs = (input or {}).get("inputs") or []
+        if (
+            not tool_name
+            or tool_name == TOOL_BATCH_NAME
+            or registry is None
+            or not isinstance(inputs, list)
+        ):
+            return []
+        target = registry.get(tool_name)
+        if target is None:
+            renamed = current_name(tool_name, lambda n: registry.get(n) is not None)
+            target = registry.get(renamed) if renamed else None
+        if target is None:
+            return []
+        return [(target, i) for i in inputs[:MAX_ITEMS] if isinstance(i, dict)]
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         from xgen_agent_runtime.stages.s10_tool import repeat_guard
