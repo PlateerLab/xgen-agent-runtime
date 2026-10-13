@@ -145,6 +145,10 @@ class ErrorCategory(str, Enum):
     CLI_TIMEOUT = "cli_timeout"
     CLI_PROTOCOL_ERROR = "cli_protocol_error"
     CLI_PERMISSION_DENIED = "cli_permission_denied"
+    #: 구독 한도·지출 한도 소진. 같은 계정으로 다시 보내도 초기화 전에는 풀리지
+    #: 않으므로 재시도 대상이 아니다(is_recoverable False). 호스트가 다른 계정으로
+    #: 넘길지 정한다. APIError.details 에 reset_at·rate_limits 가 실린다.
+    CLI_RATE_LIMITED = "cli_rate_limited"
 
     @property
     def is_recoverable(self) -> bool:
@@ -190,6 +194,7 @@ _CATEGORY_TO_CODE_DEFAULT: dict = {
     ErrorCategory.CLI_TIMEOUT: ExecutorErrorCode.EXEC_CLI_TIMEOUT,
     ErrorCategory.CLI_PROTOCOL_ERROR: ExecutorErrorCode.EXEC_CLI_PROTOCOL_ERROR,
     ErrorCategory.CLI_PERMISSION_DENIED: ExecutorErrorCode.EXEC_CLI_PERMISSION_DENIED,
+    ErrorCategory.CLI_RATE_LIMITED: ExecutorErrorCode.EXEC_API_RATE_LIMITED,
 }
 
 
@@ -273,12 +278,16 @@ class APIError(GenyExecutorError):
         status_code: Optional[int] = None,
         code: Optional[ExecutorErrorCode] = None,
         cause: Optional[Exception] = None,
+        details: Optional[dict] = None,
     ):
         # Resolve code: explicit > derived-from-category > UNKNOWN.
         resolved_code = code or ExecutorErrorCode.from_category(category)
         super().__init__(message, code=resolved_code, cause=cause)
         self.category = category
         self.status_code = status_code
+        #: 분류에 딸린 구조화 값(없으면 빈 dict). CLI_RATE_LIMITED 는
+        #: ``reset_at``(유닉스 초 또는 None)·``rate_limits``·``kind`` 를 싣는다.
+        self.details: dict = dict(details or {})
 
 
 class ToolExecutionError(GenyExecutorError):
