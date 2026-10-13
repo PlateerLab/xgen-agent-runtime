@@ -30,6 +30,9 @@ Scenarios driven by the ``FAKE_CLAUDE_SCENARIO`` env var:
                          Writes its pid to ``$FAKE_CLAUDE_PID_FILE`` so
                          cancellation tests can poll whether the child
                          was reaped after the consumer disconnected.
+  - ``message_form_rate_limited`` - subscription limit: a rejected
+                         ``rate_limit_event``, an ``error=rate_limit`` assistant
+                         envelope with the notice, an is_error result, exit 1.
   - ``auth_fail``      — exit 1 with an auth-related stderr message.
   - ``permission_fail``— exit 1 with a permission-related stderr.
   - ``crash``          — exit 2 with generic stderr.
@@ -443,6 +446,40 @@ def _message_form_auth_failed(argv: List[str]) -> int:
     return 0
 
 
+def _message_form_rate_limited(argv: List[str]) -> int:
+    """The subscription-limit path (4.90.0).
+
+    The CLI announces the rejected window on ``rate_limit_event`` first, then
+    puts the notice in an ``assistant`` envelope annotated ``error=rate_limit``,
+    then an ``is_error`` result, and exits 1. The client must raise
+    CLI_RATE_LIMITED carrying the window's reset time, and the notice must not
+    stream out as the answer.
+    """
+    _emit_line({"type": "system", "subtype": "init", "session_id": "fake-rl-1", "model": "claude-sonnet-4-6"})
+    _emit_line({
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "rejected", "resetsAt": 1781000400, "rateLimitType": "five_hour",
+            "overageStatus": "rejected", "isUsingOverage": False,
+        },
+    })
+    _emit_line({
+        "type": "assistant",
+        "error": "rate_limit",
+        "message": {
+            "id": "msg_rl",
+            "role": "assistant",
+            "type": "message",
+            "content": [{"type": "text", "text": "You've hit your limit · resets 3pm (Asia/Seoul)"}],
+        },
+    })
+    _emit_line({
+        "type": "result", "subtype": "success", "is_error": True,
+        "result": "You've hit your limit · resets 3pm (Asia/Seoul)",
+    })
+    return 1
+
+
 def _stream_then_hang(argv: List[str]) -> int:
     """Emit the stream-json preamble + one text delta, then block forever.
 
@@ -548,6 +585,7 @@ SCENARIOS = {
     "stream_then_hang": _stream_then_hang,
     "leaky_child_then_exit": _leaky_child_then_exit,
     "message_form_auth_failed": _message_form_auth_failed,
+    "message_form_rate_limited": _message_form_rate_limited,
     "auth_fail": _auth_fail,
     "permission_fail": _permission_fail,
     "crash": _crash,

@@ -42,6 +42,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 
 from xgen_agent_runtime.core.config import ModelConfig
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.llm_client._cli_limits import is_usage_limit_text, usage_limit_error
 from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIAuthFailed,
     CLIBinaryNotFound,
@@ -65,6 +66,7 @@ from xgen_agent_runtime.llm_client.translators._cli import (
     claude_code_argv,
     fits_argv,
     flatten_messages_to_prompt,
+    limit_error_from_line,
     system_prompt_text,
     resolve_auth_channel,
     parse_json_output_to_response,
@@ -108,6 +110,13 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
             f"Claude Code CLI auth failed (exit {result.returncode}): {stderr[:300]}{suffix}",
             category=ErrorCategory.CLI_AUTH_FAILED,
         )
+    # 한도 소진은 stdout 의 is_error 결과로 오기도 한다(--output-format json).
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    for text in (stderr, stdout):
+        if is_usage_limit_text(text, strict=True):
+            return usage_limit_error(
+                f"Claude Code CLI usage limit (exit {result.returncode}): {text.strip()[:300]}{suffix}"
+            )
     if "permission" in stderr and ("denied" in stderr or "deny" in stderr or "blocked" in stderr):
         return APIError(
             f"Claude Code CLI permission denied: {stderr[:300]}{suffix}",
@@ -117,6 +126,17 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
         f"Claude Code CLI exited with code {result.returncode}: {stderr[:300]}{suffix}",
         category=ErrorCategory.CLI_PROTOCOL_ERROR,
     )
+
+
+def _limit_from_json_output(stdout: bytes) -> Optional[APIError]:
+    """``--output-format json`` that exited 0 but reports a limit as its result."""
+    import json as _json
+
+    try:
+        obj = _json.loads(stdout.decode("utf-8", errors="replace") or "{}")
+    except ValueError:
+        return None
+    return limit_error_from_line(obj) if isinstance(obj, dict) else None
 
 
 def _process_alive(proc: Any) -> bool:
@@ -807,6 +827,9 @@ class ClaudeCodeCLIClient(BaseClient):
             result = await runner.run_oneshot(argv, stdin=stdin)
             if result.returncode != 0:
                 raise _classify_cli_result(result, cli_version=cli_version)
+            limit = _limit_from_json_output(result.stdout)
+            if limit is not None:
+                raise limit
             return self._attach_cli_version(
                 parse_json_output_to_response(result.stdout, model=request.model)
             )
@@ -819,11 +842,15 @@ class ClaudeCodeCLIClient(BaseClient):
                 self._with_version(str(e)), category=ErrorCategory.CLI_AUTH_FAILED
             ) from e
         except CLIProtocolError as e:
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
         except RuntimeError as e:
             # stream-json error envelope was raised by the assembler.
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
@@ -907,6 +934,17 @@ class ClaudeCodeCLIClient(BaseClient):
                     line_obj = parse_stream_json_line(raw)
                     if line_obj is None:
                         continue
+                    # Subscription limit: raise BEFORE feeding, so the notice
+                    # ("You've hit your limit · resets 3pm") never streams out as
+                    # the assistant's answer, and as CLI_RATE_LIMITED so Stage 6
+                    # does not retry the same account and the host can fail over.
+                    limit = limit_error_from_line(line_obj, accum.rate_limits)
+                    if limit is not None:
+                        raise APIError(
+                            self._with_version(str(limit)),
+                            category=limit.category,
+                            details=limit.details,
+                        )
                     # Surface CLI-side errors as APIError so the stage's
                     # retry/escalate path runs instead of silently producing
                     # an empty response. (Malformed lines have no ``type``
@@ -961,6 +999,11 @@ class ClaudeCodeCLIClient(BaseClient):
         except CLITimeout as e:
             raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_TIMEOUT) from e
         except CLIProtocolError as e:
+            # Non-zero exit whose stderr names the limit (no annotated frame came).
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(
+                    self._with_version(str(e)), rate_limits=accum.rate_limits
+                ) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e

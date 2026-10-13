@@ -1088,7 +1088,9 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
          "harness": {"components": {name: int}, "fast_path": {...}},  # 있을 때만
          "auxiliary": {"input_tokens": int, "output_tokens": int,      # 있을 때만
                        "cache_read_tokens": int, "cache_creation_tokens": int,
-                       "calls": int, "by_purpose": {purpose: {...같은 네 값과 calls}}}
+                       "calls": int, "by_purpose": {purpose: {...같은 네 값과 calls}}},
+         "cli_version": str,                                           # CLI 백엔드, 있을 때만
+         "rate_limits": {window: {status, resets_at, utilization, ...}}  # Claude CLI, 있을 때만
         }
 
     위 최상위 토큰 값은 메인 루프 호출만이다(예전과 같다). ``auxiliary`` 는 메인 루프 밖에서 모델을 부른
@@ -1162,6 +1164,14 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
         usage["harness"] = harness
     if auxiliary is not None:
         usage["auxiliary"] = auxiliary
+    # CLI 백엔드(4.90.0): 마지막 호출의 CLI 버전과 구독 한도 신호(창별 rate_limit_event).
+    # 호스트가 계정별 한도 상태와 파드별 버전을 원장에 남기는 근거다. 있을 때만 싣는다.
+    last_raw = getattr(last, "raw", None)
+    if isinstance(last_raw, dict):
+        if last_raw.get("cli_version"):
+            usage["cli_version"] = str(last_raw["cli_version"])
+        if isinstance(last_raw.get("rate_limits"), dict) and last_raw["rate_limits"]:
+            usage["rate_limits"] = last_raw["rate_limits"]
     return usage
 
 

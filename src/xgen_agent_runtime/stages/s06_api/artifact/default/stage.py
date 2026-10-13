@@ -555,6 +555,9 @@ class APIStage(Stage[Any, APIResponse]):
                 cli_version = getattr(client, "_cli_version_value", None)
                 if cli_version:
                     error_payload["cli_version"] = str(cli_version)
+                # 구독 한도 소진(CLI_RATE_LIMITED)이면 초기화 시각·창별 상태가 실린다.
+                if getattr(e, "details", None):
+                    error_payload["details"] = dict(e.details)
                 state.add_event("api.error", error_payload)
                 raise
             # The provider's own count of this prompt anchors every later size decision this turn

@@ -943,6 +943,24 @@ async def test_assemble_thinking_blocks_collected() -> None:
 async def test_assemble_raises_on_error_envelope() -> None:
     lines = [
         b'{"type": "system"}\n',
+        b'{"type": "error", "message": "upstream exploded"}\n',
+    ]
+
+    async def gen():
+        for ln in lines:
+            yield ln
+
+    with pytest.raises(RuntimeError, match="upstream exploded"):
+        await assemble_response_from_stream_json(gen(), model="m")
+
+
+@pytest.mark.asyncio
+async def test_assemble_error_envelope_naming_a_limit_is_rate_limited() -> None:
+    """4.90.0: a limit is not a protocol error: it must not be retried on the same account."""
+    from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+
+    lines = [
+        b'{"type": "system"}\n',
         b'{"type": "error", "message": "rate limited"}\n',
     ]
 
@@ -950,5 +968,6 @@ async def test_assemble_raises_on_error_envelope() -> None:
         for ln in lines:
             yield ln
 
-    with pytest.raises(RuntimeError, match="rate limited"):
+    with pytest.raises(APIError) as got:
         await assemble_response_from_stream_json(gen(), model="m")
+    assert got.value.category is ErrorCategory.CLI_RATE_LIMITED

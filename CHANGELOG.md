@@ -4,6 +4,28 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.90.0] - 2026-10-13
+
+### Added: CLI 구독 한도 신호와 한도 소진 분류
+
+XGEN 이 Claude Code·Codex 계정을 여러 개 두고 한도가 찬 계정을 건너뛰려면, 런타임이 스트림에서만 알 수 있는 두 가지를
+호스트에 넘겨야 한다. 계정을 고르는 일은 호스트 몫이고 빌더 인자(`build_cli_client`, `build_codex_cli_client`)는 바뀌지 않았다.
+
+- **한도 신호 보존**: Claude CLI 가 매 요청 앞에 내는 `rate_limit_event` 를 더는 버리지 않는다. 창(`five_hour`·`seven_day`
+  등)별 마지막 값 `{status, resets_at, utilization, overage_status, ...}` 을 `StreamJsonAccumulator.rate_limits` 로 모아
+  `APIResponse.raw["rate_limits"]` 와 턴 `usage` 청크의 `rate_limits` 에 싣는다. `utilization` 은 CLI 가 경고(90% 넘음)일
+  때만 보내므로 평소에는 None 이다(0 으로 지어내지 않는다).
+- **`ErrorCategory.CLI_RATE_LIMITED`**: 구독·지출 한도 소진. `is_recoverable` 이 아니라서 Stage 6 이 같은 계정으로 다시
+  보내지 않는다. 예전에는 `CLI_PROTOCOL_ERROR` 로 떨어져 같은 계정에 세 번 더 보냈고, Claude 의 안내 문구("You've hit your
+  limit")가 답변으로 흘러나갔다. 근거: Claude assistant 프레임의 `error` 값 `rate_limit`·`billing_error`, `is_error` 결과와
+  error 줄의 한도 문구, Codex 오류 프레임의 한도 문구와 429. stderr·종료 코드 경로는 MCP 로그가 섞이므로 넓은 표현
+  ("rate limit")은 보지 않는다.
+- **`APIError.details`**: 분류에 딸린 구조화 값. `CLI_RATE_LIMITED` 는 `reset_at`(유닉스 초, 모르면 None)·`rate_limits`·
+  `kind`(limit·billing) 를 싣는다. 초기화 시각은 거부된 창의 `resetsAt`, 없으면 문구(`limit reached|<epoch>`,
+  "resets 3pm (Asia/Seoul)", "try again in 2 days 3 hours", `resets_in_seconds`)에서 뽑는다. Stage 6 의 `api.error`
+  이벤트에도 `details` 가 실린다.
+- 턴 `usage` 에 `cli_version` 을 싣는다(호스트가 파드별 CLI 버전을 원장에 남긴다).
+
 ## [4.89.0] - 2026-10-12
 
 ### Changed: 컨텍스트 압축을 다시 짰다 (언제, 얼마나, 무엇을 남기는지)

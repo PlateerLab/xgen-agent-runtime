@@ -39,6 +39,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 
 from xgen_agent_runtime.core.config import ModelConfig
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.llm_client._cli_limits import is_usage_limit_text, usage_limit_error
 from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIAuthFailed,
     CLIBinaryNotFound,
@@ -84,6 +85,10 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
         return APIError(
             f"Codex CLI auth failed (exit {result.returncode}): {stderr[:300]}{suffix}",
             category=ErrorCategory.CLI_AUTH_FAILED,
+        )
+    if is_usage_limit_text(stderr, strict=True):
+        return usage_limit_error(
+            f"Codex CLI usage limit (exit {result.returncode}): {stderr.strip()[:300]}{suffix}"
         )
     if "permission" in stderr and ("denied" in stderr or "deny" in stderr or "blocked" in stderr):
         return APIError(
@@ -470,6 +475,11 @@ class CodexCLIClient(BaseClient):
             )
 
     def _reported_error(self, message: str) -> APIError:
+        # "You've hit your usage limit ... try again in 2 days 3 hours" / "exceeded retry
+        # limit, last status: 429 Too Many Requests": the CLI's own error frame, so the
+        # loose phrases count too. CLI_RATE_LIMITED is not retried on the same account.
+        if is_usage_limit_text(message):
+            return usage_limit_error(self._with_version(f"Codex CLI usage limit: {message[:300]}"))
         return APIError(
             self._with_version(f"Codex CLI reported error: {message[:300]}"),
             category=ErrorCategory.CLI_PROTOCOL_ERROR,
@@ -517,6 +527,8 @@ class CodexCLIClient(BaseClient):
                 self._with_version(str(e)), category=ErrorCategory.CLI_AUTH_FAILED
             ) from e
         except CLIProtocolError as e:
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
@@ -608,6 +620,8 @@ class CodexCLIClient(BaseClient):
         except CLITimeout as e:
             raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_TIMEOUT) from e
         except CLIProtocolError as e:
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
