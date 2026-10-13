@@ -130,7 +130,7 @@ def _clock_reset(match: "re.Match[str]", now: float) -> Optional[float]:
         from zoneinfo import ZoneInfo
 
         tz = ZoneInfo(tz_name.strip())
-    except Exception:  # noqa: BLE001: 모르는 시간대면 시각을 모른다
+    except Exception:  # noqa: BLE001 (모르는 시간대면 시각을 모른다)
         return None
     h = int(hour) % 12 + (12 if ampm.lower() == "pm" else 0)
     m = int(minute or 0)
@@ -143,7 +143,12 @@ def _clock_reset(match: "re.Match[str]", now: float) -> Optional[float]:
             return None
         try:
             target = current.replace(
-                month=_MONTHS.index(key) + 1, day=int(day), hour=h, minute=m, second=0, microsecond=0
+                month=_MONTHS.index(key) + 1,
+                day=int(day),
+                hour=h,
+                minute=m,
+                second=0,
+                microsecond=0,
             )
         except ValueError:
             return None
