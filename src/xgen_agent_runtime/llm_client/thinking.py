@@ -419,7 +419,48 @@ def thinking_spec(provider: str, model: str) -> ThinkingSpec:
             if pattern.search(served):
                 return spec
         return NONE
+    if provider == "openrouter":
+        return _openrouter_spec(name)
     return NONE
+
+
+#: OpenRouter 가 받는 강도 중 대부분의 생각하는 모델에 통하는 것 — 밑의 모델을 모를 때의 선택지.
+_OPENROUTER_GENERIC = _levels(_LV3, can_disable=True, default="", via="openrouter_effort")
+
+
+def _openrouter_spec(model: str) -> ThinkingSpec:
+    """OpenRouter 모델(``author/slug[:변형]``)의 생각 조절.
+
+    OpenRouter 는 ``reasoning`` 하나로 모든 모델의 생각을 받아 그 모델의 방식으로 옮긴다. 어떤 단계를
+    받는지·끌 수 있는지는 **밑의 모델**이 정하므로, 우리가 표를 가진 회사(Anthropic·OpenAI·Google)는
+    그 표를 쓰고 보내는 방식만 ``openrouter_effort`` 로 바꾼다. 모르는 모델은 세 단계 — 받지 않으면
+    OpenRouter 클라이언트가 생각 설정을 빼고 다시 보낸다(``OpenRouterClient._heal_request_kwargs``).
+    """
+    author, _, slug = str(model or "").strip().lower().partition("/")
+    slug = slug.split(":", 1)[0]
+    if not slug:
+        return _OPENROUTER_GENERIC
+    base: Optional[ThinkingSpec] = None
+    if author == "anthropic":
+        # OpenRouter 는 판 번호를 점으로 쓴다(claude-sonnet-5.5) — Anthropic 이름은 하이픈.
+        base = _match(_ANTHROPIC, _anthropic_core(slug.replace(".", "-")))
+    elif author == "openai":
+        base = _match(_OPENAI, slug)
+    elif author == "google":
+        base = _match(_GEMINI, slug)
+    if base is None:
+        return _OPENROUTER_GENERIC
+    if base.kind == "none":
+        return NONE
+    if base.kind == "toggle":
+        return _toggle(default=base.default, via="openrouter_effort")
+    return _levels(
+        base.levels,
+        can_disable=base.can_disable,
+        default=base.default,
+        via="openrouter_effort",
+        off_type=base.off_type,
+    )
 
 
 def normalize_thinking(spec: ThinkingSpec, value: Any) -> Optional[str]:
@@ -558,6 +599,15 @@ def vllm_request(spec: ThinkingSpec, level: str) -> Dict[str, Any]:
         return {"extra_body": {"chat_template_kwargs": {"thinking": on}}}
     if spec.via == "vllm_effort":
         return {"reasoning_effort": "none" if level == "off" else level}
+    if spec.via == "openrouter_effort":
+        # OpenRouter 의 통합 reasoning — 끄기는 enabled:false(effort "none" 은 Claude 가 거절한다).
+        if level == "off":
+            reasoning: Dict[str, Any] = {"enabled": False}
+        elif level == "on":
+            reasoning = {"enabled": True}
+        else:
+            reasoning = {"effort": level}
+        return {"extra_body": {"reasoning": reasoning}}
     return {}
 
 

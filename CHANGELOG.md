@@ -4,6 +4,37 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.92.0] - 2026-10-15
+
+### Added: OpenRouter 제공자 (`openrouter`)
+
+한 키로 여러 회사의 모델(Claude·GPT·Gemini·DeepSeek·Qwen …)을 부르는 OpenRouter 를 제공자로 더한다. 모양은 OpenAI Chat
+Completions 라서 `OpenAIClient` 를 그대로 쓰고(`llm_client/openrouter.py`), OpenAI 표준 밖에 있는 것만 더했다.
+
+- **생각 이어 가기**: 답의 `reasoning_details`(스트림은 `index` 별로 이어 붙임)를 앞머리 `reasoning` 블록
+  (`provider: "openrouter"`)으로 받고, 다음 호출에 **같은 모델**이면 고치지 않고 돌려준다. OpenRouter 문서는 도구를 부르는
+  동안 이것을 돌려주라고 한다("Preserving Reasoning") — 안 하면 Claude 는 생각을 잇지 못하고 Gemini 는 400 을 낸다는 보고가
+  있다. 다른 provider 의 번역기는 `reasoning` 블록을 이미 버린다.
+- **200 으로 오는 실패**: `choices` 없이 `error` 만 있는 본문과 스트림의 `error` 청크를 `error.code` 로 분류한다(402 크레딧·키
+  한도 → `TERMINAL`, 429 → `RATE_LIMITED`, 401/403 → `AUTH`, 5xx → `SERVER_ERROR`, 문맥 초과 → `TOKEN_LIMIT`). 예전 경로였다면
+  `choices[0]` 에서 `TypeError` 로 죽었다.
+- **비용**: `usage.cost` 를 `TokenUsage.cost_usd` 로 옮긴다(`supports_cost_usage=True`).
+- **생각 강도**: `extra_body.reasoning`(`effort`·`enabled`)로 보낸다. 단계는 밑의 모델 표를 따른다(`anthropic/*`·`openai/*`·
+  `google/*`), 모르는 모델은 low·medium·high. 받지 않는 설정이면 한 번 빼고 다시 보낸다. 끄기는 `enabled: false`(Claude 는
+  effort `none` 을 거절한다).
+- 시스템 프롬프트는 `system` 역할로 보낸다. `warmup` 은 `/models`(약 1MB) 대신 `/key` 를 묻는다.
+- 컨텍스트 창 기본값 128k(호스트가 카탈로그의 `context_length` 를 먼저 쓴다), temperature 범위 0~2.
+
+### Fixed: Chat Completions 스트림이 choices 가 있는 사용량 청크를 버리던 것
+
+사용량은 `choices` 가 빈 마지막 청크에서만 읽었다. 사용량 청크에 `choices` 를 함께 싣는 호환 서버(OpenRouter)에서는 토큰이
+0 으로 남았다. 이제 청크마다 `usage` 가 있으면 받는다.
+
+### Changed: `OpenAIClient` 의 Chat Completions 하위 클래스 자리
+
+`_chat_messages`·`_on_stream_delta`·`_stream_leading_blocks` 를 열었다(기본은 아무것도 하지 않는다).
+`canonical_messages_to_openai` 는 어시스턴트 메시지에 필드를 더하는 `assistant_extras` 를 받는다.
+
 ## [4.91.0] - 2026-10-15
 
 ### Added: LLM 호출·도구 실행 OpenTelemetry span (`xgen_agent_runtime.observability`)

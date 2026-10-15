@@ -506,6 +506,8 @@ class OpenAIClient(BaseClient):
 
         accumulated_content = ""
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
+        # 하위 클래스가 스트림에서 따로 모으는 것(OpenRouter 의 reasoning_details 등).
+        stream_extras: Dict[str, Any] = {}
         model = request.model
         finish_reason = ""
         usage_data: Optional[Any] = None
@@ -521,9 +523,11 @@ class OpenAIClient(BaseClient):
 
         try:
             async for chunk in stream:
+                # 사용량은 choices 가 빈 마지막 청크에 오는 것이 OpenAI 의 모양이지만, 사용량 청크에
+                # choices 를 함께 싣는 호환 서버도 있다(OpenRouter). choices 와 상관없이 받는다.
+                if getattr(chunk, "usage", None):
+                    usage_data = chunk.usage
                 if not chunk.choices:
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        usage_data = chunk.usage
                     continue
 
                 delta = chunk.choices[0].delta
@@ -532,6 +536,10 @@ class OpenAIClient(BaseClient):
 
                 if hasattr(chunk, "model") and chunk.model:
                     model = chunk.model
+
+                if delta is not None:
+                    for event in self._on_stream_delta(delta, stream_extras):
+                        yield event
 
                 if delta and delta.content:
                     accumulated_content += delta.content
@@ -558,7 +566,7 @@ class OpenAIClient(BaseClient):
         except Exception as e:
             raise self._classify_error(e) from e
 
-        blocks: List[ContentBlock] = []
+        blocks: List[ContentBlock] = list(self._stream_leading_blocks(stream_extras, model))
         if accumulated_content:
             blocks.append(
                 ContentBlock(
@@ -593,11 +601,28 @@ class OpenAIClient(BaseClient):
         )
         yield {"type": "message_complete", "response": response}
 
-    def _build_kwargs(self, request: APIRequest) -> Dict[str, Any]:
-        """Canonical APIRequest → OpenAI Chat Completions kwargs."""
-        messages = canonical_messages_to_openai(
+    # ── 하위 클래스 자리(Chat Completions) ────────────────────────────────
+    #
+    # OpenAI 표준 필드 밖의 것을 싣는 호환 서버(OpenRouter 의 reasoning_details)가 이 셋만 바꾼다.
+    # 기본은 아무것도 하지 않는다 — OpenAI·vLLM·Azure 의 동작은 그대로다.
+
+    def _chat_messages(self, request: APIRequest) -> List[Dict[str, Any]]:
+        """표준 대화 → Chat Completions ``messages``."""
+        return canonical_messages_to_openai(
             request.messages, request.system, system_role=self.system_role
         )
+
+    def _on_stream_delta(self, delta: Any, extras: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """스트림 delta 하나에서 표준 밖의 것을 ``extras`` 에 모으고, 내보낼 이벤트를 돌려준다."""
+        return []
+
+    def _stream_leading_blocks(self, extras: Dict[str, Any], model: str) -> List[ContentBlock]:
+        """스트림이 끝났을 때 글·도구 호출 앞에 놓을 블록(생각 등)."""
+        return []
+
+    def _build_kwargs(self, request: APIRequest) -> Dict[str, Any]:
+        """Canonical APIRequest → OpenAI Chat Completions kwargs."""
+        messages = self._chat_messages(request)
 
         kwargs: Dict[str, Any] = {
             "model": request.model,

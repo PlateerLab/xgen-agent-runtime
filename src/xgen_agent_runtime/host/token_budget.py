@@ -120,6 +120,9 @@ _PROVIDER_DEFAULT_WINDOW = {
     "google": 1_048_576,
     "vertex": 1_048_576,
     "vllm": 32_768,
+    # OpenRouter 는 모델마다 창이 다르다(4k~1M). 호스트는 카탈로그의 context_length 를 먼저 쓰고,
+    # 그것이 없을 때만 이 값 — 요즘 도구 호출 모델의 바닥.
+    "openrouter": 128_000,
     # CLI 백엔드: 모델 이름이 별칭(sonnet/opus)이라 표에 안 잡힌다. 런타임은 이 값으로 첫 메시지에
     # 접어 넣는 지난 대화의 양만 맞춘다. 작게 잡으면 더 일찍 덜어낼 뿐 실패하지 않는다.
     "claude_code": 200_000,

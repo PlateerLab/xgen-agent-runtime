@@ -16,6 +16,7 @@ xgen-agent-runtime abstracts the LLM call site behind a single contract: `BaseCl
 | `bedrock` | `BedrockClient` | AWS Bedrock (Anthropic Messages API, SigV4) | everything `anthropic` supports, incl. prompt caching | Inherits `AnthropicClient`. Credentials via `extras` (`aws_region` / `aws_access_key_id` / `aws_secret_access_key` / `aws_session_token` / `aws_profile`); omitted keys use the boto3 default chain (IAM role). Plain Anthropic model ids are promoted to region-scoped inference-profile ids. Requires `anthropic[bedrock]`. |
 | `vertex` | `VertexClient` | Google Vertex AI (Gemini) | everything `google` supports | Inherits `GoogleClient`. Credentials via `extras` (`project` / `location` / `credentials_json` service-account key) or an express-mode `api_key`. |
 | `codex_cli` | `CodexCLIClient` | `codex` CLI subprocess (`exec --json`) | agentic loop internally, MCP via `-c mcp_servers.*` overrides, session resume, `--output-schema` structured output | Second CLI backend; message-granularity streaming. Subscription (ChatGPT login) or `OPENAI_API_KEY` — channels are mutually exclusive per call. |
+| `openrouter` | `OpenRouterClient` | OpenRouter (OpenAI Chat Completions, one key for many vendors) | tools, structured output, reasoning replay (`reasoning_details`), per-call cost | Inherits `OpenAIClient`. `base_url` defaults to `https://openrouter.ai/api/v1`. Model ids are `author/slug`. |
 | `ollama` / `lmstudio` / `custom` (alias `local`) | profile-driven `OpenAICompatibleClient` | OpenAI-compatible local endpoints | free-form model ids, tool-arg JSON repair | `custom` requires `base_url`. |
 
 The legacy `copilot_cli` provider was removed in 2.0.6 — `gh copilot` is text-only with no streaming / tools / MCP, and could not host Stage 10 dispatch.
@@ -114,6 +115,14 @@ Function calls map to/from Anthropic-shaped `tool_use` / `tool_result` blocks vi
 
 ### `vllm`
 Inherits `OpenAIClient`. Set `base_url` to your local vLLM `/v1` endpoint. Most vLLM deployments default to `supports_tools=False`; flip via `configure_capabilities()` if your model handles them.
+
+### `openrouter`
+Inherits `OpenAIClient` and always speaks Chat Completions. Three things are added on top of the OpenAI surface:
+- **Reasoning replay** — `message.reasoning_details` (stream: `delta.reasoning_details`, merged by `index`) becomes a leading `{"type": "reasoning", "provider": "openrouter", "model", "summary", "details"}` block, and is sent back unchanged on the next call **to the same model** (tool loops on Claude/Gemini need it). Other translators already drop `reasoning` blocks.
+- **Errors with HTTP 200** — a body with `error` and no `choices` (and the stream's `error` chunk) is raised as `APIError`, classified by `error.code` (402 → `TERMINAL`, 429 → `RATE_LIMITED`, …).
+- **Cost** — `usage.cost` → `TokenUsage.cost_usd`.
+
+Thinking goes out as `extra_body.reasoning` (`effort` / `enabled`); the levels follow the underlying vendor's table for `anthropic/*`, `openai/*`, `google/*`, and three generic levels otherwise. A model that refuses the setting is retried once without it.
 
 ### `claude_code_cli`
 Most complex of the five. The CLI runs its own agentic loop internally, so:

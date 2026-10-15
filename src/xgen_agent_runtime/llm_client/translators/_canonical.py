@@ -17,7 +17,7 @@ import json
 import os
 from pathlib import Path
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from xgen_agent_runtime.core.file_blocks import file_block_pointer
 from xgen_agent_runtime.core.images import bound_image
@@ -469,6 +469,7 @@ def canonical_messages_to_openai(
     messages: List[Dict[str, Any]],
     system: Any = "",
     system_role: str = "developer",
+    assistant_extras: Optional[Callable[[List[Dict[str, Any]]], Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Canonical messages + system → OpenAI messages.
 
@@ -478,6 +479,9 @@ def canonical_messages_to_openai(
         is OpenAI's own; DeepSeek rejects it with 422)
       - assistant tool_use blocks → message.tool_calls array
       - user tool_result blocks → separate {"role": "tool"} messages
+
+    ``assistant_extras`` 는 어시스턴트 메시지의 블록 목록을 받아 그 메시지에 더할 필드를
+    돌려준다 — 표준 밖의 필드를 받는 호환 서버(OpenRouter 의 ``reasoning_details``)용이다.
     """
     result: List[Dict[str, Any]] = []
 
@@ -548,6 +552,8 @@ def canonical_messages_to_openai(
                         }
                         for tc in tool_uses
                     ]
+                if assistant_extras is not None:
+                    msg_dict.update(assistant_extras(content) or {})
                 result.append(msg_dict)
             else:
                 result.append({"role": "assistant", "content": str(content)})
