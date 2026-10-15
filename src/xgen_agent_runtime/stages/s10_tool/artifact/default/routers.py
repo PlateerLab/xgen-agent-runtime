@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 import jsonschema
 
+from xgen_agent_runtime import observability
 from xgen_agent_runtime.hooks.events import HookEvent, HookEventPayload
 from xgen_agent_runtime.permission.matrix import evaluate_permission
 from xgen_agent_runtime.permission.types import (
@@ -206,6 +207,17 @@ class RegistryRouter(ToolRouter):
         return "Routes via ToolRegistry lookup"
 
     async def route(
+        self, tool_name: str, tool_input: Dict[str, Any], context: ToolContext
+    ) -> ToolResult:
+        # 도구 실행 1건 = ``execute_tool {name}`` span. 모든 실행기(순차·병렬·분할·스트리밍)와
+        # CLI 도구 표면이 여기를 지나므로 한 곳에서 연다. 현재 span 이라 도구가 부르는
+        # HTTP·MCP 호출이 이 도구 아래에 달린다 — ``xgen_agent_runtime.observability``.
+        with observability.tool_span(tool_name=tool_name) as span:
+            result = await self._route(tool_name, tool_input, context)
+            observability.record_tool_result(span, result)
+            return result
+
+    async def _route(
         self, tool_name: str, tool_input: Dict[str, Any], context: ToolContext
     ) -> ToolResult:
         tool = self._registry.get(tool_name)
