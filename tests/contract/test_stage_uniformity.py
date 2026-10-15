@@ -4,12 +4,11 @@ Every stage in xgen-agent-runtime's 21-stage pipeline must satisfy the same
 introspection and configuration contract, regardless of slot- vs. chain-
 based architecture. These tests pin that contract so regressions fail fast.
 
-Sub-phase 9a (S9a.3) widened the layout from 16 to 21 stages. The five
-new scaffolding stages (tool_review / task_registry / hitl /
-summarize / persist) are pass-throughs / bypass — they expose no
-strategy slots yet (real slots ship in 9b), so they're excluded from
-the contract checks that require at least one configurable surface.
-The orderings + names are still pinned.
+Sub-phase 9a (S9a.3) widened the layout from 16 to 21 stages. The
+new scaffolding stages (tool_review / hitl / summarize / persist) were
+pass-throughs at first; 9b gave them real slots. Orders 12 (agent) and
+13 (task_registry) were retired in 4.71.0 — they stay reserved (no
+renumbering) and have no stage class to check.
 
 Contract surface:
   1. name / order / category properties
@@ -52,8 +51,6 @@ from xgen_agent_runtime.stages.s08_think.artifact.default.stage import ThinkStag
 from xgen_agent_runtime.stages.s09_parse.artifact.default.stage import ParseStage
 from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
 from xgen_agent_runtime.stages.s11_tool_review.artifact.default.stage import ToolReviewStage
-from xgen_agent_runtime.stages.s12_agent.artifact.default.stage import AgentStage
-from xgen_agent_runtime.stages.s13_task_registry.artifact.default.stage import TaskRegistryStage
 from xgen_agent_runtime.stages.s14_evaluate.artifact.default.stage import EvaluateStage
 from xgen_agent_runtime.stages.s15_hitl.artifact.default.stage import HITLStage
 from xgen_agent_runtime.stages.s16_loop.artifact.default.stage import LoopStage
@@ -84,8 +81,6 @@ STAGE_FACTORIES = [
     (9, "parse", ParseStage),
     (10, "tool", ToolStage),
     (11, "tool_review", ToolReviewStage),
-    (12, "agent", AgentStage),
-    (13, "task_registry", TaskRegistryStage),
     (14, "evaluate", EvaluateStage),
     (15, "hitl", HITLStage),
     (16, "loop", LoopStage),
@@ -97,9 +92,9 @@ STAGE_FACTORIES = [
 ]
 
 # Sub-phase 9a scaffolds: pass-through stages with no strategy
-# slots/chains yet. Sub-phase 9b promoted all five
-# (tool_review / task_registry / hitl / summarize / persist) — the
-# skip set is now empty. Kept as a frozenset so future scaffold
+# slots/chains yet. Sub-phase 9b promoted all of them
+# (tool_review / hitl / summarize / persist) — the skip set is now
+# empty. Kept as a frozenset so future scaffold
 # additions slot in without re-introducing the import.
 _SCAFFOLD_NAMES: frozenset[str] = frozenset()
 
@@ -223,13 +218,17 @@ class TestChainStageContract:
 
 
 def test_stage_orders_are_unique_and_dense() -> None:
-    """Each stage declares a distinct order; the set covers 1..21 exactly."""
+    """Each stage declares a distinct order; together with the retired
+    slots (12, 13 — 4.71.0) the set covers 1..21 exactly."""
+    from xgen_agent_runtime import RETIRED_STAGE_ORDERS
+
     orders = []
     for order, _name, factory in STAGE_FACTORIES:
         stage = factory()
         orders.append(stage.order)
         assert stage.order == order
-    assert sorted(orders) == list(range(1, 22))
+    assert not set(orders) & set(RETIRED_STAGE_ORDERS)
+    assert sorted(orders + list(RETIRED_STAGE_ORDERS)) == list(range(1, 22))
 
 
 def test_stage_names_are_unique() -> None:

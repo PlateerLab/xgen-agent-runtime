@@ -172,6 +172,27 @@ def _llm_compactor() -> LLMSummaryCompactor:
     )
 
 
+def _band_messages(state: PipelineState, n: int, *, alternate: bool) -> None:
+    """Fill ``state`` to the 80~90% band of its input budget (the window minus the answer's
+    reserve) with ``n`` messages, sized by the estimator."""
+    from xgen_agent_runtime.core.compaction import input_budget_of
+
+    budget = input_budget_of(state)
+    est = 0
+    for size in range(1, 4_000):
+        state.messages = [
+            {
+                "role": ("user" if i % 2 == 0 else "assistant") if alternate else "user",
+                "content": "글" * size,
+            }
+            for i in range(n)
+        ]
+        est = estimate_prompt_tokens(state)
+        if est > budget * 0.8:
+            break
+    assert budget * 0.8 < est <= budget * 0.9, f"band setup broke: est={est}"
+
+
 class TestBackgroundCompaction:
     @pytest.mark.asyncio
     async def test_llm_compaction_deferred_then_applied_next_turn(self):
@@ -182,9 +203,7 @@ class TestBackgroundCompaction:
         state = PipelineState()
         state.llm_client = _InstantLLMClient()
         state.context_window_budget = 1000
-        for i in range(12):
-            role = "user" if i % 2 == 0 else "assistant"
-            state.messages.append({"role": role, "content": "글" * 280})
+        _band_messages(state, 12, alternate=True)
 
         await stage.execute("in", state)  # ~85% → schedule, not block
         assert any(e["type"] == "context.compaction_scheduled" for e in state.events)
@@ -220,8 +239,7 @@ class TestBackgroundCompaction:
         state = PipelineState()
         state.llm_client = _InstantLLMClient()
         state.context_window_budget = 1000
-        for i in range(12):
-            state.messages.append({"role": "user", "content": "글" * 280})
+        _band_messages(state, 12, alternate=False)
 
         await stage.execute("in", state)
         assert stage._bg_compaction is not None

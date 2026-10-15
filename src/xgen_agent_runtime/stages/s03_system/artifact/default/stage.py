@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+import logging
+from typing import Any, Dict, List, Optional, Union
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.core.slot import StrategySlot
@@ -16,6 +17,8 @@ from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
 )
 from xgen_agent_runtime.stages.s03_system.persona import DynamicPersonaPromptBuilder
 from xgen_agent_runtime.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class SystemStage(Stage[Any, Any]):
@@ -269,45 +272,11 @@ class SystemStage(Stage[Any, Any]):
     # stays intact. Rebuilt only when the registry version moves
     # (register/unregister/MCP re-seed), the same trigger that already
     # rebuilds ``state.tools``.
-    _CATALOG_ONE_LINER_CHARS = 72
-    _CATALOG_MAX_CHARS = 4_000
-
     def _deferred_catalog_text(self) -> str:
-        registry = self._tool_registry
-        if registry is None:
-            return ""
-        is_core = getattr(registry, "is_core", None)
-        get = getattr(registry, "get", None)
-        list_names = getattr(registry, "list_names", None)
-        if not (callable(is_core) and callable(get) and callable(list_names)):
-            return ""
-        entries: List[Tuple[str, str]] = []
-        for name in sorted(list_names()):
-            try:
-                if is_core(name):
-                    continue
-                tool = get(name)
-                desc = str(getattr(tool, "description", "") or "").strip()
-                line = desc.splitlines()[0] if desc else ""
-                if len(line) > self._CATALOG_ONE_LINER_CHARS:
-                    line = line[: self._CATALOG_ONE_LINER_CHARS - 1] + "…"
-                entries.append((name, line))
-            except Exception:  # noqa: BLE001 — a broken tool never breaks the prompt
-                continue
-        if not entries:
-            return ""
-        header = (
-            "## Additional tools (hidden — not in your tool list)\n"
-            f"{len(entries)} more tools exist. To use one, call "
-            'ToolSearch("<keyword or exact name>") — its schema arrives on '
-            "your next step. ToolSearch with no query browses this catalog."
-        )
-        lines = [f"- {n} — {d}" if d else f"- {n}" for n, d in entries]
-        body = "\n".join(lines)
-        if len(header) + len(body) > self._CATALOG_MAX_CHARS:
-            # Degrade gracefully: names only on one wrapped line.
-            body = ", ".join(n for n, _ in entries)[: self._CATALOG_MAX_CHARS]
-        return header + "\n" + body
+        # 글은 한 곳(tools.catalog)에서 만든다 — CLI 경로도 같은 함수로 같은 글을 받는다.
+        from xgen_agent_runtime.tools.catalog import deferred_catalog_text
+
+        return deferred_catalog_text(self._tool_registry)
 
     async def execute(self, input: Any, state: PipelineState) -> Any:
         # Build system prompt (stable prefix + volatile tail separation)
@@ -366,6 +335,20 @@ class SystemStage(Stage[Any, Any]):
         if self._tool_registry is not None:
             reg_version = getattr(self._tool_registry, "version", None)
             if not state.tools or (reg_version is not None and reg_version != state.tools_version):
+                # 모델이 보는 표면을 굳히기 **직전에** "숨긴 가족에는 보이는 문이 있다" 를
+                # 검사한다(tools.gates). 어기면 숨기지 않는다 — 최악의 결과를 "도구에 영영 못
+                # 닿음" 에서 "표면이 조금 커짐" 으로 바꾼다. 열었으면 버전이 올라가므로
+                # 아래에서 다시 읽는다.
+                # 앞 턴에 쓴 도구를 먼저 되살린다 — 호스트가 턴마다 레지스트리를 새로 만들어
+                # 열어 둔 가족이 날아간다(tools.gates.restore_from_history).
+                restored = _restore_from_history(self._tool_registry, state.messages)
+                if restored:
+                    state.add_event("tool.surface_restored", {"opened": restored})
+                repaired = _enforce_gate_reachability(self._tool_registry)
+                if repaired:
+                    state.add_event("tool.gate_reachability_repaired", {"opened": repaired})
+                if restored or repaired:
+                    reg_version = getattr(self._tool_registry, "version", None)
                 try:
                     state.tools = self._tool_registry.to_api_format(exposed_only=True)
                 except TypeError:
@@ -390,3 +373,44 @@ class SystemStage(Stage[Any, Any]):
         )
 
         return input
+
+
+def _enforce_gate_reachability(registry: Any) -> List[str]:
+    """레지스트리가 노출 API 를 가질 때만 — 손으로 만든 레지스트리 흉내는 건드리지 않는다."""
+    names = getattr(registry, "list_names", None)
+    is_exposed = getattr(registry, "is_exposed", None)
+    activate = getattr(registry, "activate", None)
+    if not (callable(names) and callable(is_exposed) and callable(activate)):
+        return []
+    from xgen_agent_runtime.tools.gates import reachability_fixes
+
+    try:
+        fixes = reachability_fixes(names(), is_exposed)
+    except Exception:  # noqa: BLE001 — 검사가 턴을 막지 않는다
+        logger.debug("gate reachability check failed", exc_info=True)
+        return []
+    opened = [n for n in fixes if activate(n)]
+    if opened:
+        logger.warning(
+            "tool surface: %d tool(s) were hidden with no visible gate — exposed instead: %s",
+            len(opened),
+            ", ".join(opened),
+        )
+    return opened
+
+
+def _restore_from_history(registry: Any, messages: Any) -> List[str]:
+    """기록에서 모델이 쓴 도구를 다시 연다 — 노출 API 가 있는 레지스트리만."""
+    names = getattr(registry, "list_names", None)
+    is_exposed = getattr(registry, "is_exposed", None)
+    activate = getattr(registry, "activate", None)
+    if not (callable(names) and callable(is_exposed) and callable(activate)):
+        return []
+    from xgen_agent_runtime.tools.gates import restore_from_history
+
+    try:
+        wanted = restore_from_history(names(), is_exposed, messages or [])
+    except Exception:  # noqa: BLE001 — 복원이 턴을 막지 않는다
+        logger.debug("surface restore from history failed", exc_info=True)
+        return []
+    return [n for n in wanted if activate(n)]

@@ -19,7 +19,6 @@ class RegexDetector(CompletionSignalDetector):
         ),
         CompletionSignal.BLOCKED: re.compile(r"\[BLOCKED(?::?\s*(.+?))?\]", re.IGNORECASE),
         CompletionSignal.ERROR: re.compile(r"\[ERROR(?::?\s*(.+?))?\]", re.IGNORECASE),
-        CompletionSignal.DELEGATE: re.compile(r"\[DELEGATE(?::?\s*(.+?))?\]", re.IGNORECASE),
     }
 
     @property

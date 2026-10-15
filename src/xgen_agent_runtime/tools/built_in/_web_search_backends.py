@@ -23,6 +23,9 @@ first, then environment variables:
 * ``brave``   — ``brave_api_key`` / ``BRAVE_SEARCH_API_KEY``
 * ``tavily``  — ``tavily_api_key`` / ``TAVILY_API_KEY``
 * ``searxng`` — ``searxng_url``   / ``SEARXNG_URL``
+* ``ddg``     — ``ddg_extra_engines`` / ``GENY_WEBSEARCH_DDG_EXTRA_ENGINES``:
+  engines ddgs ships switched off that we run anyway (comma list, default
+  ``yandex``; empty turns it off)
 
 When a backend is missing its key/url, it raises
 :class:`WebSearchConfigError` with a clear config hint; the tool turns
@@ -32,12 +35,20 @@ that into a ``ToolResult(is_error=True)``.
 from __future__ import annotations
 
 import asyncio
+import importlib
+import logging
 import os
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+import random
+import re
+import threading
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 
 from xgen_agent_runtime.tools.base import ToolContext
+
+logger = logging.getLogger(__name__)
 
 # Shared HTTP timeout for the API-backed backends (seconds).
 _HTTP_TIMEOUT = 15.0
@@ -55,6 +66,21 @@ class WebSearchConfigError(WebSearchBackendError):
     """
 
 
+class WebSearchBlockedError(WebSearchBackendError):
+    """Raised when the search engines turned the request away.
+
+    Distinct from "nothing matched": the engines refused this server
+    (rate limiting) or answered with a page that yielded no result. The
+    message tells the model that rewording the query will not help and
+    is rendered verbatim into ``ToolResult.content``; ``engines`` is the
+    per-engine outcome for metadata / logs.
+    """
+
+    def __init__(self, message: str, engines: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.engines = engines
+
+
 def _extras_web_search(context: ToolContext) -> Dict[str, Any]:
     """Return the ``web_search`` sub-dict from ``ctx.extras`` (or empty)."""
     raw = (context.extras or {}).get("web_search")
@@ -69,12 +95,20 @@ def _normalise_hit(index: int, raw: Dict[str, Any]) -> Dict[str, Any]:
     accepted interchangeably so each backend can hand back whichever
     key its API uses.
     """
-    return {
+    hit = {
         "rank": index,
         "title": str(raw.get("title") or "").strip(),
         "url": str(raw.get("href") or raw.get("url") or "").strip(),
         "snippet": str(raw.get("body") or raw.get("snippet") or "").strip(),
     }
+    # News hits carry their publication date (ISO) and outlet.
+    published = str(raw.get("date") or "").strip()
+    if published:
+        hit["date"] = published[:10]
+    source = str(raw.get("source") or "").strip()
+    if source:
+        hit["source"] = source
+    return hit
 
 
 @runtime_checkable
@@ -117,29 +151,558 @@ def _load_ddgs() -> Optional[Any]:
     return DDGS
 
 
+# ddgs cannot tell "the engines turned us away" from "nothing matched":
+# ``BaseSearchEngine.request`` maps every non-200 reply to ``None`` — the same
+# as an empty page — and when no engine yields a hit ``DDGS.text`` raises
+# "No results found.". From our servers most engines refuse: google 429,
+# brave 429, mojeek 403, duckduckgo 202 on dev, stage and the home box alike
+# (2026-10-01), and yahoo — often the only one left — answers half the time
+# with a layout ddgs 9.16 parses to nothing. On dev 27 of 101 searches
+# (09-29~10-01) ended "No results found." and the model took it for a bad
+# query: one turn searched 14 times, 7 of them failing. The watch records what
+# each engine actually got back, so the backend can retry what is worth
+# retrying and say what happened.
+
+#: Title lookups ddgs always runs first for text search (``DDGS._get_engines``).
+#: They find nothing for most queries by design, so their answer says nothing
+#: about whether the web engines could be reached.
+_LOOKUP_ENGINES = frozenset({"wikipedia", "grokipedia"})
+
+#: Pause before the single retry when the web engines refused us. A second
+#: search two seconds later got through for 18 of 24 such failures on dev,
+#: stage and the home box (2026-10-01, three runs): which engines answer varies
+#: per call (duckduckgo, google, yahoo's layout) — the refusals are not a ban.
+_DDG_RETRY_PAUSE_S = 2.0
+
+#: Engines ddgs ships but has switched off, run anyway for our searches.
+#: ddgs 9.15.0 (2026-08-16) disabled yandex without a stated reason; from dev,
+#: stage and the home box it answered 36 of 36 queries (about 1.4 s each,
+#: Korean ones included) while google, brave, mojeek and duckduckgo mostly
+#: refuse us — with it the first try got results 24 of 24 times on dev and
+#: stage. Yandex is a Russian service: a host whose policy forbids sending
+#: queries there sets ``ddg_extra_engines`` / ``GENY_WEBSEARCH_DDG_EXTRA_ENGINES``
+#: to "" (or to another comma list).
+_DEFAULT_DDG_EXTRA_ENGINES: Tuple[str, ...] = ("yandex",)
+
+
+def _ddg_extra_engines(context: Optional[ToolContext]) -> Tuple[str, ...]:
+    """Extra ddgs engine names: extras > ``GENY_WEBSEARCH_DDG_EXTRA_ENGINES`` > default."""
+    raw: Any = _extras_web_search(context).get("ddg_extra_engines") if context else None
+    if raw is None:
+        raw = os.environ.get("GENY_WEBSEARCH_DDG_EXTRA_ENGINES")
+    if raw is None:
+        return _DEFAULT_DDG_EXTRA_ENGINES
+    items = raw.split(",") if isinstance(raw, str) else list(raw)
+    return tuple(name for name in (str(item).strip().lower() for item in items) if name)
+
+
+def _ddg_engine_class(name: str) -> Optional[type]:
+    """ddgs' text engine class called ``name``, even when ddgs switched it off."""
+    if not name.isidentifier():
+        return None
+    try:
+        module = importlib.import_module(f"ddgs.engines.{name}")
+    except ImportError:
+        return None
+    for obj in vars(module).values():
+        if (
+            isinstance(obj, type)
+            and getattr(obj, "name", None) == name
+            and getattr(obj, "category", None) == "text"
+        ):
+            return obj
+    return None
+
+
+def _add_ddg_engines(client: Any, names: Tuple[str, ...]) -> None:
+    """Make ``client`` also run the text engines ``names`` that ddgs leaves out.
+
+    Wraps the instance's ``_get_engines`` — ddgs' global registry stays as
+    it is. The engines are ordered the way ddgs orders its own (shuffled,
+    then by priority), as if ddgs had never switched them off; an engine
+    ddgs already runs is not added twice.
+    """
+    get_engines = getattr(client, "_get_engines", None)
+    if not names or not callable(get_engines):
+        return
+
+    def _get_engines(category: Any, backend: Any, *args: Any, **kwargs: Any) -> Any:
+        engines = get_engines(category, backend, *args, **kwargs)
+        asked = backend if isinstance(backend, (list, tuple)) else str(backend).split(",")
+        if category != "text" or not {"auto", "all"} & {str(b).strip() for b in asked}:
+            return engines
+        present = {getattr(engine, "name", None) for engine in engines or ()}
+        added = []
+        for name in names:
+            cls = None if name in present else _ddg_engine_class(name)
+            if cls is None:
+                continue
+            try:
+                added.append(
+                    cls(
+                        proxy=getattr(client, "_proxy", None),
+                        timeout=getattr(client, "_timeout", None),
+                        verify=getattr(client, "_verify", True),
+                    )
+                )
+            except Exception:
+                logger.debug("WebSearch: could not start ddgs engine %r", name, exc_info=True)
+        if not added:
+            return engines
+        merged = list(engines or ()) + added
+        random.shuffle(merged)
+        merged.sort(key=lambda engine: getattr(engine, "priority", 1), reverse=True)
+        return merged
+
+    try:
+        client._get_engines = _get_engines
+    except (AttributeError, TypeError):
+        return
+
+
+class _EngineWatch:
+    """What each ddgs engine got back during one search.
+
+    :meth:`attach` wraps the ``DDGS`` instance's ``_get_engines`` so every
+    engine it hands out gets its HTTP client's ``request`` and its
+    ``search`` wrapped — on the instance only. ddgs caches engines per
+    ``DDGS`` instance and each search builds a new one, so nothing leaks
+    between calls. When the hooks are missing (another ddgs version, a
+    test double) the watch stays empty and the caller keeps ddgs' own
+    behaviour.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._engines: Dict[str, Dict[str, Any]] = {}
+
+    @property
+    def seen(self) -> bool:
+        return bool(self._engines)
+
+    def attach(self, client: Any) -> None:
+        get_engines = getattr(client, "_get_engines", None)
+        if not callable(get_engines):
+            return
+
+        def _get_engines(*args: Any, **kwargs: Any) -> Any:
+            engines = get_engines(*args, **kwargs)
+            for engine in engines or ():
+                self._watch(engine)
+            return engines
+
+        try:
+            client._get_engines = _get_engines
+        except (AttributeError, TypeError):
+            return
+
+    def _watch(self, engine: Any) -> None:
+        if getattr(engine, "_xgen_watched", False):
+            return
+        name = str(getattr(engine, "name", "") or type(engine).__name__)
+        http = getattr(engine, "http_client", None)
+        request = getattr(http, "request", None)
+        search = getattr(engine, "search", None)
+        if http is None or not callable(request) or not callable(search):
+            return
+
+        def _request(*args: Any, **kwargs: Any) -> Any:
+            try:
+                resp = request(*args, **kwargs)
+            except Exception as exc:
+                self._note(name, error=exc)
+                raise
+            self._note(name, status=getattr(resp, "status_code", None))
+            return resp
+
+        def _search(*args: Any, **kwargs: Any) -> Any:
+            try:
+                found = search(*args, **kwargs)
+            except Exception as exc:
+                self._note(name, error=exc)
+                raise
+            self._note(
+                name, hits=len(found) if isinstance(found, (list, tuple)) else int(bool(found))
+            )
+            return found
+
+        try:
+            http.request = _request
+            engine.search = _search
+            engine._xgen_watched = True
+        except (AttributeError, TypeError):
+            return
+
+    def _note(
+        self,
+        name: str,
+        *,
+        status: Optional[int] = None,
+        error: Optional[BaseException] = None,
+        hits: int = 0,
+    ) -> None:
+        with self._lock:
+            rec = self._engines.setdefault(name, {"statuses": [], "error": None, "hits": 0})
+            if status is not None:
+                rec["statuses"].append(status)
+            if error is not None and rec["error"] is None:
+                rec["error"] = error
+            rec["hits"] += hits
+
+    @staticmethod
+    def _refusal(rec: Dict[str, Any]) -> Optional[str]:
+        """Why an engine without hits gave us nothing, or ``None`` if it answered."""
+        for status in rec["statuses"]:
+            if status != 200:
+                return f"HTTP {status}"
+        if rec["statuses"]:
+            # It answered; a page we could not parse is not a refusal.
+            return None
+        error = rec["error"]
+        if error is None:
+            return None
+        if "timeout" in type(error).__name__.lower() or "timed out" in str(error).lower():
+            return "timeout"
+        return "unreachable"
+
+    def outcome(self) -> Dict[str, Any]:
+        """Split the engines into found (name → hits), refused (name → reason), empty."""
+        found: Dict[str, int] = {}
+        refused: Dict[str, str] = {}
+        empty: List[str] = []
+        with self._lock:
+            for name, rec in sorted(self._engines.items()):
+                if rec["hits"]:
+                    found[name] = rec["hits"]
+                elif (reason := self._refusal(rec)) is not None:
+                    refused[name] = reason
+                else:
+                    empty.append(name)
+        return {"found": found, "refused": refused, "empty": empty}
+
+    def web_turned_away(self) -> bool:
+        """No web engine found anything, and more of them refused us than answered.
+
+        A refusal or two next to engines that answered with nothing is still
+        "nothing matched" — brave and mojeek refuse us on every call. Every
+        failure seen on dev, stage and the home box had four refusals to two
+        empty answers.
+        """
+        out = self.outcome()
+        if any(name not in _LOOKUP_ENGINES for name in out["found"]):
+            return False
+        refused = sum(name not in _LOOKUP_ENGINES for name in out["refused"])
+        answered = sum(name not in _LOOKUP_ENGINES for name in out["empty"])
+        return refused > 0 and refused >= answered
+
+
+def _refusal_list(outcome: Dict[str, Any]) -> str:
+    return ", ".join(
+        f"{name} {reason}"
+        for name, reason in outcome["refused"].items()
+        if name not in _LOOKUP_ENGINES
+    )
+
+
+def _blocked_message(outcome: Dict[str, Any]) -> str:
+    refused = {n: r for n, r in outcome["refused"].items() if n not in _LOOKUP_ENGINES}
+    if all(r.startswith("HTTP") for r in refused.values()):
+        what, cause = (
+            "refused this server's requests",
+            "the engines blocking or rate-limiting this server",
+        )
+    else:
+        what, cause = "refused or did not answer this server", "on this server's side"
+    message = f"web search failed twice: the search engines {what} ({_refusal_list(outcome)})"
+    empty = [n for n in outcome["empty"] if n not in _LOOKUP_ENGINES]
+    if empty:
+        message += f"; {', '.join(empty)} answered without a usable result"
+    return message + (
+        f". This is {cause}, not a problem with your query — rewording it will "
+        "not help. WebFetch a page whose URL you already know, or tell the user "
+        "web search is unavailable right now."
+    )
+
+
+def _lookup_only_notice(outcome: Dict[str, Any]) -> str:
+    return (
+        "Note: only encyclopedia lookups returned results — the web search engines "
+        f"refused this server or returned nothing usable ({_refusal_list(outcome)}), "
+        "so these results are incomplete. Rewording the query will not help."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# ddg news — dated results for the ``days`` input
+# ─────────────────────────────────────────────────────────────────
+#
+# Asked for recent information, models put years into the query ("… 2026
+# 2025") and the text engines rank by relevance: on dev, 19 turns asking for
+# the latest product launches in one market (09-29~10-02, 91 searches) got
+# results naming 2025 as often as 2026 (278 to 272), and a "latest quarter"
+# question was answered with the previous quarter.
+# The text engine that answers from our servers, yandex, ignores ddgs'
+# ``timelimit``, and text results carry no date. ddgs' news engines honour
+# a window and date every article: 12 queries on dev (2026-10-03) came back
+# 80-100% within 30 days with a one-month window.
+#
+# Two ddgs 9.16 bugs sit on that path, worked around on the DDGS instance
+# only: bing news reads "2026. 9. 28." as 2026 days ago and "4 hours ago" as
+# four days, and it sends ``timelimit`` d/w as bing's one-hour/one-day
+# windows. :func:`_date_news_engines` sets bing's window itself and re-reads
+# every news engine's raw date with :func:`_news_date`.
+
+#: bing news ``qft`` windows by size in days, measured on dev (2026-10-03):
+#: interval 7 = past day, 8 = past week, 9 = past month (4 = past hour).
+_BING_NEWS_INTERVALS: Tuple[Tuple[int, str], ...] = ((1, "7"), (7, "8"), (31, "9"))
+
+#: News hits fetched per wanted result — the ones outside the window are dropped.
+_NEWS_OVERFETCH = 2
+_NEWS_FETCH_CAP = 30
+
+_AGO_EN = re.compile(r"(\d+|an?)\s*(minute|min|hour|hr|day|week|month|year)s?\s+ago", re.I)
+_AGO_KO = re.compile(r"(\d+)\s*(분|시간|일|주|개월|달|년)\s*전")
+_YMD = re.compile(r"(\d{4})(?:[-./]|\s*년)\s*(\d{1,2})(?:[-./]|\s*월)\s*(\d{1,2})")
+_MDY = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+_MON_D_Y = re.compile(r"\b([A-Z][a-z]{2})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})")
+_DAYS_PER_UNIT = {
+    "minute": 1 / 1440,
+    "min": 1 / 1440,
+    "hour": 1 / 24,
+    "hr": 1 / 24,
+    "day": 1,
+    "week": 7,
+    "month": 30,
+    "year": 365,
+    "분": 1 / 1440,
+    "시간": 1 / 24,
+    "일": 1,
+    "주": 7,
+    "개월": 30,
+    "달": 30,
+    "년": 365,
+}
+_DAYS_AGO_WORDS = {"today": 0, "just now": 0, "오늘": 0, "방금": 0, "yesterday": 1, "어제": 1}
+_MONTHS = {
+    m: i for i, m in enumerate(("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec").split(), 1)
+}
+
+
+def _safe_date(year: int, month: int, day: int) -> Optional[date]:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _news_date(raw: Any, now: Optional[datetime] = None) -> Optional[date]:
+    """Publication date in a news engine's date text, or ``None`` when there is none.
+
+    Engines hand back what their page shows: ``2026. 9. 28.``, ``8/30/2026``,
+    ``Sep 28, 2026``, ``4 hours ago``, ``3시간 전``, an ISO timestamp, epoch
+    seconds, sometimes glued to a label (``Opinion12 days ago``). Relative
+    times count back from ``now`` (local time).
+    """
+    now = now or datetime.now().astimezone()
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return datetime.fromtimestamp(raw, now.tzinfo).date() if raw > 0 else None
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.isdigit() and len(text) >= 9:
+        return datetime.fromtimestamp(int(text), now.tzinfo).date()
+    if "T" in text and text[:4].isdigit():
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        else:
+            return parsed.astimezone(now.tzinfo).date() if parsed.tzinfo else parsed.date()
+    for pattern in (_AGO_EN, _AGO_KO):
+        m = pattern.search(text)
+        if m:
+            count = 1 if m.group(1).lower() in ("a", "an") else int(m.group(1))
+            return (now - timedelta(days=count * _DAYS_PER_UNIT[m.group(2).lower()])).date()
+    lowered = text.lower()
+    for word, back in _DAYS_AGO_WORDS.items():
+        if word in lowered:
+            return (now - timedelta(days=back)).date()
+    m = _YMD.search(text)
+    if m:
+        return _safe_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = _MDY.search(text)
+    if m:
+        return _safe_date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+    m = _MON_D_Y.search(text)
+    if m and m.group(1) in _MONTHS:
+        return _safe_date(int(m.group(3)), _MONTHS[m.group(1)], int(m.group(2)))
+    return None
+
+
+def _news_timelimit(days: int) -> Optional[str]:
+    """ddgs ``timelimit`` for a window of ``days`` — beyond a month, none."""
+    if days <= 1:
+        return "d"
+    if days <= 7:
+        return "w"
+    if days <= 31:
+        return "m"
+    return None
+
+
+def _date_news_engines(client: Any, days: int, found: Optional[List[Any]] = None) -> None:
+    """Make ``client``'s news engines search ``days`` back and keep their real dates.
+
+    Wraps the instance's ``_get_engines`` like :func:`_add_ddg_engines`; ddgs'
+    classes stay as they are. bing gets the window it understands
+    (``_BING_NEWS_INTERVALS``; none past a month), and every news engine's
+    results get their date re-read from the engine's own text by
+    :func:`_news_date` — an ISO date, or empty when there is none. With
+    ``found``, every result an engine returns is also put there (see
+    :meth:`DdgBackend._search_news` for why).
+    """
+    get_engines = getattr(client, "_get_engines", None)
+    if not callable(get_engines):
+        return
+    interval = next((iv for limit, iv in _BING_NEWS_INTERVALS if days <= limit), None)
+    lock = threading.Lock()
+
+    def _get_engines(category: Any, backend: Any, *args: Any, **kwargs: Any) -> Any:
+        engines = get_engines(category, backend, *args, **kwargs)
+        if category == "news":
+            for engine in engines or ():
+                _date_news_engine(engine, interval, found, lock)
+        return engines
+
+    try:
+        client._get_engines = _get_engines
+    except (AttributeError, TypeError):
+        return
+
+
+def _date_news_engine(
+    engine: Any,
+    bing_interval: Optional[str],
+    found: Optional[List[Any]] = None,
+    lock: Optional[Any] = None,
+) -> None:
+    if getattr(engine, "_xgen_dated", False):
+        return
+    build = getattr(engine, "build_payload", None)
+    post = getattr(engine, "post_extract_results", None)
+    search = getattr(engine, "search", None)
+    try:
+        if getattr(engine, "name", None) == "bing" and callable(build):
+
+            def _build(*args: Any, **kwargs: Any) -> Any:
+                payload = build(*args, **kwargs)
+                if isinstance(payload, dict):
+                    payload.pop("qft", None)
+                    if bing_interval:
+                        payload["qft"] = f'interval="{bing_interval}"'
+                return payload
+
+            engine.build_payload = _build
+        if callable(post):
+
+            def _post(results: Any) -> Any:
+                raw = {id(r): getattr(r, "date", "") for r in results or ()}
+                out = post(results)
+                for r in out or ():
+                    published = _news_date(raw.get(id(r), getattr(r, "date", "")))
+                    r.date = published.isoformat() if published else ""
+                return out
+
+            engine.post_extract_results = _post
+        if found is not None and lock is not None and callable(search):
+
+            def _search(*args: Any, **kwargs: Any) -> Any:
+                results = search(*args, **kwargs)
+                if results:
+                    with lock:
+                        found.extend(results)
+                return results
+
+            engine.search = _search
+        engine._xgen_dated = True
+    except (AttributeError, TypeError):
+        return
+
+
+def _distinct_news(results: List[Any]) -> List[Dict[str, Any]]:
+    """Engine results (ddgs result objects or dicts) as dicts, one per URL, in arrival order."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for item in results:
+        row = dict(item) if isinstance(item, dict) else dict(vars(item))
+        url = str(row.get("url") or row.get("href") or "")
+        if url and url in seen:
+            continue
+        seen.add(url)
+        out.append(row)
+    return out
+
+
+def _default_ddg_news_sync(
+    ddgs_factory: Any,
+    query: str,
+    max_results: int,
+    region: Optional[str],
+    safesearch: str,
+    timelimit: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Blocking ddgs news body — runs inside ``asyncio.to_thread``."""
+    kwargs: Dict[str, Any] = {"safesearch": safesearch, "max_results": max_results}
+    if region:
+        kwargs["region"] = region
+    if timelimit:
+        kwargs["timelimit"] = timelimit
+    with ddgs_factory() as client:
+        return list(client.news(query, **kwargs))
+
+
 class DdgBackend:
     """DuckDuckGo backend via the optional ``ddgs`` package.
 
-    This is the default and preserves the legacy WebSearch behaviour
-    exactly. ``ddgs`` is blocking, so the blocking body is pushed to a
-    worker thread via :func:`asyncio.to_thread`.
+    This is the default and preserves the legacy WebSearch output.
+    ``ddgs`` is blocking, so the blocking body is pushed to a worker
+    thread via :func:`asyncio.to_thread`.
 
     The DDGS-class loader and the blocking search body are injected by
     the tool (``load_ddgs`` / ``search_sync``) rather than referenced
     directly here, so existing hosts / tests that monkey-patch
     ``web_search_tool._load_ddgs`` or ``WebSearchTool._search_sync``
-    continue to take effect through the indirection.
+    continue to take effect through the indirection. The body receives
+    a factory that builds the ``DDGS`` client with the extra engines added
+    (:func:`_add_ddg_engines`) and an :class:`_EngineWatch` attached; when
+    the web engines turned the search away it is run once more, and if that
+    fails too :class:`WebSearchBlockedError` says so instead of ddgs'
+    "No results found.".
     """
 
     name = "ddg"
+    #: Takes ``days``: a dated news search (:meth:`_search_news`).
+    supports_days = True
 
     def __init__(
         self,
         load_ddgs: Optional[Callable[[], Optional[Any]]] = None,
         search_sync: Optional[Callable[..., List[Dict[str, Any]]]] = None,
+        extra_engines: Optional[Tuple[str, ...]] = None,
+        news_sync: Optional[Callable[..., List[Dict[str, Any]]]] = None,
     ) -> None:
         self._load_ddgs = load_ddgs or _load_ddgs
         self._search_sync = search_sync or _default_ddg_search_sync
+        self._news_sync = news_sync or _default_ddg_news_sync
+        self._extra_engines = (
+            _ddg_extra_engines(None) if extra_engines is None else tuple(extra_engines)
+        )
+        #: Caveat about the last search's results for the caller, or ``None``.
+        self.notice: Optional[str] = None
+        #: Per-engine outcome of the last search (empty when not observed).
+        self.engines: Dict[str, Any] = {}
+        #: What the last search returned: ``"news"`` (dated) or ``"web"``.
+        self.mode = "web"
 
     async def search(
         self,
@@ -147,6 +710,7 @@ class DdgBackend:
         max_results: int,
         region: str,
         safesearch: str,
+        days: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         ddgs_cls = self._load_ddgs()
         if ddgs_cls is None:
@@ -157,15 +721,125 @@ class DdgBackend:
                 "or pin ddgs directly:\n"
                 "    pip install 'ddgs>=9.11'"
             )
-        raw = await asyncio.to_thread(
-            self._search_sync,
-            ddgs_cls,
-            query,
-            max_results,
-            region,
-            safesearch,
-        )
+        self.notice = None
+        self.engines = {}
+        self.mode = "web"
+        if days:
+            hits = await self._search_news(ddgs_cls, query, max_results, region, safesearch, days)
+            if hits:
+                self.mode = "news"
+                return hits
+            # No dated news in the window: the web results below say so in
+            # the tool's header (their dates are unknown).
+        args = (ddgs_cls, query, max_results, region, safesearch)
+        raw, watch = await self._attempt(*args)
+        first_raw: List[Dict[str, Any]] = []
+        attempts = 1
+        if watch.web_turned_away():
+            logger.info(
+                "WebSearch: engines turned the search away, retrying once: %s", watch.outcome()
+            )
+            first_raw = raw
+            await asyncio.sleep(_DDG_RETRY_PAUSE_S)
+            raw, watch = await self._attempt(*args)
+            attempts = 2
+        if watch.seen:
+            self.engines = {**watch.outcome(), "attempts": attempts}
+        if attempts == 2:
+            raw = raw or first_raw  # encyclopedia hits, if only the first try had them
+            if watch.web_turned_away():
+                if not raw:
+                    raise WebSearchBlockedError(_blocked_message(self.engines), self.engines)
+                self.notice = _lookup_only_notice(self.engines)
         return [_normalise_hit(i, r) for i, r in enumerate(raw[:max_results])]
+
+    async def _attempt(
+        self,
+        ddgs_cls: Any,
+        query: str,
+        max_results: int,
+        region: str,
+        safesearch: str,
+    ) -> Tuple[List[Dict[str, Any]], _EngineWatch]:
+        watch = _EngineWatch()
+
+        def _watched_ddgs(*args: Any, **kwargs: Any) -> Any:
+            client = ddgs_cls(*args, **kwargs)
+            _add_ddg_engines(client, self._extra_engines)
+            watch.attach(client)
+            return client
+
+        try:
+            raw = await asyncio.to_thread(
+                self._search_sync,
+                _watched_ddgs,
+                query,
+                max_results,
+                region,
+                safesearch,
+            )
+        except Exception:
+            # ddgs raises "No results found." (or the last engine error) when
+            # nothing came back. Once the engines were watched we know more
+            # than that message says; otherwise keep ddgs' error as before.
+            if not watch.seen:
+                raise
+            raw = []
+        return list(raw or []), watch
+
+    async def _search_news(
+        self,
+        ddgs_cls: Any,
+        query: str,
+        max_results: int,
+        region: str,
+        safesearch: str,
+        days: int,
+    ) -> List[Dict[str, Any]]:
+        """News from the last ``days`` days, each with its date.
+
+        Hits dated before the window are dropped; undated ones are kept only
+        when an engine window applied (up to a month). An empty list means
+        "no dated news" and the caller falls back to the web search.
+        """
+        watch = _EngineWatch()
+        found: List[Any] = []
+
+        def _dated_ddgs(*args: Any, **kwargs: Any) -> Any:
+            client = ddgs_cls(*args, **kwargs)
+            _date_news_engines(client, days, found)
+            watch.attach(client)
+            return client
+
+        want = min(_NEWS_FETCH_CAP, max_results * _NEWS_OVERFETCH)
+        timelimit = _news_timelimit(days)
+        try:
+            raw = await asyncio.to_thread(
+                self._news_sync, _dated_ddgs, query, want, region, safesearch, timelimit
+            )
+        except Exception:
+            # ddgs raises when no news engine found anything — the web search
+            # still gets its turn.
+            logger.info("WebSearch: news search for %r found nothing", query, exc_info=True)
+            raw = []
+        if not raw and found:
+            # ddgs keeps an engine's results only if it finished before the first
+            # engine error (DDGS._search_sync waits FIRST_EXCEPTION, then stops
+            # collecting): on dev a duckduckgo timeout threw away bing's 6 hits
+            # and the search fell back to undated web results (2026-10-04).
+            raw = _distinct_news(found)
+        if watch.seen:
+            self.engines = {**watch.outcome(), "category": "news"}
+        cutoff = (datetime.now().astimezone() - timedelta(days=days)).date()
+        kept: List[Dict[str, Any]] = []
+        for item in raw or []:
+            published = _news_date(item.get("date"))
+            if published is None and timelimit is None:
+                continue
+            if published is not None and published < cutoff:
+                continue
+            kept.append({**item, "date": published.isoformat() if published else ""})
+        return [_normalise_hit(i, r) for i, r in enumerate(kept[:max_results])]
 
 
 def _default_ddg_search_sync(
@@ -409,7 +1083,11 @@ def build_backend(
     DDGS hooks for backward compatibility.
     """
     if name == "ddg":
-        return DdgBackend(load_ddgs=ddg_load_ddgs, search_sync=ddg_search_sync)
+        return DdgBackend(
+            load_ddgs=ddg_load_ddgs,
+            search_sync=ddg_search_sync,
+            extra_engines=_ddg_extra_engines(context),
+        )
     if name == "brave":
         return BraveBackend(context)
     if name == "tavily":

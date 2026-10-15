@@ -21,8 +21,8 @@ byte-level compatibility with that file.
 
 Layout (xgen-agent-runtime 1.0+, Phase 9a/9b):
 
-    1  input          | 12  agent           | 17  emit
-    2  context        | 13  task_registry   | 18  memory
+    1  input          | 12  (retired)       | 17  emit
+    2  context        | 13  (retired)       | 18  memory
     3  system         | 14  evaluate        | 19  summarize
     4  guard          | 15  hitl            | 20  persist
     5  cache          | 16  loop            | 21  yield
@@ -32,6 +32,10 @@ Layout (xgen-agent-runtime 1.0+, Phase 9a/9b):
     9  parse
     10 tool
     11 tool_review
+
+Orders 12 (``agent``) and 13 (``task_registry``) were retired in 4.71.0
+together with sub-agent orchestration. The slots stay reserved (no
+renumbering) and presets simply omit them.
 
 The returned manifest carries **only declarative shape** — stage list,
 artifact names, slot strategy choices, static configs. Runtime-scoped
@@ -88,9 +92,10 @@ _VTUBER_MAX_TURNS = 10
 
 # ── Sub-phase 9a scaffold entries ────────────────────────────────────
 #
-# The five orders added by the 16→21 layout growth. Each defaults to
-# active=False with the executor's safe no-op strategies so the entry
-# is runnable the moment a preset (or a user edit) flips it on.
+# The orders added by the 16→21 layout growth (13 was one of them and
+# is retired since 4.71.0). Each defaults to active=False with the
+# executor's safe no-op strategies so the entry is runnable the moment
+# a preset (or a user edit) flips it on.
 
 _SCAFFOLD_ENTRIES_SPEC: List[Dict[str, Any]] = [
     {
@@ -105,14 +110,6 @@ _SCAFFOLD_ENTRIES_SPEC: List[Dict[str, Any]] = [
                 "network",
                 "size",
             ],
-        },
-    },
-    {
-        "order": 13,
-        "name": "task_registry",
-        "strategies": {
-            "registry": "in_memory",
-            "policy": "fire_and_forget",
         },
     },
     {
@@ -187,16 +184,6 @@ _PRESET_SCAFFOLD_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "frequency": "on_significant",
             },
         },
-        # Task Registry on: in-memory backend + fire_and_forget policy
-        # so sub-worker delegations acquire a per-pipeline lifecycle
-        # handle without blocking the agent loop.
-        "task_registry": {
-            "active": True,
-            "strategies": {
-                "registry": "in_memory",
-                "policy": "fire_and_forget",
-            },
-        },
     },
     _VTUBER: {
         # Light tool-review chain: the conversational persona's tool
@@ -227,8 +214,7 @@ _PRESET_SCAFFOLD_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "frequency": "on_significant",
             },
         },
-        # task_registry / hitl stay off — the VTuber is a single-agent
-        # autonomous persona: no delegation registry to track, no
+        # hitl stays off — the VTuber is an autonomous persona with no
         # human-approval surface to gate.
     },
 }
@@ -237,7 +223,7 @@ _PRESET_SCAFFOLD_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
 def _make_scaffold_entries(
     overrides: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[StageManifestEntry]:
-    """Build the 5 scaffold entries with optional per-name overrides.
+    """Build the scaffold entries with optional per-name overrides.
 
     ``overrides`` maps a scaffold name to a dict carrying any of:
     ``active`` (bool), ``strategies`` (dict — merged onto the spec
@@ -363,15 +349,6 @@ def _worker_adaptive_stage_entries(*, provider: str) -> List[StageManifestEntry]
             # as a parallel batch (capped at 8), the rest serialize.
             strategies={"executor": "partition", "router": "registry"},
             config={"max_concurrency": 8},
-        ),
-        StageManifestEntry(
-            order=12,
-            name="agent",
-            # Multi-agent on by default; Pipeline.from_manifest rewires
-            # the slot with SubagentTypeOrchestrator(registry) when a
-            # subagent_registry= is passed along.
-            strategies={"orchestrator": "subagent_type"},
-            config={"max_delegations": 4},
         ),
         StageManifestEntry(
             order=14,
@@ -519,12 +496,6 @@ def _vtuber_stage_entries(*, provider: str) -> List[StageManifestEntry]:
             strategies={"executor": "sequential", "router": "registry"},
         ),
         StageManifestEntry(
-            order=12,
-            name="agent",
-            strategies={"orchestrator": "subagent_type"},
-            config={"max_delegations": 4},
-        ),
-        StageManifestEntry(
             order=14,
             name="evaluate",
             strategies={"strategy": "signal_based", "scorer": "no_scorer"},
@@ -558,7 +529,7 @@ def _vtuber_stage_entries(*, provider: str) -> List[StageManifestEntry]:
 
 
 def _build_stage_entries(preset: str, *, provider: str) -> List[StageManifestEntry]:
-    """Emit the full 21-entry :class:`StageManifestEntry` list for *preset*."""
+    """Emit the full :class:`StageManifestEntry` list for *preset* (every live order)."""
     if preset == _VTUBER:
         base = _vtuber_stage_entries(provider=provider)
     else:

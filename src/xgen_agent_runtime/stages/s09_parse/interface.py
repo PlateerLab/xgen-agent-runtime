@@ -18,7 +18,6 @@ class CompletionSignal(str, Enum):
     COMPLETE = "complete"
     BLOCKED = "blocked"
     ERROR = "error"
-    DELEGATE = "delegate"
     NONE = "none"
 
 

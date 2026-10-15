@@ -21,17 +21,31 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from xgen_agent_runtime.tools import Tool, ToolRegistry, ToolResult, build_tool
+from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 
 logger = logging.getLogger("editor.geny_bridge.tools")
 
 _EMPTY_SCHEMA: Dict[str, Any] = {"type": "object", "properties": {}}
 
 
-def _sanitize_name(name: Any) -> str:
-    """Provider-safe tool name (same rule as the agent helper's sanitizer)."""
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", str(name or ""))
-    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
-    return sanitized or "unnamed_tool"
+def _sanitize_name(name: Any, taken: Any = ()) -> str:
+    """Provider-safe tool name — :func:`xgen_agent_runtime.tools.definition.safe_tool_name`.
+
+    ``[A-Za-z0-9_-]``, 48자 이하(CLI 가 붙이는 ``mcp__connector__`` 까지 64자 안), ``taken`` 과 겹치지 않음.
+    한글 이름은 ``tool_<해시>`` 가 된다 — 글자를 ``_`` 로 바꾸면 서로 다른 도구가 한 이름으로 뭉개진다.
+    """
+    from xgen_agent_runtime.tools.definition import safe_tool_name
+
+    return safe_tool_name(name, taken=taken)
+
+
+def _described(description: Any, original: str, name: str) -> str:
+    """이름이 바뀐 도구는 원래 이름을 설명에 남긴다 — 사용자·노드가 부르는 이름과 모델이 부르는 이름을 잇는다."""
+    text = str(description or "").strip()
+    if original and original != name:
+        tail = f"(Original name: {original})"
+        text = f"{text}\n{tail}" if text else tail
+    return text
 
 
 def _stringify(value: Any) -> str:
@@ -60,15 +74,19 @@ def _json_schema_of(lc_tool: Any) -> Dict[str, Any]:
     being dropped.
     """
     raw = getattr(lc_tool, "args_schema", None)
+    # 스키마는 **통째로** 둔다 — 예전엔 properties·required 만 남겨 ``$defs`` 가 사라지고 ``$ref`` 가
+    # 깨졌다(중첩 모델·MCP 스키마). 정규화(참조 풀기·제약 글로 적기)는 모델에게 보낼 때 한 곳에서
+    # 한다(tools.definition.api_definition — SDK·CLI 공통).
     if isinstance(raw, dict):
-        return _object_schema(raw.get("properties", {}), raw.get("required"))
+        return dict(raw) if raw else dict(_EMPTY_SCHEMA)
     if raw is not None:
         for attr in ("model_json_schema", "schema"):
             fn = getattr(raw, attr, None)
             if callable(fn):
                 try:
                     full = fn()
-                    return _object_schema(full.get("properties", {}), full.get("required"))
+                    if isinstance(full, dict) and full:
+                        return dict(full)
                 except Exception:  # noqa: BLE001 - schema extraction is best-effort
                     break
     try:
@@ -110,21 +128,100 @@ def _opens_family(lc_tool: Any) -> List[str]:
     return [str(n) for n in names] if isinstance(names, (list, tuple)) else []
 
 
-def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool:
-    name = _sanitize_name(getattr(lc_tool, "name", type(lc_tool).__name__))
-    description = str(getattr(lc_tool, "description", "") or "")
+#: 사람이 거부했다는 구조화 코드 — 도구가 던진 예외의 ``code``/``error_code`` 또는 메시지 머리말.
+#: 커넥터·MCP 서버는 이 중 하나로 알려 주면 된다(권장: 예외 ``code="user_denied"``, 또는
+#: 메시지를 ``user_denied:`` 로 시작).
+_DENIAL_CODES = frozenset({"user_denied", "access_denied", "denied_by_user"})
+
+#: ⚠ **임시 호환 — DeX 1.56 의 거부 문구.** 지금 커넥터는 구조화 코드 없이 한국어 문장만 보낸다.
+#: 이 문구를 알아보지 않으면 denial_guard 가 거부를 모르고, 모델은 같은 ``rm -rf`` 를 거부된 뒤에도
+#: 거듭 불러 확인 창을 세 번 띄운다(2026-09-23 dev, trace 46745).
+#: **제거 조건: DeX 가 거부를 ``user_denied`` 코드로 보내기 시작하면 이 튜플을 지운다.**
+_LEGACY_DENIAL_PHRASES = ("사용자가 이 명령의 실행을 거부했습니다",)
+
+_DENIAL_GUIDANCE = (
+    "The user refused this action. It was NOT done. Do not attempt it again in this turn "
+    "(not even with different quoting), and do not reach the same effect another way. "
+    "Tell the user it was not done and ask how to proceed."
+)
+
+
+#: 어댑터가 실패를 **결과 문자열**로 알리는 머리말 — LangChain 도구엔 오류 플래그가 없어서
+#: workflow 커넥터 어댑터는 MCP ``isError=True`` 를 ``"Error: <본문>"`` 으로 돌려준다(예외 아님).
+_ERROR_TEXT_HEAD = re.compile(r"^\s*error\b\s*:?\s*", re.IGNORECASE)
+
+
+def _denial_message(exc: BaseException) -> Optional[str]:
+    """사람이 거부한 것이면 그 사유, 아니면 None."""
+    code = getattr(exc, "code", None) or getattr(exc, "error_code", None)
+    if isinstance(code, str) and code.strip().lower() in _DENIAL_CODES:
+        return str(exc).strip() or code
+    return _denial_in_text(str(exc))
+
+
+def _denial_in_error_text(text: str) -> Optional[str]:
+    """``"Error: …"`` 로 돌아온 결과가 사람의 거부면 그 사유.
+
+    오류 머리말이 있을 때만 본다 — 성공한 결과가 우연히 거부 문구를 담은 것(파일 내용 등)은
+    거부가 아니다.
+    """
+    m = _ERROR_TEXT_HEAD.match(text or "")
+    return _denial_in_text(text[m.end() :]) if m else None
+
+
+def _denial_in_text(text: str) -> Optional[str]:
+    msg = (text or "").strip()
+    head = msg.split(":", 1)[0].strip().lower()
+    if head in _DENIAL_CODES:
+        return msg.split(":", 1)[1].strip() if ":" in msg else msg
+    if any(p in msg for p in _LEGACY_DENIAL_PHRASES):
+        return msg
+    return None
+
+
+def _denied_result(name: str, denied: str, result_sink: Optional[Dict[str, str]]) -> ToolResult:
+    """사람의 거부는 오류가 아니라 답이다 — 구조화 머리말로 바꿔 Stage 10 이 알아보게 한다
+    (stages/s10_tool/denial_guard.py: 같은 턴에 같은 동작을 다시 묻지 않는다). 예외로 오든
+    ``"Error: …"`` 결과 문자열로 오든 같은 모양으로 모은다."""
+    logger.info("geny_bridge: tool %s denied by user: %s", name, denied)
+    text = f"ERROR user_denied: {denied}\n{_DENIAL_GUIDANCE}"
+    if result_sink is not None:
+        result_sink[name] = text
+    return ToolResult(content=text, is_error=True)
+
+
+def _capabilities_of(meta: Any) -> Optional[ToolCapabilities]:
+    """노드가 적은 ``read_only`` · ``network_egress`` 만 옮긴다(파괴 · 병렬은 기본값). ``read_only`` 가 없으면 None."""
+    if not isinstance(meta, dict) or "read_only" not in meta:
+        return None
+    return ToolCapabilities(
+        read_only=meta.get("read_only") is True,
+        network_egress=meta.get("network_egress") is True,
+    )
+
+
+def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: Any = ()) -> Tool:
+    original = str(getattr(lc_tool, "name", "") or type(lc_tool).__name__)
+    name = _sanitize_name(original, taken)
+    description = _described(getattr(lc_tool, "description", ""), original, name)
     family = _opens_family(lc_tool)
 
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         try:
             output = await _invoke_langchain(lc_tool, dict(tool_input or {}))
         except Exception as exc:  # noqa: BLE001 - tool errors go back to the model, never crash the loop
+            denied = _denial_message(exc)
+            if denied is not None:
+                return _denied_result(name, denied, result_sink)
             logger.warning("geny_bridge: tool %s failed: %s", name, exc)
             text = f"Error: {exc}"
             if result_sink is not None:
                 result_sink[name] = text
             return ToolResult(content=text, is_error=True)
         text = _stringify(output)
+        denied = _denial_in_error_text(text)
+        if denied is not None:
+            return _denied_result(name, denied, result_sink)
         if family:
             # 안내 도구가 가리킨 도구들을 이 턴에 실제로 연다 — 내장 안내 도구와 같은 규약.
             # 안내만 하고 열지 않으면 모델은 부를 수 없는 이름을 받고, 약한 모델은 안내
@@ -136,24 +233,28 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]]) -> Tool
             result_sink[name] = text
         return ToolResult(content=text)
 
-    return build_tool(
-        name=name,
-        description=description,
-        input_schema=_json_schema_of(lc_tool),
-        execute=_execute,
+    # 종류 표지 — 연결된 노드의 도구(MCP 노드 포함). 기기 도구와 이름 접두가 겹칠 수 있다.
+    return with_origin(
+        build_tool(
+            name=name,
+            description=description,
+            input_schema=_json_schema_of(lc_tool),
+            execute=_execute,
+            capabilities=_capabilities_of(getattr(lc_tool, "metadata", None)),
+        ),
+        "adapted",
     )
 
 
-def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, str]]) -> Tool:
+def _wrap_callable_dict(
+    spec: Dict[str, Any], result_sink: Optional[Dict[str, str]], taken: Any = ()
+) -> Tool:
     func = spec.get("func") or spec.get("function")
-    name = _sanitize_name(spec.get("name"))
-    description = str(spec.get("description", "") or "")
+    original = str(spec.get("name") or "")
+    name = _sanitize_name(original, taken)
+    description = _described(spec.get("description", ""), original, name)
     schema = spec.get("input_schema") or spec.get("args_schema")
-    input_schema = (
-        _object_schema(schema.get("properties", {}), schema.get("required"))
-        if isinstance(schema, dict)
-        else dict(_EMPTY_SCHEMA)
-    )
+    input_schema = dict(schema) if isinstance(schema, dict) and schema else dict(_EMPTY_SCHEMA)
 
     async def _execute(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         try:
@@ -161,19 +262,55 @@ def _wrap_callable_dict(spec: Dict[str, Any], result_sink: Optional[Dict[str, st
             if asyncio.iscoroutine(output):
                 output = await output
         except Exception as exc:  # noqa: BLE001
+            denied = _denial_message(exc)
+            if denied is not None:
+                return _denied_result(name, denied, result_sink)
             logger.warning("geny_bridge: tool %s failed: %s", name, exc)
             text = f"Error: {exc}"
             if result_sink is not None:
                 result_sink[name] = text
             return ToolResult(content=text, is_error=True)
         text = _stringify(output)
+        denied = _denial_in_error_text(text)
+        if denied is not None:
+            return _denied_result(name, denied, result_sink)
         if result_sink is not None:
             result_sink[name] = text
         return ToolResult(content=text)
 
-    return build_tool(
-        name=name, description=description, input_schema=input_schema, execute=_execute
+    return with_origin(
+        build_tool(
+            name=name,
+            description=description,
+            input_schema=input_schema,
+            execute=_execute,
+            capabilities=_capabilities_of(spec.get("capabilities")),
+        ),
+        "adapted",
     )
+
+
+def _reserved_names() -> List[str]:
+    """노드 도구가 가져가면 안 되는 이름 — 런타임 내장 도구와 기억 도구(턴 조립이 나중에 등록한다)."""
+    names = list(_MEMORY_TOOL_NAMES)
+    try:
+        from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
+
+        names += list(BUILT_IN_TOOL_CLASSES)
+    except Exception:  # noqa: BLE001
+        pass
+    return names
+
+
+#: host.memory_tools 가 등록하는 이름.
+_MEMORY_TOOL_NAMES = (
+    "memory_write",
+    "memory_pin",
+    "memory_read",
+    "memory_list",
+    "memory_search",
+    "memory_categories",
+)
 
 
 def _flatten(value: Any) -> List[Any]:
@@ -187,25 +324,31 @@ def _flatten(value: Any) -> List[Any]:
     return [value]
 
 
-def _adapt_one(obj: Any, result_sink: Optional[Dict[str, str]]) -> List[Tool]:
+def _adapt_one(obj: Any, result_sink: Optional[Dict[str, str]], taken: Any = ()) -> List[Tool]:
     if obj is None:
         return []
     if isinstance(obj, Tool):
         return [obj]
+    if not isinstance(obj, dict) and getattr(obj, "dispatch_tool", None) is not None:
+        # 스킬 페이로드가 dataclass 로 오는 노드(파일시스템 스킬 등) — dict 와 같은 규약이다. 예전엔
+        # "cannot adapt" 로 조용히 버려져 도구도 안내도 전달되지 않았다.
+        obj = {"dispatch_tool": getattr(obj, "dispatch_tool")}
     if isinstance(obj, dict):
         # Skill payload: the real tool travels under "dispatch_tool".
         if obj.get("dispatch_tool") is not None:
-            return [
-                t for item in _flatten(obj["dispatch_tool"]) for t in _adapt_one(item, result_sink)
-            ]
+            out: List[Tool] = []
+            for item in _flatten(obj["dispatch_tool"]):
+                adapted = _adapt_one(item, result_sink, set(taken) | {t.name for t in out})
+                out.extend(adapted)
+            return out
         if obj.get("name") and callable(obj.get("func") or obj.get("function")):
-            return [_wrap_callable_dict(obj, result_sink)]
+            return [_wrap_callable_dict(obj, result_sink, taken)]
         logger.warning(
             "geny_bridge: cannot adapt tool dict with keys %s — skipping", sorted(obj.keys())
         )
         return []
     if _looks_like_langchain_tool(obj):
-        return [_wrap_langchain(obj, result_sink)]
+        return [_wrap_langchain(obj, result_sink, taken)]
     logger.warning(
         "geny_bridge: cannot adapt tool object of type %s — skipping", type(obj).__name__
     )
@@ -236,7 +379,18 @@ def adapt_tools(
     Returns ``None`` when nothing usable was connected (and no registry was
     passed in), so callers can skip tool stages entirely.
     """
-    tools = [t for item in _flatten(port_value) for t in _adapt_one(item, result_sink)]
+    # 이름은 한 턴 안에서 유일해야 한다 — 두 노드가 같은 이름의 도구를 내면(MCP 노드 둘의 ``search``)
+    # 예전엔 나중 것이 앞의 것을 조용히 덮어 한 도구가 사라졌다. 이미 등록된 이름과 내장 도구 이름도
+    # 피한다(노드 도구가 ``Read`` 를 덮으면 sandbox 파일 읽기가 사라진다).
+    taken = set(_reserved_names())
+    if registry is not None:
+        taken |= set(registry.list_names())
+    tools: List[Tool] = []
+    for item in _flatten(port_value):
+        adapted = _adapt_one(item, result_sink, taken)
+        for tool in adapted:
+            taken.add(getattr(tool, "name", ""))
+        tools.extend(adapted)
     if not tools and registry is None:
         return None
     registry = registry if registry is not None else ToolRegistry()

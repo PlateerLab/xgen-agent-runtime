@@ -211,7 +211,7 @@ class TestChatScopeAttachments:
 class TestSessionImageHydration:
     @pytest.mark.asyncio
     async def test_a_session_only_image_is_materialized(self, monkeypatch):
-        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        import xgen_agent_runtime.tools._geny_sandbox as sb
         from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
 
         async def _read(sandbox, path, **kw):
@@ -231,7 +231,7 @@ class TestSessionImageHydration:
 
     @pytest.mark.asyncio
     async def test_files_are_never_read_back(self, monkeypatch):
-        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        import xgen_agent_runtime.tools._geny_sandbox as sb
         from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
 
         async def _boom(sandbox, path, **kw):
@@ -246,7 +246,7 @@ class TestSessionImageHydration:
 
     @pytest.mark.asyncio
     async def test_an_oversized_image_is_skipped_not_fatal(self, monkeypatch):
-        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        import xgen_agent_runtime.tools._geny_sandbox as sb
         from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
 
         async def _read(sandbox, path, **kw):
@@ -261,7 +261,7 @@ class TestSessionImageHydration:
 
     @pytest.mark.asyncio
     async def test_a_read_failure_keeps_the_turn_alive(self, monkeypatch):
-        import xgen_agent_runtime.tools._xgeny_sandbox as sb
+        import xgen_agent_runtime.tools._geny_sandbox as sb
         from xgen_agent_runtime.host.attachment_paths import hydrate_sandbox_images
 
         async def _read(sandbox, path, **kw):

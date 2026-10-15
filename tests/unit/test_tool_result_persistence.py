@@ -51,6 +51,58 @@ class TestSmallPayloadPassthrough:
         assert out is result
 
 
+class TestImageBlocksNotCountedAsText:
+    """Image base64 is not text — a normal-size render must reach the model (2026-10-11)."""
+
+    @staticmethod
+    def _image_result(text: str, b64_len: int) -> ToolResult:
+        return ToolResult(
+            content=[
+                {"type": "text", "text": text},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A" * b64_len}},
+            ]
+        )
+
+    def test_large_image_with_short_text_passes_through(self, tmp_path):
+        result = self._image_result("[Image file: a.png] The image is attached below.", 300_000)
+        out = maybe_persist_large_result(
+            result,
+            tool_use_id="t_img",
+            tool_name="Read",
+            capabilities=ToolCapabilities(max_result_chars=100_000),
+            context=_ctx(str(tmp_path)),
+        )
+        assert out is result
+        assert not (tmp_path / TOOL_RESULTS_DIRNAME).exists()
+
+    def test_oversized_text_next_to_image_still_persisted_without_base64(self, tmp_path):
+        result = self._image_result("y" * 5000, 300_000)
+        out = maybe_persist_large_result(
+            result,
+            tool_use_id="t_img_big",
+            tool_name="Read",
+            capabilities=ToolCapabilities(max_result_chars=1_000),
+            context=_ctx(str(tmp_path)),
+        )
+        assert out is not result
+        assert out.persist_full
+        assert "AAAA" not in out.display_text
+        assert "[tool result truncated:" in out.display_text
+
+    def test_list_without_image_measured_as_before(self, tmp_path):
+        content = [{"type": "text", "text": "z" * 900}]
+        result = ToolResult(content=content)
+        out = maybe_persist_large_result(
+            result,
+            tool_use_id="t_txt",
+            tool_name="x",
+            capabilities=ToolCapabilities(max_result_chars=920),
+            context=_ctx(str(tmp_path)),
+        )
+        # JSON rendering adds the block wrapper, which pushes 900 chars over 920 — unchanged rule.
+        assert out is not result
+
+
 class TestLargePayloadPersisted:
     def test_oversized_string_written_to_disk(self, tmp_path):
         big = "x" * 5000

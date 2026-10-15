@@ -15,7 +15,10 @@ Contract rules
   — the enum is a *names registry*, not a rename. Existing consumers
   matching raw strings keep working forever.
 * **Append-only.** New events may be added in minor releases; renaming
-  or removing a member is a major-version change.
+  or removing a member is a major-version change. A member whose
+  emitter is removed in a minor release stays in the enum and is listed
+  in :data:`RETIRED_EVENT_TYPES` ("no longer emitted") until the next
+  major version drops it.
 * **Payloads may gain fields** in minor releases; existing fields keep
   their meaning. :data:`PAYLOADS` documents the fields each event
   carries today (descriptions, not strict schemas — events are
@@ -42,7 +45,7 @@ other half of the unpublished contract.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, List
 
 #: Bumped when the catalogue gains members (append-only). Hosts can pin
 #: a minimum version to assert the names they consume exist.
@@ -56,7 +59,13 @@ from typing import Any, Dict, List
 #: v8: + ``loop.completion_review`` / ``loop.turn_budget`` (4.30.0 deliverable check, turn input budget).
 #: v9: ``context.pruned`` gains trigger/threshold/tokens fields (4.35.0 cost-triggered prune).
 #: v10: + ``loop.repeat_stop`` (4.45.0 end the turn once repeated calls keep getting refused).
-EVENT_CATALOG_VERSION = 11
+#: v15: + ``tool.not_in_sandbox`` (second machine not-found redirect).
+#: v16: ``agent.*`` / ``subagent.*`` / ``task.*`` / ``task_registry.*`` retired
+#: (4.71.0 — Stage 12/13 and sub-agent orchestration removed). The members
+#: stay (removal is a major-version change) but nothing emits them any more;
+#: see :data:`RETIRED_EVENT_TYPES`.
+#: v17: ``tool.call_start`` / ``tool.call_complete`` gain ``capabilities`` / ``origin``.
+EVENT_CATALOG_VERSION = 17
 
 
 class EventTypes(str, Enum):
@@ -123,6 +132,9 @@ class EventTypes(str, Enum):
     CONTEXT_COMPACTION_SCHEDULED = "context.compaction_scheduled"
     CONTEXT_COMPACTION_REQUESTED = "context.compaction_requested"
     CONTEXT_COMPACTION_TARGET_MISSED = "context.compaction_target_missed"
+    CONTEXT_COMPACTION_SKIPPED = "context.compaction_skipped"
+    CONTEXT_COMPACTION_DEFERRED = "context.compaction_deferred"
+    CONTEXT_OVERFLOW = "context.overflow"
     #: 단기 기억 창(4.36.0) — 호스트가 이력을 preload 하지 않은 턴에서 STM 의 최근 논리 턴을
     #: messages 앞에 되살렸다(가까운 턴은 도구까지, 먼 턴은 대화만).
     CONTEXT_SHORT_TERM_WINDOW = "context.short_term_window"
@@ -202,25 +214,30 @@ class EventTypes(str, Enum):
     TOOL_REPEAT_BLOCKED = "tool.repeat_blocked"
     # 같은 도구·같은 입력이 같은 결과를 되풀이할 때 (성공 포함, repeat_guard.observe_same).
     TOOL_SAME_RESULT = "tool.same_result"
+    TOOL_GATE_REACHABILITY_REPAIRED = "tool.gate_reachability_repaired"
+    TOOL_USER_DENIED = "tool.user_denied"
+    TOOL_SURFACE_RESTORED = "tool.surface_restored"
+    # 기계가 둘인 대화에서 sandbox 파일 도구가 '없음' → PC 도 확인하라는 안내 (stages/s10_tool/second_machine.py).
+    TOOL_NOT_IN_SANDBOX = "tool.not_in_sandbox"
 
     # ── Stage 11: Tool review ──
     TOOL_REVIEW_FLAG = "tool_review.flag"
     TOOL_REVIEW_COMPLETED = "tool_review.completed"
     TOOL_REVIEW_REVIEWER_ERROR = "tool_review.reviewer_error"
 
-    # ── Stage 12: Agent ──
+    # ── Stage 12: Agent — RETIRED 4.71.0 (no longer emitted) ──
     AGENT_ORCHESTRATE_START = "agent.orchestrate_start"
     AGENT_ORCHESTRATE_COMPLETE = "agent.orchestrate_complete"
     AGENT_DELEGATIONS_CAPPED = "agent.delegations_capped"
 
-    # ── Persistent sub-agents (2.7.0) ──
+    # ── Persistent sub-agents (2.7.0) — RETIRED 4.71.0 (no longer emitted) ──
     SUBAGENT_SPAWNED = "subagent.spawned"
     SUBAGENT_ASSIGNED = "subagent.assigned"
     SUBAGENT_COMPLETED = "subagent.completed"
     SUBAGENT_FAILED = "subagent.failed"
     SUBAGENT_STOPPED = "subagent.stopped"
 
-    # ── Stage 13: Task registry ──
+    # ── Stage 13: Task registry — RETIRED 4.71.0 (no longer emitted) ──
     TASK_REGISTERED = "task.registered"
     TASK_DONE = "task.done"
     TASK_FAILED = "task.failed"
@@ -437,18 +454,44 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "degraded": "list[str] — 예산 강등 단계",
     },
     EventTypes.CONTEXT_COMPACTED: {
-        "strategy": "str — compactor name/class",
-        "trigger": "str? — proactive | requested | guard | internal_loop | background",
+        "strategy": "str — compactor name/class, or 'prune' when the deterministic pass alone met the target",
+        "trigger": "str? — proactive | requested | manual | guard | overflow | internal_loop | background",
         "messages_before": "int?",
         "messages_after": "int?",
         "saved_tokens_estimate": "int?",
+        "tokens_after_estimate": "int? — projected prompt tokens after the relief",
+        "target_tokens": "int? — where the relief aimed (50% of the window by default)",
+        "target_met": "bool?",
+    },
+    EventTypes.CONTEXT_COMPACTION_SKIPPED: {
+        "strategy": "str — compactor name/class",
+        "trigger": "str",
+        "reason": "str — turn_compaction_limit | summary_model_failing | already_summarized_for_this_request | background_summary_running | nothing_to_summarize | summary_region_too_small | no_change",
+        "tokens_estimate": "int?",
+        "target_tokens": "int",
+    },
+    EventTypes.CONTEXT_COMPACTION_DEFERRED: {
+        "compactor": "str",
+        "reason": "str — why no summary was produced (soft pressure leaves the history unchanged)",
+        "attempts": "int — model calls tried",
+    },
+    EventTypes.CONTEXT_OVERFLOW: {
+        "message": "str — the provider's error, first 500 chars",
+        "reported_tokens": "int — prompt size the provider named, 0 when it named none",
+        "estimated_tokens": "int — our estimate for the rejected request",
+        "window": "int — the window we believed",
+        "provider_limit": "int — window the provider named, 0 when none (used for the rest of the turn when smaller)",
     },
     EventTypes.CONTEXT_PRUNED: {
         "deduped": "int — duplicate tool results rewritten to a back-reference",
-        "images_stripped": "int — stale base64 images replaced with a marker",
+        "images_stripped": "int — stale base64 images/documents replaced with a marker",
         "trimmed": "int — oversized stale tool results shortened",
+        "inputs_trimmed": "int — oversized stale tool-call arguments shortened",
         "chars_saved": "int — text chars removed (images excluded)",
-        "trigger": "str? — cost (Stage 2 token threshold) | absent when run inside compaction",
+        "aggressive": "bool? — the hard-pressure profile (guard / overflow)",
+        "results_fitted": "int? — tool results shortened in proportion so a hard-pressure request fits",
+        "current_attachments_stripped": "int? — images/documents of the request itself removed (the very last resort)",
+        "trigger": "str? — cost (Stage 2 token threshold) | the compaction trigger it ran under",
         "threshold_tokens": "int? — the prune_over_tokens threshold that fired (cost trigger)",
         "tokens_before": "int? — projected prompt tokens before the pass (cost trigger)",
         "tokens_after": "int? — projected prompt tokens after the pass (cost trigger)",
@@ -644,15 +687,31 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "tools": "list[{name: str, count: int}] — identical call returned an identical result past the warn threshold",
         "skipped": "list[str] — identical calls answered from the previous result without executing",
     },
+    EventTypes.TOOL_SURFACE_RESTORED: {
+        "opened": "list[str] — deferred tools re-exposed because the visible history shows the model using them (or their gate) earlier in the conversation (tools.gates.restore_from_history)",
+    },
+    EventTypes.TOOL_NOT_IN_SANDBOX: {
+        "count": "int — sandbox file-tool 'not found' results this round that got a 'check the user's computer too' note (stages/s10_tool/second_machine.py)",
+    },
+    EventTypes.TOOL_USER_DENIED: {
+        "tools": "list[str] — tools whose call the user refused this round; identical calls are not executed again this turn (stages/s10_tool/denial_guard.py)",
+    },
+    EventTypes.TOOL_GATE_REACHABILITY_REPAIRED: {
+        "opened": "list[str] — tools (or their gates) that were hidden with no visible gate and were exposed instead (tools.gates.reachability_fixes)",
+    },
     EventTypes.TOOL_CALL_START: {
         "tool_use_id": "str",
         "name": "str",
         "input": "dict",
+        "capabilities": "dict — {read_only, destructive, network_egress, idempotent} from Tool.capabilities(input); absent when the executor's registry does not know the tool",
+        "origin": "str — tool_origin(): builtin / adapted / device / memory / mcp / ''",
     },
     EventTypes.TOOL_CALL_COMPLETE: {
         "tool_use_id": "str",
         "name": "str",
         "is_error": "bool",
+        "capabilities": "dict — same as tool.call_start",
+        "origin": "str — same as tool.call_start",
         "duration_ms": "int",
     },
     EventTypes.TOOL_REVIEW_FLAG: {
@@ -956,8 +1015,37 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
 }
 
 
+#: Members kept for the append-only contract whose emitters are gone.
+#: 4.71.0 removed Stage 12 (agent orchestration), Stage 13 (task registry)
+#: and the persistent sub-agent manager, so nothing in the engine emits
+#: these any more. They leave the enum at the next major version.
+RETIRED_EVENT_TYPES: FrozenSet[EventTypes] = frozenset(
+    {
+        EventTypes.AGENT_ORCHESTRATE_START,
+        EventTypes.AGENT_ORCHESTRATE_COMPLETE,
+        EventTypes.AGENT_DELEGATIONS_CAPPED,
+        EventTypes.SUBAGENT_SPAWNED,
+        EventTypes.SUBAGENT_ASSIGNED,
+        EventTypes.SUBAGENT_COMPLETED,
+        EventTypes.SUBAGENT_FAILED,
+        EventTypes.SUBAGENT_STOPPED,
+        EventTypes.TASK_REGISTERED,
+        EventTypes.TASK_DONE,
+        EventTypes.TASK_FAILED,
+        EventTypes.TASK_TIMEOUT,
+        EventTypes.TASK_REGISTRY_SYNCED,
+        EventTypes.TASK_REGISTRY_INVALID_PAYLOAD,
+        EventTypes.TASK_REGISTRY_POLICY_ERROR,
+    }
+)
+
+
 def known_event_types() -> List[str]:
-    """All catalogued wire strings, sorted — UI/validation accessor."""
+    """All catalogued wire strings, sorted — UI/validation accessor.
+
+    Includes :data:`RETIRED_EVENT_TYPES` (still valid names, never
+    emitted); filter them out when building "what can I receive" UIs.
+    """
     return sorted(e.value for e in EventTypes)
 
 
@@ -965,6 +1053,7 @@ __all__ = [
     "EVENT_CATALOG_VERSION",
     "EventTypes",
     "PAYLOADS",
+    "RETIRED_EVENT_TYPES",
     "known_event_types",
 ]
 

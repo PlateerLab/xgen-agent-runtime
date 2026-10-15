@@ -18,7 +18,9 @@ beyond a synthetic "[interrupted]" result — and are backend-agnostic
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+import json
+import re
+from typing import Any, Callable, Dict, List, Sequence
 
 
 _INTERRUPTED_RESULT_CONTENT = "[interrupted — the previous turn ended before this tool finished]"
@@ -225,3 +227,127 @@ def strip_leading_orphan_tool_results(
     while i < len(messages) and _is_tool_result_only(messages[i]):
         i += 1
     return messages[i:] if i else messages
+
+
+# ── Retiring calls to tools that are gone ─────────────────────────────
+
+_RETIRED_INPUT_CHARS = 200
+_RETIRED_RESULT_CHARS = 400
+_BRIDGE_PREFIX = re.compile(r"^mcp__[A-Za-z0-9-]+__")
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _result_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        pieces: List[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                pieces.append(str(block.get("text", "")))
+            elif block.get("type") == "image":
+                pieces.append("[image]")
+        return " ".join(p for p in pieces if p)
+    return "" if content is None else str(content)
+
+
+def retire_tool_calls(
+    messages: Sequence[Dict[str, Any]],
+    *,
+    is_retired: Callable[[str], bool],
+    reason: str = "tool not available now",
+) -> List[Dict[str, Any]]:
+    """Rewrite history calls to tools that are gone into one plain-text line each.
+
+    A tool that existed in an earlier turn may be absent now (the host
+    stopped offering it). Its ``tool_use``/``tool_result`` pair stays in
+    history verbatim, so the model tends to call it again or trust what it
+    returned as still current. This returns a COPY where each such call
+    and its result become a short text block marked with ``reason``.
+
+    Both sides of a pair are rewritten together — rewriting only one would
+    orphan the other. Message count and role order are unchanged.
+    """
+    retired_ids = set()
+    for msg in messages:
+        content = msg.get("content")
+        if msg.get("role") != "assistant" or not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and is_retired(str(block.get("name", "")))
+            ):
+                retired_ids.add(block.get("id"))
+    if not retired_ids:
+        return list(messages)
+
+    out: List[Dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        changed = False
+        blocks: List[Any] = []
+        for block in content:
+            if not isinstance(block, dict):
+                blocks.append(block)
+                continue
+            kind = block.get("type")
+            if kind == "tool_use" and block.get("id") in retired_ids:
+                args = json.dumps(block.get("input") or {}, ensure_ascii=False)
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"[earlier call, {reason}] "
+                            f"{block.get('name')}({_clip(args, _RETIRED_INPUT_CHARS)})"
+                        ),
+                    }
+                )
+                changed = True
+            elif kind == "tool_result" and block.get("tool_use_id") in retired_ids:
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            "[result of that earlier call] "
+                            f"{_clip(_result_text(block.get('content')), _RETIRED_RESULT_CHARS)}"
+                        ),
+                    }
+                )
+                changed = True
+            else:
+                blocks.append(block)
+        out.append({**msg, "content": blocks} if changed else msg)
+    return out
+
+
+def retire_tool_calls_by_name(
+    messages: Sequence[Dict[str, Any]], spec: Any
+) -> List[Dict[str, Any]]:
+    """``retire_tool_calls`` driven by a plain-data spec from ``state.shared``.
+
+    ``spec`` is ``{"names": [...], "reason": str}``. Names match with or
+    without a CLI bridge server prefix (``mcp__connector__<name>``). A
+    malformed spec leaves the messages untouched.
+    """
+    if not isinstance(spec, dict):
+        return list(messages)
+    names = {str(n) for n in (spec.get("names") or []) if n}
+    if not names:
+        return list(messages)
+    reason = str(spec.get("reason") or "tool not available now")
+    return retire_tool_calls(
+        messages,
+        is_retired=lambda name: _BRIDGE_PREFIX.sub("", str(name or "")) in names,
+        reason=reason,
+    )

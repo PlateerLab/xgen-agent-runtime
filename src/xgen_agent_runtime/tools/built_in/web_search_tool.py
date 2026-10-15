@@ -43,11 +43,12 @@ from __future__ import annotations
 import asyncio
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in import _web_search_backends as _backends
 from xgen_agent_runtime.tools.built_in._web_search_backends import (
+    WebSearchBlockedError,
     WebSearchConfigError,
     build_backend,
     select_backend_name,
@@ -65,7 +66,7 @@ _HARD_MAX_RESULTS = 30
 #: engine already down, the whole call fails (dev 2026-09-22: 22 of 50
 #: WebSearch calls in one session). The cap lives in the tool, not the
 #: executor, so it holds on every path — Stage 10 parallel batches, ToolBatch,
-#: sub-agents sharing the process. Two keeps a pair of queries in flight
+#: concurrent sessions sharing the process. Two keeps a pair of queries in flight
 #: without tripping the free backends.
 _MAX_CONCURRENT_SEARCHES = 2
 _search_semaphores: Dict[int, asyncio.Semaphore] = {}
@@ -78,6 +79,23 @@ def _search_slot() -> asyncio.Semaphore:
     if sem is None:
         sem = _search_semaphores[id(loop)] = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
     return sem
+
+
+#: Longest window ``days`` takes (ten years).
+_MAX_DAYS = 3650
+
+
+def _days(raw: Any) -> Tuple[Optional[int], bool]:
+    """``days`` input → (whole days or ``None`` when absent/zero, whether it was a number)."""
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return None, True
+    try:
+        value = int(float(str(raw).strip()))
+    except ValueError:
+        return None, False
+    if value <= 0:
+        return None, True
+    return min(value, _MAX_DAYS), True
 
 
 def _load_ddgs() -> Optional[Any]:
@@ -136,6 +154,14 @@ class WebSearchTool(Tool):
                     "type": "string",
                     "description": "Region code, e.g. 'kr-kr', 'us-en'. Default worldwide.",
                 },
+                "days": {
+                    "type": "integer",
+                    "description": (
+                        "Only news from the last N days, each with its date. "
+                        "Use for recent or latest information."
+                    ),
+                    "exclusiveMinimum": 0,
+                },
             },
             "required": ["query"],
         }
@@ -164,6 +190,11 @@ class WebSearchTool(Tool):
         # only when the caller asked for one; ddgs' own default works.
         region = input.get("region") or None
         safesearch = input.get("safesearch") or "moderate"
+        days, days_ok = _days(input.get("days"))
+        if not days_ok:
+            return ToolResult(
+                content="days must be a whole number of days (e.g. 7 or 30)", is_error=True
+            )
 
         backend_name = select_backend_name(input, context)
         try:
@@ -180,12 +211,25 @@ class WebSearchTool(Tool):
             # Unknown backend name → "valid options" hint.
             return ToolResult(content=str(exc), is_error=True)
 
+        dated = bool(days) and getattr(backend, "supports_days", False)
         try:
             async with _search_slot():
-                hits = await backend.search(query, max_results, region, safesearch)
+                if dated:
+                    hits = await backend.search(query, max_results, region, safesearch, days=days)
+                else:
+                    hits = await backend.search(query, max_results, region, safesearch)
         except WebSearchConfigError as exc:
             # Missing key / url (or missing ddgs package) → config hint.
             return ToolResult(content=str(exc), is_error=True)
+        except WebSearchBlockedError as exc:
+            # The engines turned us away twice — say so, so the model stops
+            # rewording a query that was never the problem.
+            logger.warning("WebSearch %r turned away: %s", backend_name, exc.engines)
+            return ToolResult(
+                content=str(exc),
+                is_error=True,
+                metadata={"query": query, "results_count": 0, "engines": exc.engines},
+            )
         except Exception as exc:
             logger.exception("WebSearch backend %r call failed", backend_name)
             return ToolResult(
@@ -193,23 +237,48 @@ class WebSearchTool(Tool):
                 is_error=True,
             )
 
+        engines = getattr(backend, "engines", None)
+        mode = getattr(backend, "mode", "web") if dated else "web"
         if not hits:
-            return ToolResult(
-                content=f"No results for {query!r}.",
-                metadata={"query": query, "results_count": 0},
-            )
+            metadata: Dict[str, Any] = {"query": query, "results_count": 0}
+            if days:
+                metadata["days"] = days
+            if engines:
+                metadata["engines"] = engines
+            return ToolResult(content=f"No results for {query!r}.", metadata=metadata)
 
         hits = hits[:max_results]
-        header = f"Search results for {query!r} ({len(hits)} of max {max_results}):"
+        count = f"({len(hits)} of max {max_results})"
+        if mode == "news":
+            header = f"News from the last {days} days for {query!r} {count}:"
+        elif dated:
+            header = (
+                f"No news from the last {days} days for {query!r}; "
+                f"web results instead, their dates unknown {count}:"
+            )
+        else:
+            header = f"Search results for {query!r} {count}:"
         body = "\n\n".join(self._format_hit(h) for h in hits)
-        return ToolResult(
-            content=f"{header}\n\n{body}",
-            metadata={
-                "query": query,
-                "results_count": len(hits),
-                "results": hits,
-            },
-        )
+        metadata = {
+            "query": query,
+            "results_count": len(hits),
+            "results": hits,
+        }
+        if days:
+            metadata["days"] = days
+            metadata["mode"] = mode
+        content = f"{header}\n\n{body}"
+        notice = getattr(backend, "notice", None)
+        if notice:
+            content = f"{content}\n\n{notice}"
+        if days and not dated:
+            content += (
+                f"\n\nNote: the {backend_name!r} search backend cannot filter by date — "
+                "days was ignored, so check each result's date before calling it recent."
+            )
+        if engines:
+            metadata["engines"] = engines
+        return ToolResult(content=content, metadata=metadata)
 
     @staticmethod
     def _search_sync(
@@ -239,12 +308,7 @@ class WebSearchTool(Tool):
         to ``url`` and ``body`` to ``snippet`` to match the more common
         search-API conventions. ``rank`` is the zero-based position.
         """
-        return {
-            "rank": index,
-            "title": str(raw.get("title") or "").strip(),
-            "url": str(raw.get("href") or raw.get("url") or "").strip(),
-            "snippet": str(raw.get("body") or raw.get("snippet") or "").strip(),
-        }
+        return _backends._normalise_hit(index, raw)
 
     @staticmethod
     def _format_hit(hit: Dict[str, Any]) -> str:
@@ -252,6 +316,10 @@ class WebSearchTool(Tool):
         title = hit.get("title") or "(no title)"
         url = hit.get("url") or "(no url)"
         snippet = hit.get("snippet") or ""
+        lines = [f"{rank}. {title}", f"   {url}"]
+        dated = " · ".join(str(v) for v in (hit.get("date"), hit.get("source")) if v)
+        if dated:
+            lines.append(f"   {dated}")
         if snippet:
-            return f"{rank}. {title}\n   {url}\n   {snippet}"
-        return f"{rank}. {title}\n   {url}"
+            lines.append(f"   {snippet}")
+        return "\n".join(lines)

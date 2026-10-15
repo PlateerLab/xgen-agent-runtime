@@ -198,6 +198,8 @@ class TestSharedKeys:
     def test_executor_keys_namespaced(self) -> None:
         assert SharedKeys.TOOL_CALL_ID.startswith("executor.")
         assert SharedKeys.SKILL_CTX.startswith("executor.")
+        assert SharedKeys.FILE_WITNESSED.startswith("executor.")
+        assert SharedKeys.WORKSPACE_FAST_PATH.startswith("executor.")
         assert SharedKeys.TOOL_REVIEW_FLAGS.startswith("executor.")
         assert SharedKeys.HITL_REQUEST.startswith("executor.")
         assert SharedKeys.TURN_SUMMARY.startswith("executor.")

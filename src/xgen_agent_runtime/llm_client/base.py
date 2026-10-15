@@ -129,6 +129,18 @@ class ClientCapabilities:
         return bool(getattr(self, f"supports_{feature}", False))
 
 
+def prompt_tokens_with_cache(usage: Any) -> int:
+    """Anthropic-shaped usage (Anthropic, Bedrock, Claude Code CLI) reports cache reads and writes
+    OUTSIDE ``input_tokens``; the prompt the provider counted is their sum."""
+    total = 0
+    for name in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+        try:
+            total += int(getattr(usage, name, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 class BaseClient(ABC):
     """Abstract LLM client. Concrete subclasses live in this package."""
 
@@ -149,6 +161,48 @@ class BaseClient(ABC):
         self._base_url = base_url
         self._default_headers = default_headers
         self._event_sink = event_sink
+
+    async def aclose(self) -> None:
+        """이 클라이언트가 쥔 벤더 SDK 클라이언트(연결 풀)를 닫는다. 여러 번 불러도 된다.
+
+        SDK 클라이언트를 닫지 않고 버리면 그 연결은 가비지 컬렉터가 **나중에** 닫는다. 그 사이 다른
+        연결이 같은 소켓 번호를 받으면 옛 연결을 닫는 일이 새 연결을 닫아, 새 호출이 연결 단계에서
+        연결 상한(10초)까지 멈춘다 — xgen-workflow 앱 LLM 에서 실측했다(2026-09-30, httpcore 로그:
+        새 connect_tcp 직후 옛 연결 close, 10초 뒤 ConnectTimeout). 턴은 끝에 ``Pipeline.aclose`` 가
+        이것을 부른다(루프를 닫기 전). 지금까지 API 클라이언트에는 이 메서드가 없어 닫히지 않았다.
+
+        벤더 클라이언트는 ``self._client`` 에 산다(OpenAI·Anthropic·Bedrock·Azure 는 ``close()``,
+        google-genai 는 ``aio.aclose()``). 없으면 할 일이 없다. 닫은 뒤 다시 부르면 새로 만든다.
+        """
+        sdk = getattr(self, "_client", None)
+        if sdk is None:
+            return
+        self._client = None
+        aio = getattr(sdk, "aio", None)
+        closer = getattr(aio, "aclose", None) if aio is not None else None
+        if not callable(closer):
+            closer = getattr(sdk, "close", None)
+        if not callable(closer):
+            return
+        try:
+            out = closer()
+            if hasattr(out, "__await__"):
+                await out
+        except Exception:  # noqa: BLE001 — 정리가 호출자를 깨지 않는다
+            logger.debug("%s: SDK client close failed", type(self).__name__, exc_info=True)
+
+    #: 클라이언트 이름 → 생각 표(llm_client.thinking)의 provider 이름.
+    _THINKING_PROVIDERS = {
+        "claude_code_cli": "claude_code",
+        "codex_cli": "codex",
+        "azure_foundry": "azure",
+        "custom": "vllm",
+    }
+
+    def thinking_provider(self) -> str:
+        """생각 표를 고르는 provider 이름 — 같은 모델 이름이라도 provider 마다 받는 것이 다르다."""
+        name = str(getattr(self, "provider", "") or "")
+        return self._THINKING_PROVIDERS.get(name, name)
 
     # ── High-level surface used by stages ───────────────────────────────
 
@@ -260,6 +314,19 @@ class BaseClient(ABC):
                 request.thinking = thinking
             else:
                 self._emit_unsupported("thinking_enabled")
+
+        # 생각의 표준 값 — 이 모델이 받는 값으로 맞추고(llm_client.thinking), 옛 필드는 내려놓는다.
+        # 하나의 요청에 두 길이 함께 실리면 어느 쪽이 이겼는지 아무도 모른다.
+        if getattr(model_config, "thinking_level", None):
+            from xgen_agent_runtime.llm_client.thinking import normalize_thinking, thinking_spec
+
+            level = normalize_thinking(
+                thinking_spec(self.thinking_provider(), model_config.model),
+                model_config.thinking_level,
+            )
+            if level:
+                request.thinking_level = level
+                request.thinking = None
 
         if model_config.top_k is not None and not self.capabilities.supports_top_k:
             self._emit_unsupported("top_k")
@@ -530,6 +597,18 @@ class BaseClient(ABC):
                         "message": message,
                     }
                 )
+
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """The FULL prompt size a response's usage says the provider counted.
+
+        OpenAI-shaped usage (OpenAI, Azure, vLLM, Gemini) already includes cached prompt tokens in
+        ``input_tokens``; :class:`AnthropicClient` overrides this because Anthropic reports cache
+        reads/writes separately. Stage 6 anchors the context estimate on this number.
+        """
+        try:
+            return int(getattr(usage, "input_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _classify_error(self, e: Exception) -> APIError:
         """Translate a vendor exception into a canonical :class:`APIError`.

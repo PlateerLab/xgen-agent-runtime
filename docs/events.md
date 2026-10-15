@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-09-22.
-> Catalogue version: **11** · events: **136**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-12.
+> Catalogue version: **17** · events: **143**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -16,6 +16,8 @@ statement):
 - **Payloads may gain fields** in minor releases; existing fields keep
   their meaning. Field docs below are descriptive, not strict schemas.
 - `…?` marks fields present only in some emissions of the event.
+- **Retired** events (`RETIRED_EVENT_TYPES`) are still valid names but
+  are no longer emitted; they leave the catalogue at the next major version.
 
 Consume via `pipeline.on(event_type, handler)`, `pipeline.run_stream(...)`,
 or the multi-subscriber tap `pipeline.events(replay_from=...)` (2.2.0).
@@ -295,11 +297,14 @@ Enum member: `EventTypes.CONTEXT_COMPACTED`
 
 | Field | Description |
 |---|---|
-| `strategy` | str — compactor name/class |
-| `trigger` | str? — proactive \| requested \| guard \| internal_loop \| background |
+| `strategy` | str — compactor name/class, or 'prune' when the deterministic pass alone met the target |
+| `trigger` | str? — proactive \| requested \| manual \| guard \| overflow \| internal_loop \| background |
 | `messages_before` | int? |
 | `messages_after` | int? |
 | `saved_tokens_estimate` | int? |
+| `tokens_after_estimate` | int? — projected prompt tokens after the relief |
+| `target_tokens` | int? — where the relief aimed (50% of the window by default) |
+| `target_met` | bool? |
 
 ### `context.pruned`
 
@@ -308,10 +313,14 @@ Enum member: `EventTypes.CONTEXT_PRUNED`
 | Field | Description |
 |---|---|
 | `deduped` | int — duplicate tool results rewritten to a back-reference |
-| `images_stripped` | int — stale base64 images replaced with a marker |
+| `images_stripped` | int — stale base64 images/documents replaced with a marker |
 | `trimmed` | int — oversized stale tool results shortened |
+| `inputs_trimmed` | int — oversized stale tool-call arguments shortened |
 | `chars_saved` | int — text chars removed (images excluded) |
-| `trigger` | str? — cost (Stage 2 token threshold) \| absent when run inside compaction |
+| `aggressive` | bool? — the hard-pressure profile (guard / overflow) |
+| `results_fitted` | int? — tool results shortened in proportion so a hard-pressure request fits |
+| `current_attachments_stripped` | int? — images/documents of the request itself removed (the very last resort) |
+| `trigger` | str? — cost (Stage 2 token threshold) \| the compaction trigger it ran under |
 | `threshold_tokens` | int? — the prune_over_tokens threshold that fired (cost trigger) |
 | `tokens_before` | int? — projected prompt tokens before the pass (cost trigger) |
 | `tokens_after` | int? — projected prompt tokens after the pass (cost trigger) |
@@ -372,6 +381,40 @@ Enum member: `EventTypes.CONTEXT_COMPACTION_TARGET_MISSED`
 | `trigger` | str — proactive \| requested \| guard |
 | `tokens_after_estimate` | int |
 | `target_tokens` | int |
+
+### `context.compaction_skipped`
+
+Enum member: `EventTypes.CONTEXT_COMPACTION_SKIPPED`
+
+| Field | Description |
+|---|---|
+| `strategy` | str — compactor name/class |
+| `trigger` | str |
+| `reason` | str — turn_compaction_limit \| summary_model_failing \| already_summarized_for_this_request \| background_summary_running \| nothing_to_summarize \| summary_region_too_small \| no_change |
+| `tokens_estimate` | int? |
+| `target_tokens` | int |
+
+### `context.compaction_deferred`
+
+Enum member: `EventTypes.CONTEXT_COMPACTION_DEFERRED`
+
+| Field | Description |
+|---|---|
+| `compactor` | str |
+| `reason` | str — why no summary was produced (soft pressure leaves the history unchanged) |
+| `attempts` | int — model calls tried |
+
+### `context.overflow`
+
+Enum member: `EventTypes.CONTEXT_OVERFLOW`
+
+| Field | Description |
+|---|---|
+| `message` | str — the provider's error, first 500 chars |
+| `reported_tokens` | int — prompt size the provider named, 0 when it named none |
+| `estimated_tokens` | int — our estimate for the rejected request |
+| `window` | int — the window we believed |
+| `provider_limit` | int — window the provider named, 0 when none (used for the rest of the turn when smaller) |
 
 ### `context.short_term_window`
 
@@ -714,6 +757,8 @@ Enum member: `EventTypes.TOOL_CALL_START`
 | `tool_use_id` | str |
 | `name` | str |
 | `input` | dict |
+| `capabilities` | dict — {read_only, destructive, network_egress, idempotent} from Tool.capabilities(input); absent when the executor's registry does not know the tool |
+| `origin` | str — tool_origin(): builtin / adapted / device / memory / mcp / '' |
 
 ### `tool.call_complete`
 
@@ -724,6 +769,8 @@ Enum member: `EventTypes.TOOL_CALL_COMPLETE`
 | `tool_use_id` | str |
 | `name` | str |
 | `is_error` | bool |
+| `capabilities` | dict — same as tool.call_start |
+| `origin` | str — same as tool.call_start |
 | `duration_ms` | int |
 
 ### `tool.repeat_failure`
@@ -750,6 +797,38 @@ Enum member: `EventTypes.TOOL_SAME_RESULT`
 |---|---|
 | `tools` | list[{name: str, count: int}] — identical call returned an identical result past the warn threshold |
 | `skipped` | list[str] — identical calls answered from the previous result without executing |
+
+### `tool.gate_reachability_repaired`
+
+Enum member: `EventTypes.TOOL_GATE_REACHABILITY_REPAIRED`
+
+| Field | Description |
+|---|---|
+| `opened` | list[str] — tools (or their gates) that were hidden with no visible gate and were exposed instead (tools.gates.reachability_fixes) |
+
+### `tool.user_denied`
+
+Enum member: `EventTypes.TOOL_USER_DENIED`
+
+| Field | Description |
+|---|---|
+| `tools` | list[str] — tools whose call the user refused this round; identical calls are not executed again this turn (stages/s10_tool/denial_guard.py) |
+
+### `tool.surface_restored`
+
+Enum member: `EventTypes.TOOL_SURFACE_RESTORED`
+
+| Field | Description |
+|---|---|
+| `opened` | list[str] — deferred tools re-exposed because the visible history shows the model using them (or their gate) earlier in the conversation (tools.gates.restore_from_history) |
+
+### `tool.not_in_sandbox`
+
+Enum member: `EventTypes.TOOL_NOT_IN_SANDBOX`
+
+| Field | Description |
+|---|---|
+| `count` | int — sandbox file-tool 'not found' results this round that got a 'check the user's computer too' note (stages/s10_tool/second_machine.py) |
 
 ## Stage 11 — Tool review
 
@@ -783,11 +862,13 @@ Enum member: `EventTypes.TOOL_REVIEW_REVIEWER_ERROR`
 | `reviewer` | str |
 | `error` | str |
 
-## Stage 12 — Agent
+## Stage 12 — Agent (retired 4.71.0)
 
 ### `agent.orchestrate_start`
 
 Enum member: `EventTypes.AGENT_ORCHESTRATE_START`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -798,6 +879,8 @@ Enum member: `EventTypes.AGENT_ORCHESTRATE_START`
 
 Enum member: `EventTypes.AGENT_ORCHESTRATE_COMPLETE`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `delegated` | bool |
@@ -807,16 +890,20 @@ Enum member: `EventTypes.AGENT_ORCHESTRATE_COMPLETE`
 
 Enum member: `EventTypes.AGENT_DELEGATIONS_CAPPED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `requested` | int — delegate requests queued this turn |
 | `cap` | int — the max_delegations limit that truncated them |
 
-## `subagent.*`
+## Persistent sub-agents (retired 4.71.0)
 
 ### `subagent.spawned`
 
 Enum member: `EventTypes.SUBAGENT_SPAWNED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -829,6 +916,8 @@ Enum member: `EventTypes.SUBAGENT_SPAWNED`
 
 Enum member: `EventTypes.SUBAGENT_ASSIGNED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `assignment_id` | str |
@@ -838,6 +927,8 @@ Enum member: `EventTypes.SUBAGENT_ASSIGNED`
 ### `subagent.completed`
 
 Enum member: `EventTypes.SUBAGENT_COMPLETED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -851,6 +942,8 @@ Enum member: `EventTypes.SUBAGENT_COMPLETED`
 
 Enum member: `EventTypes.SUBAGENT_FAILED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `assignment_id` | str |
@@ -862,15 +955,19 @@ Enum member: `EventTypes.SUBAGENT_FAILED`
 
 Enum member: `EventTypes.SUBAGENT_STOPPED`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `sub_agent_id` | str |
 
-## Stage 13 — Task registry
+## Stage 13 — Task registry (retired 4.71.0)
 
 ### `task.registered`
 
 Enum member: `EventTypes.TASK_REGISTERED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -882,6 +979,8 @@ Enum member: `EventTypes.TASK_REGISTERED`
 
 Enum member: `EventTypes.TASK_DONE`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `task_id` | str |
@@ -890,6 +989,8 @@ Enum member: `EventTypes.TASK_DONE`
 ### `task.failed`
 
 Enum member: `EventTypes.TASK_FAILED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -901,6 +1002,8 @@ Enum member: `EventTypes.TASK_FAILED`
 
 Enum member: `EventTypes.TASK_TIMEOUT`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `task_id` | str |
@@ -910,6 +1013,8 @@ Enum member: `EventTypes.TASK_TIMEOUT`
 ### `task_registry.synced`
 
 Enum member: `EventTypes.TASK_REGISTRY_SYNCED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -921,6 +1026,8 @@ Enum member: `EventTypes.TASK_REGISTRY_SYNCED`
 
 Enum member: `EventTypes.TASK_REGISTRY_INVALID_PAYLOAD`
 
+**Retired (4.71.0) — no longer emitted.**
+
 | Field | Description |
 |---|---|
 | `payload_repr` | str — repr of the rejected payload, truncated |
@@ -928,6 +1035,8 @@ Enum member: `EventTypes.TASK_REGISTRY_INVALID_PAYLOAD`
 ### `task_registry.policy_error`
 
 Enum member: `EventTypes.TASK_REGISTRY_POLICY_ERROR`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|

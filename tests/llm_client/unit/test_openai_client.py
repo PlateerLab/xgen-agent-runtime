@@ -210,7 +210,8 @@ def test_classic_families_keep_max_tokens(model: str) -> None:
 def test_build_kwargs_sends_max_completion_tokens_for_o_series() -> None:
     client = OpenAIClient(api_key="sk-mock")
     kwargs = client._build_kwargs(_req(model="o3-mini", max_tokens=2048))
-    assert kwargs["max_completion_tokens"] == 2048
+    # o3 는 기본으로 medium 만큼 생각한다 — 생각할 자리(16384)를 답 위에 더 둔다(2026-10-01).
+    assert kwargs["max_completion_tokens"] == 2048 + 16384
     assert "max_tokens" not in kwargs
 
 
@@ -427,6 +428,44 @@ def test_vllm_provenance_reports_vllm_provider_with_openai_sdk() -> None:
 
 
 # ---------------------------------------------------------------------------
+# System prompt role: ``developer`` for OpenAI, ``system`` for compatible servers
+# ---------------------------------------------------------------------------
+
+
+def _system_message(client: Any) -> Dict[str, Any]:
+    kwargs = client._build_kwargs(_req(model="any-model", system="You are terse."))
+    return kwargs["messages"][0]
+
+
+def test_openai_sends_system_prompt_as_developer() -> None:
+    assert _system_message(OpenAIClient(api_key="sk-mock")) == {"role": "developer", "content": "You are terse."}
+
+
+def test_vllm_sends_system_prompt_as_system() -> None:
+    """DeepSeek runs through this client and answers 422 for ``developer``."""
+    from xgen_agent_runtime.llm_client.vllm import VLLMClient
+
+    client = VLLMClient(base_url="https://api.deepseek.com/v1")
+    assert _system_message(client) == {"role": "system", "content": "You are terse."}
+
+
+@pytest.mark.parametrize("provider", ["ollama", "lmstudio", "custom"])
+def test_openai_compatible_servers_send_system_prompt_as_system(provider: str) -> None:
+    from xgen_agent_runtime.llm_client.profiles import get_profiled_client_class
+
+    client = get_profiled_client_class(provider)(base_url="http://localhost:8080/v1")
+    assert _system_message(client)["role"] == "system"
+
+
+def test_azure_foundry_keeps_developer() -> None:
+    """Foundry also serves OpenAI reasoning deployments; unchanged until a deployment refuses it."""
+    from xgen_agent_runtime.llm_client.azure_foundry import AzureFoundryClient
+
+    client = AzureFoundryClient(api_key="k", base_url="https://r.openai.azure.com")
+    assert _system_message(client)["role"] == "developer"
+
+
+# ---------------------------------------------------------------------------
 # Reasoning families reject temperature/top_p: proactive drop + reactive heal
 # ---------------------------------------------------------------------------
 
@@ -455,7 +494,7 @@ def test_build_kwargs_drops_temperature_and_top_p_for_reasoning_models(
         )
     assert "temperature" not in kwargs
     assert "top_p" not in kwargs
-    assert kwargs["max_completion_tokens"] == 256
+    assert kwargs["max_completion_tokens"] == 256 + 16384  # gpt-5 기본 medium 의 생각 자리
     dropped = [r.getMessage() for r in caplog.records if "dropped" in r.getMessage()]
     assert any("'temperature'" in m for m in dropped)
     assert any("'top_p'" in m for m in dropped)

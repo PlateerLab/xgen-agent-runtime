@@ -42,6 +42,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 
 from xgen_agent_runtime.core.config import ModelConfig
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.llm_client._cli_limits import is_usage_limit_text, usage_limit_error
 from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIAuthFailed,
     CLIBinaryNotFound,
@@ -52,13 +53,21 @@ from xgen_agent_runtime.llm_client._cli_runtime import (
     aiter_bytes,
     detect_binary,
 )
-from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
+from xgen_agent_runtime.llm_client.base import (
+    BaseClient,
+    ClientCapabilities,
+    prompt_tokens_with_cache,
+)
 from xgen_agent_runtime.llm_client.translators._cli import (
     StreamJsonAccumulator,
     assemble_response_from_stream_json,
     build_stream_json_stdin,
     messages_have_images,
     claude_code_argv,
+    fits_argv,
+    flatten_messages_to_prompt,
+    limit_error_from_line,
+    system_prompt_text,
     resolve_auth_channel,
     parse_json_output_to_response,
 )
@@ -101,6 +110,13 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
             f"Claude Code CLI auth failed (exit {result.returncode}): {stderr[:300]}{suffix}",
             category=ErrorCategory.CLI_AUTH_FAILED,
         )
+    # 한도 소진은 stdout 의 is_error 결과로 오기도 한다(--output-format json).
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    for text in (stderr, stdout):
+        if is_usage_limit_text(text, strict=True):
+            return usage_limit_error(
+                f"Claude Code CLI usage limit (exit {result.returncode}): {text.strip()[:300]}{suffix}"
+            )
     if "permission" in stderr and ("denied" in stderr or "deny" in stderr or "blocked" in stderr):
         return APIError(
             f"Claude Code CLI permission denied: {stderr[:300]}{suffix}",
@@ -110,6 +126,17 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
         f"Claude Code CLI exited with code {result.returncode}: {stderr[:300]}{suffix}",
         category=ErrorCategory.CLI_PROTOCOL_ERROR,
     )
+
+
+def _limit_from_json_output(stdout: bytes) -> Optional[APIError]:
+    """``--output-format json`` that exited 0 but reports a limit as its result."""
+    import json as _json
+
+    try:
+        obj = _json.loads(stdout.decode("utf-8", errors="replace") or "{}")
+    except ValueError:
+        return None
+    return limit_error_from_line(obj) if isinstance(obj, dict) else None
 
 
 def _process_alive(proc: Any) -> bool:
@@ -133,6 +160,41 @@ def _process_alive(proc: Any) -> bool:
     except OSError:
         return False
     return True
+
+
+def _thinking_off(request: Optional[APIRequest]) -> bool:
+    return request is not None and getattr(request, "thinking_level", None) == "off"
+
+
+#: Process-private fallback folder (``mkdtemp``), used when the shared per-user name is taken.
+_FALLBACK_PROMPT_FOLDER: Optional[str] = None
+
+
+def _private_prompt_folder() -> str:
+    """``<tmp>/xgen-claude-code-system-<uid>``, created 0700 and verified (POSIX) to be ours and
+    private. If another local user already holds that name (a directory or a symlink), a fresh
+    ``mkdtemp`` folder of this process is used instead, so the long prompt still has a home."""
+    import stat
+    import tempfile
+
+    global _FALLBACK_PROMPT_FOLDER
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    folder = os.path.join(
+        tempfile.gettempdir(), f"xgen-claude-code-system-{uid if uid is not None else 'user'}"
+    )
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        if uid is not None:
+            info = os.lstat(folder)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+                raise OSError(f"{folder} is not a directory owned by this user")
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                os.chmod(folder, 0o700)
+        return folder
+    except OSError:
+        if _FALLBACK_PROMPT_FOLDER is None or not os.path.isdir(_FALLBACK_PROMPT_FOLDER):
+            _FALLBACK_PROMPT_FOLDER = tempfile.mkdtemp(prefix="xgen-claude-code-system-")
+        return _FALLBACK_PROMPT_FOLDER
 
 
 class ClaudeCodeCLIClient(BaseClient):
@@ -295,7 +357,7 @@ class ClaudeCodeCLIClient(BaseClient):
     #: monitor evicts whole sessions long after this anyway.
     _SPARE_TTL_S = 90.0
 
-    def _take_spare(self, argv: List[str]) -> Optional[Any]:
+    def _take_spare(self, argv: List[str], request: Optional[APIRequest] = None) -> Optional[Any]:
         """Claim the hot spare for *argv*, or None when it doesn't match.
 
         The spare is only valid for an IDENTICAL argv (model, MCP config,
@@ -324,7 +386,12 @@ class ClaudeCodeCLIClient(BaseClient):
         if expire_task is not None:
             expire_task.cancel()
         proc = spare["proc"]
-        if spare["argv"] != list(argv) or not _process_alive(proc):
+        # 생각 끄기는 argv 가 아니라 env 라 argv 만으로는 같은지 모른다 — 함께 본다.
+        if (
+            spare["argv"] != list(argv)
+            or spare.get("thinking_off", False) != _thinking_off(request)
+            or not _process_alive(proc)
+        ):
             self._discard_spare_proc(spare)
             return None
         return proc
@@ -342,7 +409,7 @@ class ClaudeCodeCLIClient(BaseClient):
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
 
-    async def _schedule_spare(self, argv: List[str]) -> None:
+    async def _schedule_spare(self, argv: List[str], request: Optional[APIRequest] = None) -> None:
         """Boot the NEXT turn's process right after this turn's tokens.
 
         Semantics are identical to today's one-shot mode — the spare
@@ -365,14 +432,19 @@ class ClaudeCodeCLIClient(BaseClient):
             return
         argv_snapshot = list(argv)
         try:
-            runner = self._make_runner()
+            runner = self._make_runner(request=request)
             proc, _t0 = await runner._spawn(argv_snapshot)
         except Exception:  # noqa: BLE001 — prewarm is best-effort
             logger.debug("cli prewarm: spawn failed", exc_info=True)
             return
         if proc.returncode is not None:
             return  # died at birth — nothing to keep
-        entry: Dict[str, Any] = {"proc": proc, "argv": argv_snapshot, "runner": runner}
+        entry: Dict[str, Any] = {
+            "proc": proc,
+            "argv": argv_snapshot,
+            "runner": runner,
+            "thinking_off": _thinking_off(request),
+        }
 
         async def _expire() -> None:
             try:
@@ -463,8 +535,17 @@ class ClaudeCodeCLIClient(BaseClient):
     def _truthy(value: Any) -> bool:
         return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
-    def _make_runner(self, *, timeout_s: Optional[float] = None) -> CLIProcessRunner:
+    def _make_runner(
+        self,
+        *,
+        timeout_s: Optional[float] = None,
+        request: Optional[APIRequest] = None,
+    ) -> CLIProcessRunner:
         effective_timeout = self._timeout_s if timeout_s is None else timeout_s
+        env_extras = self._env_extras()
+        if request is not None and getattr(request, "thinking_level", None) == "off":
+            # 생각 끄기는 argv 가 아니라 env 다(Claude Code: MAX_THINKING_TOKENS=0).
+            env_extras["MAX_THINKING_TOKENS"] = "0"
         # A host-supplied runner factory (e.g. a container sandbox) runs the
         # CLI elsewhere — the agent binary need not exist on this host — so the
         # host-binary check is the *default* in-process runner's concern only.
@@ -472,7 +553,7 @@ class ClaudeCodeCLIClient(BaseClient):
             return self._runner_factory(
                 binary=self._binary,
                 cwd=self._workspace_dir,
-                env_extras=self._env_extras(),
+                env_extras=env_extras,
                 timeout_s=effective_timeout,
             )
         if not self._binary:
@@ -483,13 +564,63 @@ class ClaudeCodeCLIClient(BaseClient):
         return CLIProcessRunner(
             binary=self._binary,
             cwd=self._workspace_dir,
-            env_extras=self._env_extras(),
+            env_extras=env_extras,
             timeout_s=effective_timeout,
         )
+
+    def prompt_tokens_from_usage(self, usage: Any) -> int:
+        """The CLI reports Anthropic-shaped usage: cache reads/writes outside ``input_tokens``."""
+        return prompt_tokens_with_cache(usage)
+
+    def _system_prompt_file(self, request: APIRequest) -> str:
+        """Write a system prompt too long for argv to a file; ``""`` when it fits inline.
+
+        The name is the content hash, so the same prompt yields the same argv (the hot spare still
+        matches) and repeated turns reuse one file. The folder is private to this OS user (0700,
+        checked, not just requested) and files are 0600: a system prompt can carry the user's earlier
+        conversation. Files untouched for a day are removed on the next write.
+        """
+        text = system_prompt_text(request.system)
+        if not text or fits_argv(text):
+            return ""
+        import hashlib
+        import tempfile
+        import time
+
+        try:
+            folder = _private_prompt_folder()
+            path = os.path.join(folder, hashlib.sha256(text.encode("utf-8")).hexdigest() + ".md")
+            if os.path.exists(path):
+                os.utime(path)
+                return path
+            fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp")  # unique per call, 0600
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fp:
+                    fp.write(text)
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+            cutoff = time.time() - 86_400
+            for name in os.listdir(folder):
+                old = os.path.join(folder, name)
+                with contextlib.suppress(OSError):
+                    if old != path and os.path.getmtime(old) < cutoff:
+                        os.unlink(old)
+            return path
+        except OSError:
+            logger.error(
+                "claude_code: could not write the system prompt file; the prompt is too long for "
+                "the command line and the CLI will not start",
+                exc_info=True,
+            )
+            return ""
 
     def _build_argv(self, request: APIRequest) -> List[str]:
         return claude_code_argv(
             request,
+            system_prompt_file=self._system_prompt_file(request),
             bare_mode=self._bare_mode,
             auth_mode=self._auth_mode,
             has_api_key=bool(self._api_key),
@@ -663,7 +794,7 @@ class ClaudeCodeCLIClient(BaseClient):
 
     async def _send(self, request: APIRequest, *, purpose: str = "") -> APIResponse:
         try:
-            runner = self._make_runner()
+            runner = self._make_runner(request=request)
         except CLIBinaryNotFound as e:
             raise APIError(str(e), category=ErrorCategory.CLI_NOT_FOUND) from e
 
@@ -675,6 +806,10 @@ class ClaudeCodeCLIClient(BaseClient):
         # non-stream vision call (e.g. screen-observation captioning) lost
         # its image and the model answered "I don't see an image".
         if not request.stream and messages_have_images(request.messages):
+            request = replace(request, stream=True)
+        # Same wire switch for a prompt too long to be one argv string (Linux 128 KiB per string):
+        # stream-json stdin has no such limit.
+        if not request.stream and not fits_argv(flatten_messages_to_prompt(request.messages)):
             request = replace(request, stream=True)
 
         cli_version = await self._ensure_cli_version()
@@ -692,6 +827,9 @@ class ClaudeCodeCLIClient(BaseClient):
             result = await runner.run_oneshot(argv, stdin=stdin)
             if result.returncode != 0:
                 raise _classify_cli_result(result, cli_version=cli_version)
+            limit = _limit_from_json_output(result.stdout)
+            if limit is not None:
+                raise limit
             return self._attach_cli_version(
                 parse_json_output_to_response(result.stdout, model=request.model)
             )
@@ -704,11 +842,15 @@ class ClaudeCodeCLIClient(BaseClient):
                 self._with_version(str(e)), category=ErrorCategory.CLI_AUTH_FAILED
             ) from e
         except CLIProtocolError as e:
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
         except RuntimeError as e:
             # stream-json error envelope was raised by the assembler.
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
@@ -752,7 +894,7 @@ class ClaudeCodeCLIClient(BaseClient):
         )
 
         try:
-            runner = self._make_runner()
+            runner = self._make_runner(request=request)
         except CLIBinaryNotFound as e:
             raise APIError(str(e), category=ErrorCategory.CLI_NOT_FOUND) from e
 
@@ -764,7 +906,7 @@ class ClaudeCodeCLIClient(BaseClient):
         # turn when its argv matches — Node boot + auth + MCP startup are
         # already done and the prompt travels over stdin exactly as on a
         # fresh spawn.
-        spare_proc = self._take_spare(argv)
+        spare_proc = self._take_spare(argv, request)
 
         from xgen_agent_runtime.llm_client._cli_runtime import parse_stream_json_line
 
@@ -792,6 +934,17 @@ class ClaudeCodeCLIClient(BaseClient):
                     line_obj = parse_stream_json_line(raw)
                     if line_obj is None:
                         continue
+                    # Subscription limit: raise BEFORE feeding, so the notice
+                    # ("You've hit your limit · resets 3pm") never streams out as
+                    # the assistant's answer, and as CLI_RATE_LIMITED so Stage 6
+                    # does not retry the same account and the host can fail over.
+                    limit = limit_error_from_line(line_obj, accum.rate_limits)
+                    if limit is not None:
+                        raise APIError(
+                            self._with_version(str(limit)),
+                            category=limit.category,
+                            details=limit.details,
+                        )
                     # Surface CLI-side errors as APIError so the stage's
                     # retry/escalate path runs instead of silently producing
                     # an empty response. (Malformed lines have no ``type``
@@ -836,7 +989,7 @@ class ClaudeCodeCLIClient(BaseClient):
             # prebooting again). Awaited inline: all tokens are already
             # out, and a background spawn task wedges 3.11/3.12 loop
             # teardown (see _schedule_spare).
-            await self._schedule_spare(argv)
+            await self._schedule_spare(argv, request)
             yield {
                 "type": "message_complete",
                 "response": self._attach_cli_version(accum.finalize()),
@@ -846,6 +999,11 @@ class ClaudeCodeCLIClient(BaseClient):
         except CLITimeout as e:
             raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_TIMEOUT) from e
         except CLIProtocolError as e:
+            # Non-zero exit whose stderr names the limit (no annotated frame came).
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(
+                    self._with_version(str(e)), rate_limits=accum.rate_limits
+                ) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e

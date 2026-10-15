@@ -1,18 +1,35 @@
-"""OpenAI Chat Completions API client.
+"""OpenAI client — Responses API(추론 모델) 와 Chat Completions(그 밖).
 
 Ported from the former :class:`OpenAIProvider` in
 ``stages/s06_api/artifact/openai/providers.py``. Translators are
 imported from :mod:`xgen_agent_runtime.llm_client.translators`, which
 re-exports from the s06_api module during the PR-3→PR-4 bridge.
+
+어느 표면으로 부르는가 (2026-10-01)
+-----------------------------------
+OpenAI 공식 엔드포인트의 추론 모델(``RESPONSES_FAMILIES``)은 **Responses API** 로 부른다. GPT-5.4 부터
+Chat Completions 는 함수 도구와 생각을 함께 받지 않는다(400 "Function tools with reasoning_effort are not
+supported … use /v1/responses"). gpt-6-sol 은 기본 강도가 medium 이라 생각을 고르지 않아도 도구만 있으면
+실패했고, gpt-6-astra·gpt-6.1-sol 은 끌 수도 없어 Chat Completions 로는 도구를 쓸 수 없었다. dev 실측에서
+Responses 는 10개 모델의 모든 강도에서 도구 호출 → 결과 → 답까지 받았다(``translators/_responses``).
+
+그 밖(gpt-4.x, 공식이 아닌 base_url, Azure·vLLM·호환 서버 하위 클래스)은 Chat Completions 그대로다. 그쪽에서
+같은 400 이 나면 생각을 끄고 한 번 다시 보낸다(``_heal_request_kwargs``) — 답은 하되 경고를 남긴다.
+운영 스위치 ``XGEN_OPENAI_API_SURFACE``: ``auto``(기본)·``responses``(공식이 아닌 base_url 도 Responses)·``chat``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import re
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional
+from urllib.parse import urlsplit
 
-from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory, is_context_overflow_message
 from xgen_agent_runtime.core.state import TokenUsage
 from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.translators import (
@@ -22,10 +39,70 @@ from xgen_agent_runtime.llm_client.translators import (
     canonical_tools_to_openai,
     normalize_stop_reason,
 )
+from xgen_agent_runtime.llm_client.translators._responses import (
+    REASONING_BLOCK,
+    REASONING_PROVIDER,
+    canonical_to_responses_input,
+    canonical_tool_choice_to_responses,
+    canonical_tools_to_responses,
+    reasoning_summary_text,
+    response_format_to_responses,
+    stop_reason_of,
+    strip_reasoning_items,
+)
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
 
 
 logger = logging.getLogger(__name__)
+
+
+# ── 어느 표면으로 부르는가 ─────────────────────────────────────────────
+
+#: Responses API 로 부르는 모델 묶음(접두사). 추론 모델 — 생각과 도구를 함께 쓰려면 Responses 여야 한다.
+RESPONSES_FAMILIES: tuple[str, ...] = ("gpt-5", "gpt-6", "o1", "o3", "o4")
+
+
+#: 생각이 시작된 뒤 첫 글자까지 기다리는 상한(초). 높은 강도는 몇 분씩 생각한다 — 그 사이 스트림
+#: 감시(무응답 상한)가 끊지 않게 살아 있다는 신호를 보낸다. 이 시간이 지나면 보내지 않는다.
+def _reasoning_wait_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("XGEN_LLM_REASONING_TIMEOUT_S", "600")))
+    except ValueError:
+        return 600.0
+
+
+#: 살아 있다는 신호의 간격(초) — 스트림 감시의 무응답 상한(기본 120초)보다 짧게.
+_HEARTBEAT_S = 20.0
+
+
+def _api_surface() -> str:
+    mode = str(os.getenv("XGEN_OPENAI_API_SURFACE", "auto") or "auto").strip().lower()
+    return mode if mode in ("auto", "responses", "chat") else "auto"
+
+
+def _is_official_endpoint(base_url: Optional[str]) -> bool:
+    """OpenAI 공식 엔드포인트인가 — 비었거나 ``*.openai.com``. 사내 게이트웨이·프록시는 Responses 를
+    모를 수 있어 Chat Completions 로 둔다(``XGEN_OPENAI_API_SURFACE=responses`` 로 바꿀 수 있다)."""
+    if not base_url:
+        return True
+    host = (urlsplit(str(base_url)).hostname or "").lower()
+    return host == "api.openai.com" or host.endswith(".openai.com")
+
+
+#: 같은 묶음이라도 Responses 로 부르지 않는 변형 — 검색 모델은 Responses 를 받지 않고
+#: (dev 실측: gpt-5-search-api 400 "not supported with the Responses API"), chat 변형은 생각하지 않아
+#: Chat Completions 로 도구를 쓸 수 있다.
+_CHAT_ONLY_MARKERS: tuple[str, ...] = ("search", "-chat")
+
+
+def model_uses_responses(model: str) -> bool:
+    name = str(model or "").strip().lower()
+    if any(marker in name for marker in _CHAT_ONLY_MARKERS):
+        return False
+    return any(name.startswith(prefix) for prefix in RESPONSES_FAMILIES)
+
+
+_TOOLS_WITH_REASONING = "function tools with reasoning_effort are not supported"
 
 
 # ── ``max_tokens`` → ``max_completion_tokens`` migration ────────────
@@ -87,6 +164,85 @@ def _model_rejects_sampling_params(model: str) -> bool:
     return _model_requires_max_completion_tokens(model)
 
 
+def _response_format_to_openai(rf: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """표준 response_format → OpenAI Chat Completions 형식.
+
+    표준형은 ``json_schema`` 에 스키마 자체를 담고(CLI 백엔드 계약과 같다), OpenAI 형식은
+    ``{"name": ..., "schema": ...}`` 로 감싼다. 이미 감싼 형태는 그대로 둔다. ``strict`` 는 넣지
+    않는다 — OpenAI 의 strict 는 모든 속성을 required 로 요구해 선택 필드가 있는 스키마를 거절한다.
+    """
+    kind = rf.get("type")
+    if kind == "json_object":
+        return {"type": "json_object"}
+    if kind != "json_schema":
+        return None
+    body = rf.get("json_schema")
+    if not isinstance(body, dict) or not body:
+        return None
+    if isinstance(body.get("schema"), dict) and body.get("name"):
+        return {"type": "json_schema", "json_schema": dict(body)}
+    name = str(body.get("title") or "response")
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64] or "response"
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": body}}
+
+
+def _get_attr(obj: Any, key: str, default: Any = None) -> Any:
+    """SDK 객체와 dict 를 같은 방식으로 읽는다(테스트 가짜·다른 SDK 판)."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _dump_item(item: Any) -> Dict[str, Any]:
+    if isinstance(item, dict):
+        return dict(item)
+    dump = getattr(item, "model_dump", None)
+    if callable(dump):
+        try:
+            return dict(dump(exclude_none=True))
+        except TypeError:
+            return dict(dump())
+    return {}
+
+
+def _has_visible_output(response: Any) -> bool:
+    """글이나 도구 호출이 하나라도 있는가."""
+    for item in _get_attr(response, "output", None) or []:
+        kind = _get_attr(item, "type", "")
+        if kind == "function_call":
+            return True
+        if kind == "message":
+            for part in _get_attr(item, "content", None) or []:
+                if _get_attr(part, "text", "") or _get_attr(part, "refusal", ""):
+                    return True
+    return False
+
+
+#: 상한을 넓혀 다시 부를 때의 천장 — gpt-5.x·6 은 128k 까지 받는다.
+_RETRY_OUTPUT_CEILING = 128_000
+
+
+def _with_more_output_room(kwargs: Dict[str, Any], response: Any) -> Optional[Dict[str, Any]]:
+    """생각만 하다 출력 상한에 닿아 보일 것이 없는 응답이면, 상한을 넓힌 인자(아니면 None).
+
+    생각 토큰은 출력 상한 안에서 자리를 먹는다 — 높은 강도·긴 문제에서 답을 쓰기 전에 상한에 닿을
+    수 있다. 한 번만, 넓힐 여지가 있을 때만.
+    """
+    if response is None or _get_attr(response, "status", "") != "incomplete":
+        return None
+    reason = _get_attr(_get_attr(response, "incomplete_details", None), "reason", "")
+    if reason != "max_output_tokens" or _has_visible_output(response):
+        return None
+    current = int(kwargs.get("max_output_tokens") or 0)
+    if not current or current >= _RETRY_OUTPUT_CEILING:
+        return None
+    retry = dict(kwargs)
+    retry["max_output_tokens"] = min(max(current * 2, current + 32_768), _RETRY_OUTPUT_CEILING)
+    return retry
+
+
 class OpenAIClient(BaseClient):
     """OpenAI Chat Completions API client.
 
@@ -95,6 +251,10 @@ class OpenAIClient(BaseClient):
 
     provider = "openai"
     _sdk_module = "openai"
+    #: Role that carries the system prompt on Chat Completions. ``developer``
+    #: is OpenAI's own (its reasoning models expect it); subclasses that talk
+    #: to OpenAI-compatible servers send ``system``.
+    system_role = "developer"
     capabilities = ClientCapabilities(
         supports_thinking=False,
         supports_tools=True,
@@ -198,7 +358,44 @@ class OpenAIClient(BaseClient):
         ``_MAX_COMPLETION_TOKENS_PREFIXES`` table doesn't know yet.
         Pure: always returns a fresh dict or ``None``.
         """
-        msg = str(getattr(exc, "message", "") or exc).lower()
+        raw_msg = str(getattr(exc, "message", "") or exc)
+        msg = raw_msg.lower()
+
+        if "input" in kwargs and "messages" not in kwargs:
+            return self._heal_responses_kwargs(kwargs, raw_msg)
+
+        # Class 3 — 도구 + 생각 거절(GPT-5.4 이후의 Chat Completions). 공식 엔드포인트의 추론 모델은
+        # Responses 로 가므로 여기 오는 것은 프록시·Azure·스위치로 Chat Completions 를 고른 경우다.
+        # 생각을 끄고 다시 보낸다 — 답은 하되, 고른 생각 강도는 이 요청에서 쓰이지 않는다(경고가 남는다).
+        if (
+            _TOOLS_WITH_REASONING in msg
+            and kwargs.get("tools")
+            and kwargs.get("reasoning_effort") != "none"
+        ):
+            retry = dict(kwargs)
+            retry["reasoning_effort"] = "none"
+            for key in _SAMPLING_PARAM_KEYS:
+                retry.pop(key, None)
+            return retry
+
+        # Class 4 — 이 모델이 받지 않는 생각 강도. 400 이 받는 값을 알려 주면 가장 가까운 값으로.
+        if "reasoning_effort" in kwargs and "supported values" in msg:
+            from xgen_agent_runtime.llm_client.thinking import nearest_supported_effort
+
+            better = nearest_supported_effort(raw_msg, str(kwargs.get("reasoning_effort") or ""))
+            if better and better != kwargs.get("reasoning_effort"):
+                retry = dict(kwargs)
+                retry["reasoning_effort"] = better
+                return retry
+
+        # Class 5 — 생각 파라미터 자체를 모르는 모델(gpt-4.1 등).
+        if "reasoning_effort" in kwargs and (
+            "unrecognized request argument supplied: reasoning_effort" in msg
+            or "'reasoning_effort' is not supported" in msg
+        ):
+            retry = dict(kwargs)
+            retry.pop("reasoning_effort", None)
+            return retry
 
         # Class 2 — sampling-param rejection. The 400 names the kwarg
         # (``'temperature' does not support 0.2 with this model`` /
@@ -231,8 +428,42 @@ class OpenAIClient(BaseClient):
         retry["max_completion_tokens"] = retry.pop("max_tokens")
         return retry
 
+    def _uses_responses(self, model: str) -> bool:
+        """이 요청을 Responses API 로 보내는가 — 모듈 머리말의 규칙. 하위 클래스(Azure·vLLM·호환
+        서버)는 provider 이름이 달라 언제나 Chat Completions 다."""
+        if self.provider != "openai":
+            return False
+        mode = _api_surface()
+        if mode == "chat":
+            return False
+        if mode == "responses":
+            return True
+        return _is_official_endpoint(self._base_url) and model_uses_responses(model)
+
     async def _send(self, request: APIRequest, *, purpose: str = "") -> APIResponse:
         client = self._get_client()
+        if self._uses_responses(request.model):
+            kwargs = self._build_responses_kwargs(request)
+            raw = await self._invoke_with_heal(
+                client.responses.create,
+                kwargs,
+                purpose=purpose or "responses.create",
+            )
+            roomier = _with_more_output_room(kwargs, raw) if not _has_visible_output(raw) else None
+            if roomier is not None:
+                logger.warning(
+                    "openai responses: output hit max_output_tokens=%s while reasoning, nothing "
+                    "visible — retrying once with %s (model=%r)",
+                    kwargs.get("max_output_tokens"),
+                    roomier["max_output_tokens"],
+                    request.model,
+                )
+                raw = await self._invoke_with_heal(
+                    client.responses.create,
+                    roomier,
+                    purpose=purpose or "responses.create",
+                )
+            return self._parse_responses_response(raw, request.model)
         kwargs = self._build_kwargs(request)
         raw = await self._invoke_with_heal(
             client.chat.completions.create,
@@ -260,6 +491,10 @@ class OpenAIClient(BaseClient):
             stream=True,
         )
         client = self._get_client()
+        if self._uses_responses(request.model):
+            async for event in self._stream_responses(client, request, purpose=purpose):
+                yield event
+            return
         kwargs = self._build_kwargs(request)
         kwargs["stream"] = True
         # Without this flag the Chat Completions stream sends NO usage
@@ -360,7 +595,9 @@ class OpenAIClient(BaseClient):
 
     def _build_kwargs(self, request: APIRequest) -> Dict[str, Any]:
         """Canonical APIRequest → OpenAI Chat Completions kwargs."""
-        messages = canonical_messages_to_openai(request.messages, request.system)
+        messages = canonical_messages_to_openai(
+            request.messages, request.system, system_role=self.system_role
+        )
 
         kwargs: Dict[str, Any] = {
             "model": request.model,
@@ -416,8 +653,408 @@ class OpenAIClient(BaseClient):
             effort = canonical_thinking_to_openai(request.thinking)
             if effort:
                 kwargs["reasoning_effort"] = effort
+        if request.thinking_level:
+            self._apply_thinking_level(kwargs, request)
+        if "max_completion_tokens" in kwargs and self.provider in ("openai", "azure_foundry"):
+            # 생각 토큰은 출력 상한 안에서 자리를 먹는다 — 높은 강도에서 빈 답으로 끝나지 않게 더 둔다.
+            from xgen_agent_runtime.llm_client.thinking import openai_output_budget, thinking_spec
+
+            level = request.thinking_level or (
+                "off"
+                if kwargs.get("reasoning_effort") == "none"
+                else kwargs.get("reasoning_effort")
+            )
+            kwargs["max_completion_tokens"] = openai_output_budget(
+                thinking_spec(self.thinking_provider(), request.model),
+                level,
+                kwargs["max_completion_tokens"],
+            )
+
+        # 구조화 출력 — 표준 요청({"type": "json_schema", "json_schema": <스키마>})을 OpenAI 전송 형식으로.
+        # 예전엔 전달하지 않아 스키마가 지시문에만 있었고, Qwen(vLLM) 은 키를 지어내 메모리 사실 추출이
+        # 매번 schema_mismatch 로 버려졌다(dev 60일: 메모리가 쌓인 Qwen 에이전트 59개 중 사실 장부 0개).
+        if request.response_format and self.capabilities.supports_structured_output:
+            wire = _response_format_to_openai(request.response_format)
+            if wire is not None:
+                kwargs["response_format"] = wire
 
         return kwargs
+
+    def _apply_thinking_level(self, kwargs: Dict[str, Any], request: APIRequest) -> None:
+        """생각의 표준 값 → OpenAI ``reasoning_effort`` 또는 vLLM 채팅 템플릿 값(llm_client.thinking 표).
+
+        OpenAI 는 effort 가 ``none`` 이 아니면 temperature·top_p 를 받지 않는다 — 함께 내려놓는다.
+        """
+        from xgen_agent_runtime.llm_client.thinking import (
+            openai_effort,
+            thinking_spec,
+            vllm_request,
+        )
+
+        spec = thinking_spec(self.thinking_provider(), request.model)
+        level = str(request.thinking_level)
+        if spec.via == "openai_effort":
+            kwargs["reasoning_effort"] = openai_effort(level)
+            if level != "off":
+                for key in ("temperature", "top_p"):
+                    kwargs.pop(key, None)
+            return
+        shaped = vllm_request(spec, level)
+        if "reasoning_effort" in shaped:
+            kwargs["reasoning_effort"] = shaped["reasoning_effort"]
+        if "extra_body" in shaped:
+            extra = dict(kwargs.get("extra_body") or {})
+            for key, value in shaped["extra_body"].items():
+                if isinstance(value, dict):
+                    merged = dict(extra.get(key) or {})
+                    merged.update(value)
+                    extra[key] = merged
+                else:
+                    extra[key] = value
+            kwargs["extra_body"] = extra
+
+    # ── Responses API ────────────────────────────────────────────────────
+
+    def _build_responses_kwargs(self, request: APIRequest) -> Dict[str, Any]:
+        """표준 요청 → ``responses.create`` 인자. 상태 없이(``store=False``) 부르고 생각은 암호화된 채로 받는다."""
+        from xgen_agent_runtime.llm_client.thinking import (
+            openai_effort,
+            openai_output_budget,
+            thinking_spec,
+        )
+
+        instructions, items = canonical_to_responses_input(
+            request.messages, request.system, model=request.model
+        )
+        kwargs: Dict[str, Any] = {"model": request.model, "input": items, "store": False}
+        if instructions:
+            kwargs["instructions"] = instructions
+        if request.tools:
+            kwargs["tools"] = canonical_tools_to_responses(request.tools)
+        if request.tool_choice:
+            kwargs["tool_choice"] = canonical_tool_choice_to_responses(request.tool_choice)
+
+        spec = thinking_spec(self.thinking_provider(), request.model)
+        level: Optional[str] = request.thinking_level or None
+        if not level and request.thinking:
+            level = canonical_thinking_to_openai(request.thinking)
+        reasoning: Dict[str, Any] = {}
+        if level and spec.kind == "levels":
+            reasoning["effort"] = openai_effort(level)
+        effective = level or (spec.default if spec.kind == "levels" else "")
+        if spec.kind == "levels" and effective not in ("", "off", "none"):
+            # 생각의 요약을 받아 화면에 "생각" 으로 흘린다(스트림의 thinking_delta).
+            reasoning["summary"] = "auto"
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+        if spec.kind == "levels" or model_uses_responses(request.model):
+            kwargs["include"] = ["reasoning.encrypted_content"]
+
+        if request.max_tokens:
+            kwargs["max_output_tokens"] = openai_output_budget(spec, level, request.max_tokens)
+        # 생각하는 동안에는 temperature·top_p 를 받지 않는다(OpenAI: 생각을 끈 때만).
+        if effective in ("", "off", "none") and not _model_rejects_sampling_params(request.model):
+            if request.temperature is not None:
+                kwargs["temperature"] = request.temperature
+            if request.top_p is not None:
+                kwargs["top_p"] = request.top_p
+        if request.stop_sequences:
+            logger.debug("openai responses: stop sequences are not supported — dropped")
+        if request.response_format and self.capabilities.supports_structured_output:
+            wire = response_format_to_responses(request.response_format)
+            if wire is not None:
+                kwargs["text"] = {"format": wire}
+        return kwargs
+
+    def _heal_responses_kwargs(
+        self, kwargs: Dict[str, Any], raw_msg: str
+    ) -> Optional[Dict[str, Any]]:
+        """Responses 의 400 중 문구가 원인을 말하는 것만 고쳐 한 번 다시 보낸다."""
+        msg = raw_msg.lower()
+        reasoning = kwargs.get("reasoning") if isinstance(kwargs.get("reasoning"), dict) else None
+
+        # 받지 않는 생각 강도 — 받는 값 중 가장 가까운 것.
+        if reasoning and reasoning.get("effort") and "supported values" in msg:
+            from xgen_agent_runtime.llm_client.thinking import nearest_supported_effort
+
+            better = nearest_supported_effort(raw_msg, str(reasoning["effort"]))
+            if better and better != reasoning["effort"]:
+                retry = dict(kwargs)
+                retry["reasoning"] = {**reasoning, "effort": better}
+                if better == "none":
+                    retry["reasoning"].pop("summary", None)
+                return retry
+
+        # 생각 파라미터를 모르는 모델.
+        if "reasoning" in kwargs and "reasoning.effort" in msg and "not supported" in msg:
+            retry = {k: v for k, v in kwargs.items() if k not in ("reasoning", "include")}
+            return retry
+
+        # 생각 요약을 받을 수 없는 조직(검증 전) — 요약 없이.
+        if reasoning and "summary" in reasoning and "summar" in msg:
+            retry = dict(kwargs)
+            retry["reasoning"] = {k: v for k, v in reasoning.items() if k != "summary"}
+            if not retry["reasoning"]:
+                retry.pop("reasoning")
+            return retry
+
+        # 돌려준 생각 항목을 받지 못했다(다른 모델·만료·짝이 안 맞음) — 생각 항목 없이.
+        items = kwargs.get("input")
+        if (
+            isinstance(items, list)
+            and any(isinstance(i, dict) and i.get("type") == "reasoning" for i in items)
+            and ("reasoning" in msg or "encrypted" in msg)
+        ):
+            retry = dict(kwargs)
+            retry["input"] = strip_reasoning_items(items)
+            return retry
+
+        # 출력 상한이 모델 한도를 넘었다 — 알려 준 한도로(없으면 절반).
+        if "max_output_tokens" in msg and kwargs.get("max_output_tokens"):
+            current = int(kwargs["max_output_tokens"])
+            limits = [
+                int(n) for n in re.findall(r"\b(\d{4,7})\b", raw_msg) if 1024 <= int(n) < current
+            ]
+            retry = dict(kwargs)
+            retry["max_output_tokens"] = max(limits) if limits else max(1024, current // 2)
+            return retry
+
+        # 샘플링 파라미터 거절.
+        if "not supported" in msg or "unsupported" in msg:
+            named = [
+                k
+                for k in _SAMPLING_PARAM_KEYS
+                if k in kwargs and (f"'{k}'" in msg or f" {k} " in f" {msg} ")
+            ]
+            if named:
+                return {k: v for k, v in kwargs.items() if k not in named}
+        return None
+
+    def _parse_responses_response(self, raw: Any, model: str) -> APIResponse:
+        """Responses 응답 → 표준 응답. 블록은 출력 항목의 순서 그대로(생각 → 글/도구 호출)."""
+        blocks: List[ContentBlock] = []
+        has_calls = False
+        for item in _get_attr(raw, "output", None) or []:
+            kind = _get_attr(item, "type", "")
+            if kind == "reasoning":
+                dumped = _dump_item(item)
+                summary = reasoning_summary_text(item)
+                kept: Dict[str, Any] = {
+                    k: dumped[k] for k in ("id", "summary", "encrypted_content") if k in dumped
+                }
+                kept["type"] = "reasoning"
+                blocks.append(
+                    ContentBlock(
+                        type=REASONING_BLOCK,
+                        thinking_text=summary or None,
+                        raw={
+                            "type": REASONING_BLOCK,
+                            "provider": REASONING_PROVIDER,
+                            "model": model,
+                            "summary": summary,
+                            "item": kept,
+                        },
+                    )
+                )
+            elif kind == "message":
+                parts = []
+                for part in _get_attr(item, "content", None) or []:
+                    ptype = _get_attr(part, "type", "")
+                    if ptype == "output_text":
+                        parts.append(str(_get_attr(part, "text", "") or ""))
+                    elif ptype == "refusal":
+                        parts.append(str(_get_attr(part, "refusal", "") or ""))
+                text = "".join(parts)
+                if not text:
+                    continue
+                raw_block: Dict[str, Any] = {"type": "text", "text": text}
+                phase = _get_attr(item, "phase", None)
+                if phase:
+                    raw_block["_meta"] = {"openai_phase": str(phase)}
+                blocks.append(ContentBlock(type="text", text=text, raw=raw_block))
+            elif kind == "function_call":
+                has_calls = True
+                call_id = str(_get_attr(item, "call_id", "") or "")
+                name = str(_get_attr(item, "name", "") or "")
+                tool_input = self._parse_tool_arguments(_get_attr(item, "arguments", "") or "")
+                raw_call: Dict[str, Any] = {
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": tool_input,
+                }
+                item_id = _get_attr(item, "id", None)
+                if item_id:
+                    raw_call["_meta"] = {"openai_item_id": str(item_id)}
+                blocks.append(
+                    ContentBlock(
+                        type="tool_use",
+                        tool_use_id=call_id,
+                        tool_name=name,
+                        tool_input=tool_input,
+                        raw=raw_call,
+                    )
+                )
+        provenance = self._provenance()
+        provenance["response"] = raw
+        provenance["api"] = "responses"
+        return APIResponse(
+            content=blocks,
+            stop_reason=stop_reason_of(raw, has_tool_calls=has_calls),
+            usage=self._parse_responses_usage(_get_attr(raw, "usage", None)),
+            model=str(_get_attr(raw, "model", "") or model),
+            message_id=str(_get_attr(raw, "id", "") or ""),
+            raw=provenance,
+        )
+
+    @staticmethod
+    def _parse_responses_usage(usage: Any) -> TokenUsage:
+        if usage is None:
+            return TokenUsage()
+        details = _get_attr(usage, "input_tokens_details", None)
+        cached = _get_attr(details, "cached_tokens", 0) if details is not None else 0
+        return TokenUsage(
+            input_tokens=int(_get_attr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(_get_attr(usage, "output_tokens", 0) or 0),
+            cache_read_input_tokens=int(cached or 0),
+        )
+
+    async def _stream_responses(
+        self, client: Any, request: APIRequest, *, purpose: str = ""
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Responses 스트림 → 표준 스트림 청크(``text_delta``·``thinking_delta``·``input_json_delta``·
+        ``heartbeat``·``message_complete``).
+
+        생각은 몇 분씩 걸릴 수 있고 그동안 서버는 아무것도 보내지 않는다. 생각이 시작되면(생각 항목이
+        열리면) 빈 ``thinking_delta`` 로 "응답이 시작됐다" 를 알리고, 그 뒤 ``_HEARTBEAT_S`` 마다
+        ``heartbeat`` 청크를 보내 스트림 감시가 무응답으로 끊지 않게 한다(``XGEN_LLM_REASONING_TIMEOUT_S``
+        까지). 도구 인자는 ``input_json_delta`` 로 흘린다(Anthropic 과 같다 — 긴 인자를 쓰는 동안에도
+        살아 있다). 최종 응답은 ``response.completed``·``response.incomplete`` 가 실어 오는 응답 전체로
+        만든다. 생각만 하다 상한에 닿아 보일 것이 하나도 없으면 상한을 넓혀 한 번 다시 부른다.
+        """
+        kwargs = self._build_responses_kwargs(request)
+        kwargs["stream"] = True
+        seen: Dict[str, Any] = {}
+        async for chunk in self._stream_responses_once(client, kwargs, purpose, seen):
+            yield chunk
+        final = seen.get("final")
+        roomier = None if seen.get("visible") else _with_more_output_room(kwargs, final)
+        if roomier is not None:
+            logger.warning(
+                "openai responses: output hit max_output_tokens=%s while reasoning, nothing visible — "
+                "retrying once with %s (model=%r)",
+                kwargs.get("max_output_tokens"),
+                roomier["max_output_tokens"],
+                request.model,
+            )
+            seen = {}
+            async for chunk in self._stream_responses_once(client, roomier, purpose, seen):
+                yield chunk
+            final = seen.get("final")
+        if final is None:
+            raise APIError(
+                "OpenAI Responses stream ended without a final response",
+                category=ErrorCategory.SERVER_ERROR,
+            )
+        yield {
+            "type": "message_complete",
+            "response": self._parse_responses_response(final, request.model),
+        }
+
+    async def _stream_responses_once(
+        self, client: Any, kwargs: Dict[str, Any], purpose: str, seen: Dict[str, Any]
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """한 번의 Responses 스트림. 최종 응답은 ``seen["final"]``, 보이는 것(글·도구 호출)을 흘렸으면
+        ``seen["visible"]``."""
+        stream = await self._invoke_with_heal(
+            client.responses.create,
+            kwargs,
+            purpose=purpose or "responses.create(stream)",
+        )
+        reasoning_started_at: Optional[float] = None
+        summary_parts = 0
+        iterator = stream.__aiter__()
+        pending: Optional[asyncio.Future] = None
+        try:
+            while True:
+                if pending is None:
+                    pending = asyncio.ensure_future(iterator.__anext__())
+                wait_s = _HEARTBEAT_S if reasoning_started_at is not None else None
+                done, _ = await asyncio.wait({pending}, timeout=wait_s)
+                if not done:
+                    if time.monotonic() - (reasoning_started_at or 0.0) <= _reasoning_wait_s():
+                        yield {"type": "heartbeat"}
+                    continue
+                try:
+                    event = pending.result()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    pending = None
+                etype = str(_get_attr(event, "type", "") or "")
+                if etype == "response.output_text.delta":
+                    reasoning_started_at = None
+                    delta = _get_attr(event, "delta", "")
+                    if delta:
+                        seen["visible"] = True
+                        yield {"type": "text_delta", "text": str(delta)}
+                elif etype == "response.function_call_arguments.delta":
+                    delta = _get_attr(event, "delta", "")
+                    if delta:
+                        yield {"type": "input_json_delta", "delta": str(delta)}
+                elif etype == "response.reasoning_summary_text.delta":
+                    delta = _get_attr(event, "delta", "")
+                    if delta:
+                        yield {"type": "thinking_delta", "text": str(delta)}
+                elif etype == "response.reasoning_summary_part.added":
+                    summary_parts += 1
+                    if summary_parts > 1:
+                        yield {"type": "thinking_delta", "text": "\n\n"}
+                elif etype == "response.output_item.added":
+                    item = _get_attr(event, "item", None)
+                    if _get_attr(item, "type", "") == "reasoning":
+                        reasoning_started_at = time.monotonic()
+                        yield {"type": "thinking_delta", "text": ""}
+                    else:
+                        reasoning_started_at = None
+                        if _get_attr(item, "type", "") == "function_call":
+                            seen["visible"] = True
+                elif etype in ("response.completed", "response.incomplete"):
+                    seen["final"] = _get_attr(event, "response", None)
+                elif etype == "response.failed":
+                    response = _get_attr(event, "response", None)
+                    error = _get_attr(response, "error", None)
+                    message = _get_attr(error, "message", "") or "OpenAI response failed"
+                    code = str(_get_attr(error, "code", "") or "")
+                    category = (
+                        ErrorCategory.RATE_LIMITED
+                        if "rate" in code
+                        else ErrorCategory.TOKEN_LIMIT
+                        if code == "context_length_exceeded"
+                        or is_context_overflow_message(str(message))
+                        else ErrorCategory.SERVER_ERROR
+                        if code in ("server_error", "")
+                        else ErrorCategory.BAD_REQUEST
+                    )
+                    raise APIError(str(message), category=category)
+                elif etype == "error":
+                    message = _get_attr(event, "message", "") or "OpenAI stream error"
+                    raise APIError(str(message), category=ErrorCategory.SERVER_ERROR)
+        except APIError:
+            raise
+        except Exception as e:
+            raise self._classify_error(e) from e
+        finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
+            aclose = getattr(stream, "close", None) or getattr(iterator, "aclose", None)
+            if aclose is not None:
+                try:
+                    out = aclose()
+                    if hasattr(out, "__await__"):
+                        await out
+                except Exception:  # noqa: BLE001 — 닫기 실패가 결과를 가리지 않는다
+                    pass
 
     def _parse_response(self, raw: Any) -> APIResponse:
         choice = raw.choices[0]
@@ -522,7 +1159,14 @@ class OpenAIClient(BaseClient):
         if isinstance(e, openai.AuthenticationError):
             return APIError(str(e), category=ErrorCategory.AUTH, status_code=401, cause=e)
         if isinstance(e, openai.BadRequestError):
-            return APIError(str(e), category=ErrorCategory.BAD_REQUEST, status_code=400, cause=e)
+            # The prompt did not fit: TOKEN_LIMIT lets Stage 6 compact and retry once (4.89.0).
+            # OpenAI, vLLM, Azure and OpenAI-compatible servers all land here.
+            category = (
+                ErrorCategory.TOKEN_LIMIT
+                if is_context_overflow_message(str(e))
+                else ErrorCategory.BAD_REQUEST
+            )
+            return APIError(str(e), category=category, status_code=400, cause=e)
         if isinstance(e, openai.InternalServerError):
             return APIError(str(e), category=ErrorCategory.SERVER_ERROR, status_code=500, cause=e)
         if isinstance(e, APIError):

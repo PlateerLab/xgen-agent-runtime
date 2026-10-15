@@ -102,6 +102,39 @@ def resolve_auth_channel(auth_mode: str, has_api_key: bool) -> str:
     return "api_key" if has_api_key else "oauth"
 
 
+#: One argv string must stay under Linux ``MAX_ARG_STRLEN`` (131,072 bytes). Above this the
+#: Claude Code client moves the system prompt to a file and the prompt to stdin. Windows caps the
+#: WHOLE command line at 32,767 characters (the desktop host runs the CLI there), and 8,191 when the
+#: binary is a ``.cmd`` shim run through cmd.exe, so the bar is much lower: the rest of the argv
+#: (MCP config, tool lists) needs room too.
+ARGV_SAFE_BYTES = 100_000
+ARGV_SAFE_CHARS_WINDOWS = 6_000
+
+
+def system_prompt_text(system: Any) -> str:
+    """The system prompt as one string (Anthropic-shaped blocks: text parts only)."""
+    if not system:
+        return ""
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        parts: List[str] = []
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "\n".join(parts)
+    return str(system)
+
+
+def fits_argv(text: str) -> bool:
+    """True when *text* is safe as a single argv string on this platform."""
+    import os
+
+    if os.name == "nt":
+        return len(text or "") <= ARGV_SAFE_CHARS_WINDOWS
+    return len((text or "").encode("utf-8")) <= ARGV_SAFE_BYTES
+
+
 def claude_code_argv(
     request: APIRequest,
     *,
@@ -115,8 +148,16 @@ def claude_code_argv(
     allow_tools: Sequence[str] = (),
     disallow_tools: Sequence[str] = (),
     extra_args: Sequence[str] = (),
+    system_prompt_file: str = "",
 ) -> List[str]:
     """Build the argv list (excluding the binary) for one Claude Code call.
+
+    ``system_prompt_file``: when set, the system prompt travels as
+    ``--system-prompt-file <path>`` instead of inline. Linux caps ONE argv
+    string at ``MAX_ARG_STRLEN`` (128 KiB); a long system prompt (a memory
+    node's earlier conversation, a large skill set: Korean is 3 bytes a
+    character) made ``exec`` fail with E2BIG before the CLI even started.
+    The client writes the file (:data:`ARGV_SAFE_BYTES`).
 
     The mapping is intentionally narrow — only flags Claude Code's
     ``--print`` mode honours. Fields the CLI does not accept (temperature,
@@ -183,25 +224,21 @@ def claude_code_argv(
         argv += ["--model", str(request.model)]
 
     # System prompt: --system-prompt fully replaces the CLI's default.
-    if request.system:
-        if isinstance(request.system, str):
-            sys_text = request.system
-        elif isinstance(request.system, list):
-            # Anthropic-shaped system blocks — flatten text only.
-            parts: List[str] = []
-            for block in request.system:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(str(block.get("text", "")))
-            sys_text = "\n".join(parts)
-        else:
-            sys_text = str(request.system)
+    if system_prompt_file:
+        argv += ["--system-prompt-file", system_prompt_file]
+    else:
+        sys_text = system_prompt_text(request.system)
         if sys_text:
             argv += ["--system-prompt", sys_text]
 
-    # Thinking → --effort
-    effort = thinking_to_effort(request.thinking)
-    if effort:
-        argv += ["--effort", effort]
+    # Thinking → --effort. 표준 값이 있으면 그것(끄기는 argv 가 아니라 env — 클라이언트가 붙인다).
+    if getattr(request, "thinking_level", None):
+        if request.thinking_level != "off":
+            argv += ["--effort", str(request.thinking_level)]
+    else:
+        effort = thinking_to_effort(request.thinking)
+        if effort:
+            argv += ["--effort", effort]
 
     # Tool allow/deny lists. We pass these as space-joined strings (the CLI
     # accepts comma- or space-separated input per its --help).
@@ -686,6 +723,76 @@ def stream_json_line_to_canonical_event(line_obj: Dict[str, Any]) -> Optional[Di
 
 
 # ---------------------------------------------------------------------------
+# Claude Code: subscription limit on the wire (shared by both parsers)
+# ---------------------------------------------------------------------------
+
+
+def _assistant_error_text(line: Mapping[str, Any]) -> str:
+    """Text of an assistant envelope (the CLI puts the limit notice there)."""
+    message = line.get("message")
+    content = message.get("content") if isinstance(message, Mapping) else None
+    parts: List[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, Mapping) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+    elif isinstance(content, str):
+        parts.append(content)
+    return "".join(parts).strip()
+
+
+def limit_error_from_line(
+    line: Mapping[str, Any], rate_limits: Optional[Mapping[str, Mapping[str, Any]]] = None
+):
+    """A stream-json line that says this account hit its limit → APIError, else None.
+
+    Three shapes, checked in wire order:
+
+    * assistant envelope with ``error`` ``rate_limit`` / ``billing_error`` (the
+      SDK's ``AssistantMessage.error``): the notice text rides in its content,
+      e.g. "You've hit your limit · resets 3pm (Asia/Seoul)".
+    * ``result`` with ``is_error`` and a limit text (fallback when the CLI
+      skipped the annotated assistant frame).
+    * an ``error`` line whose message is a limit text.
+
+    Before 4.90.0 the first shape streamed the notice as the assistant's answer
+    and the second ended as CLI_PROTOCOL_ERROR, which Stage 6 retried three times
+    on the same account.
+    """
+    from xgen_agent_runtime.llm_client._cli_limits import (
+        LIMIT_ASSISTANT_ERRORS,
+        is_usage_limit_text,
+        usage_limit_error,
+    )
+
+    ltype = str(line.get("type", ""))
+    if ltype == "assistant":
+        err = str(line.get("error") or "")
+        if err in LIMIT_ASSISTANT_ERRORS:
+            text = _assistant_error_text(line) or err
+            return usage_limit_error(
+                f"Claude Code CLI usage limit ({err}): {text[:300]}",
+                rate_limits=rate_limits,
+                kind="billing" if err == "billing_error" else "limit",
+            )
+        return None
+    if ltype == "result" and line.get("is_error"):
+        text = str(line.get("result") or line.get("error") or "")
+        if is_usage_limit_text(text):
+            return usage_limit_error(
+                f"Claude Code CLI usage limit: {text[:300]}", rate_limits=rate_limits
+            )
+        return None
+    if ltype == "error":
+        text = str(line.get("message") or line.get("error") or "")
+        if is_usage_limit_text(text):
+            return usage_limit_error(
+                f"Claude Code CLI usage limit: {text[:300]}", rate_limits=rate_limits
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Claude Code: result-envelope field extraction (shared by both parsers)
 # ---------------------------------------------------------------------------
 
@@ -867,8 +974,16 @@ class StreamJsonAccumulator:
         self._first_unknown_type: Optional[str] = None
         self._unknown_samples: List[str] = []
         self._warned_unknown = False
+        #: 창(five_hour·seven_day·…)별 마지막 rate_limit_event. 호스트가 계정별 한도
+        #: 상태를 그리는 유일한 원천이다(구독 사용량 API 는 setup-token 으로 못 읽는다).
+        self._rate_limits: Dict[str, Dict[str, Any]] = {}
 
     # ── Public ────────────────────────────────────────────────
+
+    @property
+    def rate_limits(self) -> Dict[str, Dict[str, Any]]:
+        """창별 마지막 구독 한도 신호 (``normalize_rate_limit_event`` 모양)."""
+        return {k: dict(v) for k, v in self._rate_limits.items()}
 
     @property
     def unknown_line_count(self) -> int:
@@ -923,8 +1038,14 @@ class StreamJsonAccumulator:
 
         if ltype == "rate_limit_event":
             # Quota telemetry the CLI emits before requesting (verified in
-            # the golden captures). Bookkeeping-only — deliberately known
-            # so it never inflates the unknown-shape counters.
+            # the golden captures). Never text-bearing: kept per window for
+            # the host (APIResponse.raw["rate_limits"]) and for the reset
+            # time of a CLI_RATE_LIMITED error.
+            from xgen_agent_runtime.llm_client._cli_limits import normalize_rate_limit_event
+
+            info = normalize_rate_limit_event(line)
+            if info is not None:
+                self._rate_limits[info["type"]] = info
             return []
 
         if ltype == "user":
@@ -1009,6 +1130,8 @@ class StreamJsonAccumulator:
         # wire telemetry is merged in (not clobbered over it) so the
         # original CLI fields stay readable for hosts that inspect raw.
         raw_out: Dict[str, Any] = dict(self._final_obj or {})
+        if self._rate_limits:
+            raw_out["rate_limits"] = self.rate_limits
         if self._unknown_count or self._malformed_count:
             raw_out["unknown_line_count"] = self._unknown_count
             raw_out["malformed_line_count"] = self._malformed_count
@@ -1413,6 +1536,9 @@ async def assemble_response_from_stream_json(
         # CLIProtocolError path runs — match the prior behaviour exactly.
         # (Malformed lines have no ``type`` key, so they fall through to
         # ``feed`` for counting.)
+        limit = limit_error_from_line(line, accum.rate_limits)
+        if limit is not None:
+            raise limit
         if str(line.get("type", "")) == "error":
             raise RuntimeError(f"Claude Code CLI reported error: {line.get('message') or line!r}")
         accum.feed(line)

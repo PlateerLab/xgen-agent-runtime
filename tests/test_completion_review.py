@@ -274,10 +274,18 @@ class _Client(BaseClient):
 
 
 def _last_user_text(request: Any) -> Optional[str]:
+    """마지막 사용자 텍스트. 턴 맥락(날짜 등)이 붙으면 content 가 블록 목록이 된다 — 첫 텍스트 블록."""
     msgs = getattr(request, "messages", None) or []
     for m in reversed(msgs):
-        if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str):
-            return m["content"]
+        if not (isinstance(m, dict) and m.get("role") == "user"):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            if texts:
+                return texts[0]
     return None
 
 

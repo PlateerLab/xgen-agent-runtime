@@ -25,7 +25,6 @@ from xgen_agent_runtime.stages.s07_token import TokenStage
 from xgen_agent_runtime.stages.s08_think import ThinkStage
 from xgen_agent_runtime.stages.s09_parse import ParseStage
 from xgen_agent_runtime.stages.s10_tool import ToolStage
-from xgen_agent_runtime.stages.s12_agent import AgentStage
 from xgen_agent_runtime.stages.s14_evaluate import EvaluateStage
 from xgen_agent_runtime.stages.s16_loop import LoopStage, StandardLoopController
 from xgen_agent_runtime.stages.s17_emit import EmitStage, TextEmitter, VTuberEmitter
@@ -115,7 +114,6 @@ async def test_full_pipeline_all_stages():
     pipeline.register_stage(ThinkStage())  # 8
     pipeline.register_stage(ParseStage())  # 9
     pipeline.register_stage(ToolStage(registry=registry))  # 10
-    pipeline.register_stage(AgentStage())  # 11
     pipeline.register_stage(EvaluateStage())  # 12
     pipeline.register_stage(LoopStage(StandardLoopController(max_turns=5)))  # 13
     pipeline.register_stage(

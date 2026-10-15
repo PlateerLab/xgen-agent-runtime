@@ -194,3 +194,154 @@ async def test_codex_tool_items_reach_stage6_as_cli_tool_calls():
     # The tool items never reach the history as tool_use blocks (no Stage 10 ghost dispatch).
     text = [e for e in events if e.type == "text.delta"]
     assert [t.data["text"] for t in text] == ["two files"]
+
+
+# ---------------------------------------------------------------------------
+# 4.71.0 — the stream path decides like one-shot: warnings are not fatal
+# ---------------------------------------------------------------------------
+#
+# 실측(codex-cli 0.159.2): codex 는 치명적이지 않은 경고도 {"type": "error"} 줄로 낸다
+# ("Model metadata for `gpt-5.3-codex` not found. Defaulting to fallback metadata …").
+# 스트림 경로가 줄마다 바로 올리면 경고 하나가 codex 턴 전체를 죽였다 — 같은 출력을
+# one-shot(_send)은 성공으로 읽는다. 스트림도 끝에서 판정한다.
+
+import json as _json
+from types import SimpleNamespace
+
+_WARNING = (
+    "Model metadata for `gpt-5.3-codex` not found. Defaulting to fallback metadata; "
+    "this can degrade performance and cause issues."
+)
+
+
+class _ScriptedRunner:
+    """CLIProcessRunner 대역 — ``stream`` 이 정해 둔 JSONL 줄을 내보낸다."""
+
+    def __init__(self, lines, *, exit_error: Exception | None = None) -> None:
+        self._lines = [_json.dumps(obj).encode() + b"\n" for obj in lines]
+        self._exit_error = exit_error
+
+    async def run_oneshot(self, argv, **_kw):
+        return SimpleNamespace(returncode=0, stdout=b"codex-cli 0.159.2\n", stderr=b"")
+
+    async def stream(self, argv, *, stdin_iter=None, prespawned=None):
+        if stdin_iter is not None:
+            async for _chunk in stdin_iter:
+                pass
+        for line in self._lines:
+            yield line
+        if self._exit_error is not None:
+            raise self._exit_error
+
+
+def _scripted(lines, **kw) -> CodexCLIClient:
+    runner = _ScriptedRunner(lines, **kw)
+    return CodexCLIClient(api_key="sk-fake", runner_factory=lambda **_k: runner)
+
+
+async def _collect(client: CodexCLIClient):
+    return [
+        e
+        async for e in client.create_message_stream(
+            model_config=_mc(), messages=[{"role": "user", "content": "hi"}]
+        )
+    ]
+
+
+_THREAD = {"type": "thread.started", "thread_id": "thr_1"}
+_ANSWER = {"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": "done"}}
+_TURN_DONE = {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 1}}
+
+
+@pytest.mark.asyncio
+async def test_stream_warning_error_line_then_answer_completes(caplog):
+    client = _scripted([_THREAD, {"type": "error", "message": _WARNING}, _ANSWER, _TURN_DONE])
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="xgen_agent_runtime.llm_client.codex"):
+        events = await _collect(client)
+    assert events[-1]["type"] == "message_complete"
+    assert events[-1]["response"].text == "done"
+    assert "Model metadata" in caplog.text, "the warning is logged, not swallowed"
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_call_counts_as_output_after_a_warning():
+    tool_done = {
+        "type": "item.completed",
+        "item": {
+            "id": "i2",
+            "type": "command_execution",
+            "command": "ls",
+            "aggregated_output": "a\n",
+            "exit_code": 0,
+            "status": "completed",
+        },
+    }
+    client = _scripted([{"type": "error", "message": _WARNING}, tool_done, _TURN_DONE])
+    events = await _collect(client)
+    assert events[-1]["type"] == "message_complete"
+    assert "tool_use" in [e["type"] for e in events]
+
+
+@pytest.mark.asyncio
+async def test_stream_error_then_turn_failed_raises_with_that_message():
+    client = _scripted(
+        [_THREAD, {"type": "error", "message": "stream disconnected: 502"}, {"type": "turn.failed"}]
+    )
+    with pytest.raises(APIError) as ei:
+        await _collect(client)
+    assert ei.value.category == ErrorCategory.CLI_PROTOCOL_ERROR
+    assert "stream disconnected: 502" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_failed_uses_its_own_message_when_present():
+    client = _scripted(
+        [
+            {"type": "error", "message": _WARNING},
+            _ANSWER,
+            {"type": "turn.failed", "error": {"message": "context window exceeded"}},
+        ]
+    )
+    with pytest.raises(APIError) as ei:
+        await _collect(client)
+    assert "context window exceeded" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_stream_error_only_then_eof_raises_with_that_message():
+    client = _scripted([_THREAD, {"type": "error", "message": "model not supported"}])
+    with pytest.raises(APIError) as ei:
+        await _collect(client)
+    assert ei.value.category == ErrorCategory.CLI_PROTOCOL_ERROR
+    assert "model not supported" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_stream_auth_phrase_fails_immediately():
+    client = _scripted(
+        [{"type": "error", "message": "401 Unauthorized: invalid api key"}, _ANSWER, _TURN_DONE]
+    )
+    events = []
+    with pytest.raises(APIError) as ei:
+        async for e in client.create_message_stream(
+            model_config=_mc(), messages=[{"role": "user", "content": "hi"}]
+        ):
+            events.append(e)
+    assert ei.value.category == ErrorCategory.CLI_AUTH_FAILED
+    assert events == [], "auth failure must not wait for the rest of the stream"
+
+
+@pytest.mark.asyncio
+async def test_stream_non_zero_exit_still_raises():
+    from xgen_agent_runtime.llm_client._cli_runtime import CLIProtocolError
+
+    client = _scripted(
+        [{"type": "error", "message": _WARNING}, _ANSWER],
+        exit_error=CLIProtocolError("CLI 'codex' exited with code 1: boom"),
+    )
+    with pytest.raises(APIError) as ei:
+        await _collect(client)
+    assert ei.value.category == ErrorCategory.CLI_PROTOCOL_ERROR
+    assert "exited with code 1" in str(ei.value)

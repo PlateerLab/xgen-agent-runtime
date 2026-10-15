@@ -1,11 +1,10 @@
-"""Stage 12: Evaluate — response quality evaluation."""
+"""Stage 14: Evaluate — response quality evaluation."""
 
 from xgen_agent_runtime.stages.s14_evaluate.stage import EvaluateStage
 from xgen_agent_runtime.stages.s14_evaluate.strategies import (
     EvaluationStrategy,
     SignalBasedEvaluation,
     CriteriaBasedEvaluation,
-    AgentEvaluation,
     EvaluationChain,
     QualityScorer,
     NoScorer,
@@ -23,7 +22,6 @@ __all__ = [
     "EvaluationStrategy",
     "SignalBasedEvaluation",
     "CriteriaBasedEvaluation",
-    "AgentEvaluation",
     "EvaluationChain",
     "BinaryClassifyEvaluation",
     "BinaryClassifyConfig",

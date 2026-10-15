@@ -1181,6 +1181,15 @@ class MemoryProvider(Protocol):
     def set_hooks(self, hooks: "MemoryHooks") -> None: ...
 
 
+def provider_hooks(provider: Any) -> Optional["MemoryHooks"]:
+    """``set_hooks`` 로 붙은 :class:`MemoryHooks`, 없으면 None. 파이프라인을 지을 때 한 번만 읽힌다."""
+    for attr in ("hooks", "_hooks"):
+        h = getattr(provider, attr, None)
+        if isinstance(h, MemoryHooks):
+            return h
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 11. MemoryHooks — pluggable policy attached to a provider / stage
 # ─────────────────────────────────────────────────────────────────────

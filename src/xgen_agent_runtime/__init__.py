@@ -75,6 +75,7 @@ from xgen_agent_runtime.core.manifest_factory import (
     preset_catalog,
 )
 from xgen_agent_runtime.core.artifact import (
+    RETIRED_STAGE_ORDERS,
     ArtifactInfo,
     create_stage,
     describe_artifact,
@@ -116,15 +117,6 @@ from xgen_agent_runtime.memory import (
     ProviderDrivenStrategy,
 )
 from xgen_agent_runtime.memory.factory import provider_from_manifest_memory
-from xgen_agent_runtime.stages.s12_agent.subagent_type import (
-    ManifestSubagentPipelineFactory,
-    SubAgentBuildContext,
-    SubagentTypeDescriptor,
-    SubagentTypeOrchestrator,
-    SubagentTypeRegistry,
-    compile_subagent_descriptors,
-    resolve_subagent_provider,
-)
 
 # Single source of truth: read the installed distribution version so
 # ``__version__`` can never drift from ``pyproject.toml`` again.
@@ -182,6 +174,7 @@ __all__ = [
     "DiffEntry",
     "EnvironmentDiff",
     # Artifact system
+    "RETIRED_STAGE_ORDERS",
     "ArtifactInfo",
     "create_stage",
     "describe_artifact",
@@ -240,12 +233,4 @@ __all__ = [
     "ProviderDrivenStrategy",
     "GenyPresets",
     "provider_from_manifest_memory",
-    # Sub-agent types (manifest-expressible since 2.2.0 Wave 3)
-    "ManifestSubagentPipelineFactory",
-    "SubAgentBuildContext",
-    "SubagentTypeDescriptor",
-    "SubagentTypeOrchestrator",
-    "SubagentTypeRegistry",
-    "compile_subagent_descriptors",
-    "resolve_subagent_provider",
 ]

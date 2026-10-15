@@ -57,8 +57,7 @@ class ToolCapabilities:
             the whole turn on a hung network tool / MCP adapter. ``0``
             (the default) means no per-tool timeout — set it on tools
             whose backend can hang (http/browser/ssh/mcp). Long-running
-            tools that legitimately take minutes (agent delegation) keep
-            ``0``.
+            tools that legitimately take minutes keep ``0``.
     """
 
     concurrency_safe: bool = False
@@ -165,13 +164,17 @@ class ToolContext:
     # behaves exactly as it did pre-Phase-7. Typed as ``Any`` to avoid
     # a hard import dependency on the permission subsystem.
     permission_rules: List[Any] = field(default_factory=list)
-    # The agent's XGeny sandbox session (``xgen_agent_runtime.tools.
-    # _xgeny_sandbox.XgenySandbox``: ``workdir`` + async ``ensure``/``exec``/
+    # The agent's Geny sandbox session (``xgen_agent_runtime.tools.
+    # _geny_sandbox.GenySandbox``: ``workdir`` + async ``ensure``/``exec``/
     # ``read_bytes``/``write_bytes``). When set, the built-in fs/shell tools
     # (bash/read/write/edit/grep/glob/ls) do their I/O *there* instead of on
     # this host. ``None`` (default) = host execution. Typed ``Any`` so this
     # module stays free of the protocol import.
     sandbox: Optional[Any] = None
+    # 파일시스템 포트(``tools.fs.ToolFileSystem``)를 호스트가 **직접** 정할 때만 채운다.
+    # 비워 두면 ``tools.fs.tool_fs`` 가 ``sandbox`` 유무로 러너/로컬을 고른다 — 그 선택은
+    # 거기 한 곳에서만 일어난다. 도구는 이 필드를 직접 읽지 말고 ``tool_fs(context)`` 를 쓴다.
+    fs: Optional[Any] = None
     # Self-modifying environment: the live PipelineEnvironment controller for
     # this session. The built-in ``env_*`` tools read it to view/edit the
     # running environment (prompt, active tools, skills). ``None`` (default)
@@ -185,10 +188,25 @@ class ToolContext:
     # Typed ``Any`` to avoid importing the registry from this base module.
     tool_registry: Optional[Any] = None
     extras: Dict[str, Any] = field(default_factory=dict)
-    # Appended to preserve positional construction of older ToolContext fields.
+    # 4.71.0: host-supplied post-processing of tool results (e.g. masking
+    # PII / forbidden words in what external-data tools return, per admin
+    # policy). ``async (tool, result) -> ToolResult``: ``tool`` is the Tool
+    # instance that ran (decide by kind — class, attributes, capabilities —
+    # not just ``tool.name``); ``result`` is its ToolResult AS-IS, error
+    # results and non-text (image) blocks included — leaving what it should
+    # not touch alone is the filter's job. Applied once per call by Stage
+    # 10's ``RegistryRouter.route`` right after the tool ran, BEFORE large-
+    # result persistence, previews, events and repeat guards — so the SDK
+    # pipeline and the CLI tool surface (``host.tool_surface``, same router)
+    # see identical filtered content. Fail-open: a filter that raises (or
+    # returns something other than a ToolResult / None) is logged and the
+    # original result is used. ``None`` (default) = no filtering. Set by the
+    # host through ``HostServices.tool_result_filter`` (see host/host.py).
+    result_filter: Optional[Callable[["Tool", "ToolResult"], Awaitable["ToolResult"]]] = None
+    # Keyword-only so upstream result_filter retains its positional field.
     # Keep this separate from the local execution ID and model-facing bags.
     canonical_identity: Optional[CanonicalSessionIdentity] = field(
-        default=None, repr=False, compare=False
+        default=None, repr=False, compare=False, kw_only=True
     )
 
 
@@ -465,6 +483,48 @@ class Tool(ABC):
             "description": self.description,
             "input_schema": self.input_schema,
         }
+
+
+# ─────────────────────────────────────────────────────────────────
+# Tool origin — telling tool KINDS apart without parsing names
+# ─────────────────────────────────────────────────────────────────
+
+#: 4.71.0 — instance attribute naming where a tool object came from, for hosts
+#: that post-process results by kind (``ToolContext.result_filter``). Names
+#: cannot tell kinds apart: a user-device tool (``mcp_local_ReadFile``) and a
+#: workflow MCP-node tool can share a prefix, and every ``build_tool`` product
+#: is the same class. The runtime's own builders stamp it:
+#:
+#: * ``"device"``  — ``host.device_tools.build_device_tool`` / ``build_device_guide``
+#:   (the user's PC / phone / browser over the connector)
+#: * ``"memory"``  — ``host.memory_tools.build_memory_tools`` (the agent's vault)
+#: * ``"adapted"`` — ``host.tools.adapt_tools`` wrappers (tools from connected
+#:   workflow nodes: LangChain tools / callable specs, MCP nodes included)
+#:
+#: Read it with :func:`tool_origin`, which also infers ``"mcp"`` (runtime MCP
+#: adapters) and ``"builtin"`` (classes under ``tools.built_in`` — the
+#: workspace file/shell tools, WebSearch/WebFetch, Doc*, Ssh* …).
+TOOL_ORIGIN_ATTR = "tool_origin"
+
+
+def tool_origin(tool: Any) -> str:
+    """Where *tool* came from — ``device`` / ``memory`` / ``adapted`` / ``mcp`` /
+    ``builtin``, or ``""`` when unknown (host-built tools, forged tools, …)."""
+    explicit = getattr(tool, TOOL_ORIGIN_ATTR, None)
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    module = type(tool).__module__ or ""
+    if module.startswith("xgen_agent_runtime.tools.mcp"):
+        return "mcp"
+    if module.startswith("xgen_agent_runtime.tools.built_in"):
+        return "builtin"
+    return ""
+
+
+def with_origin(tool: "Tool", origin: str) -> "Tool":
+    """Stamp :data:`TOOL_ORIGIN_ATTR` on *tool* (returns it for chaining)."""
+    setattr(tool, TOOL_ORIGIN_ATTR, origin)
+    return tool
 
 
 # ─────────────────────────────────────────────────────────────────

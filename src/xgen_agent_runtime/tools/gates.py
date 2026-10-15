@@ -1,0 +1,288 @@
+"""문(gate)과 그 뒤의 방(family)을 **한 표**에서 정한다.
+
+왜 필요한가 — "문은 보이는데 방이 안 열린다" 가 2주 새 네 번
+-------------------------------------------------------------
+턴-1 표면(``host.tool_exposure``)은 기본 동사만 세우고, 나머지 능력은 가족마다 **문 하나**
+뒤에 숨긴다. 숨기는 일은 한 곳(``TURN_ONE_TOOLS``)이 한꺼번에 하는데, **여는 일은 문마다
+따로** 선언해야 했다 — 내장 안내 도구는 모듈마다 ``open_family(...)`` 를 부르고, 어댑트된
+LangChain 도구는 ``metadata["opens_family"]`` 를 달아야 했다. 빠뜨려도 아무 오류가 없었다.
+그래서 같은 모양의 사고가 되풀이됐다:
+
+* 09-09 ``SshListServers`` — 방도 문도 둘 다 숨어 "인증 정보가 없다" 로 멈춤.
+* ``DelegationGuide`` — 지도만 주고 방을 잠가 둠.
+* 09-19 ``BrowserGuide``(커넥터) — 안내만 100회 되풀이, 입력 약 750만 토큰.
+* 09-23 ``LocalControl``(커넥터, SDK 경로) — 지도의 Shell·WriteFile 을 한 번도 못 부르고
+  브라우저 도구에 ``rm -rf`` 를 우겨넣음. 부르지도 않은 쓰기로 "PC 에 저장했다" 고 답함.
+
+(서버 쪽 브라우저·위임 가족과 그 문은 4.70.0 에서 제거됐다 — 위 사고 기록은 규칙의 근거로 남긴다.)
+
+이 모듈이 그 관계의 **유일한 출처**다. 여기 적힌 문이 불리면 그 가족은 문의 구현과 무관하게
+열린다(:func:`family_of` — Stage 10 라우터가 부른다). 그리고 매 표면마다 "숨긴 가족에는 보이는
+문이 있다" 를 검사한다(:func:`reachability_fixes` — Stage 3 가 부른다). 규칙을 **기억**하지
+않고 **검사**한다.
+
+가족은 이름 규칙이다
+--------------------
+목록을 두 저장소에 나눠 적지 않으려고, 가족은 대부분 **이름 규칙**으로 적는다
+(``Browser*``, ``Doc*``, ``Job*`` …). workflow 가 가진 작업 가족도 이름 규칙이라
+여기서 따로 목록을 들고 있을 필요가 없다. 앱 가족(``App*``)은 **이름 목록**으로 적는다 —
+``App`` 으로 시작하는 이름은 사용자가 만든 도구(``AppendRows`` 같은)와 너무 쉽게 겹친다. 그리고 문과 방은 **같은 MCP 접두**를 가져야 같은
+가족이다 — 커넥터의 ``mcp_local_BrowserGuide`` 는 ``mcp_local_Browser*`` 만 연다. 남의 MCP
+서버 도구가 우리 규칙에 우연히 맞아도 접두가 달라 섞이지 않는다. 내장 ``Browser*`` 는 없다 —
+브라우저 문은 접두 전용이다.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterable, List, Set, Tuple
+
+__all__ = [
+    "GATES",
+    "Gate",
+    "family_of",
+    "gate_of",
+    "owner_gate",
+    "reachability_fixes",
+    "restore_from_history",
+    "split_prefix",
+]
+
+#: MCP 를 지나며 붙는 접두 — ``mcp_local_Shell``, ``mcp__connector__Foo``.
+#: (host.tool_exposure 와 같은 정규식 — 표면 판정과 가족 판정이 같은 이름 해석을 쓴다.)
+_MCP_PREFIX = re.compile(r"^mcp_{1,2}[A-Za-z0-9-]+_{1,2}")
+
+
+def split_prefix(name: str) -> Tuple[str, str]:
+    """``mcp_local_Shell`` → ``("mcp_local_", "Shell")``. 접두가 없으면 ``("", name)``."""
+    text = str(name or "")
+    m = _MCP_PREFIX.match(text)
+    return (m.group(0), text[m.end() :]) if m else ("", text)
+
+
+def _named(*names: str) -> Callable[[str], bool]:
+    wanted = frozenset(names)
+    return lambda base: base in wanted
+
+
+def _starts(stem: str, gate: str) -> Callable[[str], bool]:
+    return lambda base: base.startswith(stem) and base != gate
+
+
+def _lazy_family(module: str, attr: str) -> Callable[[str], bool]:
+    """내장 모듈이 들고 있는 목록을 그대로 쓴다(두 벌로 적지 않는다). 처음 쓸 때 읽는다."""
+    cache: Dict[str, frozenset] = {}
+
+    def member(base: str) -> bool:
+        if "v" not in cache:
+            import importlib
+
+            try:
+                cache["v"] = frozenset(getattr(importlib.import_module(module), attr))
+            except Exception:  # noqa: BLE001 — 모듈이 없는 배포(선택 기능)면 빈 가족
+                cache["v"] = frozenset()
+        return base in cache["v"]
+
+    return member
+
+
+@dataclass(frozen=True)
+class Gate:
+    #: 접두를 뗀 문 이름.
+    name: str
+    #: 접두를 뗀 이름이 이 문의 가족인가.
+    member: Callable[[str], bool]
+    #: 이 문이 턴-1 에 **보여야 하는가**. False 는 "그 가족은 의도적으로 ToolSearch 로 찾는
+    #: 긴 꼬리" 라는 선언이다 — 불변식이 그 문을 억지로 세우지 않는다.
+    visible: bool = True
+    #: 접두가 **있는** 문(사용자 기기 앱의 도구)만 가족을 여는가. 로컬 컨트롤처럼 "같은 접두의
+    #: 전부" 를 여는 문은 접두가 있을 때만 의미가 있다 — 접두 없는 LocalControl 이 모든 내장
+    #: 도구를 가족으로 삼는 사고를 막는다. 브라우저도 기기 앱에만 있다(서버 브라우저는 제거).
+    prefixed_only: bool = False
+
+
+#: 문 → 가족. **새 가족을 문 뒤에 숨기려면 여기 한 줄을 더한다** — 숨김(턴-1 계획)과 열림
+#: (라우터)과 검사(Stage 3)가 전부 이 표를 읽는다.
+GATES: Dict[str, Gate] = {
+    g.name: g
+    for g in (
+        # 브라우저는 사용자 PC 의 XGEN 브라우저 탭뿐이다(커넥터 ``mcp_local_BrowserGuide`` → ``mcp_local_Browser*``).
+        # 서버 쪽 브라우저 엔진(an-web)은 제거됐다 — 접두 없는 ``Browser*`` 는 더 이상 없다.
+        Gate("BrowserGuide", _starts("Browser", "BrowserGuide"), prefixed_only=True),
+        Gate("JobGuide", _starts("Job", "JobGuide")),
+        # 앱(에이전트가 만들어 띄우는 웹 앱) — 2026-09-28 Artifact* 에서 이름을 바꿨다.
+        # 옛 이름으로 부르면 tools.renamed 가 새 이름으로 보낸다.
+        Gate("AppGuide", _named("AppCreate", "AppPublish", "AppStatus", "AppList", "AppDelete")),
+        Gate("SshListServers", _named("SshRun", "SshUpload", "SshDownload")),
+        Gate(
+            "SelfExtendGuide",
+            _lazy_family(
+                "xgen_agent_runtime.tools.built_in.self_extend_guide_tool", "SELF_EXTEND_FAMILY"
+            ),
+        ),
+        # 사용자 PC(커넥터) — 같은 접두의 **나머지 전부**. 셸·파일·앱·오피스, 이 PC 의 브라우저,
+        # 사용자가 커넥터에 붙인 MCP 서버까지. 다른 문(BrowserGuide 등)은 가족에서 뺀다.
+        Gate("LocalControl", lambda base: True, prefixed_only=True),
+    )
+}
+
+
+def gate_of(name: str) -> Gate | None:
+    """이 이름이 문이면 그 :class:`Gate`."""
+    prefix, base = split_prefix(name)
+    gate = GATES.get(base)
+    if gate is None or (gate.prefixed_only and not prefix):
+        return None
+    return gate
+
+
+def _owner(name: str, present: Set[str]) -> Tuple[str, Gate] | None:
+    """이 도구가 속한 가족의 (문의 전체 이름, 문). 문 자신이나 어느 가족도 아니면 None.
+
+    **접두가 있는 도구는 같은 접두의 문이 실제로 있을 때만** 그 가족이다. 사용자가 붙인
+    MCP 서버(``mcp_github_…``)는 우리 문을 갖고 있지 않다 — 이름이 우연히 규칙에 맞아도
+    (예: 그 서버의 ``BrowserNavigate``) 그건 그 서버의 카탈로그이고 ToolSearch 뒤의 긴
+    꼬리다. 접두 없는 도구(우리 내장)만 "문이 없으면 방을 연다" 의 대상이다(09-09 SSH).
+
+    한 도구가 두 문에 걸리면(커넥터 ``mcp_local_BrowserNavigate`` 는 BrowserGuide 와
+    LocalControl 둘 다) **좁은 쪽**(prefixed_only 가 아닌 문)을 주인으로 본다.
+    """
+    prefix, base = split_prefix(name)
+    if base in GATES:
+        return None
+    best: Tuple[str, Gate] | None = None
+    for gate in GATES.values():
+        if gate.prefixed_only and not prefix:
+            continue
+        if prefix and (prefix + gate.name) not in present:
+            continue
+        if gate.member(base):
+            cand = (prefix + gate.name, gate)
+            if best is None or (best[1].prefixed_only and not gate.prefixed_only):
+                best = cand
+    return best
+
+
+def owner_gate(name: str, registered: Iterable[str]) -> str | None:
+    """이 도구를 여는 **보이는 문**의 이름(접두 포함). 문이 없거나 숨은 문이면 None.
+
+    숨김 목록(:mod:`xgen_agent_runtime.tools.catalog`)이 문 뒤의 도구를 문 이름 아래로 묶을 때 쓴다 —
+    문이 첫 화면에 서 있으니 도구마다 한 줄씩 적을 필요가 없다.
+    """
+    present: Set[str] = set(registered)
+    owner = _owner(str(name), present)
+    if owner is None:
+        return None
+    gate_full, gate = owner
+    if not gate.visible or gate_full not in present:
+        return None
+    return gate_full
+
+
+def family_of(gate_name: str, registered: Iterable[str]) -> List[str]:
+    """``gate_name`` 을 부르면 열려야 할 도구들 — 등록된 것 중 **같은 접두**의 가족."""
+    gate = gate_of(gate_name)
+    if gate is None:
+        return []
+    prefix, _ = split_prefix(gate_name)
+    out: List[str] = []
+    for name in registered:
+        p, base = split_prefix(name)
+        if p != prefix or base in GATES:
+            continue
+        if gate.member(base):
+            out.append(name)
+    return out
+
+
+def reachability_fixes(registered: Iterable[str], is_exposed: Callable[[str], bool]) -> List[str]:
+    """ "숨긴 가족에는 보이는 문이 있다" 를 지키려면 **무엇을 열어야 하는가**.
+
+    숨겨진 도구마다 주인 문을 찾는다:
+
+    * 문이 등록돼 있고 ``visible`` 인데 **숨어 있으면** → 문을 연다(스키마 하나로 복구).
+    * 문이 **아예 등록되지 않았으면** → 그 도구 자신을 연다. 문이 없는데 숨기면 모델이 그
+      도구에 닿을 길은 ToolSearch 뿐이고, 약한 모델은 거기까지 가지 않는다(09-09 SSH).
+    * 문이 ``visible=False`` 면 손대지 않는다 — 의도된 긴 꼬리다.
+
+    어느 가족도 아닌 숨긴 도구(연결된 DB·API 노드·사용자 MCP 의 수백 개)는 건드리지 않는다.
+    그것들이 ToolSearch 뒤에 있는 것은 설계다.
+
+    반환값은 열어야 할 이름 목록(중복 없음). 부르는 쪽이 열고 이벤트를 남긴다.
+    """
+    names = list(registered)
+    present: Set[str] = set(names)
+    fixes: List[str] = []
+    seen: Set[str] = set()
+    for name in names:
+        if is_exposed(name):
+            continue
+        owner = _owner(name, present)
+        if owner is None:
+            continue
+        gate_full, gate = owner
+        if not gate.visible:
+            continue
+        target = gate_full if gate_full in present else name
+        if target in present and is_exposed(target):
+            continue
+        if target not in seen:
+            seen.add(target)
+            fixes.append(target)
+    return fixes
+
+
+def _used_tool_names(messages: Iterable[Any]) -> List[str]:
+    """대화 기록의 assistant ``tool_use`` 블록에서 도구 이름을 순서대로(중복 없이)."""
+    seen: Dict[str, None] = {}
+    for msg in messages or ():
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        if role != "assistant":
+            continue
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            btype = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+            if btype == "tool_use":
+                raw = block.get("name") if isinstance(block, dict) else getattr(block, "name", "")
+                name = str(raw or "")
+                if name:
+                    seen.setdefault(name, None)
+    return list(seen)
+
+
+def restore_from_history(
+    registered: Iterable[str], is_exposed: Callable[[str], bool], messages: Iterable[Any]
+) -> List[str]:
+    """모델이 **기록에서 볼 수 있는** 도구 사용만큼은 표면을 다시 연다.
+
+    호스트는 턴마다 레지스트리를 새로 만든다(``host.turn_executor``). 그래서 앞 턴에 문을 열어
+    ``mcp_local_Shell`` 을 쓴 대화도 다음 턴에는 Shell 이 다시 숨는다 — 모델은 기록에서 자기가
+    Shell 을 썼다는 걸 보는데 정작 부를 수 없다. 실측(2026-09-23 dev, gpt-4.1): 모델이 말로
+    "정말 삭제할까요?" 를 묻고 사용자가 "좋다" 고 답한 다음 턴에, 모델은 문(LocalControl)을
+    다시 열지 않고 브라우저 안내만 5번 부르다 반복 종료로 끝났다 — 가장 자연스러운 대화
+    흐름에서 실패했다.
+
+    규칙은 하나다: **표면은 기록 속에서 모델이 쓴 도구보다 좁아지지 않는다.** 기록에 보이는
+    도구 호출마다 — 그 도구가 숨어 있으면 연다. 그 도구가 문이면 그 가족까지 연다(문을 열어
+    둔 대화는 방도 열려 있어야 한다).
+
+    기록이 짧아지면(단기 기억 창이 도구 블록을 떨군 먼 턴) 다시 닫힌다 — 모델이 더는 볼 수
+    없는 사용을 표면에 붙잡아 두지 않는다. 상태를 따로 저장하지 않고 기록에서 복원하므로 호스트가
+    무엇이든(레지스트리를 새로 만들든 재사용하든) 같게 동작한다.
+
+    반환값은 열어야 할 이름 목록. 부르는 쪽이 열고 이벤트를 남긴다.
+    """
+    names = list(registered)
+    present: Set[str] = set(names)
+    out: Dict[str, None] = {}
+    for used in _used_tool_names(messages):
+        if used in present and not is_exposed(used):
+            out.setdefault(used, None)
+        if gate_of(used) is not None:
+            for member in family_of(used, names):
+                if not is_exposed(member):
+                    out.setdefault(member, None)
+    return list(out)

@@ -280,3 +280,47 @@ class TestNoFuzzyFallback:
         assert "send_direct_message_internal" in result.metadata["activated"]
         assert reg.is_exposed("send_direct_message_internal")
         assert "[activated]" in result.content
+
+
+class TestExactNamesInQuery:
+    """정확한 이름을 여럿 적으면 각각 찾는다 — AND 는 키워드 검색 규칙이다."""
+
+    @pytest.mark.asyncio
+    async def test_several_exact_names_each_match(self):
+        ctx = _ctx_with_tools(
+            [
+                _desc("mcp_local_ListDir", "List a directory on the user's computer."),
+                _desc("mcp_local_ReadFile", "Read a text file on the user's computer."),
+                _desc("mcp_local_Search", "Search text files on the user's computer."),
+                _desc("Grep", "Search file contents."),
+            ]
+        )
+        r = await ToolSearchTool().execute(
+            {"query": "mcp_local_ListDir mcp_local_ReadFile mcp_local_Search"}, ctx
+        )
+        assert "No matching tools" not in r.content
+        for n in ("mcp_local_ListDir", "mcp_local_ReadFile", "mcp_local_Search"):
+            assert n in r.content
+        assert "Grep" not in r.content
+
+    @pytest.mark.asyncio
+    async def test_exact_name_plus_keywords_finds_the_named_tool(self):
+        ctx = _ctx_with_tools(
+            [_desc("DocBuild", "Build a document."), _desc("DocRender", "Render slides to images.")]
+        )
+        r = await ToolSearchTool().execute({"query": "DocBuild pptx presentation"}, ctx)
+        assert "DocBuild" in r.content
+        assert "DocRender" not in r.content
+
+    @pytest.mark.asyncio
+    async def test_comma_separated_names(self):
+        ctx = _ctx_with_tools([_desc("Read", "r"), _desc("Write", "w"), _desc("Edit", "e")])
+        r = await ToolSearchTool().execute({"query": "Read, Write"}, ctx)
+        assert "Read" in r.content and "Write" in r.content and "Edit" not in r.content
+
+    @pytest.mark.asyncio
+    async def test_plain_keywords_still_require_every_token(self):
+        """이름이 없는 키워드 질의는 예전 그대로 AND — 퍼지 확장이 아니다."""
+        ctx = _ctx_with_tools([_desc("WebFetch", "fetches HTTP pages")])
+        r = await ToolSearchTool().execute({"query": "web unrelated"}, ctx)
+        assert "No matching tools" in r.content

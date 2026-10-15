@@ -28,8 +28,11 @@ class TokenBudgetGuard(Guard):
     the job of ``cost_budget`` and the Stage 16 loop's token dimension.
     """
 
-    def __init__(self, min_remaining_tokens: int = 10_000):
-        self._min_remaining = min_remaining_tokens
+    def __init__(self, min_remaining_tokens: int = 0):
+        #: 0 = the compaction policy's answer reserve for this request
+        #: (``core.compaction.output_reserve``: max(4096, max_tokens + 2048), at most half the
+        #: window), so the proactive 80% relief always comes before this guard.
+        self._min_remaining = int(min_remaining_tokens or 0)
 
     @property
     def name(self) -> str:
@@ -37,10 +40,12 @@ class TokenBudgetGuard(Guard):
 
     @property
     def description(self) -> str:
-        return (
-            f"Ensures the next request leaves >= {self._min_remaining} tokens "
-            "of context headroom (compacts history first)"
+        need = (
+            f"{self._min_remaining} tokens"
+            if self._min_remaining
+            else "the answer's room (max(4096, max_tokens + 2048), at most half the window)"
         )
+        return f"Ensures the next request leaves >= {need} of context headroom (compacts history first)"
 
     @classmethod
     def config_schema(cls) -> ConfigSchema:
@@ -55,9 +60,10 @@ class TokenBudgetGuard(Guard):
                         "Headroom (for the response) the next request must leave "
                         "free in the context window. When the projected request "
                         "would leave less, history is compacted and re-checked "
-                        "before the turn is rejected."
+                        "before the turn is rejected. 0 = derive it from max_tokens like the "
+                        "compaction policy (max(4096, max_tokens + 2048), at most half the window)."
                     ),
-                    default=10_000,
+                    default=0,
                     min_value=0,
                 ),
             ],
@@ -72,16 +78,22 @@ class TokenBudgetGuard(Guard):
         return {"min_remaining_tokens": self._min_remaining}
 
     def check(self, state: PipelineState) -> GuardResult:
+        from xgen_agent_runtime.core.compaction import output_reserve, window_of
+
         projected = estimate_prompt_tokens(state)
-        remaining = state.context_window_budget - projected
-        if remaining < self._min_remaining:
+        window = window_of(state)
+        need = self._min_remaining or output_reserve(
+            window, int(getattr(state, "max_tokens", 0) or 0)
+        )
+        remaining = window - projected
+        if remaining < need:
             return GuardResult(
                 passed=False,
                 guard_name=self.name,
                 message=(
                     f"Context near limit: ~{projected} of "
-                    f"{state.context_window_budget} tokens projected, "
-                    f"{remaining} free (need {self._min_remaining})"
+                    f"{window} tokens projected, "
+                    f"{remaining} free (need {need})"
                 ),
                 action="compact",
             )

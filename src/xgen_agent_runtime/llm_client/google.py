@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.core.errors import APIError, ErrorCategory, is_context_overflow_message
 from xgen_agent_runtime.core.state import TokenUsage
 from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
 from xgen_agent_runtime.llm_client.translators import (
@@ -23,6 +23,42 @@ from xgen_agent_runtime.llm_client.translators import (
 from xgen_agent_runtime.llm_client.types import APIRequest, APIResponse, ContentBlock
 
 logger = logging.getLogger(__name__)
+
+
+def _json_schema_field() -> str:
+    """이 google-genai 가 JSON Schema 를 받는 칸 — 새 SDK 는 ``response_json_schema``(JSON Schema 그대로),
+    옛 SDK 는 ``response_schema``(OpenAPI 부분집합)뿐이다."""
+    try:
+        from google.genai import types
+
+        if "response_json_schema" in getattr(types.GenerateContentConfig, "model_fields", {}):
+            return "response_json_schema"
+    except Exception:  # noqa: BLE001 — SDK 가 없으면 옛 칸 이름
+        pass
+    return "response_schema"
+
+
+def _structured_output_config(response_format: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """표준 ``response_format`` → Gemini ``GenerateContentConfig`` 칸.
+
+    이 클라이언트는 구조화 출력을 지원한다고 선언해 왔는데(``supports_structured_output=True``) 요청에
+    싣지 않았다 — 부르는 쪽은 JSON 이 강제된다고 믿고 산문을 받았다(2026-09-30, 앱 LLM provider 감사).
+    ``json_object`` 는 JSON 응답만, ``json_schema`` 는 스키마까지 강제한다. OpenAI 식 중첩
+    (``{"json_schema": {"name", "schema"}}``)도 받는다.
+    """
+    if not isinstance(response_format, dict):
+        return {}
+    kind = str(response_format.get("type") or "")
+    if kind not in ("json_object", "json_schema"):
+        return {}
+    config: Dict[str, Any] = {"response_mime_type": "application/json"}
+    if kind == "json_schema":
+        schema = response_format.get("json_schema")
+        if isinstance(schema, dict) and isinstance(schema.get("schema"), dict):
+            schema = schema["schema"]
+        if isinstance(schema, dict) and schema:
+            config[_json_schema_field()] = schema
+    return config
 
 
 class GoogleClient(BaseClient):
@@ -287,6 +323,16 @@ class GoogleClient(BaseClient):
             thinking_config = canonical_thinking_to_google(request.thinking)
             if thinking_config:
                 config["thinking_config"] = thinking_config
+        if request.thinking_level:
+            # 생각의 표준 값 — 2.5 는 토큰 예산(0 이면 끔), 3 계열은 thinking_level(llm_client.thinking 표).
+            from xgen_agent_runtime.llm_client.thinking import gemini_thinking_config, thinking_spec
+
+            config["thinking_config"] = gemini_thinking_config(
+                thinking_spec(self.thinking_provider(), request.model),
+                request.thinking_level,
+            )
+
+        config.update(_structured_output_config(request.response_format))
 
         kwargs: Dict[str, Any] = {
             "model": request.model,
@@ -427,9 +473,14 @@ class GoogleClient(BaseClient):
                     str(e), category=ErrorCategory.SERVER_ERROR, status_code=code, cause=e
                 )
             if code == 400 or status in ("INVALID_ARGUMENT", "FAILED_PRECONDITION"):
-                return APIError(
-                    str(e), category=ErrorCategory.BAD_REQUEST, status_code=code, cause=e
+                # "The input token count (N) exceeds the maximum number of tokens allowed (M)":
+                # TOKEN_LIMIT lets Stage 6 compact and retry once (4.89.0).
+                category = (
+                    ErrorCategory.TOKEN_LIMIT
+                    if is_context_overflow_message(str(e))
+                    else ErrorCategory.BAD_REQUEST
                 )
+                return APIError(str(e), category=category, status_code=code, cause=e)
             # Partition by class/range when the specific code is novel.
             if isinstance(e, genai_errors.ServerError) or (
                 isinstance(code, int) and 500 <= code < 600
@@ -469,7 +520,11 @@ class GoogleClient(BaseClient):
         if isinstance(e, gac_exceptions.DeadlineExceeded):
             return ErrorCategory.TIMEOUT
         if isinstance(e, gac_exceptions.InvalidArgument):
-            return ErrorCategory.BAD_REQUEST
+            return (
+                ErrorCategory.TOKEN_LIMIT
+                if is_context_overflow_message(str(e))
+                else ErrorCategory.BAD_REQUEST
+            )
         if isinstance(e, (gac_exceptions.ServiceUnavailable, gac_exceptions.InternalServerError)):
             return ErrorCategory.SERVER_ERROR
         return None
@@ -491,6 +546,8 @@ class GoogleClient(BaseClient):
             return APIError(str(e), category=ErrorCategory.AUTH, cause=e)
         if "unavailable" in error_str or "503" in error_str or "500" in error_str:
             return APIError(str(e), category=ErrorCategory.SERVER_ERROR, cause=e)
+        if is_context_overflow_message(error_str):
+            return APIError(str(e), category=ErrorCategory.TOKEN_LIMIT, cause=e)
         if "invalid argument" in error_str or "400" in error_str:
             return APIError(str(e), category=ErrorCategory.BAD_REQUEST, cause=e)
         return APIError(str(e), category=ErrorCategory.UNKNOWN, cause=e)

@@ -67,6 +67,7 @@ def test_wire_and_result_dataclass_fields_are_stable() -> None:
         "stop_sequences",
         "stream",
         "thinking",
+        "thinking_level",
         "response_format",
         "session_hint",
         "mcp_config",
@@ -136,6 +137,7 @@ def test_pipeline_state_public_fields_are_stable() -> None:
         "thinking_budget_tokens",
         "thinking_type",
         "thinking_display",
+        "thinking_level",
         "thinking_history",
         "token_usage",
         "turn_token_usage",
@@ -151,8 +153,6 @@ def test_pipeline_state_public_fields_are_stable() -> None:
         "pending_tool_calls",
         "tool_results",
         "tool_dispatcher",
-        "delegate_requests",
-        "agent_results",
         "evaluation_score",
         "evaluation_feedback",
         "final_text",
@@ -165,7 +165,6 @@ def test_pipeline_state_public_fields_are_stable() -> None:
         "events",
         "llm_client",
         "credentials",
-        "subagent_registry",
         "session_runtime",
     ]
 

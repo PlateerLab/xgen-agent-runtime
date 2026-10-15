@@ -20,17 +20,15 @@ a session is two different agents wearing one name, and every capability had to
 be built twice.
 
 Method groups map 1:1 to the dependency categories established in the extraction
-survey (see memory ``xgeny-shared-host-extraction``):
+survey (see memory ``geny-shared-host-extraction``):
 
   B/C/E-abstract → injected here (③ "needs abstraction").
   D/E-server, workspace store, sandbox runner → ④ "server-resident": the server
-    impl does the real thing; the connector impl calls the server over RPC, or
-    returns a graceful no-op when the capability is genuinely unavailable
-    locally (e.g. self-evolution edits a server-owned graph).
+    impl does the real thing.
 
 Nothing here imports server symbols; the protocol is defined against
 ``xgen_agent_runtime`` types + plain data only, so this package stays a pure,
-bundle-able dependency of BOTH hosts.
+bundle-able dependency of the host.
 """
 
 from __future__ import annotations
@@ -38,6 +36,8 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
+    Callable,
     Dict,
     List,
     Mapping,
@@ -51,21 +51,25 @@ from typing import (
 if TYPE_CHECKING:
     # Import only for typing — keeps import-time deps to xgen_agent_runtime.
     from xgen_agent_runtime.tools import ToolRegistry
-    from xgen_agent_runtime.tools._xgeny_sandbox import XgenySandbox
+    from xgen_agent_runtime.tools._geny_sandbox import GenySandbox
+    from xgen_agent_runtime.tools.base import Tool, ToolResult
 
 #: Result of a built provider LLM client + its per-run cleanup callback.
 CliRuntime = Tuple[Any, Optional[Any]]
 
+#: Host post-processing of one tool result: ``async (tool, result) -> ToolResult``.
+#: See :attr:`~xgen_agent_runtime.tools.base.ToolContext.result_filter`.
+ToolResultFilter = Callable[["Tool", "ToolResult"], Awaitable["ToolResult"]]
+
 
 @runtime_checkable
 class HostServices(Protocol):
-    """Everything a turn needs from its host. See module docstring for the two
-    implementations and the non-divergence contract they must honour."""
+    """Everything a turn needs from its host. See module docstring for the
+    implementation and the non-divergence contract it must honour."""
 
     # ── A. settings & credentials ────────────────────────────────────────
-    # Server: admin config-composer DB → env → default. Connector: env/local
-    # config → default (no DB). ``_cli_setting`` already carries the env
-    # fallback, so this seam is a drop-in.
+    # Server: admin config-composer DB → env → default. ``_cli_setting``
+    # already carries the env fallback, so this seam is a drop-in.
     def setting(self, name: str, default: str = "") -> str: ...
     def setting_truthy(self, name: str) -> bool: ...
     def resolve_model(self, provider: str, params: Mapping[str, Any]) -> str: ...
@@ -76,32 +80,29 @@ class HostServices(Protocol):
     ) -> Optional[Dict[str, Any]]: ...
 
     # ── B. execution host: sandbox + workspace ───────────────────────────
-    # The one seam the runtime already models (ToolContext.sandbox / XgenySandbox).
+    # The one seam the runtime already models (ToolContext.sandbox / GenySandbox).
     # An agent turn ALWAYS runs in its own runner session — that is the whole
     # point of the session. ``None`` means an operator explicitly disabled the
     # runner for this deployment; anything else raises rather than silently
     # falling back to the serving pod.
-    def make_sandbox(self, workflow_id: str, user_id: Any) -> Optional["XgenySandbox"]: ...
+    def make_sandbox(self, workflow_id: str, user_id: Any) -> Optional["GenySandbox"]: ...
     def agent_workspace_dir(self, workflow_id: str, *, create: bool = True) -> str: ...
     def workspace_storage_root(self, workflow_id: str) -> str: ...
     #: Restore the persistent workspace from the source of truth into ``run_dir``
     #: BEFORE the turn. Returns True iff hydration succeeded — the executor only
     #: publishes afterwards when it did (empty-cache-deletes-everything guard).
     def hydrate_workspace(self, workflow_id: str, run_dir: str) -> bool: ...
-    #: Reflect a turn's workspace changes back to the source of truth. Connector
-    #: local mode is a no-op here (the connector's own sync engine owns it).
+    #: Reflect a turn's workspace changes back to the source of truth.
     def publish_workspace(
         self, workflow_id: str, run_dir: str, *, origin: str = "agent"
     ) -> None: ...
 
     #: 실행 환경 안내 프롬프트 — 도구가 **어디서** 도는지 에이전트에게 알린다.
-    #: 서버: 러너 sandbox / 커넥터 로컬(ConnectorLocalSandbox) 설명. 커넥터
-    #: 사이드카: 이 PC 로컬 환경 설명(OS 포함). 없으면 "".
+    #: 서버: 러너 sandbox 설명. 없으면 "".
     def environment_prompt(self, sandbox: Any, provider: str) -> str: ...
 
     # ── C. memory ────────────────────────────────────────────────────────
-    # Server: xgen-db provider. Connector: file/sqlite vault OR server RPC so
-    # web↔connector share the same memory (confirmed decision: state is shared).
+    # Server: xgen-db provider.
     def build_memory_provider(self, workflow_id: str, interaction_id: str) -> Optional[Any]: ...
 
     # ── D. (제거됨) ambient user cloud ───────────────────────────────────
@@ -111,11 +112,10 @@ class HostServices(Protocol):
     def jobs_prompt_block(self) -> str: ...
 
     # ── E. server-owned tool families ────────────────────────────────────
-    # Injected as tools into the runtime ToolRegistry (SDK path) or advertised
-    # via the connector MCP bridge (CLI path). Each returns tools/None or
-    # registers into the passed registry. Connector impl routes to server RPC
-    # for the DB-backed ones (jobs/self-evolution/delegation) or no-ops when
-    # unavailable locally, without ever changing the executor's call shape.
+    # Injected as tools into the turn's ToolRegistry. The same registry serves
+    # every provider: the SDK pipeline uses it directly, and CLI providers get it
+    # through ``params["_tool_surface"]`` (host.tool_surface) for the MCP bridge.
+    # Each returns tools/None or registers into the passed registry.
     def build_connector_mcp_tools(self, user_id: Any, client_surface: Any) -> List[Any]: ...
 
     def build_host_skill_tools(self, **kwargs: Any) -> List[Any]:
@@ -148,33 +148,6 @@ class HostServices(Protocol):
         user_id: Any,
         workflow_name: str,
     ) -> None: ...
-    #: Build the per-turn delegation extras (sub-pipeline factory + report sink).
-    #: ``spec_fields`` is a plain dict of the turn's LLM/run fields — the server
-    #: impl constructs its SubPipelineSpec from it (the spec type is server-owned,
-    #: so it never appears in the shared executor). Connector → {} (no delegation).
-    def build_turn_delegation(
-        self,
-        *,
-        workflow_id: str,
-        interaction_id: str,
-        user_id: Any,
-        spec_fields: Mapping[str, Any],
-    ) -> Dict[str, Any]: ...
-    #: True iff this turn's text is a delegation report (recursion guard). Server
-    #: consults its delegation module; connector → False.
-    def is_report_turn(self, text: str) -> bool: ...
-    #: Server-owned delegation tool classes (name → class) to register into the
-    #: SDK registry. Connector → {}.
-    def delegation_extra_tool_classes(self) -> Dict[str, type]: ...
-    #: Filesystem root for a workflow's delegation run when no sandbox is present.
-    #: Server → local pod path; connector → the local synced folder.
-    def delegation_workspace(self, workflow_id: str) -> str: ...
-    #: Claim & format any unreported delegation completions to inject into this
-    #: turn (alarm/pod-restart fallback). Server → the report block; connector → "".
-    def drain_pending_reports(self, workflow_id: str, interaction_id: str) -> str: ...
-    def make_sub_cli_client_factory(
-        self, params: Mapping[str, Any], workflow_id: str
-    ) -> Optional[Any]: ...
     def register_forged_tools(
         self,
         registry: "ToolRegistry",
@@ -196,11 +169,30 @@ class HostServices(Protocol):
     def build_run_tool_context(self, **kwargs: Any) -> Any: ...
     def load_ssh_servers(self) -> List[Any]: ...
 
+    def tool_result_filter(self) -> Optional[ToolResultFilter]:
+        """**OPTIONAL** — 이 턴의 모든 도구 결과에 거는 후처리 (4.71.0). 기본은 없음(None).
+
+        ``async (tool, result) -> ToolResult`` 를 돌려주면 실행기가 턴마다 한 번 받아 **SDK
+        파이프라인과 CLI 도구 표면이 함께 쓰는 도구 컨텍스트**(``ToolContext.result_filter``)에
+        싣는다. 적용은 Stage 10 라우터(``RegistryRouter.route``) 한 곳 — 도구가 돈 직후, 큰 결과
+        파일 저장·미리보기·이벤트·반복 가드보다 먼저 — 이므로 provider 와 무관하게 같은 결과가
+        모델·기록·화면으로 간다. 용도: 관리자 정책에 따라 외부 데이터 도구 결과의 개인정보·금칙어
+        가림.
+
+        ``tool`` 은 실행된 Tool 인스턴스다 — 이름 접두만으로는 기기 도구와 MCP 노드 도구가
+        겹칠 수 있으니 종류(클래스·속성·capabilities)로 판정한다. ``result`` 는 가공 전
+        ToolResult 그대로(오류 결과·이미지 블록 포함) — 건드리지 말아야 할 것을 두는 일은
+        필터의 몫이다. 필터가 예외를 내면 경고만 남기고 원래 결과를 쓴다(fail-open).
+
+        구현하지 않은 호스트를 위해 기본 구현이 None 을 돌려준다 — 실행기는 ``getattr`` 로
+        묻기 때문에 이 프로토콜을 상속하지 않은 옛 호스트도 그대로 돈다.
+        """
+        return None
+
     # ── H. product helpers injected into the pure ② modules ──────────────
     # rag / token_budget / distill are otherwise-pure orchestration helpers;
     # these are the last xgen-workflow-specific calls they need, injected by the
-    # host so the modules stay import-clean. Server delegates to editor; the
-    # connector returns a graceful default (None/""/skip).
+    # host so the modules stay import-clean. Server delegates to editor.
     #: Build one RAG context block from a retrieval port item (or None to skip).
     def rag_context_builder(self, text: str, item: Any) -> Optional[str]: ...
     #: Live vLLM ``max_model_len`` probe for an OpenAI-compatible base_url (or None).
@@ -223,10 +215,8 @@ class HostServices(Protocol):
     ) -> Optional[Any]: ...
 
     # ── G. turn teardown: reflect the turn's file changes ────────────────
-    # The 3-way publish decision (connector-local flush / runner publish / pod
-    # publish). Server does the real reflection; the connector sidecar flushes
-    # through its own sync engine. Local resource cleanups (cli/run-dir) stay
-    # in the executor — they are not host state.
+    # The publish decision (runner publish / pod publish). Local resource
+    # cleanups (cli/run-dir) stay in the executor — they are not host state.
     def finalize_turn(
         self,
         *,
@@ -239,21 +229,28 @@ class HostServices(Protocol):
 
     # ── F. CLI provider runtime (process spawn + connector MCP bridge) ────
     # Builds the claude_code / codex subprocess client. The process runs on the
-    # serving pod, but its tools come from the MCP bridge and execute in the
-    # agent's runner session — natives are denied on both backends.
+    # serving pod; its tools are ``params["_tool_surface"]`` (a
+    # :class:`~xgen_agent_runtime.host.tool_surface.TurnToolSurface`) served by the
+    # host's MCP bridge — the same registry, tool context and turn state the SDK
+    # path uses — and execute in the agent's runner session. Natives are off on
+    # both backends.
     def build_cli_runtime(
         self,
         provider: str,
         params: Mapping[str, Any],
     ) -> CliRuntime: ...
 
-    #: **OPTIONAL** — does this host advertise the turn's non-native tool surface
-    #: (memory_* / WorkflowSelf / DelegateTask… as ``mcp__connector__*``) to the
-    #: CLI backend ``provider`` (claude_code/codex) through an MCP bridge?
-    #: The executor only appends the CLI-only prompt notes (memory tool names,
-    #: self-evolution block, delegation note) when this returns True — a note
-    #: about tools the CLI cannot see is a ghost promise (audit #25). Absent
-    #: method → treated as True (legacy behaviour). Server: True iff the bridge
-    #: run ctx will actually be bound (a workspace dir, and either built-in tools
-    #: or self-evolution).
+    #: **OPTIONAL** — can this host serve the turn's tool surface to the CLI
+    #: backend ``provider`` (claude_code/codex) through an MCP bridge? When False
+    #: the executor registers no tools and promises none in the prompt — a tool
+    #: the CLI cannot see is a ghost promise (audit #25). Absent method → True.
     def cli_bridge_available(self, provider: str) -> bool: ...
+
+    #: **OPTIONAL** — the OS of the user's device whose tools ride this turn
+    #: (``darwin``/``win32``/``linux``/``android``/``ios``, "" when unknown).
+    #: Only names the device in the per-turn folder note ("the user's Mac").
+    #: Absent method → the note says "device".
+    def local_device_platform(self) -> str: ...
+
+    #: **OPTIONAL** (sync): notes for this turn only, sent after the folder note, never in history.
+    def turn_notes(self) -> List[str]: ...

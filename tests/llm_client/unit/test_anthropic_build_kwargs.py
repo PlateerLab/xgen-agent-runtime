@@ -200,6 +200,15 @@ def test_model_rejects_sampling_params_for_dated_opus_4_7_variant():
 
 @pytest.mark.parametrize(
     "model",
+    # 2026-09-28 live API: temperature=0.7 → 400 "`temperature` is deprecated for this model."
+    ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-fable-5", "claude-fable-5-1"],
+)
+def test_model_rejects_sampling_params_for_claude_5_family(model: str) -> None:
+    assert _model_rejects_sampling_params(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
     ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
 )
 def test_model_rejects_sampling_params_false_for_non_opus_4_7(model: str) -> None:
@@ -242,6 +251,33 @@ def test_build_kwargs_drops_temperature_after_alias_resolves_to_opus_4_7() -> No
         temperature=0.2,
     ))
     assert kwargs["model"] == "claude-opus-4-7"
+    assert "temperature" not in kwargs
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"])
+def test_disabled_thinking_keeps_temperature(model: str) -> None:
+    """``thinking={"type": "disabled"}`` 은 생각을 끈다 — 표준 샘플러라 temperature 를 받는다
+    (2026-10-01 live 200). 예전에는 칸이 있기만 하면 지워서 temperature=0 JSON 호출이 1.0 으로 돌았다."""
+    client = AnthropicClient(api_key="sk-mock")
+    kwargs = client._build_kwargs(_req(
+        model=model,
+        temperature=0.0,
+        top_p=0.9,
+        thinking={"type": "disabled"},
+    ))
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["top_p"] == 0.9
+    assert kwargs["thinking"] == {"type": "disabled"}
+
+
+def test_disabled_thinking_still_drops_for_models_that_refuse_temperature() -> None:
+    """생각을 꺼도 temperature 자체를 받지 않는 계열(Sonnet 5 등)은 그대로 지운다."""
+    client = AnthropicClient(api_key="sk-mock")
+    kwargs = client._build_kwargs(_req(
+        model="claude-sonnet-5",
+        temperature=0.0,
+        thinking={"type": "disabled"},
+    ))
     assert "temperature" not in kwargs
 
 
@@ -453,3 +489,26 @@ def test_retry_kwargs_returns_none_when_thinking_already_adaptive() -> None:
 
     kwargs = {"model": "claude-x", "thinking": {"type": "adaptive"}, "max_tokens": 100}
     assert _retry_kwargs_after_deprecation(kwargs, _Fake400()) is None
+
+
+# ── 2026-09-28 — 기본으로 생각하는 모델(Claude 5)은 요약을 흘려보낸다 ─────────
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"])
+def test_think_by_default_models_stream_summarized_thinking(model: str) -> None:
+    kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(_req(model=model, temperature=0.7))
+    assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "temperature" not in kwargs
+
+
+def test_caller_chosen_display_is_kept() -> None:
+    kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(
+        _req(model="claude-sonnet-5", thinking={"type": "adaptive", "display": "omitted"})
+    )
+    assert kwargs["thinking"] == {"type": "adaptive", "display": "omitted"}
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"])
+def test_models_that_do_not_think_by_default_get_no_thinking(model: str) -> None:
+    kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(_req(model=model))
+    assert "thinking" not in kwargs

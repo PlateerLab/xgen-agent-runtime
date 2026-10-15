@@ -199,8 +199,10 @@ class TestGenyLayoutCompatibility:
 
     @pytest.mark.parametrize("preset", ["worker_adaptive", "vtuber"])
     def test_full_21_slot_layout(self, snapshot, preset):
+        """Every live order 1–21; the retired slots (12 agent / 13
+        task_registry, 4.71.0) are absent but NOT renumbered around."""
         ours = build_manifest(preset, provider="anthropic").to_dict()["stages"]
-        assert [e["order"] for e in ours] == list(range(1, 22))
+        assert [e["order"] for e in ours] == [o for o in range(1, 22) if o not in (12, 13)]
 
 
 # ── 2.4.0 — host-facing preset catalog ───────────────────────────────
@@ -237,7 +239,9 @@ class TestPresetCatalog:
         m = build_manifest_for("claude_code_worker")
         assert m.stages[5]["config"]["provider"] == "claude_code_cli"
         assert m.metadata.base_preset == "worker_adaptive"
-        assert [e["order"] for e in m.to_dict()["stages"]] == list(range(1, 22))
+        assert [e["order"] for e in m.to_dict()["stages"]] == [
+            o for o in range(1, 22) if o not in (12, 13)
+        ]
 
     def test_build_manifest_for_provider_override(self):
         from xgen_agent_runtime import build_manifest_for

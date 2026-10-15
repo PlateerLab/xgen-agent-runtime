@@ -274,3 +274,62 @@ async def test_aiter_bytes_none_yields_nothing() -> None:
     async for c in aiter_bytes(None):
         chunks.append(c)
     assert chunks == []
+
+
+# ---------------------------------------------------------------------------
+# Windows — 창 없이 띄우고 트리째 끝낸다 (4.83.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_has_no_console_window_and_its_own_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """창 없는 엔진이 CLI(콘솔 프로그램)를 띄우면 Windows 는 새 콘솔 창을 만든다 — 턴마다 창이 뜬다."""
+    import xgen_agent_runtime.llm_client._cli_runtime as rt
+
+    seen: dict = {}
+
+    async def fake_exec(*argv, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(rt.sys, "platform", "win32")
+    monkeypatch.setattr(rt.asyncio, "create_subprocess_exec", fake_exec)
+    runner = CLIProcessRunner(binary=FAKE_CLI)
+    with pytest.raises(RuntimeError, match="stop here"):
+        await runner._spawn(["echo"])
+    assert seen["creationflags"] & 0x08000000  # CREATE_NO_WINDOW
+    assert seen["creationflags"] & 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    assert "start_new_session" not in seen
+
+
+@pytest.mark.asyncio
+async def test_windows_kill_takes_the_whole_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    import xgen_agent_runtime.llm_client._cli_runtime as rt
+
+    calls: list = []
+
+    class _Killer:
+        async def wait(self):
+            return 0
+
+    async def fake_exec(*argv, **kwargs):
+        calls.append((argv, kwargs.get("creationflags")))
+        return _Killer()
+
+    class _Proc:
+        pid = 777
+        returncode = None
+
+        def kill(self):
+            self.returncode = 1
+
+        async def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(rt.sys, "platform", "win32")
+    monkeypatch.setattr(rt.asyncio, "create_subprocess_exec", fake_exec)
+    runner = CLIProcessRunner(binary=FAKE_CLI)
+    proc = _Proc()
+    await runner._kill_tree(proc)  # type: ignore[arg-type]
+    assert calls == [(("taskkill", "/T", "/F", "/PID", "777"), 0x08000000)]
+    assert proc.returncode == 1  # taskkill 이 못 끝냈으면 CLI 하나라도

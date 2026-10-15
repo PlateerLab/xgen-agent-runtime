@@ -12,10 +12,10 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from xgen_agent_runtime.core.diff import EnvironmentDiff
@@ -313,15 +313,15 @@ def _migrate_v1_to_v2(data: Dict[str, Any]) -> Dict[str, Any]:
 # v2 → v3 (Sub-phase 9a / S9a.4): the canonical layout grew from 16
 # slots to 21. v2 payloads have stage entries for whichever orders
 # the host serialised — typically the original 16. The migration
-# pads the array out to 21 by inserting default pass-through entries
-# for any of the five new orders (11/13/15/19/20) that aren't
-# already present. Entries the v2 payload supplied are preserved
-# byte-for-byte; only the missing orders are filled. ``active`` is
-# left at its v3 default (False) so consumers must explicitly opt
-# the new stages in.
+# pads the array out by inserting default pass-through entries for
+# any of the new orders (11/15/19/20) that aren't already present.
+# Order 13 (task_registry) was one of the five new orders; it was
+# retired in 4.71.0, so the migration no longer pads it. Entries the
+# v2 payload supplied are preserved byte-for-byte; only the missing
+# orders are filled. ``active`` is left at its v3 default (False) so
+# consumers must explicitly opt the new stages in.
 _V3_NEW_ORDERS: Dict[int, str] = {
     11: "tool_review",
-    13: "task_registry",
     15: "hitl",
     19: "summarize",
     20: "persist",
@@ -348,9 +348,15 @@ _KNOWN_TOP_LEVEL_KEYS: Set[str] = {
     "stages",
     "tools",
     "host_selections",
-    "subagents",
     "memory",
 }
+
+# Top-level sections the library no longer consumes but that stored
+# manifests legitimately carry (every pre-4.71.0 ``to_dict`` wrote
+# ``"subagents": []``). They are dropped on load — silently when empty,
+# with one warning when they declared something — never reported as
+# unknown keys.
+_RETIRED_TOP_LEVEL_KEYS: Set[str] = {"subagents"}
 
 _KNOWN_STAGE_ENTRY_KEYS: Set[str] = {
     "order",
@@ -368,7 +374,7 @@ _KNOWN_STAGE_ENTRY_KEYS: Set[str] = {
 
 def _warn_unknown_keys(data: Dict[str, Any]) -> None:
     """Log one warning per load listing unknown top-level / stage-entry keys."""
-    unknown_top = sorted(set(data.keys()) - _KNOWN_TOP_LEVEL_KEYS)
+    unknown_top = sorted(set(data.keys()) - _KNOWN_TOP_LEVEL_KEYS - _RETIRED_TOP_LEVEL_KEYS)
     unknown_stage: Set[str] = set()
     for entry in data.get("stages", []) or []:
         if isinstance(entry, dict):
@@ -387,6 +393,153 @@ def _warn_unknown_keys(data: Dict[str, Any]) -> None:
         "manifest home).",
         " and ".join(parts),
     )
+
+
+# ── Retired declarations (4.71.0) ───────────────────────────────
+#
+# Sub-agent orchestration was removed: Stage 12 (``agent``), Stage 13
+# (``task_registry``) and the ``subagents`` manifest section are gone.
+# Environments stored before that still carry them, and hosts must keep
+# loading those environments — a stored manifest may never become
+# unloadable because the library dropped a feature. So retired entries
+# are *dropped with a warning*, not rejected.
+
+
+def _is_retired_stage_entry(entry: Any) -> bool:
+    """True for a stage-entry dict that declares a retired slot.
+
+    The entry's ``name`` decides (short or module name). A name-less
+    entry falls back to its ``order``; an entry that names a live stage
+    at a retired order is left alone (``validate_manifest`` reports the
+    order mismatch).
+    """
+    from xgen_agent_runtime.core.artifact import is_retired_stage
+
+    if not isinstance(entry, dict):
+        return False
+    name = str(entry.get("name") or "").strip()
+    if name:
+        return is_retired_stage(name)
+    try:
+        return is_retired_stage(int(entry.get("order", 0) or 0))
+    except (TypeError, ValueError):
+        return False
+
+
+def _split_retired_stage_entries(
+    stages: List[Any],
+) -> Tuple[List[Any], List[str]]:
+    """Split *stages* into (kept, labels of dropped retired entries)."""
+    kept: List[Any] = []
+    dropped: List[str] = []
+    for entry in stages:
+        if _is_retired_stage_entry(entry):
+            dropped.append(f"{entry.get('name') or '?'} (order {entry.get('order')})")
+            continue
+        kept.append(entry)
+    return kept, dropped
+
+
+# Stage 14's ``agent_evaluation`` evaluator only scored what the Stage 12
+# evaluator orchestrator produced; it went with Stage 12. A stored s14
+# entry that still selects it falls back to the default evaluator.
+_RETIRED_EVALUATOR = "agent_evaluation"
+_RETIRED_EVALUATOR_FALLBACK = "signal_based"
+
+
+def _migrate_retired_evaluator(stages: List[Any]) -> Tuple[List[Any], List[str]]:
+    """Rewrite s14 declarations that name the retired ``agent_evaluation``.
+
+    * ``strategies["strategy"] == "agent_evaluation"`` → ``"signal_based"``
+      (its ``strategy_configs["strategy"]`` is dropped — it was aimed at
+      the retired impl).
+    * ``strategy_configs["strategy"]["evaluators"]`` of an
+      ``evaluation_chain`` loses the ``"agent_evaluation"`` item.
+
+    Returns ``(stages, labels)``; the input list and its dicts are never
+    mutated — rewritten entries are deep copies.
+    """
+    out: List[Any] = []
+    labels: List[str] = []
+    for entry in stages:
+        if not isinstance(entry, dict) or str(entry.get("name") or "") not in (
+            "evaluate",
+            "s14_evaluate",
+        ):
+            out.append(entry)
+            continue
+        strategies = entry.get("strategies")
+        configs = entry.get("strategy_configs")
+        chain_cfg = configs.get("strategy") if isinstance(configs, dict) else None
+        evaluators = chain_cfg.get("evaluators") if isinstance(chain_cfg, dict) else None
+        selects_retired = (
+            isinstance(strategies, dict) and strategies.get("strategy") == _RETIRED_EVALUATOR
+        )
+        chains_retired = isinstance(evaluators, list) and _RETIRED_EVALUATOR in evaluators
+        if not (selects_retired or chains_retired):
+            out.append(entry)
+            continue
+        entry = copy.deepcopy(entry)
+        if selects_retired:
+            entry["strategies"]["strategy"] = _RETIRED_EVALUATOR_FALLBACK
+            if isinstance(entry.get("strategy_configs"), dict):
+                entry["strategy_configs"].pop("strategy", None)
+            labels.append(
+                f"evaluate.strategy {_RETIRED_EVALUATOR!r} → {_RETIRED_EVALUATOR_FALLBACK!r}"
+            )
+        else:
+            cfg = entry["strategy_configs"]["strategy"]
+            cfg["evaluators"] = [n for n in cfg["evaluators"] if n != _RETIRED_EVALUATOR]
+            labels.append(f"evaluate.evaluation_chain drops {_RETIRED_EVALUATOR!r}")
+        out.append(entry)
+    return out, labels
+
+
+def _warn_retired_declarations(
+    where: str,
+    dropped_stages: List[str],
+    subagent_count: int,
+    rewritten: Optional[List[str]] = None,
+) -> None:
+    parts: List[str] = []
+    if dropped_stages:
+        parts.append(f"stage entries {dropped_stages}")
+    if rewritten:
+        parts.append(f"evaluator declarations {rewritten}")
+    if subagent_count:
+        parts.append(f"{subagent_count} 'subagents' declaration(s)")
+    logger.warning(
+        "%s: dropped / rewrote retired %s — sub-agent orchestration (Stage 12 "
+        "'agent', Stage 13 'task_registry', the 'subagents' section, the "
+        "'agent_evaluation' evaluator) was removed in "
+        "xgen-agent-runtime 4.71.0. The rest of the manifest loads unchanged; "
+        "re-save this environment to persist the cleanup.",
+        where,
+        " and ".join(parts),
+    )
+
+
+def drop_retired_manifest_declarations(manifest: "EnvironmentManifest") -> "EnvironmentManifest":
+    """Return *manifest* without retired Stage 12 / 13 declarations.
+
+    ``EnvironmentManifest.from_dict`` already drops them on load; this
+    covers manifest objects built in memory (``EnvironmentManifest(
+    stages=[...])``) that never went through ``from_dict``.
+    ``Pipeline.from_manifest`` calls it before validation so a stored
+    environment that still lists ``agent`` / ``task_registry`` builds
+    with one warning instead of failing. A Stage 14 entry that selects
+    the retired ``agent_evaluation`` evaluator is rewritten to
+    ``signal_based`` (or loses it from an ``evaluation_chain``).
+
+    Returns the same object when nothing is retired; otherwise a copy —
+    the caller's manifest is never mutated.
+    """
+    kept, dropped = _split_retired_stage_entries(list(manifest.stages or []))
+    kept, rewritten = _migrate_retired_evaluator(kept)
+    if not dropped and not rewritten:
+        return manifest
+    _warn_retired_declarations("Pipeline.from_manifest", dropped, 0, rewritten)
+    return replace(manifest, stages=kept)
 
 
 def _migrate_legacy_mock_provider(stages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -481,25 +634,10 @@ class EnvironmentManifest:
     :meth:`from_dict` — callers that simply load + save a legacy file will
     upgrade it on next write.
 
-    **2.2.0 (Wave 3, audit 2026-06-09 §1-1)** adds two optional sections —
-    both default-empty, so every existing manifest loads and round-trips
-    unchanged (no version bump; pure additive defaults):
+    **2.2.0 (Wave 3, audit 2026-06-09 §1-1)** adds an optional section —
+    default-empty, so every existing manifest loads and round-trips
+    unchanged (no version bump; pure additive default):
 
-    - ``subagents``: list of sub-agent type declarations. Each entry is a
-      plain dict::
-
-          {"agent_type": str,                  # registry key (required)
-           "description": str,                  # LLM-visible summary
-           "provider": Optional[str],           # None ⇒ inherit parent
-           "model_override": Optional[str],
-           "allowed_tools": List[str],
-           "env_id": Optional[str],             # stored env (host-resolved)
-           "manifest": Optional[dict]}          # OR inline sub-manifest
-
-      ``Pipeline.from_manifest`` compiles these into
-      :class:`~xgen_agent_runtime.stages.s12_agent.subagent_type.
-      SubagentTypeDescriptor` registrations — sub-agent environments were
-      previously host-code-only ("not first-class", audit §1-1).
     - ``memory``: declarative memory-provider block mirroring
       :class:`~xgen_agent_runtime.memory.factory.MemoryProviderFactory`'s
       config-dict schema::
@@ -510,6 +648,13 @@ class EnvironmentManifest:
       ``Pipeline.from_manifest`` builds and wires the provider when the
       block is non-empty; runtime objects a host attaches later via
       ``attach_runtime(memory_*=...)`` win over this declaration.
+
+    **4.71.0** retired sub-agent orchestration: the ``subagents`` section
+    and the Stage 12 ``agent`` / Stage 13 ``task_registry`` entries are
+    no longer part of the format. :meth:`from_dict` drops them from
+    stored payloads with a warning (see
+    :func:`drop_retired_manifest_declarations`), so old environments
+    keep loading.
     """
 
     version: str = MANIFEST_VERSION
@@ -519,7 +664,6 @@ class EnvironmentManifest:
     stages: List[Dict[str, Any]] = field(default_factory=list)
     tools: ToolsSnapshot = field(default_factory=ToolsSnapshot)
     host_selections: HostSelections = field(default_factory=HostSelections)
-    subagents: List[Dict[str, Any]] = field(default_factory=list)
     memory: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -531,7 +675,6 @@ class EnvironmentManifest:
             "stages": list(self.stages),
             "tools": self.tools.to_dict(),
             "host_selections": self.host_selections.to_dict(),
-            "subagents": list(self.subagents),
             "memory": dict(self.memory),
         }
 
@@ -557,6 +700,13 @@ class EnvironmentManifest:
         ``s06.strategies['provider'] == 'mock'`` entries are migrated
         to ``'anthropic'`` on load — see
         :func:`_migrate_legacy_mock_provider` for the incident history.
+
+        Retired declarations (4.71.0): stage entries for the retired
+        Stage 12 ``agent`` / Stage 13 ``task_registry`` slots and the
+        ``subagents`` section are dropped (and a Stage 14 selection of the
+        retired ``agent_evaluation`` evaluator falls back to
+        ``signal_based``) with one warning — never an error, so
+        environments stored before the removal keep loading.
         """
         version = str(data.get("version", "1.0"))
         if version == "1.0":
@@ -566,7 +716,15 @@ class EnvironmentManifest:
             data = _migrate_v2_to_v3(data)
             version = MANIFEST_VERSION
         _warn_unknown_keys(data)
-        stages = _migrate_legacy_mock_provider(data.get("stages", []) or [])
+        stages, dropped_stages = _split_retired_stage_entries(list(data.get("stages", []) or []))
+        stages, rewritten = _migrate_retired_evaluator(stages)
+        retired_subagents = data.get("subagents") or []
+        subagent_count = len(retired_subagents) if isinstance(retired_subagents, list) else 1
+        if dropped_stages or subagent_count or rewritten:
+            _warn_retired_declarations(
+                "EnvironmentManifest.from_dict", dropped_stages, subagent_count, rewritten
+            )
+        stages = _migrate_legacy_mock_provider(stages)
         return cls(
             version=version,
             metadata=EnvironmentMetadata.from_dict(data.get("metadata", {})),
@@ -575,9 +733,8 @@ class EnvironmentManifest:
             stages=stages,
             tools=ToolsSnapshot.from_dict(data.get("tools", {})),
             host_selections=HostSelections.from_dict(data.get("host_selections")),
-            # Absent → empty (2.2.0 Wave 3 additive sections; pre-Wave-3
-            # payloads simply don't carry them).
-            subagents=list(data.get("subagents", []) or []),
+            # Absent → empty (2.2.0 Wave 3 additive section; pre-Wave-3
+            # payloads simply don't carry it).
             memory=dict(data.get("memory", {}) or {}),
         )
 
@@ -842,7 +999,7 @@ class ManifestIssue:
       - ``code``: stable machine-readable identifier (``"stage.…"`` /
         ``"strategy.…"`` / ``"chain.…"`` / ``"config.…"`` /
         ``"provider.…"`` / ``"model.…"`` / ``"version.…"`` /
-        ``"subagent.…"`` / ``"memory.…"``). Hosts may
+        ``"memory.…"``). Hosts may
         key i18n / suppression lists on it; codes are append-only
         within a major version.
       - ``stage_order`` / ``stage_name``: the offending stage entry,
@@ -946,20 +1103,9 @@ def validate_manifest(
       home and wins (``_pipeline_config_from_manifest`` reunites it
       into ``PipelineConfig.model``; the stage-config copy is inert).
     - ``version`` unknown / newer than this library supports [warning]
-    - ``subagents`` entries (2.2.0 Wave 3): non-dict entry / missing
-      ``agent_type`` [error] — the entry cannot be registered;
-      duplicate ``agent_type`` [error] — the registry raises on
-      duplicates, so the build would fail; both ``env_id`` AND an
-      inline ``manifest`` set [warning] — the inline manifest wins;
-      ``provider`` not in :class:`~xgen_agent_runtime.llm_client.registry.
-      ClientRegistry` [warning] — hosts register custom providers
-      late, so an unknown name here may resolve at build time;
-      ``provider``/``model_override``/``allowed_tools`` alongside an
-      inline ``manifest``/``env_id`` [warning] — the factory builds
-      wholly from that source and ignores them; a non-Claude
-      ``provider`` with no ``model_override`` and no sub-manifest
-      [warning] — the compiled sub-environment would carry the default
-      claude-* model id, which that backend will 404 on.
+    - stage entry for a retired slot (Stage 12 ``agent`` / Stage 13
+      ``task_registry``, removed in 4.71.0) [warning,
+      ``stage.retired``] — ``from_dict`` / ``from_manifest`` drop it.
     - ``tools.adhoc`` / ``tools.scope`` carrying data [warning] — both
       fields are serialized but engine-unconsumed (2.2.0 review B6); a
       silent green check over them would institutionalize the decoy.
@@ -994,7 +1140,6 @@ def validate_manifest(
         _introspection_kwargs,
     )
     from xgen_agent_runtime.core.stage import Strategy
-    from xgen_agent_runtime.llm_client.registry import ClientRegistry
 
     issues: List[ManifestIssue] = []
 
@@ -1030,105 +1175,6 @@ def validate_manifest(
             "does not understand will be ignored.",
             field_="version",
         )
-
-    # ── Subagents section (2.2.0 Wave 3, audit §1-1) ────────
-    seen_agent_types: Set[str] = set()
-    for idx, raw_sub in enumerate(manifest.subagents or []):
-        locator = f"subagents[{idx}]"
-        if not isinstance(raw_sub, dict):
-            add(
-                "error",
-                "subagent.malformed_entry",
-                f"{locator} must be a dict, got {type(raw_sub).__name__}; "
-                "the entry cannot be compiled into a descriptor.",
-                field_=locator,
-            )
-            continue
-        agent_type = str(raw_sub.get("agent_type") or "").strip()
-        if not agent_type:
-            add(
-                "error",
-                "subagent.missing_type",
-                f"{locator} declares no 'agent_type' — it is the registry "
-                "key and the value the LLM uses in delegate requests, so "
-                "the entry cannot be registered without one.",
-                field_=f"{locator}.agent_type",
-            )
-            continue
-        if agent_type in seen_agent_types:
-            add(
-                "error",
-                "subagent.duplicate_type",
-                f"{locator} re-declares agent_type {agent_type!r}; "
-                "SubagentTypeRegistry.register raises on duplicates, so "
-                "the build would fail. Keep one entry per agent_type.",
-                field_=f"{locator}.agent_type",
-            )
-        seen_agent_types.add(agent_type)
-        if raw_sub.get("env_id") and raw_sub.get("manifest"):
-            add(
-                "warning",
-                "subagent.dual_source",
-                f"{locator} ({agent_type!r}) sets BOTH 'env_id' and an "
-                "inline 'manifest'; the inline manifest wins and env_id is "
-                "ignored — delete one so the intent is unambiguous.",
-                field_=f"{locator}.env_id",
-            )
-        sub_provider = raw_sub.get("provider")
-        if sub_provider and str(sub_provider) not in ClientRegistry.available():
-            add(
-                "warning",
-                "subagent.unknown_provider",
-                f"{locator} ({agent_type!r}) requests provider "
-                f"{sub_provider!r}, which is not currently registered "
-                f"(known: {sorted(ClientRegistry.available())}). Hosts "
-                "register custom providers late, so this may resolve at "
-                "build time — verify the name is not a typo.",
-                field_=f"{locator}.provider",
-            )
-        has_sub_source = bool(raw_sub.get("manifest")) or bool(raw_sub.get("env_id"))
-        ignored_overrides = sorted(
-            key for key in ("provider", "model_override", "allowed_tools") if raw_sub.get(key)
-        )
-        if has_sub_source and ignored_overrides:
-            # ManifestSubagentPipelineFactory builds the sub-pipeline
-            # WHOLLY from the inline manifest / resolved environment on
-            # those paths — of the entry's fields only agent_type
-            # (registry key) and description (delegation metadata) are
-            # honoured there; provider/model_override/allowed_tools
-            # never reach the build.
-            add(
-                "warning",
-                "subagent.overrides_ignored",
-                f"{locator} ({agent_type!r}) sets {ignored_overrides} "
-                "alongside an inline 'manifest'/'env_id'; the factory "
-                "builds the sub-pipeline entirely from that source, so "
-                "these fields are ignored (only agent_type and "
-                "description are honoured on this path). Declare them "
-                "inside the sub-manifest instead.",
-                field_=locator,
-            )
-        if (
-            sub_provider
-            and str(sub_provider) not in ("anthropic", "claude_code_cli")
-            and not raw_sub.get("model_override")
-            and not has_sub_source
-        ):
-            # The no-manifest path materializes build_manifest(...,
-            # model=descriptor.model_override) — with no override that
-            # is the default ModelConfig model, a claude-* id an
-            # OpenAI-compatible backend will 404 on.
-            add(
-                "warning",
-                "subagent.model_default_mismatch",
-                f"{locator} ({agent_type!r}) requests provider "
-                f"{sub_provider!r} with no 'model_override' and no inline "
-                "manifest — the compiled sub-environment falls back to "
-                "the default ModelConfig model (a claude-* id), which "
-                f"{sub_provider!r} will reject. Declare a model_override "
-                "the provider actually serves.",
-                field_=f"{locator}.model_override",
-            )
 
     # ── Tools section — engine-unconsumed fields (2.2.0 review B6) ──
     # ``built_in`` / ``mcp_servers`` / ``external`` are all consumed at
@@ -1254,6 +1300,18 @@ def validate_manifest(
         # Inactive entries are parked intent: their problems are worth
         # surfacing but must never block a build that won't run them.
         entry_severity = "error" if entry.active else "warning"
+
+        if _is_retired_stage_entry(entry.to_dict()):
+            add(
+                "warning",
+                "stage.retired",
+                f"stage entry {entry.name!r} (order {entry.order}) declares a "
+                "slot retired in 4.71.0 (sub-agent orchestration was removed); "
+                "it is dropped on load — delete it from the manifest.",
+                order=entry.order,
+                name=entry.name,
+            )
+            continue
 
         try:
             module = _resolve_stage_module(entry.name)

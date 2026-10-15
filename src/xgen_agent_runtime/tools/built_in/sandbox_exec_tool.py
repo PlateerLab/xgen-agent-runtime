@@ -1,5 +1,5 @@
 """SandboxExecTool — a tool whose implementation is *code that runs inside the
-agent's XGeny sandbox session*.
+agent's Geny sandbox session*.
 
 This is the execution core of **Sandbox Tool Packs**: an agent authors a script
 in its isolated sandbox workspace, and this tool dispatches the tool's input into
@@ -13,7 +13,7 @@ Invocation contract (tool ↔ script), language-agnostic + shell-testable:
   * a non-zero exit code (or anything on stderr with a non-zero exit) →
     ``ToolResult(is_error=True)``.
 
-The tool carries an :class:`XgenySandbox` (``workdir`` + async ``ensure()``
+The tool carries an :class:`GenySandbox` (``workdir`` + async ``ensure()``
 + ``exec()``). It has **no host fallback** — without a sandbox it errors, by
 design: a sandboxed tool's whole point is isolation.
 
@@ -28,7 +28,7 @@ import asyncio
 import json
 from typing import Any, Dict, Optional, Sequence
 
-from xgen_agent_runtime.tools._xgeny_sandbox import sandbox_path
+from xgen_agent_runtime.tools._geny_sandbox import sandbox_path
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 
 _NO_SANDBOX = (
@@ -42,7 +42,7 @@ _STDERR_CAP = 2000
 
 
 class SandboxExecTool(Tool):
-    """A Tool that runs an authored script inside the agent's XGeny sandbox session."""
+    """A Tool that runs an authored script inside the agent's Geny sandbox session."""
 
     def __init__(
         self,

@@ -210,7 +210,10 @@ class DateTimeBlock(PromptBlock):
             label = offset or "UTC"
         else:
             label = f"{zone} ({offset})" if offset else zone
-        return f"Current date: {now.strftime('%Y-%m-%d %H:%M')} {label}".rstrip()
+        # 요일을 함께 준다 — "다음 주 화요일" 같은 요청을 모델이 달력 계산 없이 풀 수 있게.
+        # (로케일에 따라 %a 가 바뀌지 않도록 고정 약어)
+        weekday = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[now.weekday()]
+        return f"Current date: {now.strftime('%Y-%m-%d')} ({weekday}) {now.strftime('%H:%M')} {label}".rstrip()
 
 
 class PinnedFactsBlock(PromptBlock):
@@ -318,6 +321,34 @@ class ToolInstructionsBlock(PromptBlock):
                 "You have access to tools. Use them when appropriate to accomplish tasks."
             )
         return ""
+
+
+class TurnNotesBlock(PromptBlock):
+    """Host notes about this turn's situation (state.shared[TURN_NOTES]).
+
+    Volatile: the host rewrites them every turn from the current state (for
+    example which folders on the user's device this conversation is
+    connected to). In the volatile tail they never enter history, so a note
+    from an earlier turn cannot contradict the current one.
+    """
+
+    @property
+    def name(self) -> str:
+        return "turn_notes"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        from xgen_agent_runtime.core.shared_keys import SharedKeys
+
+        notes = state.shared.get(SharedKeys.TURN_NOTES)
+        if isinstance(notes, str):
+            notes = [notes]
+        if not isinstance(notes, (list, tuple)):
+            return ""
+        return "\n\n".join(str(n).strip() for n in notes if str(n or "").strip())
 
 
 class CustomBlock(PromptBlock):

@@ -89,7 +89,7 @@ class PipelineState:
     ``loop_decision``, ``completion_signal``, ``completion_detail``, and
     the private slice outcome backing ``run_status`` / ``resumable``,
     ``final_text``, ``final_output``, ``pending_tool_calls``,
-    ``tool_results``, ``delegate_requests``, ``agent_results``,
+    ``tool_results``,
     ``evaluation_score``, ``evaluation_feedback``, ``events``,
     ``turn_token_usage``, ``total_cost_usd``, ``last_api_response``.
     Earlier releases never reset these, so a long-lived state carried a
@@ -104,7 +104,7 @@ class PipelineState:
     ``session_id``, ``pipeline_id``, ``system``, ``messages``,
     ``shared``, ``metadata``, ``memory_refs``, ``thinking_history``,
     ``cache_metrics``, ``llm_client``, ``credentials``,
-    ``subagent_registry``, ``session_runtime``, ``tools``,
+    ``session_runtime``, ``tools``,
     ``tool_choice``, and every model/limit knob stomped by
     ``PipelineConfig.apply_to_state`` at each run start (``model``,
     ``max_tokens``, ``temperature``, …, ``max_iterations``,
@@ -179,6 +179,7 @@ class PipelineState:
     thinking_budget_tokens: int = 10000
     thinking_type: str = "enabled"  # "enabled" | "disabled" | "adaptive"
     thinking_display: Optional[str] = None  # "summarized" | "omitted" | None
+    thinking_level: Optional[str] = None  # llm_client.thinking 표준 값 — None 이면 모델 기본
     thinking_history: List[Dict[str, Any]] = field(default_factory=list)
 
     # ── Token & Cost tracking ──
@@ -190,6 +191,10 @@ class PipelineState:
     # turn's total_cost_usd into it at turn end (2.2.0, audit §3.3).
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     turn_token_usage: List[TokenUsage] = field(default_factory=list)
+    # 보조 호출(대화 압축처럼 메인 루프 밖에서 state.llm_client 를 직접 부르는 호출)의 사용량.
+    # (purpose, TokenUsage) 목록. turn_token_usage 와 섞지 않는다: 그쪽은 반복 한도·예산 판정이
+    # "모델 왕복" 으로 읽는다. 호스트는 turn_usage 의 ``auxiliary`` 로 받아 과금·한도에 더한다.
+    _turn_aux_usage: List[Any] = field(default_factory=list, repr=False)
     total_cost_usd: float = 0.0
     session_cost_usd: float = 0.0
     cost_budget_usd: Optional[float] = None
@@ -219,10 +224,6 @@ class PipelineState:
     # Stage 10 would. Lifetime: refreshed every run (sticky across the
     # run only); never serialized.
     tool_dispatcher: Optional[Any] = field(default=None, repr=False, compare=False)
-
-    # ── Agent orchestration ──
-    delegate_requests: List[Dict[str, Any]] = field(default_factory=list)
-    agent_results: List[Dict[str, Any]] = field(default_factory=list)
 
     # ── Evaluation ──
     evaluation_score: Optional[float] = None
@@ -301,6 +302,9 @@ class PipelineState:
     _checkpoint_id: Optional[str] = field(default=None, repr=False)
     _is_continuation_slice: bool = field(default=False, repr=False)
     _accounted_turn_cost_usd: float = field(default=0.0, repr=False)
+    # 턴 단위 사건 수(type → 횟수). events 는 연속 슬라이스마다 비워지므로 턴 전체에서
+    # 하네스 장치가 몇 번 작동했는지는 여기서 센다 (host/harness_components.py).
+    _turn_event_counts: Dict[str, int] = field(default_factory=dict, repr=False)
     _context_compactor: Optional[Any] = field(default=None, repr=False, compare=False)
     _context_memory_provider: Optional[Any] = field(default=None, repr=False, compare=False)
 
@@ -322,12 +326,6 @@ class PipelineState:
     # provider. ``None`` when the pipeline was not constructed via
     # ``from_manifest`` (manual ``register_stage`` style). ──
     credentials: Optional[Any] = field(default=None, repr=False)
-
-    # ── Sub-agent registry (set by Pipeline._init_state from the value
-    # passed to ``Pipeline.attach_runtime(subagent_registry=...)``). The
-    # Stage 12 ``subagent_type`` orchestrator consumes this; factories
-    # may also reach it for nested wiring (intentionally rare). ──
-    subagent_registry: Optional[Any] = field(default=None, repr=False)
 
     # ── Plugin-supplied session runtime container (v0.30.0) ──
     # Free-shape carrier for host-side session-scoped objects (e.g.
@@ -380,14 +378,12 @@ class PipelineState:
         self.final_text = ""
         self.final_output = None
         self.last_api_response = None
-        # In-flight tool / agent work. Stale pending_tool_calls from a
+        # In-flight tool work. Stale pending_tool_calls from a
         # turn that died mid-loop would otherwise be re-executed by
         # Stage 10 at the start of the next turn — a silent replay of
         # side-effectful tools.
         self.pending_tool_calls = []
         self.tool_results = []
-        self.delegate_requests = []
-        self.agent_results = []
         # Per-turn judgments
         self.evaluation_score = None
         self.evaluation_feedback = None
@@ -395,7 +391,9 @@ class PipelineState:
         # accumulator; the previous turn's value was already folded
         # into session_cost_usd at turn end by the pipeline.
         self.turn_token_usage = []
+        self._turn_aux_usage = []
         self.total_cost_usd = 0.0
+        self._turn_event_counts = {}
         # Event log — per-turn to bound growth (run_stream re-emits
         # everything live; PipelineResult.events carries this turn's).
         self.events = []
@@ -429,6 +427,8 @@ class PipelineState:
             "tool.repeat_error_counts",
             "tool.repeat_error_blocked",
             "tool.same_result_counts",
+            # 기계가 둘인 대화의 'sandbox 에 없음' 안내 횟수(stages/s10_tool/second_machine.py).
+            "tool.second_machine_notes",
             # 완료 직전 산출물 대조(stages/s16_loop/completion_review.py)도 턴당 한 번.
             "loop.completion_review",
             # 턴 입력 토큰 예산(stages/s16_loop/turn_budget.py) — 턴마다 새로 센다.
@@ -436,6 +436,15 @@ class PipelineState:
             # 반복 거부 종료(stages/s16_loop/repeat_stop.py) — 거부 수와 진행 기록.
             "tool.refused_calls",
             "loop.repeat_stop",
+            # 사람이 거부한 동작(stages/s10_tool/denial_guard.py) — 그 턴의 답이다. 다음 턴에
+            # 사용자가 허락하면 다시 물을 수 있어야 한다.
+            "tool.denied_calls",
+            # 압축 정책의 턴 단위 계수(core/compaction.py): 턴당 요약 상한과 "이번 요청에 이미
+            # 요약했다" 표시. 남겨 두면 재사용 상태에서 여섯 번째 요약 뒤로는 guard 회복조차 못 한다.
+            "_context_llm_compactions",
+            "_context_llm_failures",
+            "_context_summarized_at_call",
+            "_context_api_calls",
         ):
             self.shared.pop(_k, None)
 
@@ -462,8 +471,6 @@ class PipelineState:
         self.last_api_response = None
         self.pending_tool_calls = []
         self.tool_results = []
-        self.delegate_requests = []
-        self.agent_results = []
         self.evaluation_score = None
         self.evaluation_feedback = None
         self.events = []
@@ -476,6 +483,15 @@ class PipelineState:
             "executor.tool_calls_total",
         ):
             self.shared.pop(key, None)
+
+    def add_aux_usage(self, purpose: str, usage: Any) -> None:
+        """보조 호출 한 번의 사용량을 남긴다 (``turn_usage`` 의 ``auxiliary``). usage 가 없으면 무시."""
+        if isinstance(usage, TokenUsage):
+            self._turn_aux_usage.append((str(purpose or "auxiliary"), usage))
+
+    def aux_usage_entries(self) -> List[Any]:
+        """이번 턴 보조 호출의 ``(purpose, TokenUsage)`` 목록 (begin_turn 이 비운다)."""
+        return list(self._turn_aux_usage)
 
     def add_event(self, event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Append an event to the log and forward it to the pipeline.
@@ -499,6 +515,7 @@ class PipelineState:
             "data": data or {},
         }
         self.events.append(event_dict)
+        self._turn_event_counts[event_type] = self._turn_event_counts.get(event_type, 0) + 1
         self.updated_at = datetime.now(timezone.utc)
 
         # Forward into the pipeline event channel (2.2.0 unification).
