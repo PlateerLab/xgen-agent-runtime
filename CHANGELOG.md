@@ -4,6 +4,32 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.91.0] - 2026-10-15
+
+### Added: LLM 호출·도구 실행 OpenTelemetry span (`xgen_agent_runtime.observability`)
+
+dev Tempo 의 Geny 턴 trace(2026-10-15)에는 `chat` span 이 하나도 없었다. LLM 의 `POST /v1/chat/completions`
+다섯 건과 도구가 부른 HTTP·MCP 호출은 에이전트 턴이 아니라 워크플로우 span 바로 아래에 흩어져, 어느 호출이 병목인지
+trace 에서 읽을 수 없었다. 호스트는 턴 끝의 사용량 합계와 도구 사건만 받으므로 호출 구간도 부모 관계도 되살릴 수 없다.
+그래서 호출과 실행이 일어나는 런타임이 span 을 연다.
+
+- **`chat {model}`**: Stage 6 의 호출 1건(재시도 포함)마다. 현재 span 으로 열어 벤더 SDK 의 HTTP 자동 계측 span 이 그
+  아래에 달린다. 속성은 GenAI semantic conventions — `gen_ai.provider.name`·`gen_ai.request.model`·
+  `gen_ai.response.model`·`gen_ai.response.finish_reasons`·`gen_ai.usage.*`(캐시 토큰은 0 이면 생략), 그리고
+  `xgen.llm.stream`·`message_count`·`has_tools`·`output_length`·`tool_calls`. `APIError` 는 오류 코드(없으면 분류)를
+  `error.type` 으로 남긴다.
+- **`execute_tool {tool}`**: `RegistryRouter.route` 에서 도구 실행 1건마다. 모든 실행기(순차·병렬·분할·스트리밍)와
+  CLI 도구 표면이 여기를 지나므로 한 곳에서 연다. 도구가 부르는 HTTP·MCP 호출이 이 span 아래에 달린다.
+  `xgen.tool.is_error`·`xgen.tool.result_size` 를 남기고, 실패면 `error.type=tool_error`.
+- 프롬프트·응답·도구 입출력 **본문은 남기지 않는다**(길이·개수만). 취소는 오류로 표시하지 않는다.
+- span 의 부모는 호출 시점의 현재 context 다. 턴을 도는 전용 이벤트 루프의 Task 가 호출 스레드의 context 를
+  이어받으므로, 호스트가 턴 span 을 현재 context 로 두고 `run_turn`/`stream_turn` 을 부르면 그 아래에 달린다.
+- **선택 의존성**: `opentelemetry-api` 가 없거나 `XGEN_AGENT_RUNTIME_OTEL=0` 이면 전 경로가 no-op 이다. 호스트는
+  `observability.spans_enabled()` 가 참이면 자기 쪽 같은 span(사건으로 만든 도구 span)과 턴 span 의 `gen_ai.usage.*` 를
+  끈다 — 둘 다 내면 같은 호출이 두 번 나오고 토큰이 두 번 더해진다. span 조작 실패는 실행을 깨지 않는다.
+- 구성: `observability.spans`(span 수명 — 켜짐 판정·tracer·현재 span 으로 열고 닫기), `observability.attributes`
+  (속성 키 — xgen-workflow 와 같은 이름), `observability.genai`(`chat`/`execute_tool` span 과 속성 기록).
+
 ## [4.90.0] - 2026-10-13
 
 ### Added: CLI 구독 한도 신호와 한도 소진 분류

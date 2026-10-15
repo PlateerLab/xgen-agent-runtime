@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Union
 
 from xgen_agent_runtime.core.compaction import note_api_call
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
@@ -33,6 +33,7 @@ from xgen_agent_runtime.core.slot import StrategySlot
 from xgen_agent_runtime.core.stage import Stage
 from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.core.config import ModelConfig
+from xgen_agent_runtime import observability
 from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities, ClientRegistry
 from xgen_agent_runtime.stages.s06_api.interface import (
     APIProvider,
@@ -498,6 +499,16 @@ class APIStage(Stage[Any, APIResponse]):
             state.shared.pop("_api_ttft_emitted", None)
 
             async def _invoke() -> APIResponse:
+                return await self._traced_call(
+                    _call_provider,
+                    client=client,
+                    cfg=cfg,
+                    stream=use_stream,
+                    message_count=len(state.messages) + len(extra_messages or []),
+                    has_tools=bool(state.tools),
+                )
+
+            async def _call_provider() -> APIResponse:
                 if use_stream:
                     return await self._call_streaming_with_retry(
                         client, cfg, state, extra_messages=extra_messages
@@ -668,6 +679,37 @@ class APIStage(Stage[Any, APIResponse]):
             # Anything rendered from the rejected attempt is discarded before the retry.
             self._signal_stream_restart(state)
         return shrunk
+
+    @staticmethod
+    async def _traced_call(
+        call: Callable[[], Awaitable[APIResponse]],
+        *,
+        client: BaseClient,
+        cfg: ModelConfig,
+        stream: bool,
+        message_count: int,
+        has_tools: bool,
+    ) -> APIResponse:
+        """호출 1건(재시도 포함)을 ``chat {model}`` span 으로 감싼다.
+
+        현재 span 으로 열어 벤더 SDK 의 HTTP 자동 계측 span 이 이 호출 아래에 달린다. 무엇을
+        어떤 키로 남기는지는 ``xgen_agent_runtime.observability`` 가 정하고, 여기서는 오류를
+        분류 코드로 옮기는 일만 한다 — 자유 텍스트(메시지)는 남기지 않는다.
+        """
+        with observability.llm_call_span(
+            model=cfg.model,
+            provider=getattr(client, "provider", ""),
+            stream=stream,
+            message_count=message_count,
+            has_tools=has_tools,
+        ) as span:
+            try:
+                response = await call()
+            except APIError as e:
+                span.fail(e.code.value if e.code is not None else e.category.value)
+                raise
+            observability.record_llm_response(span, response)
+            return response
 
     def _build_request(self, state: PipelineState) -> APIRequest:
         """Assemble a canonical :class:`APIRequest` from state.
