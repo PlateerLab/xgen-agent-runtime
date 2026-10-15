@@ -153,6 +153,20 @@ class GuardStage(Stage[Any, Any]):
     async def execute(self, input: Any, state: PipelineState) -> Any:
         guards = self._guard_chain.items
 
+        # Proactive capacity check, AFTER Stage 3 (4.89.0). Stage 2 runs the same 80% check before
+        # Stage 3 builds the system prompt and tool list, so on the first iteration of a turn its
+        # estimate is missing both: this is the first point where the estimate is complete. The
+        # shared policy (core.compaction) keeps the two from summarizing the same request twice.
+        if self._budget_compactor is not None:
+            from xgen_agent_runtime.core.compaction import relieve_if_over
+
+            await relieve_if_over(
+                state,
+                self._budget_compactor,
+                trigger="proactive",
+                provider=self._memory_provider,
+            )
+
         # 2026-06-09 audit ("validated-but-inert" table): both knobs below
         # passed schema validation and then were never read here. An
         # operator who edited them saw a green check and no behaviour
@@ -265,12 +279,17 @@ class GuardStage(Stage[Any, Any]):
         )
         # Lazy import: keeps the guard stage import-light and avoids a
         # core→stage cycle at module load.
-        from xgen_agent_runtime.core.compaction import run_compaction
+        from xgen_agent_runtime.core.compaction import TARGET_RATIO, run_compaction, soft_level
 
         outcome = await run_compaction(
             state,
             self._budget_compactor,
             trigger="guard",
             provider=self._memory_provider,
+            # A prune that already lands here is enough; otherwise summarize down to it.
+            target_tokens=soft_level(state, TARGET_RATIO),
+            # The request cannot go out as it is: aggressive prune, no small-region skip, and a
+            # deterministic digest if the model summary fails.
+            hard=True,
         )
         return bool(outcome.get("ok"))

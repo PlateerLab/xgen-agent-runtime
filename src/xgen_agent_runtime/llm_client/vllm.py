@@ -23,6 +23,11 @@ class VLLMClient(OpenAIClient):
     """vLLM client. Reuses the OpenAI SDK against a local ``base_url``."""
 
     provider = "vllm"
+    #: ``developer`` is OpenAI's own role. vLLM's chat templates render it the
+    #: same as ``system`` (Qwen3.8 on dev: identical 27-token prompt,
+    #: 2026-10-03), but other servers on this channel refuse it — DeepSeek,
+    #: which XGEN runs through this client, answers 422 for ``developer``.
+    system_role = "system"
     capabilities = ClientCapabilities(
         supports_thinking=False,
         supports_tools=False,

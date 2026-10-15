@@ -529,17 +529,21 @@ def test_natives_fully_disallowed_when_local_tools_off(captured_cli) -> None:
     assert "CronCreate" in disallowed  # 세션 한정 스케줄 도구는 언제나 차단
 
 
-def test_build_cli_client_adds_caller_disallows(captured_cli) -> None:
-    """호출자 추가분(위임 시 CLI 자체 Task/Agent)은 차단 목록에 합쳐진다.
+def test_build_cli_client_blocks_cli_own_subagents(captured_cli) -> None:
+    """CLI 자체 하위 에이전트(Task/Agent/TaskOutput)는 네이티브 차단 목록이 막는다.
 
-    ``allow_local_tools=True`` 는 sub-worker 팩토리에만 남은 예외다 — 거기엔 아직
-    MCP 브릿지가 없어 네이티브가 유일한 도구 경로다.
+    예전엔 호출자가 ``disallow_tools_extra=("Task", "Agent")`` 로 더 막았다(위임 배선
+    시). 하위 에이전트가 플랫폼에서 없어진 4.71.0 부터 그 인자도 없다 — 카탈로그가
+    이미 그 이름들을 담고 있다. ``allow_local_tools=True`` 예외 경로에서도 세션 한정
+    스케줄 도구는 언제나 막힌다.
     """
-    runner.build_cli_client(
-        auth_mode="api_key", api_key="sk", allow_local_tools=True,
-        disallow_tools_extra=("Task", "Agent"),
-    )
+    import inspect
+
+    assert "disallow_tools_extra" not in inspect.signature(runner.build_cli_client).parameters
+    runner.build_cli_client(auth_mode="api_key", api_key="sk", allow_local_tools=False)
     disallowed = set(captured_cli.get("disallow_tools", ()))
-    assert {"Task", "Agent"} <= disallowed
+    assert {"Task", "Agent", "TaskOutput"} <= disallowed
+    runner.build_cli_client(auth_mode="api_key", api_key="sk", allow_local_tools=True)
+    disallowed = set(captured_cli.get("disallow_tools", ()))
     assert "Bash" not in disallowed  # 카탈로그는 열려 있다(예외 경로)
     assert "CronCreate" in disallowed  # 스케줄 도구는 항상 차단

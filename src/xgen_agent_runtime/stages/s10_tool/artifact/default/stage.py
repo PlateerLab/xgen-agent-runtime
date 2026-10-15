@@ -19,7 +19,7 @@ from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
 )
 from xgen_agent_runtime.stages.s10_tool.artifact.default.routers import RegistryRouter
 from xgen_agent_runtime.stages.s10_tool.streaming import StreamingToolExecutor
-from xgen_agent_runtime.stages.s10_tool import repeat_guard
+from xgen_agent_runtime.stages.s10_tool import repeat_guard, second_machine
 
 
 # Default parallel budget when a host doesn't specify one. Matches the
@@ -234,7 +234,7 @@ class ToolStage(Stage[Any, Any]):
             # so the built-in ``env`` tool reaches it through real dispatch
             # (not just direct calls). Without this it would see ``None``.
             environment=getattr(self._context, "environment", None),
-            # The agent's XGeny sandbox session. THIS is what makes Bash /
+            # The agent's Geny sandbox session. THIS is what makes Bash /
             # Read / Write / Edit / Glob / Grep run inside the agent's own
             # isolated sandbox instead of on the serving pod. The host
             # attaches it via ``attach_runtime(tool_context=...)``; if it is
@@ -244,12 +244,17 @@ class ToolStage(Stage[Any, Any]):
             # off ``self._context`` so a session attached after the stage
             # was constructed still routes correctly.
             sandbox=getattr(self._context, "sandbox", None),
-            # Structured-event sink so long-running tools (Bash streaming,
-            # delegation) can surface progress; ``None`` is the no-op default.
+            # Structured-event sink so long-running tools (Bash streaming)
+            # can surface progress; ``None`` is the no-op default.
             event_emit=getattr(self._context, "event_emit", None),
             # The LLM tool_use block this dispatch belongs to — lets nested
-            # tool calls (sub-agents, tasks) attribute their events correctly.
+            # tool calls (e.g. ToolBatch members) attribute their events correctly.
             parent_tool_use_id=getattr(self._context, "parent_tool_use_id", None),
+            # Host tool-result filter (4.71.0) — read live like the fields
+            # above so the SDK loop, the Stage 6 internal dispatcher and the
+            # CLI tool surface (all build their context HERE) apply the same
+            # post-processing. ToolBatch members reuse this context.
+            result_filter=getattr(self._context, "result_filter", None),
         )
 
         # 2.2.0 (audit §1-5 — policy via config): the permission posture
@@ -271,25 +276,29 @@ class ToolStage(Stage[Any, Any]):
 
         return ctx
 
-    async def execute(self, input: Any, state: PipelineState) -> Any:
-        if not state.pending_tool_calls:
-            return input
+    async def dispatch_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        state: PipelineState,
+        *,
+        add_event: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """도구 호출 묶음을 실행하고 ``tool_result`` 블록을 돌려준다 — **메시지는 건드리지 않는다.**
 
-        tool_calls = list(state.pending_tool_calls)
+        파이프라인 루프(:meth:`execute`)와 CLI 백엔드의 도구 표면(``host.tool_surface``)이 **같은
+        함수**로 도구를 부른다. 둘이 따로 부르면 같은 도구가 백엔드마다 다르게 굴었다 — 읽기 장부
+        (Read 전에 Write 금지)·반복 실패 차단·같은 호출 건너뛰기·사람의 거부 존중·"sandbox 에 없으면
+        기기도 보라" 안내가 CLI 에서만 빠져 있었다(2026-09-30 감사).
 
+        ``add_event`` — 이벤트를 받을 곳. 기본은 ``state.add_event``. CLI 표면은 자기 싱크를 준다:
+        CLI 는 자기 도구 사건을 스트림으로 이미 알리므로, 여기서 또 내면 화면에 두 번 뜬다.
+        """
+        emit = add_event if add_event is not None else state.add_event
         binding = self.tool_binding
         for tc in tool_calls:
             tool_name = tc.get("tool_name", "")
             if not binding.is_allowed(tool_name):
                 raise ToolAccessDenied(tool_name, self.order)
-
-        state.add_event(
-            "tool.execute_start",
-            {
-                "count": len(tool_calls),
-                "tools": [tc["tool_name"] for tc in tool_calls],
-            },
-        )
 
         ctx = self.build_dispatch_context(state)
 
@@ -315,8 +324,14 @@ class ToolStage(Stage[Any, Any]):
         precomputed: Dict[str, Dict[str, Any]] = {}
         runnable = []
         skipped_same: List[str] = []
+        from xgen_agent_runtime.stages.s10_tool import denial_guard
+
         for tc in tool_calls:
-            blocked = repeat_guard.blocked_result(tc, state.shared)
+            # 사람이 이번 턴에 거부한 동작은 다시 묻지 않는다 — 확인 창이 거듭 뜨면 결국 잘못
+            # 눌린다(denial_guard). 반복 가드보다 먼저 본다: 거부는 첫 번째가 곧 답이다.
+            blocked = denial_guard.refused_result(tc, state.shared)
+            if blocked is None:
+                blocked = repeat_guard.blocked_result(tc, state.shared)
             if blocked is None:
                 blocked = repeat_guard.skip_identical(tc, state.shared)
                 if blocked is not None:
@@ -326,7 +341,7 @@ class ToolStage(Stage[Any, Any]):
             else:
                 runnable.append(tc)
         executed = (
-            await executor_strategy.execute_all(runnable, router, ctx, on_event=state.add_event)
+            await executor_strategy.execute_all(runnable, router, ctx, on_event=emit)
             if runnable
             else []
         )
@@ -342,7 +357,7 @@ class ToolStage(Stage[Any, Any]):
                 for tc in tool_calls
             ]
             results = [r for r in results if r is not None]
-            state.add_event(
+            emit(
                 "tool.repeat_blocked",
                 {
                     "tools": sorted(
@@ -356,21 +371,55 @@ class ToolStage(Stage[Any, Any]):
             )
         else:
             results = executed
+        newly_denied = denial_guard.observe(tool_calls, results, state.shared)
+        if newly_denied:
+            emit("tool.user_denied", {"tools": sorted(set(newly_denied))})
         flagged = repeat_guard.observe(tool_calls, results, state.shared)
         if flagged:
-            state.add_event(
+            emit(
                 "tool.repeat_failure",
                 {"tools": [{"name": n, "count": c} for n, c in flagged]},
             )
         same = repeat_guard.observe_same(tool_calls, results, state.shared)
         if same or skipped_same:
-            state.add_event(
+            emit(
                 "tool.same_result",
                 {
                     "tools": [{"name": n, "count": c} for n, c in same],
                     "skipped": sorted(set(skipped_same)),
                 },
             )
+
+        # 사용자 기기 폴더가 연결된 대화에서, sandbox 도구가 "없음" 을 돌려주거나 기기 경로를 받으면
+        # 기기 도구를 가리키는 안내를 붙인다(second_machine).
+        noted = second_machine.annotate(
+            tool_calls, results, self._registry.list_names(), state.shared
+        )
+        if noted:
+            emit("tool.not_in_sandbox", {"count": noted})
+        return results
+
+    async def execute(self, input: Any, state: PipelineState) -> Any:
+        if not state.pending_tool_calls:
+            return input
+
+        tool_calls = list(state.pending_tool_calls)
+
+        binding = self.tool_binding
+        for tc in tool_calls:
+            tool_name = tc.get("tool_name", "")
+            if not binding.is_allowed(tool_name):
+                raise ToolAccessDenied(tool_name, self.order)
+
+        state.add_event(
+            "tool.execute_start",
+            {
+                "count": len(tool_calls),
+                "tools": [tc["tool_name"] for tc in tool_calls],
+            },
+        )
+
+        results = await self.dispatch_calls(tool_calls, state)
 
         state.add_message("user", results)
         state.tool_results = results

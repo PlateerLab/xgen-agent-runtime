@@ -22,18 +22,23 @@ def test_패밀리는_문_하나만_내놓는다():
     # 문은 보이고, 그 뒤의 식구들은 보이지 않는다.
     for gate, member in (
         ("JobGuide", "JobSchedule"),
-        ("DelegationGuide", "SubAgentSpawn"),
-        ("DelegationGuide", "TaskCreate"),
         ("BrowserGuide", "BrowserNavigate"),
-        ("ArtifactGuide", "ArtifactSave"),
+        ("AppGuide", "AppCreate"),
     ):
         assert is_turn_one(gate), gate
         assert not is_turn_one(member), member
 
 
-def test_문서편집은_검색해야_나온다():
-    # 사용자 지시: "Documents 편집은 검색해야 나오는거고".
-    for name in ("DocGuide", "DocBuild", "DocEdit", "DocGenerate", "DocRender"):
+def test_위임_도구는_첫_화면에_없다():
+    # 하위 에이전트 위임은 제거됐다(4.70.0) — 이름이 다시 생겨도 첫 화면에 서지 않는다.
+    for name in ("DelegationGuide", "DelegateTask", "SubAgentSpawn", "TaskCreate", "Agent"):
+        assert not is_turn_one(name), name
+
+
+def test_문서_읽기는_검색해야_나온다():
+    # 문서 편집 도구는 없어졌다(4.74.0). 남은 ParseDocument 도 첫 화면에 서지 않는다 —
+    # 문서를 Read 로 열면 그 결과가 ParseDocument 를 가리킨다(read_tool._binary_note).
+    for name in ("ParseDocument", "DocGuide", "DocBuild", "DocEdit", "DocRender"):
         assert not is_turn_one(name), name
 
 
@@ -42,10 +47,7 @@ def test_문서편집은_검색해야_나온다():
 #: 이 표가 있는 이유: 문을 만들면서 입구에 세우는 것을 잊으면 아무 신호도 나지
 #: 않는다. 도구는 등록돼 있고 부르면 돌기 때문에 테스트도 로그도 조용하다.
 #: 에이전트만 그 능력이 없는 것처럼 행동한다 — 그게 SSH 에게 실제로 일어난 일이다.
-_DOORS_THAT_STAY_HIDDEN = {
-    # 사용자 지시. 위 테스트가 같은 사실을 못박는다.
-    "DocGuide": "Documents 편집은 검색해야 나온다 (사용자 지시)",
-}
+_DOORS_THAT_STAY_HIDDEN: dict = {}
 
 
 def test_선언된_문은_전부_입구에_선다():
@@ -125,8 +127,8 @@ def test_모르는_이름은_첫_턴이_아니다():
 
 
 def test_flat_은_전부_선노출한다():
-    assert registers_core("DocBuild", flat=True)
-    assert not registers_core("DocBuild", flat=False)
+    assert registers_core("ParseDocument", flat=True)
+    assert not registers_core("ParseDocument", flat=False)
     assert registers_core("Bash", flat=False)
 
 
@@ -219,9 +221,9 @@ def test_사용자_PC_는_문_뒤에_있다():
         assert not is_turn_one(f"mcp_local_{member}"), member
 
 
-def test_아티팩트는_문이_첫_턴에_있다():
-    """만든 것을 대화에 찍는 대신 화면으로 내놓는 길 — 문이 안 보이면 그런 길이
+def test_앱은_문이_첫_턴에_있다():
+    """만든 것을 대화에 찍는 대신 앱으로 내놓는 길 — 문이 안 보이면 그런 길이
     있다는 것 자체를 모른다. 멤버는 문 뒤다."""
-    assert is_turn_one("ArtifactGuide")
-    for member in ("ArtifactSave", "ArtifactList", "ArtifactDelete"):
+    assert is_turn_one("AppGuide")
+    for member in ("AppCreate", "AppPublish", "AppStatus", "AppList", "AppDelete"):
         assert not is_turn_one(member), member

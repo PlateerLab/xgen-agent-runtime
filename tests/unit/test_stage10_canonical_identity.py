@@ -104,3 +104,33 @@ async def test_sandbox_environment_enrichment_keeps_identity() -> None:
     assert tool.contexts[0].env_vars == {"INJECTED": "1"}
     assert "canonical_identity" not in tool.contexts[0].env_vars
     assert ToolContext().canonical_identity is None
+
+
+@pytest.mark.asyncio
+async def test_upstream_result_filter_keeps_the_verified_identity_private() -> None:
+    identity = _identity()
+    tool = _CaptureTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    observed = []
+
+    async def filter_result(actual_tool, result):
+        observed.append(actual_tool)
+        assert result.content == "ok"
+        return ToolResult(content="filtered")
+
+    stage = ToolStage(
+        registry=registry,
+        context=ToolContext(canonical_identity=identity, result_filter=filter_result),
+    )
+    state = PipelineState(session_id="execution-filter")
+    results = await stage.dispatch_calls(
+        [{"tool_use_id": "filter-1", "tool_name": tool.name, "tool_input": {}}], state
+    )
+
+    assert observed == [tool]
+    assert tool.contexts[0].canonical_identity is identity
+    assert tool.contexts[0].result_filter is filter_result
+    assert "filtered" in str(results)
+    assert identity.agent_session_id.hex not in str(results)
+    assert "canonical_identity" not in repr(tool.contexts[0])

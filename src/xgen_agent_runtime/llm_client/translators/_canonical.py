@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import base64
 import json
-import io
-import warnings
 import os
 from pathlib import Path
-from PIL import Image, ImageOps
 
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+from xgen_agent_runtime.core.file_blocks import file_block_pointer
+from xgen_agent_runtime.core.images import bound_image
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -193,29 +193,11 @@ def materialize_local_image_block(block: Dict[str, Any]) -> Dict[str, Any]:
         max_bytes = 20 * 1024 * 1024
     if path.stat().st_size > max_bytes:
         raise ValueError(f"image exceeds {max_bytes // (1024 * 1024)} MiB: {path.name}")
-    data = path.read_bytes()
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as original:
-                mime = Image.MIME.get(original.format or "", "")
-                if mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
-                    raise ValueError("unsupported image format")
-                original.load()
-                # Keep the original in the workspace. Only the provider copy is
-                # bounded; Base64 adds another third to the request size.
-                if max(original.size) > 2048 or len(data) > 4 * 1024 * 1024:
-                    resized = ImageOps.exif_transpose(original).convert("RGB")
-                    resized.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                    output = io.BytesIO()
-                    resized.save(output, format="JPEG", quality=85, optimize=True)
-                    data, mime = output.getvalue(), "image/jpeg"
-    except (
-        OSError,
-        ValueError,
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-    ) as exc:
+        # Keep the original in the workspace. Only the provider copy is
+        # bounded; Base64 adds another third to the request size.
+        data, mime = bound_image(path.read_bytes())
+    except (OSError, ValueError) as exc:
         raise ValueError(f"unsupported or invalid image: {path.name}") from exc
     return {
         **block,
@@ -287,26 +269,10 @@ def _image_block_to_google_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 def _file_block_to_text_fallback(block: Dict[str, Any]) -> str:
-    """Tell the agent which current-turn file it can read, **by absolute path**.
-
-    ``path`` is the session absolute path when the host knew the working folder
-    (:mod:`xgen_agent_runtime.host.attachment_paths`); only then does the agent
-    need no base of its own. Without it we fall back to the workspace-relative
-    form and say what it is relative to — never a bare path with no stated base,
-    which is what made the model invent a wrong root (2026-09-21).
-    """
-    name = block.get("name") or "unnamed"
-    mime = block.get("mime_type") or "application/octet-stream"
-    absolute = block.get("path")
-    if absolute and str(absolute).startswith("/"):
-        return f"[Current-turn attachment: {name} ({mime}). Read it at: {absolute}]"
-    relative = block.get("workspace_path") or absolute
-    if relative:
-        return (
-            f"[Current-turn attachment: {name} ({mime}). Read it at: {relative} "
-            "(relative to your working folder)]"
-        )
-    return f"[Current-turn attachment: {name} ({mime})]"
+    """Tell the agent where an attached file is, **by path** — see
+    :func:`xgen_agent_runtime.core.file_blocks.file_block_pointer` (one wording for every
+    backend, the short-term window and the conversation archive)."""
+    return file_block_pointer(block)
 
 
 def _user_content_to_openai_parts(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -371,10 +337,16 @@ def _content_has_media(content: Any) -> bool:
 
 _ANTHROPIC_INTERNAL_KEYS = ("_meta",)
 
+#: 다른 provider 가 남긴 생각 블록 — Anthropic 은 모르는 종류라 400 이다. 대화 중에 모델을 바꾸면
+#: 같은 기록이 다른 provider 로 간다(OpenAI Responses 의 ``reasoning`` 블록, ``translators/_responses``).
+_FOREIGN_BLOCK_TYPES = ("reasoning",)
+
 
 def _sanitize_anthropic_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Strip executor-internal keys and lower unsupported block types."""
     btype = block.get("type")
+    if btype in _FOREIGN_BLOCK_TYPES:
+        return None
     if btype == "file":
         # TODO: Anthropic ``document`` block 으로 매핑 (PDF/text 직접 지원).
         # 지금은 metadata 텍스트로 fallback.
@@ -410,6 +382,10 @@ def canonical_messages_to_anthropic(
                 cleaned = _sanitize_anthropic_block(block)
                 if cleaned is not None:
                     new_blocks.append(cleaned)
+            if not new_blocks:
+                # 빈 content 는 Anthropic 이 거절한다 — 다른 provider 의 생각만 있던 메시지, 또는
+                # 저장하며 그 생각을 뺀 뒤 복원된 메시지(`content: []`).
+                continue
             sanitized.append({**msg, "content": new_blocks})
         else:
             sanitized.append(msg)
@@ -492,21 +468,24 @@ def split_tool_uses(
 def canonical_messages_to_openai(
     messages: List[Dict[str, Any]],
     system: Any = "",
+    system_role: str = "developer",
 ) -> List[Dict[str, Any]]:
     """Canonical messages + system → OpenAI messages.
 
     Key transformations:
-      - system → prepend as {"role": "developer"} message
+      - system → prepend as a ``system_role`` message — ``developer`` for
+        OpenAI itself, ``system`` for OpenAI-compatible servers (the role
+        is OpenAI's own; DeepSeek rejects it with 422)
       - assistant tool_use blocks → message.tool_calls array
       - user tool_result blocks → separate {"role": "tool"} messages
     """
     result: List[Dict[str, Any]] = []
 
-    # System prompt → developer role message
+    # System prompt → one leading message in the caller's role
     if system:
         sys_text = blocks_to_text(system)
         if sys_text:
-            result.append({"role": "developer", "content": sys_text})
+            result.append({"role": system_role, "content": sys_text})
 
     for msg in messages:
         role = msg.get("role", "user")
@@ -554,6 +533,9 @@ def canonical_messages_to_openai(
                 text = blocks_to_text(text_blocks)
                 if text:
                     msg_dict["content"] = text
+                if not text and not tool_uses:
+                    # 생각만 남은 메시지(다른 표면의 reasoning 블록) — 빈 assistant 는 보내지 않는다.
+                    continue
                 if tool_uses:
                     msg_dict["tool_calls"] = [
                         {
@@ -588,8 +570,14 @@ def canonical_messages_to_google(
       - tool_use blocks → functionCall parts
       - tool_result blocks → functionResponse parts
       - text blocks → text parts
+
+    Gemini names a ``functionResponse`` by the function, not by the call id. A canonical
+    ``tool_result`` carries only ``tool_use_id`` (the agent loop and every host build it
+    that way), so the name comes from the earlier ``tool_use`` with the same id — without
+    it every tool result went out with an empty name.
     """
     contents: List[Dict[str, Any]] = []
+    call_names: Dict[str, str] = {}
 
     for msg in messages:
         role = msg.get("role", "user")
@@ -621,6 +609,8 @@ def canonical_messages_to_google(
                     # TODO: PDF 등 Gemini fileData 직접 매핑. 지금은 text fallback.
                     parts.append({"text": _file_block_to_text_fallback(block)})
                 elif btype == "tool_use":
+                    if block.get("id") and block.get("name"):
+                        call_names[str(block["id"])] = str(block["name"])
                     parts.append(
                         {
                             "functionCall": {
@@ -635,7 +625,8 @@ def canonical_messages_to_google(
                     parts.append(
                         {
                             "functionResponse": {
-                                "name": block.get("name", ""),
+                                "name": block.get("name")
+                                or call_names.get(str(block.get("tool_use_id", "")), ""),
                                 "id": block.get("tool_use_id", ""),
                                 "response": {"result": tr_text},
                             }

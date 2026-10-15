@@ -32,7 +32,7 @@ from xgen_agent_runtime import (
     introspect_all,
     introspect_stage,
 )
-from xgen_agent_runtime.core.artifact import STAGE_MODULES
+from xgen_agent_runtime.core.artifact import RETIRED_STAGE_ORDERS, STAGE_MODULES
 
 
 # ── introspect_stage on every default artifact ─────────────────
@@ -41,7 +41,6 @@ from xgen_agent_runtime.core.artifact import STAGE_MODULES
 _SCAFFOLD_MODULES = frozenset(
     {
         "s11_tool_review",
-        "s13_task_registry",
         "s15_hitl",
         "s19_summarize",
         "s20_persist",
@@ -226,10 +225,11 @@ def test_introspect_all_falls_back_to_default_on_strategy_only():
 
 
 def test_introspect_all_returns_21_in_order():
-    """Sub-phase 9a (S9a.3) widened the layout from 16 to 21 stages."""
+    """Sub-phase 9a (S9a.3) widened the layout from 16 to 21 stages; 4.71.0
+    retired 12 / 13 — every live order, in order, none renumbered."""
     results = introspect_all()
-    assert len(results) == 21
-    assert [r.order for r in results] == list(range(1, 22))
+    assert len(results) == 21 - len(RETIRED_STAGE_ORDERS)
+    assert [r.order for r in results] == [o for o in range(1, 22) if o not in RETIRED_STAGE_ORDERS]
     assert all(r.artifact == "default" for r in results)
 
 

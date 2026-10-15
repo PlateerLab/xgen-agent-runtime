@@ -74,7 +74,7 @@ class _LocalSandbox:
     async def exec(self, argv, *, cwd=None, stdin=None, env=None, timeout_s=120.0, **_kw):
         import subprocess
 
-        from xgen_agent_runtime.tools._xgeny_sandbox import ExecResult
+        from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 
         proc = subprocess.run(  # noqa: S603
             list(argv), cwd=cwd or self.workdir, input=stdin or b"",

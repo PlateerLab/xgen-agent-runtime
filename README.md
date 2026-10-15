@@ -70,12 +70,16 @@ Phase A — Setup (once per turn)
 
 Phase B — Generate + Dispatch (loop)
   6: API  →  7: Token  →  8: Think  →  9: Parse
-  → 10: Tool  →  11: ToolReview  →  12: Agent  →  13: TaskRegistry
+  → 10: Tool  →  11: ToolReview
   → 14: Evaluate  →  15: HITL  →  16: Loop
 
 Phase C — Surface (once)
   17: Emit  →  18: Memory  →  19: Summarize  →  20: Persist  →  21: Yield
 ```
+
+Orders 12 (Agent) and 13 (TaskRegistry) were retired in 4.71.0 together with
+sub-agent orchestration. The numbering is kept (no renumbering); stored
+manifests that still list them load with those entries dropped.
 
 The full stage list with strategy options lives in [`docs/architecture.md`](docs/architecture.md).
 
@@ -427,13 +431,12 @@ xgen-agent-runtime/
 │   ├── __init__.py          # Public API surface
 │   ├── py.typed             # PEP 561 type marker
 │   ├── core/                # Pipeline engine, errors, manifest, mutation, snapshot
-│   ├── stages/              # 21 pipeline stages (s01–s21)
+│   ├── stages/              # pipeline stages s01–s21 (12/13 retired)
 │   ├── llm_client/          # 5 providers + ClientRegistry + CredentialBundle + CLI runtime
 │   ├── tools/               # Tool ABC, registry, router, MCP integration
 │   ├── hooks/               # PRE/POST tool-use lifecycle hooks
 │   ├── memory/              # Memory v2 retrieval, vault map, vector store
 │   ├── skills/              # SkillProvider + skill loading
-│   ├── subagents/           # Stage 12 sub-agent orchestration
 │   ├── permission/          # Per-tool ACL evaluated by RegistryRouter
 │   ├── channels/            # Output channel adapters (text, callback, TTS, …)
 │   ├── cron/                # Scheduled trigger support

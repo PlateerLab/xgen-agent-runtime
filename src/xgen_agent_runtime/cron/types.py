@@ -20,8 +20,8 @@ class CronJobStatus(str, enum.Enum):
 @dataclass
 class CronJob:
     """A single scheduled job. ``target_kind`` matches a
-    BackgroundTaskExecutor key (e.g. ``"local_bash"``,
-    ``"local_agent"``); ``payload`` carries the arguments that
+    BackgroundTaskExecutor key (e.g. ``"local_bash"`` or a host-registered
+    kind); ``payload`` carries the arguments that
     will land on the synthesised :class:`TaskRecord`.
     """
 

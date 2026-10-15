@@ -44,12 +44,22 @@ def _state(
     s.token_usage = TokenUsage(input_tokens=total_tokens, output_tokens=0)
     s.context_window_budget = context_window_budget
     # 2.51.0 (audit R2): TokenBudget/loop controllers now measure the
-    # ACTUAL next-request size via estimate_prompt_tokens (~4 chars/token)
-    # rather than cumulative token_usage. Materialize a user message of
-    # the requested size so the estimator reports ``total_tokens``.
+    # ACTUAL next-request size via estimate_prompt_tokens rather than
+    # cumulative token_usage. Materialize a user message the estimator
+    # reports as about ``total_tokens`` (within a couple of percent).
     if total_tokens > 0:
-        s.messages = [{"role": "user", "content": "x" * (total_tokens * 4)}]
+        s.messages = [{"role": "user", "content": _text_of_about(total_tokens)}]
     return s
+
+
+def _text_of_about(tokens: int) -> str:
+    from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
+
+    unit = "budget word "
+    probe = PipelineState()
+    probe.messages = [{"role": "user", "content": unit * 1000}]
+    per_unit = estimate_prompt_tokens(probe) / 1000
+    return unit * max(1, round(tokens / per_unit))
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -92,7 +102,7 @@ class TestTokenBudget:
     def test_uses_state_window_by_default(self):
         b = TokenBudget(threshold_ratio=0.85)
         assert b.is_exceeded(_state(total_tokens=100_000, context_window_budget=200_000)) is False
-        assert b.is_exceeded(_state(total_tokens=170_001, context_window_budget=200_000)) is True
+        assert b.is_exceeded(_state(total_tokens=180_000, context_window_budget=200_000)) is True
 
     def test_explicit_max_overrides_state(self):
         b = TokenBudget(max_tokens=1000, threshold_ratio=0.5)

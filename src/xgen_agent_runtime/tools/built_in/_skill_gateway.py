@@ -3,17 +3,17 @@
 ## The contract
 
 Our tool surface is hierarchical: basic verbs are visible from turn 1, and
-everything else sits behind **one door per family** (``DelegationGuide``,
-``JobGuide``, ``BrowserGuide``, ``DocGuide``). ``tool_exposure`` states it
-plainly — "DelegateTask/SubAgent*/Task* 는 이 문 뒤에".
+everything else sits behind **one door per family** (``JobGuide``,
+``AppGuide``, ``SelfExtendGuide``). ``tool_exposure`` states it
+plainly — "JobSchedule/JobList/JobCancel 은 이 문 뒤에".
 
 Behind the door only works if opening it *lets you in*. It did not. A guide
 returned its map and nothing else, so the family stayed deferred and the only
 thing that could actually expose a member was ``ToolSearch`` — which no guide
 ever mentions. The result was a surface that contradicted its own instructions:
 
-    DelegationGuide  ->  "1. DelegateTask(task)  ONE VERB, the default."
-    DelegateTask     ->  Error: No such tool available
+    JobGuide     ->  "JobSchedule(tool=..., cron_expr=...) — schedule it."
+    JobSchedule  ->  Error: No such tool available
 
 The model did exactly what it was told and hit a wall. Worse, the failure is
 client-side on CLI backends (Claude Code rejects unknown names locally), so no
@@ -41,9 +41,19 @@ logger = logging.getLogger(__name__)
 
 #: Appended to a guide's answer when it just opened its family. The model reads
 #: this in the same result that told it which verb to use, so the two halves of
-#: the instruction ("use DelegateTask" / "DelegateTask is callable now") arrive
+#: the instruction ("use JobSchedule" / "JobSchedule is callable now") arrive
 #: together instead of one turn apart.
-_OPENED_TEMPLATE = "\n\nNow callable: {names}."
+#:
+#: The second sentence is for CLI clients. The bridge tells the CLI that its tool
+#: list changed, but the list does not always refresh before the next call
+#: (measured 2026-09-24 against the Geny turn-1 surface: Claude Code 2.1.236
+#: rejected the just-opened tool with "No such tool available" in 70 of 158 runs,
+#: and Codex 0.156.1 never refreshed within the turn). ToolBatch is on the first
+#: surface and runs any registered tool by name, so the room is reachable either way.
+_OPENED_TEMPLATE = (
+    "\n\nNow callable: {names}. If one is not in your tool list yet, call it through "
+    'ToolBatch(tool="<name>", inputs=[<its input>]).'
+)
 
 
 def open_family(context: Any, names: Iterable[str]) -> List[str]:

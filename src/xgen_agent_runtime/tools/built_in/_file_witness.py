@@ -10,7 +10,7 @@
 고쳐도 마찰이 없다.
 
 **경로만 적는다.** 읽은 뒤 밖에서 바뀐 파일까지 잡으려면 쓸 때마다 현재 내용을 다시
-확인해야 하는데, 파일 도구는 로컬과 XGeny 샌드박스 두 경로로 갈리고 샌드박스 쪽은
+확인해야 하는데, 파일 도구는 로컬과 Geny 샌드박스 두 경로로 갈리고 샌드박스 쪽은
 그 확인이 매번 원격 왕복이다. 막으려는 것은 "내용을 모른 채 지우는 일" 이고 그건
 경로만으로 잡힌다 — 두 경로에 **같은 규칙**이 걸리는 쪽을 택했다.
 """
@@ -19,8 +19,20 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from xgen_agent_runtime.core.shared_keys import SharedKeys
+
 #: state.shared 키 — 이 세션에서 내용을 확인한 파일 경로들.
-WITNESSED_KEY = "file.witnessed"
+#: ⚠ ``executor.`` 접두어가 **필수**다. Stage 10 은 허용된 이름공간(executor.·memory.·geny.·plugin.)의
+#: 키만 state.shared 에 반영하고 나머지는 경고만 남기고 버린다(stages/s10_tool/state_mutation.py).
+#: 4.51.0~4.59.0 은 ``file.witnessed`` 여서 장부가 **한 번도 기록되지 않았다** — 이미 있는 파일의
+#: Write 는 먼저 읽었든 자기가 방금 썼든 전부 거절됐다(2026-09-24 로컬 벤치 qwen: 실행당 11~19회,
+#: 과제의 약 10%. Read 뒤 Write 도 거절돼 모델은 Bash 로 우회했다). 단위 테스트가 장부를 손으로
+#: 반영해서 못 잡았다 — 이제 테스트는 실제 반영 함수를 거친다.
+WITNESSED_KEY = SharedKeys.FILE_WITNESSED
+# 4.51.0 shipped this unnamespaced spelling. Read it during the transition so
+# an in-flight session does not forget what it inspected, but never write it
+# again: Stage 10 correctly rejects unknown namespaces.
+_LEGACY_WITNESSED_KEY = "file.witnessed"
 
 #: 장부 상한. 넘으면 오래된 것부터 잊는다 — 잊은 파일은 "안 읽은 것" 이 되어
 #: 한 번 더 읽으면 그만이다(데이터를 잃지는 않는다).
@@ -32,6 +44,8 @@ def _book(state_view: Any) -> List[str]:
     if not isinstance(shared, dict):
         return []
     seen = shared.get(WITNESSED_KEY)
+    if not isinstance(seen, list):
+        seen = shared.get(_LEGACY_WITNESSED_KEY)
     return list(seen) if isinstance(seen, list) else []
 
 

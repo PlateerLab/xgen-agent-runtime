@@ -11,7 +11,7 @@ from xgen_agent_runtime.host.forged_tools import (
     _missing_script_hint,
     _script_candidates,
 )
-from xgen_agent_runtime.tools._xgeny_sandbox import ExecResult
+from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
 
 

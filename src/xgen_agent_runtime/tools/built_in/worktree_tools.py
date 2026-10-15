@@ -1,6 +1,6 @@
 """Git worktree tools — EnterWorktree / ExitWorktree (PR-A.3.4).
 
-Lets sub-agents (or the main agent) work in an isolated branch
+Lets the agent work in an isolated branch
 without changing the host process's cwd. Worktree state is tracked
 on ``ToolContext.extras["worktree_stack"]`` (a list of dicts) so
 EnterWorktree push and ExitWorktree pop are paired.
@@ -158,7 +158,7 @@ class EnterWorktreeTool(Tool):
             return _err("GIT_WORKTREE_FAILED", stderr.strip()[:500] or stdout.strip()[:500])
         _stack(context).append({"path": path, "branch": branch})
         # PR-D.4.2 — also push onto the unified WorkspaceStack so
-        # workspace-aware downstream tools (LSP / sub-agents) see the
+        # workspace-aware downstream tools (e.g. LSP) see the
         # new branch + cwd without consulting the legacy dict stack.
         _push_workspace(context, cwd=path, branch=branch)
         return ToolResult(

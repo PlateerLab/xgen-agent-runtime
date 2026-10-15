@@ -12,7 +12,7 @@ def test_detach_verbs_and_trailing_ampersand_are_caught():
         "disown %1",
     ):
         reason = _detached_process_reason(cmd)
-        assert reason and "ArtifactCreate" in reason, cmd
+        assert reason and "AppCreate" in reason, cmd
 
 
 def test_ordinary_commands_pass():

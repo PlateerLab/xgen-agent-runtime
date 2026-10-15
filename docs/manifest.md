@@ -121,7 +121,6 @@ The single-source-of-truth rule lives in `core/pipeline.py:_validate_manifest_pr
 | `credentials` | A `CredentialBundle` — see [providers.md](providers.md). |
 | `api_key` | Legacy fallback; auto-wrapped into a `CredentialBundle` if `credentials` not provided. |
 | `adhoc_providers` | A `Sequence[AdhocToolProvider]` resolving `tools.external` names. Geny passes a `GenyToolProvider` here. |
-| `subagent_registry` | A `SubagentRegistry` (Stage 12 sub-agent orchestration). Optional. |
 | `strict` | When `True` (default), strict-load is applied. |
 
 ## Mutating a live manifest

@@ -22,7 +22,7 @@ Phase A — Setup (once per turn)
 
 Phase B — Generate + Dispatch (loop)
   6: API  →  7: Token  →  8: Think  →  9: Parse
-  → 10: Tool  →  11: ToolReview  →  12: Agent  →  13: TaskRegistry
+  → 10: Tool  →  11: ToolReview
   → 14: Evaluate  →  15: HITL  →  16: Loop
 
 Phase C — Surface (once)
@@ -46,9 +46,9 @@ A turn enters at Stage 1, traverses Phase A once, loops through Phase B until St
 | 9 | **Parse** | Parse response, detect completion signals | `default`, `structured_output`, `signal_detector` |
 | 10 | **Tool** | Dispatch `tool_use` blocks | `sequential`, `parallel`, `partition`, `streaming` |
 | 11 | **ToolReview** | Inspect tool results before re-prompt | `passthrough`, `flagging`, `escalate_to_reviewer` |
-| 12 | **Agent** | Sub-agent orchestration | `single_agent`, `delegate`, `subagent_type_orchestrator` |
-| 13 | **TaskRegistry** | Register / track long-running tasks | `passthrough`, `local`, `external_queue` |
-| 14 | **Evaluate** | Judge quality + completion | `signal_based`, `criteria_based`, `agent_eval`, `adaptive` |
+| 12 | ~~Agent~~ | *Retired in 4.71.0* (sub-agent orchestration removed) | — |
+| 13 | ~~TaskRegistry~~ | *Retired in 4.71.0* (see below) | — |
+| 14 | **Evaluate** | Judge quality + completion | `signal_based`, `criteria_based`, `binary_classify`, `evaluation_chain` |
 | 15 | **HITL** | Human-in-the-loop pause / approval | `passthrough`, `gated`, `timeout_based` |
 | 16 | **Loop** | Continue or finish? | `standard`, `single_turn`, `budget_aware` |
 | 17 | **Emit** | Surface output | `text`, `callback`, `streaming`, `vtuber`, `tts` |
@@ -56,6 +56,17 @@ A turn enters at Stage 1, traverses Phase A once, loops through Phase B until St
 | 19 | **Summarize** | Roll up long histories | `passthrough`, `truncate`, `llm_summary` |
 | 20 | **Persist** | Save session snapshot | `passthrough`, `file`, `sqlite` |
 | 21 | **Yield** | Format the final result | `default`, `structured`, `streaming` |
+
+**Retired slots (4.71.0).** Orders 12 and 13 stay reserved — stages 14–21 keep
+their numbers so stored manifests, snapshots and UIs line up. The constant
+`xgen_agent_runtime.RETIRED_STAGE_ORDERS` (`{12: "agent", 13: "task_registry"}`)
+names them; `Pipeline.describe()` still renders all 21 rows (the retired ones as
+`unregistered`), and the run loop skips them like any unregistered slot. A stored
+manifest that still declares `agent` / `task_registry` entries or a `subagents`
+section loads with those parts dropped and one warning. The background-task
+registry that Stage 13 used to own lives on in `xgen_agent_runtime.runtime.tasks`
+(`TaskRecord`, `TaskRegistry`, `InMemoryRegistry`, `FileBackedRegistry`) for
+`BackgroundTaskRunner`, the cron daemon and `/tasks`.
 
 The exact strategy class list per stage lives next to each stage's `artifact/` folder. Browse `src/xgen_agent_runtime/stages/<sNN_name>/artifact/`.
 
@@ -118,8 +129,8 @@ Five channels can influence what a run executes with. Highest wins; every channe
 |---|---|---|---|
 | 1 (highest) | **Per-run `ModelOverrides`** — `run(..., overrides=...)` / `run_stream(..., overrides=...)` | **One run.** Applied to state after the config stomp; the next run's stomp reverts it by construction. Each applied field emits `config.override_applied`. | model, max_tokens, temperature, top_p, thinking_enabled, thinking_budget_tokens |
 | 2 | **`PipelineMutator` mutations / `refresh_runtime(**kwargs)`** — between-turn live mutation | **Until cleared / re-mutated.** Refused mid-run (`MutationLocked` / `RuntimeError`); a refreshed `llm_client` bumps the client generation so reused states re-resolve. | strategy swaps + strategy/stage/model/pipeline config (mutator); every `attach_runtime` kwarg (refresh) |
-| 3 | **`attach_runtime` runtime objects** — construction-time wiring, before the first run | **Construction.** One-shot by contract (gate raises after the first run — use `refresh_runtime` afterwards). `llm_client` is guarded: a provider mismatch against the manifest raises `ConfigError` unless `override_manifest=True` is acknowledged (announced via `runtime.llm_client_override` at the next run start). | memory/system/tool strategies, tool_context, llm_client, session_runtime, hook_runner, mcp_manager, permission rules/mode, subagent_registry |
-| 4 | **Manifest** (`EnvironmentManifest`) | **Declarative.** The single source of truth on disk; each setting has exactly ONE home (model block at the top level, provider at `stages[6].config["provider"]`). `validate_manifest` flags dual-home declarations. | everything reconstructible: stages, strategies + configs, chains, tools, model block, pipeline block, subagents, memory |
+| 3 | **`attach_runtime` runtime objects** — construction-time wiring, before the first run | **Construction.** One-shot by contract (gate raises after the first run — use `refresh_runtime` afterwards). `llm_client` is guarded: a provider mismatch against the manifest raises `ConfigError` unless `override_manifest=True` is acknowledged (announced via `runtime.llm_client_override` at the next run start). | memory/system/tool strategies, tool_context, llm_client, session_runtime, hook_runner, mcp_manager, permission rules/mode |
+| 4 | **Manifest** (`EnvironmentManifest`) | **Declarative.** The single source of truth on disk; each setting has exactly ONE home (model block at the top level, provider at `stages[6].config["provider"]`). `validate_manifest` flags dual-home declarations. | everything reconstructible: stages, strategies + configs, chains, tools, model block, pipeline block, memory |
 | 5 (lowest) | **`PipelineConfig` defaults** | **Default.** Dataclass defaults — what you get for anything no higher channel set. | model `claude-sonnet-4-6`, max_tokens 8192, max_iterations 50, stream on, … |
 
 Reading order at run start: `PipelineConfig.apply_to_state` stomps the state (4/5, as mutated by 2), then per-run overrides land on top (1). Runtime objects (3) are not state values — they are the live collaborators (clients, managers, strategies) the stages call into; the manifest names *which* to build, attach/refresh supply *the instances*.

@@ -39,6 +39,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 
 from xgen_agent_runtime.core.config import ModelConfig
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
+from xgen_agent_runtime.llm_client._cli_limits import is_usage_limit_text, usage_limit_error
 from xgen_agent_runtime.llm_client._cli_runtime import (
     CLIAuthFailed,
     CLIBinaryNotFound,
@@ -85,6 +86,10 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
             f"Codex CLI auth failed (exit {result.returncode}): {stderr[:300]}{suffix}",
             category=ErrorCategory.CLI_AUTH_FAILED,
         )
+    if is_usage_limit_text(stderr, strict=True):
+        return usage_limit_error(
+            f"Codex CLI usage limit (exit {result.returncode}): {stderr.strip()[:300]}{suffix}"
+        )
     if "permission" in stderr and ("denied" in stderr or "deny" in stderr or "blocked" in stderr):
         return APIError(
             f"Codex CLI permission denied: {stderr[:300]}{suffix}",
@@ -94,6 +99,10 @@ def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIErro
         f"Codex CLI exited with code {result.returncode}: {stderr[:300]}{suffix}",
         category=ErrorCategory.CLI_PROTOCOL_ERROR,
     )
+
+
+#: 시스템 프롬프트가 없는 요청의 codex 기본 지시 — 빈 파일은 거부된다.
+_NEUTRAL_INSTRUCTIONS = "You are a helpful assistant."
 
 
 class CodexCLIClient(BaseClient):
@@ -149,6 +158,7 @@ class CodexCLIClient(BaseClient):
         strict_wire: bool = False,
         runner_factory: Optional[Callable[..., CLIProcessRunner]] = None,
         session_hint: Optional[Dict[str, Any]] = None,
+        host_tools_only: bool = False,
     ) -> None:
         super().__init__(
             api_key=api_key,
@@ -177,6 +187,9 @@ class CodexCLIClient(BaseClient):
         self._runner_factory = runner_factory
         self._session_hint: Optional[Dict[str, Any]] = dict(session_hint) if session_hint else None
         self._cli_version_value: Optional[str] = None
+        #: 도구는 호스트 MCP 브릿지뿐 — codex 네이티브 도구·지시를 끄고 시스템 프롬프트를 codex 의
+        #: 기본 지시 자리에 넣는다(:func:`codex_host_only_args`).
+        self._host_tools_only = bool(host_tools_only)
 
     # ─────────────────────────────────────────────────────── helpers ─
 
@@ -238,7 +251,9 @@ class CodexCLIClient(BaseClient):
             logger.debug("codex: schema tempfile write failed", exc_info=True)
             return ""
 
-    def _build_argv(self, request: APIRequest, *, output_schema_path: str = "") -> List[str]:
+    def _build_argv(
+        self, request: APIRequest, *, output_schema_path: str = "", instructions_path: str = ""
+    ) -> List[str]:
         return codex_argv(
             request,
             sandbox_mode=self._sandbox_mode,
@@ -246,13 +261,47 @@ class CodexCLIClient(BaseClient):
             mcp_config=self._mcp_config,
             output_schema_path=output_schema_path,
             extra_args=self._extra_args,
+            host_tools_only=self._host_tools_only,
+            instructions_path=instructions_path,
         )
+
+    @staticmethod
+    def _system_text(request: APIRequest) -> str:
+        system = request.system
+        if isinstance(system, str):
+            return system.strip()
+        if isinstance(system, list):
+            texts = [str(b.get("text", "")) for b in system if isinstance(b, dict)]
+            return "\n".join(t for t in texts if t).strip()
+        return ""
+
+    def _instructions_tempfile(self, request: APIRequest) -> str:
+        """시스템 프롬프트를 codex 기본 지시 파일로 쓴다(``host_tools_only`` 일 때만).
+
+        시스템 프롬프트가 없어도 파일은 쓴다 — 안 쓰면 codex 기본 지시(있지도 않은 셸 도구를 전제한
+        코딩 에이전트 지시 17k 자)가 남는다. 빈 파일은 codex 가 거부하므로(0.159.2 실측) 중립 한 줄.
+        """
+        if not self._host_tools_only:
+            return ""
+        text = self._system_text(request) or _NEUTRAL_INSTRUCTIONS
+        try:
+            fd, path = tempfile.mkstemp(prefix="codex-instructions-", suffix=".md")
+            with os.fdopen(fd, "w", encoding="utf-8") as fp:
+                fp.write(text)
+            return path
+        except OSError:
+            logger.debug("codex: instructions tempfile write failed", exc_info=True)
+            return ""
 
     def _build_stdin(self, request: APIRequest) -> bytes:
         parts: List[str] = []
         hint = request.session_hint or {}
         is_resume = bool(hint.get("resume") and hint.get("session_id"))
         system = request.system
+        if self._host_tools_only:
+            # 시스템 프롬프트는 codex 기본 지시 파일로 간다(_instructions_tempfile) — 여기서 또 보내면
+            # 두 번 읽는다.
+            system = None
         # ``codex exec resume`` owns the prior thread, including its system
         # instructions and compacted history.  Re-sending either duplicates
         # context and is a common source of repeated progress prose.
@@ -381,15 +430,27 @@ class CodexCLIClient(BaseClient):
                 category=ErrorCategory.CLI_PROTOCOL_ERROR,
             )
 
-    def _raise_on_wire_error(self, line_obj: Dict[str, Any]) -> None:
-        """Surface CLI-side error frames as APIError before accumulation."""
+    @staticmethod
+    def _wire_error(line_obj: Dict[str, Any]) -> Optional[tuple[bool, str]]:
+        """Classify a CLI-side error frame: ``(fatal, message)`` or None.
+
+        ``fatal`` is True only for ``turn.failed`` — the CLI's own verdict
+        that the turn is over. Its message may be empty (the reason usually
+        rode on an earlier ``error`` frame). Every other error frame
+        (``type: error``, an ``error`` item, legacy ``msg.type == error``)
+        is NOT fatal by itself: codex emits non-fatal warnings on the same
+        channel (2026-09-30, codex-cli 0.159.2: "Model metadata for
+        `gpt-5.3-codex` not found. Defaulting to fallback metadata …").
+        """
         etype = str(line_obj.get("type") or "")
+        if etype == "turn.failed":
+            err = line_obj.get("error")
+            if isinstance(err, dict):
+                return True, str(err.get("message") or "")
+            return True, str(err or "")
         message = ""
         if etype == "error":
             message = str(line_obj.get("message") or line_obj)
-        elif etype == "turn.failed":
-            err = line_obj.get("error")
-            message = str((err or {}).get("message") if isinstance(err, dict) else err or line_obj)
         elif etype == "item.completed":
             item = line_obj.get("item")
             if (
@@ -401,10 +462,10 @@ class CodexCLIClient(BaseClient):
             msg = line_obj.get("msg")
             if isinstance(msg, dict) and str(msg.get("type") or "") == "error":
                 message = str(msg.get("message") or msg)
-        if not message:
-            return
-        lowered = message.lower()
-        if any(p in lowered for p in _AUTH_FAILURE_PHRASES):
+        return (False, message) if message else None
+
+    def _raise_if_auth_failure(self, message: str) -> None:
+        if any(p in message.lower() for p in _AUTH_FAILURE_PHRASES):
             raise APIError(
                 self._with_version(
                     "Codex CLI is not authenticated: run `codex login` on the "
@@ -412,7 +473,14 @@ class CodexCLIClient(BaseClient):
                 ),
                 category=ErrorCategory.CLI_AUTH_FAILED,
             )
-        raise APIError(
+
+    def _reported_error(self, message: str) -> APIError:
+        # "You've hit your usage limit ... try again in 2 days 3 hours" / "exceeded retry
+        # limit, last status: 429 Too Many Requests": the CLI's own error frame, so the
+        # loose phrases count too. CLI_RATE_LIMITED is not retried on the same account.
+        if is_usage_limit_text(message):
+            return usage_limit_error(self._with_version(f"Codex CLI usage limit: {message[:300]}"))
+        return APIError(
             self._with_version(f"Codex CLI reported error: {message[:300]}"),
             category=ErrorCategory.CLI_PROTOCOL_ERROR,
         )
@@ -427,7 +495,10 @@ class CodexCLIClient(BaseClient):
 
         cli_version = await self._ensure_cli_version()
         schema_path = self._schema_tempfile(request)
-        argv = self._build_argv(request, output_schema_path=schema_path)
+        instructions_path = self._instructions_tempfile(request)
+        argv = self._build_argv(
+            request, output_schema_path=schema_path, instructions_path=instructions_path
+        )
         stdin = self._build_stdin(request)
 
         try:
@@ -456,15 +527,18 @@ class CodexCLIClient(BaseClient):
                 self._with_version(str(e)), category=ErrorCategory.CLI_AUTH_FAILED
             ) from e
         except CLIProtocolError as e:
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
         finally:
-            if schema_path:
-                try:
-                    os.unlink(schema_path)
-                except OSError:
-                    pass
+            for _tmp in (schema_path, instructions_path):
+                if _tmp:
+                    try:
+                        os.unlink(_tmp)
+                    except OSError:
+                        pass
 
     # ───────────────────────────────────────────────── streaming API ─
 
@@ -500,9 +574,16 @@ class CodexCLIClient(BaseClient):
 
         cli_version = await self._ensure_cli_version()
         schema_path = self._schema_tempfile(request)
-        argv = self._build_argv(request, output_schema_path=schema_path)
+        instructions_path = self._instructions_tempfile(request)
+        argv = self._build_argv(
+            request, output_schema_path=schema_path, instructions_path=instructions_path
+        )
         stdin = self._build_stdin(request)
         accum = CodexEventAccumulator(model=model_config.model, cli_version=cli_version)
+        # 오류 줄은 모아 두고 끝에서 판정한다 — one-shot(_send)과 같은 결론이 나게.
+        # codex 는 치명적이지 않은 경고도 error 줄로 낸다; 줄마다 바로 올리면 경고 하나가 턴을 죽였다.
+        last_error = ""
+        produced = False  # 어시스턴트 출력(텍스트·도구 호출)이 하나라도 나왔나
 
         try:
             async with aclosing(runner.stream(argv, stdin_iter=aiter_bytes(stdin))) as lines:
@@ -510,10 +591,26 @@ class CodexCLIClient(BaseClient):
                     line_obj = parse_stream_json_line(raw)
                     if line_obj is None:
                         continue
-                    self._raise_on_wire_error(line_obj)
+                    wire_error = self._wire_error(line_obj)
+                    if wire_error is not None:
+                        fatal, message = wire_error
+                        # 인증 실패는 기다릴 이유가 없다 — 바로 올린다.
+                        self._raise_if_auth_failure(message)
+                        if fatal:
+                            raise self._reported_error(
+                                message or last_error or "turn failed (no reason given)"
+                            )
+                        logger.warning("codex: CLI error frame (continuing): %s", message[:300])
+                        last_error = message
                     for event in accum.feed(line_obj):
+                        etype = event.get("type")
+                        if etype == "tool_use" or (etype == "text_delta" and event.get("text")):
+                            produced = True
                         yield event
 
+            if last_error and not produced:
+                # 경고가 아니었다 — 아무 출력 없이 끝났으니 CLI 가 말한 이유로 실패시킨다.
+                raise self._reported_error(last_error)
             self._report_unknown_wire(accum)
             response = self._attach_cli_version(accum.finalize())
             self._capture_session(response)
@@ -523,12 +620,15 @@ class CodexCLIClient(BaseClient):
         except CLITimeout as e:
             raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_TIMEOUT) from e
         except CLIProtocolError as e:
+            if is_usage_limit_text(str(e), strict=True):
+                raise usage_limit_error(self._with_version(str(e))) from e
             raise APIError(
                 self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
             ) from e
         finally:
-            if schema_path:
-                try:
-                    os.unlink(schema_path)
-                except OSError:
-                    pass
+            for _tmp in (schema_path, instructions_path):
+                if _tmp:
+                    try:
+                        os.unlink(_tmp)
+                    except OSError:
+                        pass

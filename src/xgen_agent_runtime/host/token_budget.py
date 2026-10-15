@@ -25,7 +25,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from xgen_agent_runtime.host.token_estimator import estimate_tokens
+from xgen_agent_runtime.core.text_tokens import estimate_tokens, estimate_tokens_cached  # noqa: F401
 
 logger = logging.getLogger("token-budget")
 
@@ -35,16 +35,12 @@ logger = logging.getLogger("token-budget")
 #   tiktoken(o200k_base) 은 OpenAI 기준. 타 provider 는 토크나이저가 달라 토큰 수가
 #   더 많을 수 있으므로 보정계수로 *과대추정* 한다 (안전한 방향). 추가로 전역 안전마진.
 # ─────────────────────────────────────────────────────────────────────────
-_PROVIDER_TOKEN_FACTOR = {
-    "openai": 1.0,
-    "anthropic": 1.15,
-    "bedrock": 1.15,
-    "google": 1.20,
-    "vertex": 1.20,
-    "vllm": 1.20,
-}
-_DEFAULT_PROVIDER_FACTOR = 1.20
-_SAFETY_MULTIPLIER = 1.05  # 모든 추정에 5% 가산
+# 계수 표의 원본은 core.text_tokens 다(압축 판단도 같은 표를 쓴다). 여기 이름은 예전 호출부를 위한 별칭.
+from xgen_agent_runtime.core.text_tokens import (  # noqa: E402
+    DEFAULT_PROVIDER_FACTOR as _DEFAULT_PROVIDER_FACTOR,
+    PROVIDER_TOKEN_FACTOR as _PROVIDER_TOKEN_FACTOR,
+    SAFETY_MULTIPLIER as _SAFETY_MULTIPLIER,
+)
 
 # 이미지 1장당 근사 토큰 비용 (멀티모달). provider/해상도별로 다르나 보수적 상수.
 _IMAGE_TOKEN_COST = 1200
@@ -60,40 +56,74 @@ _IMAGE_TOKEN_COST = 1200
 #   - agent 노드의 context_window 파라미터는 언제나 최우선 override.
 # ─────────────────────────────────────────────────────────────────────────
 _MODEL_CONTEXT_WINDOW: List[Tuple[str, int]] = [
-    # OpenAI
+    # OpenAI. gpt-5 계열은 창이 400k 여도 **입력은 272k** 까지다(나머지는 출력 몫): 창 값을 400k 로
+    # 두면 유효 예산이 실제 입력 한도를 넘어 압축보다 provider 400 이 먼저 난다. 그래서 입력 한도를
+    # 창으로 쓴다. gpt-5.5 이후·gpt-6 은 1.05M 창에 출력 128k(2026-10-12 OpenAI 모델 문서 확인).
     ("gpt-4.1", 1_047_576),
     ("gpt-4o", 128_000),
     ("gpt-4-turbo", 128_000),
     ("gpt-4", 128_000),
     ("gpt-3.5", 16_385),
+    ("gpt-35-turbo", 16_385),  # Azure 배포 이름
     ("o1", 200_000),
     ("o3", 200_000),
     ("o4", 200_000),
-    ("gpt-5", 400_000),
-    # Anthropic / Bedrock Claude
+    ("gpt-5", 272_000),
+    ("gpt-5-chat", 128_000),
+    ("gpt-5.5", 922_000),
+    ("gpt-6", 922_000),
+    # Anthropic / Bedrock / Vertex Claude. Opus 4.6 이후·Sonnet 4.6 이후·Haiku 5.5·Fable·Mythos 는
+    # 1M 이 기본이다(베타 헤더 불필요). 그 밖은 200k(2026-10-12 Anthropic 문서 확인).
     ("claude-3-5", 200_000),
     ("claude-3-7", 200_000),
     ("claude-3", 200_000),
     ("claude-sonnet-4", 200_000),
+    ("claude-sonnet-4-6", 1_000_000),
     ("claude-opus-4", 200_000),
+    ("claude-opus-4-6", 1_000_000),
+    ("claude-opus-4-7", 1_000_000),
+    ("claude-opus-4-8", 1_000_000),
     ("claude-haiku-4", 200_000),
     ("claude-4", 200_000),
+    ("claude-opus-5", 1_000_000),
+    ("claude-sonnet-5", 1_000_000),
+    ("claude-haiku-5", 1_000_000),
+    ("claude-fable", 1_000_000),
+    ("claude-mythos", 1_000_000),
     ("claude", 200_000),
-    # Google Gemini
+    # Google Gemini / Gemma (Gemma 는 gemini 접두에 걸리지 않으므로 provider 기본값 1M 으로 새지 않게)
     ("gemini-1.5", 1_048_576),
     ("gemini-2.0", 1_048_576),
     ("gemini-2.5", 1_048_576),
     ("gemini", 1_048_576),
+    ("gemma-4", 131_072),
+    ("gemma-3", 131_072),
+    ("gemma-3-1b", 32_768),
+    ("gemma-3-270m", 32_768),
+    ("gemma-3n", 32_768),
+    ("gemma-2", 8_192),
+    # 모르는 Gemma 판. 작게 잡으면 질문이 잘리고(8k 창 + max_tokens 8k 는 입력 자리가 없다), 크게 잡으면
+    # provider 가 한도를 말해 줄 때 넘침 복구가 창을 고친다. 중간값.
+    ("gemma", 32_768),
 ]
 
 # provider 기준 기본값 (모델 매칭 실패 시).
 _PROVIDER_DEFAULT_WINDOW = {
     "openai": 128_000,
+    # Azure 는 모델 이름이 배포 이름이라 표에 안 잡히는 일이 흔하다. 현행 배포 모델의 바닥.
+    "azure": 128_000,
+    "azure_foundry": 128_000,
     "anthropic": 200_000,
+    # BedrockClient 는 AnthropicClient 이고 Claude 만 부른다. 이름에 모델명이 없는 별칭(sonnet)·추론 프로필
+    # ARN 도 Claude 다.
     "bedrock": 200_000,
     "google": 1_048_576,
     "vertex": 1_048_576,
     "vllm": 32_768,
+    # CLI 백엔드: 모델 이름이 별칭(sonnet/opus)이라 표에 안 잡힌다. 런타임은 이 값으로 첫 메시지에
+    # 접어 넣는 지난 대화의 양만 맞춘다. 작게 잡으면 더 일찍 덜어낼 뿐 실패하지 않는다.
+    "claude_code": 200_000,
+    "codex": 272_000,
 }
 # 완전 미상(provider 도 모름)일 때 보수적 기본값.
 DEFAULT_CONTEXT_WINDOW = 32_000
@@ -103,30 +133,32 @@ _BUDGET_MARGIN_RATIO = 0.02
 _BUDGET_MARGIN_MIN = 1024
 
 
-# 카탈로그(capabilities.max_context) 조회 캐시 — (provider, model) → (조회 시각, 값|None).
+# 카탈로그(capabilities) 조회 캐시 — (provider, model) → (조회 시각, capabilities|None).
 # 실패(None)도 캐시해 DB 장애 시 실행마다 재시도하지 않는다.
 _CATALOG_WINDOW_TTL_SEC = 300
-_catalog_window_cache: Dict[Tuple[str, str], Tuple[float, Optional[int]]] = {}
+_catalog_caps_cache: Dict[Tuple[str, str], Tuple[float, Optional[Dict[str, Any]]]] = {}
 
 # agent provider 표기 → llm_model_catalog.provider 정규화 (catalog_reader 와 동일 규칙)
 _PROVIDER_TO_CATALOG_ID = {"gemini": "google"}
 
 
-def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optional[int]:
-    """`llm_model_catalog.capabilities.max_context` 조회 (TTL 캐시, fail-open).
+def _catalog_capabilities(
+    provider: Optional[str], model: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """`llm_model_catalog.capabilities` 조회 (TTL 캐시, fail-open).
 
-    public 모델(openai/anthropic/google/bedrock)의 윈도우 관리 진실은 어드민 카탈로그 DB.
-    DB/컨테이너 불가 환경(테스트 등)에서는 조용히 None → 정적 fallback.
+    public 모델(openai/anthropic/google/bedrock)의 윈도우·이미지 입력 같은 능력의 관리 진실은
+    어드민 카탈로그 DB. DB/컨테이너 불가 환경(테스트 등)에서는 조용히 None → 정적 fallback.
     """
     if not provider or not model:
         return None
     key = (provider, model)
-    cached = _catalog_window_cache.get(key)
+    cached = _catalog_caps_cache.get(key)
     now = time.time()
     if cached and now - cached[0] < _CATALOG_WINDOW_TTL_SEC:
         return cached[1]
 
-    win: Optional[int] = None
+    caps: Optional[Dict[str, Any]] = None
     try:
         from app_container import app_container  # noqa: PLC0415 — lazy (테스트/도구 환경 방어)
 
@@ -138,23 +170,29 @@ def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optio
             (catalog_provider, model),
         )
         if rows:
-            caps = rows[0].get("capabilities")
-            if isinstance(caps, str):
-                caps = json.loads(caps)
-            max_context = (caps or {}).get("max_context")
-            if isinstance(max_context, (int, float)) and max_context > 0:
-                win = int(max_context)
-                logger.info(
-                    "[TOKEN_BUDGET] 카탈로그 max_context: %s/%s → %s tokens",
-                    catalog_provider,
-                    model,
-                    f"{win:,}",
-                )
+            raw = rows[0].get("capabilities")
+            if isinstance(raw, str):
+                raw = json.loads(raw)
+            caps = raw if isinstance(raw, dict) else None
     except Exception as e:
-        logger.debug("[TOKEN_BUDGET] 카탈로그 max_context 조회 실패(%s/%s): %s", provider, model, e)
+        logger.debug(
+            "[TOKEN_BUDGET] 카탈로그 capabilities 조회 실패(%s/%s): %s", provider, model, e
+        )
 
-    _catalog_window_cache[key] = (now, win)
-    return win
+    _catalog_caps_cache[key] = (now, caps)
+    return caps
+
+
+def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optional[int]:
+    """`llm_model_catalog.capabilities.max_context` (없으면 None)."""
+    max_context = (_catalog_capabilities(provider, model) or {}).get("max_context")
+    if isinstance(max_context, (int, float)) and max_context > 0:
+        win = int(max_context)
+        logger.info(
+            "[TOKEN_BUDGET] 카탈로그 max_context: %s/%s → %s tokens", provider, model, f"{win:,}"
+        )
+        return win
+    return None
 
 
 def resolve_context_window(
@@ -192,22 +230,99 @@ def resolve_context_window(
         return catalog_win
 
     name = (model or "").lower().strip()
-    if name:
+    if prov == "claude_code":
+        # CLI 가 쓰는 창은 모델 이름이 아니라 CLI 와 요금제가 정한다(1M 은 [1m] 별칭으로 고를 때). 정식 ID 를
+        # 넘겨도 표의 API 창을 쓰지 않는다. 런타임은 이 값으로 첫 메시지에 접는 지난 대화만 맞춘다.
+        return 1_000_000 if name.endswith("[1m]") else _PROVIDER_DEFAULT_WINDOW["claude_code"]
+    if prov == "codex":
+        # Codex CLI 는 모델의 API 창(gpt-5.5 1.05M)과 무관하게 자기 창(272k 입력)으로 돈다.
+        return _PROVIDER_DEFAULT_WINDOW["codex"]
+    if name and prov != "vllm":
+        # 자체 서빙(vLLM)은 표를 쓰지 않는다: 같은 모델도 --max-model-len 을 줄여 띄우는 일이 흔해 모델의
+        # 원래 창은 과대다. 서버 실측(위) → 카탈로그 → vLLM 기본값 순이다.
+        # 이름 앞이나 구분자(. / :) 뒤에서 시작하는 접두만: 'apac.anthropic.claude-…',
+        # 'meta.llama3-1-70b-…', 'Qwen/…'. 그냥 포함으로 보면 'o1' 같은 짧은 접두가 엉뚱한 이름 속에서
+        # 걸린다. 가장 긴 접두가 이긴다.
+        segments = [name] + [name[i + 1 :] for i, ch in enumerate(name) if ch in "./:"]
         best_len, best_win = -1, None
         for prefix, win in _MODEL_CONTEXT_WINDOW:
-            if name.startswith(prefix) and len(prefix) > best_len:
-                best_len, best_win = len(prefix), win
-        if best_win is not None:
-            return best_win
-        # 접두가 아니라 포함이라도 잡아본다 (예: 'apac.anthropic.claude-...').
-        best_len, best_win = -1, None
-        for prefix, win in _MODEL_CONTEXT_WINDOW:
-            if prefix in name and len(prefix) > best_len:
+            if len(prefix) > best_len and any(_prefix_matches(seg, prefix) for seg in segments):
                 best_len, best_win = len(prefix), win
         if best_win is not None:
             return best_win
 
-    return _PROVIDER_DEFAULT_WINDOW.get((provider or "").lower(), DEFAULT_CONTEXT_WINDOW)
+    return _PROVIDER_DEFAULT_WINDOW.get(prov, DEFAULT_CONTEXT_WINDOW)
+
+
+def _prefix_matches(name: str, prefix: str) -> bool:
+    """``name`` starts with ``prefix`` and does not continue its number: 'gpt-5.5' is not a prefix
+    of 'gpt-5.50', 'claude-opus-4-6' is not one of 'claude-opus-4-60'."""
+    if not name.startswith(prefix):
+        return False
+    rest = name[len(prefix) :]
+    return not (rest and rest[0].isdigit() and prefix[-1:].isdigit())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 이미지 입력 — 모델이 그림을 볼 수 있는가. Read 가 이미지를 모델에게 건넬지("보여 준다"),
+# "이 모델은 못 본다" 고 말할지를 가른다. 못 보는 모델에 그림을 보내면 provider 가 400 으로
+# 턴을 깨므로 모르면 **못 본다** 쪽이다.
+#   1) 노드 파라미터 override (bool)
+#   2) llm_model_catalog.capabilities.supports_vision (bool) — 배포마다 다르다(같은 이름도
+#      서빙한 체크포인트가 글 전용일 수 있다). 자체 서빙(vLLM) 모델은 여기서만 켠다.
+#   3) 공개 API 모델 계열의 접두 테이블 (fallback, longest-prefix wins)
+# ─────────────────────────────────────────────────────────────────────────
+_MODEL_VISION: List[Tuple[str, bool]] = [
+    ("claude-3-5-haiku", False),
+    ("claude", True),
+    ("gpt-4o", True),
+    ("gpt-4.1", True),
+    ("gpt-4-turbo", True),
+    ("gpt-5", True),
+    ("o1-mini", False),
+    ("o3-mini", False),
+    ("o1", True),
+    ("o3", True),
+    ("o4", True),
+    ("gemini", True),
+]
+#: provider 자체가 이미지 입력을 받는 CLI 백엔드 (모델 이름이 sonnet/opus 같은 별칭이다).
+_PROVIDER_VISION = {"claude_code": True}
+
+
+def resolve_supports_vision(
+    provider: Optional[str],
+    model: Optional[str],
+    override: Any = None,
+) -> bool:
+    """모델이 이미지 입력을 받는가 — 모르면 False."""
+    if isinstance(override, bool):
+        return override
+    caps = _catalog_capabilities((provider or "").lower().strip(), model) or {}
+    for key in ("supports_vision", "vision"):
+        if isinstance(caps.get(key), bool):
+            return bool(caps[key])
+    prov = (provider or "").lower().strip()
+    if prov in _PROVIDER_VISION:
+        return _PROVIDER_VISION[prov]
+    name = (model or "").lower().strip()
+    if not name:
+        return False
+    if "-vl" in name or "vl-" in name:
+        return True
+    # 이름 앞이나 구분자(. / :) 뒤에서 시작하는 것만 — 'apac.anthropic.claude-…', 'openai/gpt-4.1'.
+    # 그냥 포함으로 보면 'o1'·'o3' 같은 짧은 접두가 엉뚱한 이름 속에서 걸린다.
+    segments = [name] + [name[i + 1 :] for i, ch in enumerate(name) if ch in "./:"]
+    best_len, best = -1, None
+    for prefix, vision in _MODEL_VISION:
+        if any(seg.startswith(prefix) for seg in segments) and len(prefix) > best_len:
+            best_len, best = len(prefix), vision
+    return bool(best)
+
+
+def budget_margin(context_window: int) -> int:
+    """추정 오차에 남기는 안전마진: 창의 2%, 최소 1,024토큰."""
+    return max(_BUDGET_MARGIN_MIN, int(max(0, int(context_window or 0)) * _BUDGET_MARGIN_RATIO))
 
 
 def effective_input_budget(
@@ -233,7 +348,7 @@ def _raw_token_count(text: str) -> int:
     """보정 전 원시 토큰 수. 네트워크를 타지 않는다(:mod:`.token_estimator`)."""
     if not text:
         return 0
-    return estimate_tokens(text)
+    return estimate_tokens_cached(text)
 
 
 def count_text_tokens(
@@ -374,13 +489,15 @@ def truncate_text_to_token_budget(
     )
     keep = max(1, int((max_tokens - notice_tokens) / scale) - 1)
 
-    for _ in range(4):
+    # 앞과 뒤의 글 밀도가 전체 평균과 다를 수 있다(영어 본문 + 한국어 머리말): 잰 값에 비례해 줄여 맞춘다.
+    for _ in range(8):
         front_budget = max(1, int(keep * front_ratio))
         back_budget = max(1, keep - front_budget)
         truncated = _cut_middle(text, front_budget, back_budget, omit_notice)
-        if count_text_tokens(truncated, provider, model) <= max_tokens or keep <= 1:
+        counted = count_text_tokens(truncated, provider, model)
+        if counted <= max_tokens or keep <= 1:
             return truncated, True
-        keep = max(1, int(keep * 0.9))
+        keep = max(1, int(keep * min(0.9, max_tokens / counted * 0.95)))
     return truncated, True
 
 

@@ -213,10 +213,13 @@ class ToolRegistry:
         default (``False``) keeps the full-catalogue behaviour for
         hosts/tests that build registries by hand.
         """
+        from xgen_agent_runtime.tools.definition import api_definition
+
         tools = self.filter(include=include, exclude=exclude)
         if exposed_only:
             tools = [t for t in tools if self.is_exposed(t.name)]
-        return [t.to_api_format() for t in tools]
+        # 모델에게 가는 정의는 한 함수가 만든다 — CLI 표면(host.tool_surface)도 같은 함수다.
+        return [api_definition(t) for t in tools]
 
     def __len__(self) -> int:
         return len(self._tools)

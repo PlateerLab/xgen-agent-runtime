@@ -1,7 +1,7 @@
 """How many tools the agent sees at once.
 
 Our tool surface is **hierarchical**, not flat. The agent always sees its basic
-tools — web, files, shell, delegation, memory, the search tool of every attached
+tools — web, files, shell, memory, the search tool of every attached
 knowledge source. Everything beyond that (connected API / DB / MCP nodes, which
 can be hundreds of schemas) is announced by name and one line, and the agent
 pulls in the full schema with ``ToolSearch`` when it actually needs it.
@@ -72,6 +72,9 @@ def sends_every_schema(value: object) -> bool:
 # 메모리·작업·위임·커넥터)에 흩어져 있고, 각자가 자기 판단으로 ``core=True`` 를
 # 쓰면 표면은 아무도 의도하지 않은 모양이 된다.
 
+#: 도구를 찾기만 하는 호출(실제 작업이 아니다).
+TURN_ONE_DISCOVERY = frozenset({"ToolSearch"})
+
 #: 첫 턴에 스키마까지 보이는 도구.
 #:
 #: 각 줄은 **입구 하나**다. 패밀리 전체를 올리는 줄은 없다 — 기본 명령만 예외인데,
@@ -86,7 +89,7 @@ TURN_ONE_TOOLS = frozenset(
         "Glob",
         "Grep",
         # 2. 도구 발견 — 아래 계층 전부로 가는 문.
-        "ToolSearch",
+        *TURN_ONE_DISCOVERY,
         # 2-b. 목록 작업 — 같은 도구를 여러 입력으로 한 왕복에. 첫 턴에 보여야
         #      항목마다 따로 부르는 습관(왕복 N회)이 처음부터 생기지 않는다.
         "ToolBatch",
@@ -101,12 +104,12 @@ TURN_ONE_TOOLS = frozenset(
         "memory_categories",
         # 4. 영구 작업 — JobSchedule/JobList/JobCancel 은 이 문 뒤에.
         "JobGuide",
-        # 4-b. 아티팩트(사용자가 여는 화면) — ArtifactSave/List/Delete 는 이 문 뒤에.
-        #      만든 것을 대화에 찍는 대신 화면으로 내놓는 길이라, 문이 안 보이면
-        #      그런 길이 있다는 것 자체를 모른다.
-        "ArtifactGuide",
-        # 5. 위임 — DelegateTask/SubAgent*/Task* 는 이 문 뒤에.
-        "DelegationGuide",
+        # 4-b. 앱(사용자가 여는 웹 앱) — AppCreate/Publish/Status/List/Delete
+        #      는 이 문 뒤에. 만든 것을 대화에 찍는 대신 화면으로 내놓는 길이라, 문이
+        #      안 보이면 그런 길이 있다는 것 자체를 모른다. "도구를 만들어 달라" 는 이
+        #      문이 아니라 6(SelfExtendGuide → ForgeTool)의 몫이다 — 두 문의 설명이 그
+        #      경계를 말한다(tests/unit/test_tool_request_routing.py).
+        "AppGuide",
         # 6. 자기확장 — 제작(ForgeTool·ListForgedTools·DeleteForgedTool)·환경
         #    (PythonEnv·SystemPackages)·자기진화(WorkflowSelf)는 **문 하나** 뒤에.
         #
@@ -118,11 +121,11 @@ TURN_ONE_TOOLS = frozenset(
         #    턴은 각각 0~2.4% 였다. 문의 설명이 능력을 말해 인식은 남고, 쓰는 턴에만
         #    왕복 하나가 는다.
         "SelfExtendGuide",
-        # 웹 — 브라우저가 없는 표면(웹 대화)의 유일한 바깥 통로라 항상 둔다.
+        # 웹 — 바깥으로 가는 일반 통로(검색·페이지 읽기). 모든 표면에 항상 둔다.
         "WebFetch",
         "WebSearch",
-        # 브라우저 — 실제 조작 도구는 이 문 뒤에. an-web·커넥터 양쪽이 같은 이름을
-        #   쓰므로, 어느 쪽이 이번 턴의 주인이든 표면의 모양은 같다.
+        # 브라우저 — 사용자 PC 의 XGEN 브라우저 탭(커넥터 ``mcp_local_BrowserGuide``)만 있다.
+        #   조작 도구 6종은 이 문 뒤에. 서버 브라우저 엔진(an-web)은 제거됐다.
         "BrowserGuide",
         # 로컬 컨트롤 — 사용자 PC 를 조작하는 **문**. 방(셸·파일·브라우저·앱·
         #   오피스·사용자가 붙인 MCP 서버)은 이 문 뒤에 있다.
@@ -134,7 +137,7 @@ TURN_ONE_TOOLS = frozenset(
         #   작업을 하던 턴이 사용자 PC 셸을 불러 42분을 타임아웃으로 태웠다.
         #
         #   장소가 다른 능력은 전부 **문을 입구에 세우고 방을 그 뒤에** 둔다 —
-        #   브라우저(BrowserGuide)·위임(DelegationGuide)이 그 규약이다.
+        #   브라우저(BrowserGuide)·작업(JobGuide)이 그 규약이다.
         "LocalControl",
         # SSH — 사용자가 등록한 **원격 서버**. 여기도 장소가 다른 능력이라 같은
         #   규약을 따른다: 문(SshListServers)만 서고 SshRun/Upload/Download 는
@@ -150,6 +153,10 @@ TURN_ONE_TOOLS = frozenset(
         #   먼저 걸러서, **서버를 실제로 등록한 세션에만** 등록된다. 나머지 세션의
         #   입구는 지금과 똑같다.
         "SshListServers",
+        # 사용자 기기 — 대화에 폴더가 연결됐을 때만 호스트가 등록한다(host.user_pc). 장소가 다른
+        #   능력이지만 문을 두지 않는다: 도구 이름 자체가 "사용자 기기" 이고 하는 일이 그 기기
+        #   하나뿐이라, 같은 동사의 도구가 입구에 나란히 서는 문제(옛 Shell)가 없다.
+        "UserPc",
     }
 )
 

@@ -226,13 +226,6 @@ class BinaryClassifyEvaluation(EvaluationStrategy):
                 feedback=state.completion_detail or "Error encountered.",
             )
 
-        if signal == "delegate":
-            return EvaluationResult(
-                passed=True,
-                decision="continue",
-                feedback=f"Delegated: {state.completion_detail or 'unknown'}",
-            )
-
         if signal == "continue" or signal is None:
             # No explicit signal but text present and no tools → might be done
             if state.final_text and not state.pending_tool_calls:

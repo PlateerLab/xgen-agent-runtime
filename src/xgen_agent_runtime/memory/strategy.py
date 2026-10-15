@@ -92,7 +92,16 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
         if provider is None:
             return
         last_recorded = _recorded_upto(state)
-        new_msgs = state.messages[last_recorded:]
+        # Messages a mid-turn compaction summarized away before they were recorded come first
+        # (core.compaction keeps them for exactly this).
+        from xgen_agent_runtime.core.compaction import (
+            RECORDER_STM,
+            peek_pending_records,
+            take_pending_records,
+        )
+
+        compacted = peek_pending_records(state, RECORDER_STM)
+        new_msgs = compacted + list(state.messages[last_recorded:])
         if not new_msgs:
             return
 
@@ -112,6 +121,8 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
 
         state.metadata[_RECORDED_KEY] = len(state.messages)
         state.metadata[_STAGE_RECORDED_KEY] = len(state.messages)
+        if compacted:
+            take_pending_records(state, RECORDER_STM)
         if recorded:
             try:
                 state.add_event(

@@ -253,12 +253,10 @@ class PipelinePresets:
     ) -> Pipeline:
         """Agent pipeline — full autonomous agent with all stages.
 
-        Sub-phase 9a (S9a.5): also registers the five scaffolding
-        stages (tool_review / task_registry / hitl / summarize /
-        persist) so they show up in introspection. They're pass-
-        through / bypass for now — Sub-phase 9b adds real behaviour.
-
-        Active stages: 16 legacy stages + 5 scaffolds = 21 total.
+        Sub-phase 9a (S9a.5): also registers the scaffolding stages
+        (tool_review / hitl / summarize / persist) so they show up in
+        introspection. Orders 12 (agent) and 13 (task_registry) were
+        retired in 4.71.0 — sub-agent orchestration is gone.
         """
         builder = (
             PipelineBuilder("agent", api_key=api_key, model=model)
@@ -268,7 +266,6 @@ class PipelinePresets:
             .with_cache(strategy="aggressive")
             .with_think()
             .with_tool_review()
-            .with_task_registry()
             .with_hitl()
             .with_evaluate()
             .with_loop(max_turns=max_turns)
@@ -308,11 +305,9 @@ class PipelinePresets:
     ) -> Pipeline:
         """Geny VTuber pipeline — full Geny system reproduction.
 
-        Sub-phase 9a (S9a.5): also registers the five scaffolding
-        stages so introspection and manifest export show all 21
-        slots. Scaffolds are pass-through / bypass for now.
-
-        Active stages: 16 legacy stages + 5 scaffolds + VTuber/TTS emitters.
+        Sub-phase 9a (S9a.5): also registers the scaffolding stages so
+        introspection and manifest export show every live slot
+        (orders 12/13 are retired since 4.71.0).
         """
         builder = (
             PipelineBuilder("geny-vtuber", api_key=api_key, model=model)
@@ -322,7 +317,6 @@ class PipelinePresets:
             .with_cache(strategy="aggressive")
             .with_think()
             .with_tool_review()
-            .with_task_registry()
             .with_hitl()
             .with_evaluate()
             .with_loop(max_turns=50)

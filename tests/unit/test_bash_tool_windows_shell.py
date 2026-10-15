@@ -31,6 +31,8 @@ def test_windows_falls_back_to_cmd_when_no_powershell(monkeypatch):
     assert argv[1:] == ["/d", "/s", "/c", "dir"]
 
 
-def test_description_mentions_powershell_on_windows():
+def test_description_says_the_sandbox_linux_shell():
+    """로컬 실행은 폐지됐다(2026-08-26) — Bash 는 서버 sandbox 의 리눅스 셸 하나다."""
     desc = bt.BashTool().description
-    assert "PowerShell" in desc and "POSIX" in desc
+    assert "sandbox" in desc and "bash/sh syntax" in desc
+    assert "PowerShell" not in desc

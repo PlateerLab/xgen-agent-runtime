@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from xgen_agent_runtime.events.catalog import (  # noqa: E402  (path bootstrap above)
     EVENT_CATALOG_VERSION,
     PAYLOADS,
+    RETIRED_EVENT_TYPES,
     EventTypes,
 )
 
@@ -51,9 +52,10 @@ FAMILY_HEADINGS = {
     "parse": "Stage 9 — Parse",
     "tool": "Stage 10 — Tool",
     "tool_review": "Stage 11 — Tool review",
-    "agent": "Stage 12 — Agent",
-    "task": "Stage 13 — Task registry",
-    "task_registry": "Stage 13 — Task registry",
+    "agent": "Stage 12 — Agent (retired 4.71.0)",
+    "subagent": "Persistent sub-agents (retired 4.71.0)",
+    "task": "Stage 13 — Task registry (retired 4.71.0)",
+    "task_registry": "Stage 13 — Task registry (retired 4.71.0)",
     "evaluate": "Stage 14 — Evaluate",
     "hitl": "Stage 15 — HITL",
     "emit": "Stage 17 — Emit",
@@ -87,6 +89,8 @@ def render() -> str:
     out("- **Payloads may gain fields** in minor releases; existing fields keep")
     out("  their meaning. Field docs below are descriptive, not strict schemas.")
     out("- `…?` marks fields present only in some emissions of the event.")
+    out("- **Retired** events (`RETIRED_EVENT_TYPES`) are still valid names but")
+    out("  are no longer emitted; they leave the catalogue at the next major version.")
     out("")
     out("Consume via `pipeline.on(event_type, handler)`, `pipeline.run_stream(...)`,")
     out("or the multi-subscriber tap `pipeline.events(replay_from=...)` (2.2.0).")
@@ -106,6 +110,9 @@ def render() -> str:
         out("")
         out(f"Enum member: `EventTypes.{member.name}`")
         out("")
+        if member in RETIRED_EVENT_TYPES:
+            out("**Retired (4.71.0) — no longer emitted.**")
+            out("")
         if payload:
             out("| Field | Description |")
             out("|---|---|")

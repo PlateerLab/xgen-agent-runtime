@@ -227,7 +227,7 @@ def validate_spec(
 # 없으므로, 파드 로컬 JSON 이면 파드 A 에서 만든 도구가 파드 B 에서 보이지
 # 않는다 — 라운드로빈이라 **호출할 때마다 있다 없다 한다.**
 #
-# 테이블은 xgen-core 가 소유한다 (``xgeny_tool_specs``, APPLICATION_MODELS
+# 테이블은 xgen-core 가 소유한다 (``geny_tool_specs``, APPLICATION_MODELS
 # 단일 등록소). 여기서는 읽고 쓰기만 한다.
 
 # ── 실행 도구 ─────────────────────────────────────────────────────────
@@ -384,9 +384,9 @@ class ForgedScriptTool:
     def _record(self, error: Optional[str]) -> None:
         """호출 통계 기록 (동기 DB UPDATE).
 
-        이 도구의 execute 는 CLI 브릿지 경유 시 **서빙 루프**, sub-agent 경유
-        시 **공유 위임 루프**에서 돈다 — 루프가 감지되면 워커로 보내고 결과는
-        기다리지 않는다 (통계는 유실보다 루프 정지가 훨씬 비싸다).
+        이 도구의 execute 는 CLI 브릿지 경유 시 **서빙 루프**에서 돈다 — 루프가
+        감지되면 워커로 보내고 결과는 기다리지 않는다 (통계는 유실보다 루프
+        정지가 훨씬 비싸다).
         """
         if self._store is None:
             return
@@ -441,7 +441,7 @@ async def _run_in_sandbox(sandbox: Any, spec: "ForgedToolSpec", payload: bytes) 
     위치가 러너의 기본값에 달리고, 그 기본값이 바뀌는 날 "도구는 등록됐는데
     스크립트를 못 찾는다"가 된다 — 아무 로그도 그 이유를 말해 주지 않는다.
     """
-    from xgen_agent_runtime.tools._xgeny_sandbox import _cwd
+    from xgen_agent_runtime.tools._geny_sandbox import _cwd
 
     kwargs: Dict[str, Any] = {
         "stdin": payload,
@@ -595,9 +595,16 @@ class ForgeTool:
         # 짧게 — 턴1 도구라 **모든 모델 호출**에 실린다. 검증 실패 시 이 도구가 실패
         # 출력과 고칠 점을 그대로 돌려주므로, 긴 설명은 여기가 아니라 그 결과가 맡는다.
         # (2026-09-20 실측: 769토큰, 28일간 턴의 1.4% 에서 사용.)
+        #
+        # 첫 문장이 "make a tool" 이어야 하는 이유: 이 설명은 문(SelfExtendGuide) 뒤에서도,
+        # ToolSearch 결과 줄에서도 읽힌다. "Register a script" 로 시작하던 때는
+        # ToolSearch("create tool") 이 이 도구를 못 찾고 ArtifactGuide(지금의 AppGuide)를 돌려줬고,
+        # ToolSearch("make tool") 은 "이 능력은 없다" 로 답했다(검색은 모든 낱말이 맞아야 한다).
         return (
-            "Register a script from your workspace as a REUSABLE TOOL that persists across "
-            "sessions. Write the script first. Contract: input arrives as JSON on stdin; print "
+            "Make (create, build) a TOOL — what the user means by making or adding a tool: "
+            "register a script from your workspace as a reusable tool that persists across "
+            "sessions; the user uses it by asking you. Not an app. "
+            "Write the script first. Contract: input arrives as JSON on stdin; print "
             'the result as JSON on stdout ({"error": "..."} for a handled failure). '
             "The tool is verified by running it ONCE with `test_input` and is registered only if "
             "that run succeeds — otherwise this call returns the failure output to fix. Callable "

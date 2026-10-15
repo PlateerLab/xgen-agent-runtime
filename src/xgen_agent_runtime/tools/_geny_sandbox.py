@@ -1,0 +1,265 @@
+"""Geny 도구가 코드를 실행하는 곳 — ``xgen-workflow-sandbox`` 세션.
+
+**컨테이너가 아니다.** ``docker`` 도, ``container_name`` 도, 호스트↔컨테이너
+경로 변환도 없다. 에이전트를 태우는 서비스와 코드를 돌리는 서비스가 같은 절대
+경로를 쓰기 때문에 (호스트가 두 루트를 같은 문자열로 맞춘다) **변환할 좌표계가
+애초에 하나뿐이다.**
+
+런타임은 :class:`GenySandbox` 프로토콜만 안다. 그 뒤가 HTTP 인지 인프로세스인지
+로컬 디렉터리인지는 호스트가 정한다 — 그래서 이 모듈은 stdlib 밖을 import 하지
+않고, 테스트는 가짜 구현 하나로 파일/셸 도구 전부를 검증할 수 있다.
+
+파일 읽기·쓰기가 :meth:`~GenySandbox.read_bytes` / :meth:`write_bytes` 라는
+**1급 연산**인 것이 중요하다. 이걸 셸 명령(``cat``, ``sh -c 'cat > …'``)으로
+흉내내면 파일 하나 읽는 데 프로세스가 하나 뜨고, 실패가 "명령 실패"로 뭉개져
+"파일이 없다"와 "권한이 없다"를 구분할 수 없게 된다.
+"""
+
+from __future__ import annotations
+
+import posixpath
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+
+__all__ = [
+    "ExecResult",
+    "SandboxError",
+    "SandboxPathError",
+    "GenySandbox",
+    "sandbox_extra_roots",
+    "sandbox_path",
+    "sandbox_readonly_roots",
+    "sandbox_root",
+    "sb_read_bytes",
+    "sb_run",
+    "sb_write_bytes",
+]
+
+
+class SandboxError(RuntimeError):
+    """샌드박스에 닿을 수 없거나 요청을 수행하지 못했다."""
+
+
+class SandboxPathError(SandboxError):
+    """세션 루트 밖을 가리키는 경로.
+
+    가드가 여기 있는 이유: 도구마다 각자 막으면 새로 추가되는 도구가 매번
+    빠뜨린다. 샌드박스로 나가는 모든 경로는 :func:`sandbox_path` 를 지난다.
+    """
+
+
+@dataclass(frozen=True)
+class ExecResult:
+    """명령 한 번의 결과. 바이트 그대로 — 디코딩은 부르는 쪽 몫이다."""
+
+    rc: int
+    stdout: bytes
+    stderr: bytes
+
+    @property
+    def ok(self) -> bool:
+        return self.rc == 0
+
+
+@runtime_checkable
+class GenySandbox(Protocol):
+    """에이전트 하나의 실행 세션.
+
+    구현체는 :mod:`editor.geny_bridge.sandbox_mount`(xgen-workflow) 의 HTTP
+    클라이언트다. 테스트는 같은 모양의 로컬 구현을 쓴다.
+    """
+
+    #: 세션의 작업 루트 — **절대 경로**. 기본적으로 이 밖으로는 나갈 수 없다.
+    workdir: str
+
+    #: 그 밖에 **명시적으로** 열어 주는 트리들 (선택). 호스트가 붙여 준다.
+    #:
+    #: 에이전트는 자기 workspace 말고도 다룰 것이 있다 — 사용자 계정의 클라우드
+    #: 스토리지가 그렇다. 그것까지 ``workdir`` 안으로 밀어 넣으면 에이전트의
+    #: 산출물과 사용자 파일이 한 트리에 섞이고, 한쪽의 삭제 전파가 다른 쪽
+    #: 파일을 지운다. 그래서 형제 트리로 두고 여기서 연다.
+    #:
+    #: ``ToolContext.allowed_paths`` 와 같은 역할이다 — 로컬 실행에서 그것이
+    #: 하던 일을, 러너 실행에서는 이 목록이 한다.
+    extra_roots: Sequence[str]
+
+    #: 그중 **읽기 전용**인 것들 (선택). ``extra_roots`` 의 부분집합이다.
+    #:
+    #: 공유받은 폴더가 여기 들어온다 — 읽기로 공유받았으면 읽을 수는 있지만
+    #: 쓸 수 없다. 목록이 비어 있으면 전부 읽고 쓸 수 있다 (예전 동작).
+    #:
+    #: ⚠ 보안 경계가 아니다 (:func:`sandbox_readonly_roots` 참고). 셸은 이
+    #: 검사를 지나가지 않는다 — 진짜 관문은 인덱스 커밋이다.
+    readonly_roots: Sequence[str]
+
+    async def ensure(self) -> None:
+        """세션을 살아 있게 만든다. 멱등 — 몇 번 불러도 같다."""
+        ...
+
+    async def exec(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Optional[str] = None,
+        stdin: Optional[bytes] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout_s: float = 120.0,
+    ) -> ExecResult: ...
+
+    async def read_bytes(self, path: str) -> bytes:
+        """없으면 :class:`FileNotFoundError`."""
+        ...
+
+    async def write_bytes(self, path: str, data: bytes) -> int:
+        """상위 디렉터리는 알아서 만든다. 쓴 바이트 수를 돌려준다."""
+        ...
+
+
+# ── 경로 ──────────────────────────────────────────────────────────────
+
+
+def sandbox_root(sandbox: Any) -> str:
+    root = str(getattr(sandbox, "workdir", "") or "/workspace")
+    return "/" + root.strip("/") if root != "/" else "/"
+
+
+def sandbox_extra_roots(sandbox: Any) -> Tuple[str, ...]:
+    """호스트가 명시적으로 열어 준 형제 트리들 (없으면 빈 튜플)."""
+    raw = getattr(sandbox, "extra_roots", None) or ()
+    out = []
+    for r in raw:
+        r = str(r or "").strip()
+        if r:
+            out.append("/" + r.strip("/") if r != "/" else "/")
+    return tuple(out)
+
+
+def sandbox_readonly_roots(sandbox: Any) -> Tuple[str, ...]:
+    """읽기 전용으로 열린 형제 트리들.
+
+    프로토콜의 **선택적 확장**이다 — 없으면 빈 튜플이고 모든 형제 트리는
+    읽고 쓸 수 있다 (예전 동작 그대로).
+
+    ⚠ **이건 보안 경계가 아니라 빠른 피드백이다.** 셸은 파일시스템에 직접
+    쓰므로 이 검사를 지나가지 않는다. 진짜 관문은 인덱스 커밋이고, 거기서
+    거부되면 그 변경은 원본에 반영되지 않는다.
+
+    그래도 여기서 막는 이유: 커밋은 턴이 끝날 때 일어난다. 그때 처음 알면
+    에이전트는 이미 그 파일을 고쳤다고 믿고 30분을 더 일한 뒤다. 쓰기 도구가
+    그 자리에서 "읽기 전용입니다"를 말해 주면 에이전트가 방향을 바꾼다.
+    """
+    raw = getattr(sandbox, "readonly_roots", None) or ()
+    out = []
+    for r in raw:
+        r = str(r or "").strip()
+        if r:
+            out.append("/" + r.strip("/") if r != "/" else "/")
+    return tuple(out)
+
+
+def _within(resolved: str, root: str) -> bool:
+    return resolved == root or resolved.startswith(root.rstrip("/") + "/")
+
+
+def sandbox_path(sandbox: Any, path: str, workdir: str = "", *, write: bool = False) -> str:
+    """도구가 준 경로 → 세션 안의 절대 경로.
+
+    상대 경로는 ``workdir``(없으면 세션 루트) 기준으로 푼다. 결과가 허용된
+    트리 밖이면 :class:`SandboxPathError` — ``..`` 나 절대경로로 빠져나가는
+    것을 여기서 한 번에 막는다.
+
+    허용되는 곳은 세션 루트와 :func:`sandbox_extra_roots` 다. 후자는 호스트가
+    **명시적으로** 연 것만 들어온다 (사용자 클라우드 등) — 목록이 한 곳에서만
+    늘어나야 "무엇이 열려 있는가" 를 답할 수 있다.
+
+    ``workdir`` 은 보통 ``ToolContext.working_dir`` 이다. 호스트가 양쪽 루트를
+    같은 문자열로 맞추므로 그 값은 세션 안에서도 그대로 유효하다 — 이것이
+    변환 함수를 두지 않는 이유다.
+    """
+    root = sandbox_root(sandbox)
+    base = str(workdir or "").strip() or root
+    if not posixpath.isabs(base):
+        base = posixpath.join(root, base)
+    target = str(path or ".")
+    if not posixpath.isabs(target):
+        target = posixpath.join(base, target)
+    resolved = posixpath.normpath(target)
+    allowed = (root, *sandbox_extra_roots(sandbox))
+    if not any(_within(resolved, r) for r in allowed):
+        raise SandboxPathError(
+            f"경로가 샌드박스 세션 밖을 가리킵니다: {path!r} → {resolved!r} "
+            f"(허용: {', '.join(allowed)})"
+        )
+    if write:
+        for ro in sandbox_readonly_roots(sandbox):
+            if _within(resolved, ro):
+                raise SandboxPathError(
+                    f"읽기 전용으로 열린 경로입니다: {resolved!r} — 읽을 수는 "
+                    f"있지만 쓸 수 없습니다 (공유받은 폴더는 공유한 사람이 "
+                    f"권한을 정합니다)"
+                )
+    return resolved
+
+
+def _cwd(sandbox: Any, workdir: str) -> str:
+    """``exec`` 에 넘길 작업 디렉터리 — 항상 세션 안."""
+    try:
+        return sandbox_path(sandbox, ".", workdir)
+    except SandboxPathError:
+        # 세션과 무관한 workdir 이 들어왔다. chdir 실패로 모든 호출을 죽이느니
+        # 루트에서 실행한다 (GAPT 시절 host-absolute workdir 이 exec 를 통째로
+        # 죽였던 실패 모드를 되풀이하지 않는다).
+        return sandbox_root(sandbox)
+
+
+# ── 도구가 쓰는 3가지 ──────────────────────────────────────────────────
+
+
+async def sb_run(
+    sandbox: Any,
+    command: str,
+    *,
+    workdir: str = "",
+    env: Optional[Mapping[str, str]] = None,
+    timeout_s: float = 120.0,
+) -> Tuple[int, str, str]:
+    """셸 명령 하나. ``(rc, stdout, stderr)`` — 문자열로 디코딩해서 준다.
+
+    **로그인 셸(`-l`)을 쓰지 않는다.** 세션의 환경은 러너가 정한다 — 선언된
+    파이썬 환경(``PythonEnv``)의 ``bin`` 과 세션 HOME 의 ``.local/bin`` 을 PATH
+    앞에 얹어 넘긴다. 그런데 로그인 셸은 ``/etc/profile`` 을 읽고, Debian
+    계열(러너 이미지는 python:3.14-slim)의 그 파일은 PATH 를 **통째로
+    덮어쓴다**:
+
+        넘긴 PATH:  <env>/bin:/usr/local/bin:/usr/bin:/bin
+        -lc 안에서: /usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+
+    그래서 ``PythonEnv`` 로 깐 패키지는 안 보이고 ``pip install`` 로 깐 것만
+    보였다 — 후자는 기본 인터프리터가 읽는 곳에 앉기 때문이다. 에이전트는
+    "설치했는데 못 찾는다"를 겪고 직접 pip 로 다시 깔았다(프로드 실증).
+
+    로그인 셸이 우리에게 더해 주는 것은 없다(러너 이미지는 PATH 를 profile 로
+    구성하지 않는다). 빼는 것만 있었다.
+    """
+    await sandbox.ensure()
+    result = await sandbox.exec(
+        ["bash", "-c", command],
+        cwd=_cwd(sandbox, workdir),
+        env=env,
+        timeout_s=timeout_s,
+    )
+    return (
+        result.rc,
+        result.stdout.decode("utf-8", "replace"),
+        result.stderr.decode("utf-8", "replace"),
+    )
+
+
+async def sb_read_bytes(sandbox: Any, path: str, *, workdir: str = "") -> bytes:
+    await sandbox.ensure()
+    return await sandbox.read_bytes(sandbox_path(sandbox, path, workdir))
+
+
+async def sb_write_bytes(sandbox: Any, path: str, data: bytes, *, workdir: str = "") -> int:
+    await sandbox.ensure()
+    return await sandbox.write_bytes(sandbox_path(sandbox, path, workdir, write=True), data)

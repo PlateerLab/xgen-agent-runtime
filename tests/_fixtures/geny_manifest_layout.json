@@ -1,7 +1,7 @@
 {
   "_source": "Geny/backend/service/executor/default_manifest.py",
   "_generated": "2026-06-10",
-  "_rationale": "Vendored snapshot of the stage layouts Geny's host-side manifest builder produced at the time xgen-agent-runtime 2.2.0 absorbed it into core/manifest_factory.build_manifest(). The factory must stay layout-compatible with what the reference consumer shipped: same orders, names, active flags, artifacts, strategies, strategy_configs, configs, and chain orders. Regenerate ONLY when deliberately changing the canonical preset layouts, and say so in the changelog. | 2.50.2 deliberate layout change: vtuber cache system_cache→aggressive_cache (TTFT follow-up — persona sessions have the longest histories; history breakpoint matters most there).",
+  "_rationale": "Vendored snapshot of the stage layouts Geny's host-side manifest builder produced at the time xgen-agent-runtime 2.2.0 absorbed it into core/manifest_factory.build_manifest(). The factory must stay layout-compatible with what the reference consumer shipped: same orders, names, active flags, artifacts, strategies, strategy_configs, configs, and chain orders. Regenerate ONLY when deliberately changing the canonical preset layouts, and say so in the changelog. | 2.50.2 deliberate layout change: vtuber cache system_cache→aggressive_cache (TTFT follow-up — persona sessions have the longest histories; history breakpoint matters most there). | 4.71.0 deliberate layout change: orders 12 (agent) and 13 (task_registry) retired with sub-agent orchestration — both presets drop those entries (the orders stay reserved, never renumbered).",
   "provider": "anthropic",
   "presets": {
     "worker_adaptive": [
@@ -181,37 +181,6 @@
             "size"
           ]
         }
-      },
-      {
-        "order": 12,
-        "name": "agent",
-        "active": true,
-        "artifact": "default",
-        "strategies": {
-          "orchestrator": "subagent_type"
-        },
-        "strategy_configs": {},
-        "config": {
-          "max_delegations": 4
-        },
-        "tool_binding": null,
-        "model_override": null,
-        "chain_order": {}
-      },
-      {
-        "order": 13,
-        "name": "task_registry",
-        "active": true,
-        "artifact": "default",
-        "strategies": {
-          "registry": "in_memory",
-          "policy": "fire_and_forget"
-        },
-        "strategy_configs": {},
-        "config": {},
-        "tool_binding": null,
-        "model_override": null,
-        "chain_order": {}
       },
       {
         "order": 14,
@@ -513,37 +482,6 @@
             "sensitive"
           ]
         }
-      },
-      {
-        "order": 12,
-        "name": "agent",
-        "active": true,
-        "artifact": "default",
-        "strategies": {
-          "orchestrator": "subagent_type"
-        },
-        "strategy_configs": {},
-        "config": {
-          "max_delegations": 4
-        },
-        "tool_binding": null,
-        "model_override": null,
-        "chain_order": {}
-      },
-      {
-        "order": 13,
-        "name": "task_registry",
-        "active": false,
-        "artifact": "default",
-        "strategies": {
-          "registry": "in_memory",
-          "policy": "fire_and_forget"
-        },
-        "strategy_configs": {},
-        "config": {},
-        "tool_binding": null,
-        "model_override": null,
-        "chain_order": {}
       },
       {
         "order": 14,

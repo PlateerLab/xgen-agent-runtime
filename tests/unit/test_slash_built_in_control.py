@@ -19,7 +19,7 @@ from xgen_agent_runtime.slash_commands.built_in import (
     TasksCommand,
     install_built_in_commands,
 )
-from xgen_agent_runtime.stages.s13_task_registry import (
+from xgen_agent_runtime.runtime.tasks import (
     InMemoryRegistry,
     TaskRecord,
     TaskStatus,
@@ -124,31 +124,48 @@ class TestCancel:
 # ── /compact ─────────────────────────────────────────────────────────
 
 
-class _FakeSummarizer:
-    def __init__(self, tokens_compressed=42):
-        self.called = False
-        self._tokens = tokens_compressed
-
-    async def summarize_now(self):
-        self.called = True
-        return type("R", (), {"tokens_compressed": self._tokens})()
-
-
 class TestCompact:
-    @pytest.mark.asyncio
-    async def test_invokes_summarizer(self):
-        summarizer = _FakeSummarizer()
-        pipeline = _FakePipeline(strategies={"summarize_strategy": summarizer})
-        result = await CompactCommand().execute([], SlashContext(pipeline=pipeline))
-        assert result.success is True
-        assert "42 tokens compressed" in result.content
-        assert summarizer.called is True
+    """4.89.0: ``/compact`` queues a manual compaction on the live state; Stage 2 runs it at the
+    next pass even when the context is far from the window."""
 
     @pytest.mark.asyncio
-    async def test_no_summarizer(self):
-        ctx = SlashContext(pipeline=_FakePipeline())
-        result = await CompactCommand().execute([], ctx)
+    async def test_queues_a_manual_request_that_stage_2_runs(self):
+        from xgen_agent_runtime.core.shared_keys import SharedKeys
+        from xgen_agent_runtime.core.state import PipelineState
+        from xgen_agent_runtime.stages.s02_context import ContextStage
+        from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+            TruncateCompactor,
+        )
+
+        state = PipelineState()
+        state.messages = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(12)
+        ]
+        compactor = TruncateCompactor(keep_last=4)
+        state._context_compactor = compactor  # what Pipeline._init_state wires when compaction is on
+        result = await CompactCommand().execute([], SlashContext(extras={"state": state}))
+        assert result.success is True
+        assert state.shared[SharedKeys.CONTEXT_COMPACTION_REQUEST]["source"] == "manual"
+
+        await ContextStage(compactor=compactor).execute(None, state)
+
+        assert len(state.messages) < 12
+        compacted = [e for e in state.events if e["type"] == "context.compacted"]
+        assert compacted and compacted[-1]["data"]["trigger"] == "manual"
+        assert SharedKeys.CONTEXT_COMPACTION_REQUEST not in state.shared
+
+    @pytest.mark.asyncio
+    async def test_without_a_state_reports_failure(self):
+        result = await CompactCommand().execute([], SlashContext(pipeline=_FakePipeline()))
         assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_with_compaction_off_reports_failure(self):
+        from xgen_agent_runtime.core.state import PipelineState
+
+        result = await CompactCommand().execute([], SlashContext(extras={"state": PipelineState()}))
+        assert result.success is False
+        assert "turned off" in result.content
 
 
 # ── /config ──────────────────────────────────────────────────────────

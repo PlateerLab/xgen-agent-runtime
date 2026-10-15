@@ -329,7 +329,7 @@ class DeliverableReviewer:
         sandbox = getattr(ctx, "sandbox", None)
         wd = str(getattr(ctx, "working_dir", "") or "")
         if sandbox is not None:
-            from xgen_agent_runtime.tools._xgeny_sandbox import sb_read_bytes
+            from xgen_agent_runtime.tools._geny_sandbox import sb_read_bytes
 
             try:
                 data = await sb_read_bytes(sandbox, path, workdir=wd or "/workspace")

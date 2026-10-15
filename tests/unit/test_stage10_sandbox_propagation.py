@@ -6,7 +6,7 @@ per tool call and silently drop the host-attached runtime handles — most
 critically ``sandbox``. When ``sandbox`` is dropped, ``context.sandbox`` is
 ``None`` on every real dispatch, so Bash / Read / Write / Edit / Glob / Grep
 fall to their local-subprocess path and run on the SERVING POD instead of the
-agent's isolated XGeny session. Every XGeny agent, regardless of provider, is
+agent's isolated Geny session. Every Geny agent, regardless of provider, is
 supposed to execute its built-in tools inside its own sandbox — this test
 locks that contract at the exact seam the earlier tests bypassed (they built
 ToolContext directly and called ``router.route``, never exercising the
@@ -24,7 +24,7 @@ from xgen_agent_runtime.tools.sandbox import SandboxConfig, ToolSandbox
 
 
 class _FakeSandbox:
-    """Stand-in for an XGeny sandbox session (identity is all that matters)."""
+    """Stand-in for a Geny sandbox session (identity is all that matters)."""
 
     def __init__(self) -> None:
         self.workdir = "/workspace"

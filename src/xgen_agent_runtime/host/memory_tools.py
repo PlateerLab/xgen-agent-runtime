@@ -124,7 +124,7 @@ def build_memory_tools(provider: Any) -> List[Any]:
 
     from xgen_agent_runtime.memory.provider import Importance, NoteDraft, NotePatch  # noqa: F401
     from xgen_agent_runtime.tools import ToolResult, build_tool
-    from xgen_agent_runtime.tools.base import ToolCapabilities
+    from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 
     def _importance(value: str, default: str = "medium") -> "Importance":
         v = (value or default).strip().lower()
@@ -284,7 +284,7 @@ def build_memory_tools(provider: Any) -> List[Any]:
     read_caps = ToolCapabilities(concurrency_safe=True, read_only=True, idempotent=True)
     write_caps = ToolCapabilities(concurrency_safe=False)
 
-    return [
+    tools = [
         build_tool(
             name="memory_write",
             description=(
@@ -379,3 +379,5 @@ def build_memory_tools(provider: Any) -> List[Any]:
             capabilities=read_caps,
         ),
     ]
+    # 종류 표지 — 호스트의 결과 필터가 이름이 아니라 종류로 판정한다(tools.base.tool_origin).
+    return [with_origin(t, "memory") for t in tools]

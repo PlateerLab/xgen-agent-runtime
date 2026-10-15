@@ -54,13 +54,32 @@ def test_watermark_never_exceeds_new_length():
     assert 0 <= meta[_STATE_LAST_RECORDED] <= 3
 
 
-def test_noop_when_nothing_recorded():
+def test_absent_watermark_counts_as_nothing_recorded():
+    """4.89.0: no watermark means nothing was recorded yet (a compaction inside the first turn,
+    before Stage 18 ran). The summarized messages are kept for the recorders, and the watermark
+    moves past the synthetic head so the summary is not recorded as something the user said."""
+    from xgen_agent_runtime.core.compaction import PENDING_RECORDS_KEY
+
+    for meta in ({}, {_STATE_LAST_RECORDED: 0}):
+        before = _msgs(10)
+        kept = before[-2:]
+        after = [{"role": "user", "content": "SUMMARY"}] + kept
+        reconcile_recorded_index(before, after, meta)
+        assert meta[_STATE_LAST_RECORDED] == 1
+        assert meta[PENDING_RECORDS_KEY]["stm"] == before[:8]
+        assert meta[PENDING_RECORDS_KEY]["archive"] == before[:8]
+
+
+def test_pending_records_are_capped():
+    from xgen_agent_runtime.core.compaction import PENDING_RECORDS_CAP, PENDING_RECORDS_KEY
+
     meta = {}
-    reconcile_recorded_index(_msgs(10), _msgs(3), meta)
-    assert _STATE_LAST_RECORDED not in meta
-    meta2 = {_STATE_LAST_RECORDED: 0}
-    reconcile_recorded_index(_msgs(10), _msgs(3), meta2)
-    assert meta2[_STATE_LAST_RECORDED] == 0
+    for _ in range(3):
+        before = _msgs(PENDING_RECORDS_CAP)
+        reconcile_recorded_index(before, [{"role": "user", "content": "S"}] + before[-1:], meta)
+        meta[_STATE_LAST_RECORDED] = 0
+        meta["geny_bridge.conversation_archived_idx"] = 0
+    assert len(meta[PENDING_RECORDS_KEY]["stm"]) == PENDING_RECORDS_CAP
 
 
 def test_truncate_compactor_keeps_recording_after_shrink():

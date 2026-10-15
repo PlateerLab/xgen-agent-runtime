@@ -137,5 +137,6 @@ class TestLegacyMockProviderMigration:
         assert manifest.version == "3.0"
         s6 = next(e for e in manifest.stages if e["order"] == 6)
         assert s6["strategies"]["provider"] == "anthropic"
-        # v2→v3 padding happened too.
-        assert {e["order"] for e in manifest.stages} >= {6, 11, 13, 15, 19, 20}
+        # v2→v3 padding happened too (order 13 is retired since 4.71.0).
+        assert {e["order"] for e in manifest.stages} >= {6, 11, 15, 19, 20}
+        assert 13 not in {e["order"] for e in manifest.stages}

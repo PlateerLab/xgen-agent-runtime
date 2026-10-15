@@ -31,6 +31,7 @@ from xgen_agent_runtime.tools.errors import (
     validate_input,
 )
 from xgen_agent_runtime.tools.registry import ToolRegistry
+from xgen_agent_runtime.tools.renamed import current_name
 from xgen_agent_runtime.stages.s10_tool.interface import ToolRouter
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,11 @@ class RegistryRouter(ToolRouter):
     ) -> ToolResult:
         tool = self._registry.get(tool_name)
         if tool is None:
+            # 이름을 바꾼 도구를 옛 이름으로 불렀으면 지금 이름으로 보낸다(tools.renamed).
+            renamed = current_name(tool_name, lambda n: self._registry.get(n) is not None)
+            if renamed:
+                tool_name, tool = renamed, self._registry.get(renamed)
+        if tool is None:
             return make_error_result(
                 ToolError.unknown_tool(tool_name, known=self._registry.list_names())
             )
@@ -258,7 +264,47 @@ class RegistryRouter(ToolRouter):
                 )
 
         result = await self._dispatch_with_lifecycle(tool, tool_input, context)
+        # 호스트 결과 필터 — 도구가 돈 직후, 파일 저장·미리보기·이벤트·반복 가드보다 먼저.
+        # SDK 루프와 CLI 도구 표면이 모두 여기를 지나므로 두 경로가 같은 결과를 본다.
+        result = await _apply_result_filter(tool, result, context)
+        result = self._open_gate_family(tool_name, result, context)
         return _with_repair_notes(result, repair_notes)
+
+    def _open_gate_family(
+        self, tool_name: str, result: ToolResult, context: ToolContext
+    ) -> ToolResult:
+        """표(``tools.gates.GATES``)에 있는 문이 성공하면 그 가족을 **여기서** 연다.
+
+        문이 스스로 열든(내장 안내 도구의 ``open_family``, 어댑트 도구의 ``opens_family``)
+        말든 상관없이 열린다 — 여는 일을 문마다 따로 선언하게 했더니 빠뜨린 문에서 방이
+        잠겼다(SSH·Delegation·Browser·LocalControl, 2주 새 네 번). 이미 열린 것은 다시
+        말하지 않는다(문이 스스로 열었으면 여기서는 새로 연 것이 없다).
+        """
+        if result.is_error:
+            return result
+        from xgen_agent_runtime.tools.gates import family_of, gate_of
+
+        if gate_of(tool_name) is None:
+            return result
+        # 모델에게 노출을 결정하는 레지스트리는 턴의 것(``context.tool_registry``)이다 —
+        # 내장 안내 도구의 open_family 가 이미 그걸 쓴다. 없을 때만 라우터 자신의 것.
+        registry = getattr(context, "tool_registry", None) or self._registry
+        if not callable(getattr(registry, "activate", None)):
+            return result
+        opened = []
+        for name in family_of(tool_name, registry.list_names()):
+            if not registry.is_exposed(name) and registry.activate(name):
+                opened.append(name)
+        if not opened:
+            return result
+        from xgen_agent_runtime.tools.built_in._skill_gateway import with_opened
+
+        updates: Dict[str, Any] = {}
+        if isinstance(result.content, str):
+            updates["content"] = with_opened(result.content, opened)
+        if isinstance(getattr(result, "display_text", None), str):
+            updates["display_text"] = with_opened(result.display_text, opened)
+        return _dc_replace(result, **updates) if updates else result
 
     async def _dispatch_with_lifecycle(
         self, tool: Tool, tool_input: Dict[str, Any], context: ToolContext
@@ -382,7 +428,7 @@ class RegistryRouter(ToolRouter):
 
         # Per-tool timeout (audit R3): a hung network tool / MCP adapter
         # would otherwise wedge the whole turn forever with no recovery.
-        # 0 = no timeout (long-running tools like agent delegation).
+        # 0 = no timeout (tools whose work legitimately runs long).
         try:
             timeout_s = float(getattr(tool.capabilities(tool_input), "timeout_s", 0.0) or 0.0)
         except Exception:  # noqa: BLE001 — capabilities must never block dispatch
@@ -449,6 +495,40 @@ class RegistryRouter(ToolRouter):
             output_preview=_preview_result(result),
         )
         return result
+
+
+async def _apply_result_filter(tool: Tool, result: ToolResult, context: ToolContext) -> ToolResult:
+    """``context.result_filter`` 를 한 번 적용한다 — 실패하면 원래 결과(fail-open).
+
+    필터는 호스트 정책(예: 외부 데이터 도구 결과의 개인정보 가림)이다. 필터가 고장 나도
+    도구 호출 자체를 깨지 않는다 — 경고를 남기고 원래 결과를 쓴다. ``None`` 을 돌려주면
+    "손대지 않음" 으로 본다. 오류 결과도 그대로 넘긴다 — 무엇을 가릴지는 호스트가 정한다.
+    """
+    result_filter = getattr(context, "result_filter", None)
+    if result_filter is None:
+        return result
+    try:
+        filtered = result_filter(tool, result)
+        if _is_awaitable(filtered):
+            filtered = await filtered
+    except Exception:  # noqa: BLE001 — fail-open: 필터 고장이 도구 호출을 깨지 않는다
+        logger.warning(
+            "tool result filter failed for %s — using the unfiltered result",
+            tool.name,
+            exc_info=True,
+        )
+        return result
+    if filtered is None:
+        return result
+    if not isinstance(filtered, ToolResult):
+        logger.warning(
+            "tool result filter returned %s for %s (expected ToolResult) — "
+            "using the unfiltered result",
+            type(filtered).__name__,
+            tool.name,
+        )
+        return result
+    return filtered
 
 
 def _preview_result(result: ToolResult, *, max_chars: int = 500) -> str:

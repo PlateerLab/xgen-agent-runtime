@@ -141,6 +141,12 @@ class TestMessageTranslation:
         assert result[1]["role"] == "user"
         assert result[1]["content"] == "Hello"
 
+    def test_openai_system_role_for_compatible_servers(self):
+        messages = [{"role": "user", "content": "Hello"}]
+        result = canonical_messages_to_openai(messages, system="You are helpful.", system_role="system")
+        assert result[0] == {"role": "system", "content": "You are helpful."}
+        assert [m["role"] for m in result] == ["system", "user"]
+
     def test_openai_tool_use_in_assistant(self):
         """assistant tool_use blocks → OpenAI tool_calls array."""
         messages = [

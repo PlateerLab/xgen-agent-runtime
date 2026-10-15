@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolResult
@@ -217,21 +216,34 @@ class SendUserFileTool(Tool):
         channel = context.extras.get("user_file_channel")
         if channel is None:
             return _err("NO_CHANNEL", "user_file_channel not wired into ctx.extras")
-        cwd = context.working_dir or "."
-        path = Path(input["file_path"])
-        if not path.is_absolute():
-            path = Path(cwd) / path
-        if not path.exists():
-            return _err("FILE_NOT_FOUND", str(path))
-        if not path.is_file():
-            return _err("NOT_A_FILE", str(path))
+        # 파일시스템 포트로 연다(tools.fs). 예전엔 파드 로컬 Path 를 그대로 검사해 채널에
+        # 넘겼다 — 서버에서는 에이전트의 파일이 러너에 있으니 엉뚱한 파일을 봤고, **경로
+        # 가드도 없어서** 파드의 아무 파일이나 사용자에게 보낼 수 있었다. 이제 허용 트리
+        # 밖이면 거절하고, 러너 파일은 파드 전용 임시 사본으로 가져와 보낸다.
+        from pathlib import PurePosixPath
+
+        from xgen_agent_runtime.tools.fs import FsAccessError, tool_fs
+
+        fs = tool_fs(context)
+        raw = str(input["file_path"])
         try:
-            result = await channel.send(
-                path,
-                filename=input.get("filename") or path.name,
-                content_type=input.get("content_type"),
-                description=input.get("description"),
-            )
+            resolved = fs.resolve(raw)
+        except (FsAccessError, PermissionError) as exc:
+            return _err("ACCESS_DENIED", str(exc))
+        except ValueError as exc:
+            return _err("FILE_NOT_FOUND", str(exc))
+        try:
+            async with fs.materialize(raw) as local:
+                result = await channel.send(
+                    local,
+                    filename=input.get("filename") or PurePosixPath(resolved).name,
+                    content_type=input.get("content_type"),
+                    description=input.get("description"),
+                )
+        except FileNotFoundError:
+            return _err("FILE_NOT_FOUND", resolved)
+        except IsADirectoryError:
+            return _err("NOT_A_FILE", resolved)
         except Exception as exc:  # noqa: BLE001
             return _err("SEND_FAILED", str(exc))
         return ToolResult(content={"delivered": True, "result": result})

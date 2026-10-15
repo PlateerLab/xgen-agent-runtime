@@ -77,6 +77,14 @@ def _scan_rows(hooks: MemoryHooks) -> int:
     return max(scan, max(0, int(hooks.recent_turns)) * 4)
 
 
+#: 뺄 분류(``search_exclude_categories``)가 있으면 거른 뒤에도 k 개가 남도록 이 배수만큼 더 받는다.
+_EXCLUDED_OVERFETCH = 5
+#: 압축 기록이 쌓이는 노트 분류(``record_compaction``). 자동 검색 층에서 늘 빠진다.
+_COMPACTIONS_CATEGORY = "compactions"
+#: 그것만 빠질 때의 여유 배수.
+_COMPACTIONS_OVERFETCH = 2
+
+
 def _layer_cap(hooks: MemoryHooks, layer: str) -> int:
     """Resolve the per-layer character cap from the hooks bag."""
     ratio = hooks.layer_budget_ratio.get(layer, 0.0)
@@ -375,10 +383,19 @@ class MemoryAwareRetriever(MemoryRetriever):
         # Ambient-noise exclusion for the AUTOMATIC search layers (explicit
         # memory_search tool calls are unaffected): screen-observation style
         # buffers can dominate a vault and drown real recall.
-        _excluded = set(getattr(hooks, "search_exclude_categories", ()) or ())
+        _configured_excluded = set(getattr(hooks, "search_exclude_categories", ()) or ())
+        # Compaction records are always dropped (below), so always fetch a little more than k:
+        # otherwise every compaction note in the top k leaves the layer with fewer than k results.
+        _fetch_k = hooks.max_results * (
+            _EXCLUDED_OVERFETCH if _configured_excluded else _COMPACTIONS_OVERFETCH
+        )
+        # 압축 기록("compactions")은 늘 뺀다. 이 세션의 것은 체크포인트로 이미 messages 에 있고,
+        # 지난 세션의 것은 같은 대화의 아카이브를 줄인 판이다. 자동 층에 올리면 같은 요약이 "관련
+        # 지식" 으로 한 번 더 들어간다. 명시적 memory_search 는 그대로 찾는다.
+        _excluded = _configured_excluded | {_COMPACTIONS_CATEGORY}
 
         def _drop_excluded(hits):
-            if not _excluded or not hits:
+            if not hits:
                 return hits
             kept = []
             for h in hits:
@@ -386,7 +403,7 @@ class MemoryAwareRetriever(MemoryRetriever):
                 if cat in _excluded:
                     continue
                 kept.append(h)
-            return kept
+            return kept[: hooks.max_results]
 
         if hooks.slim_mode or hooks.always_render_vault_map:
             _add(
@@ -405,14 +422,12 @@ class MemoryAwareRetriever(MemoryRetriever):
                     vec = self._provider.vector()
                     if vec is None:
                         return None
-                    return _drop_excluded(await vec.search(query, top_k=hooks.max_results))
+                    return _drop_excluded(await vec.search(query, top_k=_fetch_k))
 
                 _add("vector", _fetch_vector)
 
             async def _fetch_kw_notes() -> Any:
-                return _drop_excluded(
-                    await self._provider.notes().search(query, limit=hooks.max_results)
-                )
+                return _drop_excluded(await self._provider.notes().search(query, limit=_fetch_k))
 
             _add("kw_notes", _fetch_kw_notes)
             _add("kw_ltm", lambda: self._provider.ltm().search(query, limit=hooks.max_results))
@@ -786,6 +801,8 @@ class MemoryAwareRetriever(MemoryRetriever):
         for h in hits:
             if _is_current_session_record(h, getattr(self, "_current_session_id", "")):
                 continue
+            if (getattr(h, "metadata", None) or {}).get("category") == _COMPACTIONS_CATEGORY:
+                continue  # 프리페치 없이 불린 경로도 같은 규칙(위 _drop_excluded)
             text = h.content or ""
             if not text or _dedup_key(h) in already:
                 continue

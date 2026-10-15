@@ -4,6 +4,1378 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.90.0] - 2026-10-13
+
+### Added: CLI 구독 한도 신호와 한도 소진 분류
+
+XGEN 이 Claude Code·Codex 계정을 여러 개 두고 한도가 찬 계정을 건너뛰려면, 런타임이 스트림에서만 알 수 있는 두 가지를
+호스트에 넘겨야 한다. 계정을 고르는 일은 호스트 몫이고 빌더 인자(`build_cli_client`, `build_codex_cli_client`)는 바뀌지 않았다.
+
+- **한도 신호 보존**: Claude CLI 가 매 요청 앞에 내는 `rate_limit_event` 를 더는 버리지 않는다. 창(`five_hour`·`seven_day`
+  등)별 마지막 값 `{status, resets_at, utilization, overage_status, ...}` 을 `StreamJsonAccumulator.rate_limits` 로 모아
+  `APIResponse.raw["rate_limits"]` 와 턴 `usage` 청크의 `rate_limits` 에 싣는다. `utilization` 은 CLI 가 경고(90% 넘음)일
+  때만 보내므로 평소에는 None 이다(0 으로 지어내지 않는다).
+- **`ErrorCategory.CLI_RATE_LIMITED`**: 구독·지출 한도 소진. `is_recoverable` 이 아니라서 Stage 6 이 같은 계정으로 다시
+  보내지 않는다. 예전에는 `CLI_PROTOCOL_ERROR` 로 떨어져 같은 계정에 세 번 더 보냈고, Claude 의 안내 문구("You've hit your
+  limit")가 답변으로 흘러나갔다. 근거: Claude assistant 프레임의 `error` 값 `rate_limit`·`billing_error`, `is_error` 결과와
+  error 줄의 한도 문구, Codex 오류 프레임의 한도 문구와 429. stderr·종료 코드 경로는 MCP 로그가 섞이므로 넓은 표현
+  ("rate limit")은 보지 않는다.
+- **`APIError.details`**: 분류에 딸린 구조화 값. `CLI_RATE_LIMITED` 는 `reset_at`(유닉스 초, 모르면 None)·`rate_limits`·
+  `kind`(limit·billing) 를 싣는다. 초기화 시각은 거부된 창의 `resetsAt`, 없으면 문구(`limit reached|<epoch>`,
+  "resets 3pm (Asia/Seoul)", "try again in 2 days 3 hours", `resets_in_seconds`)에서 뽑는다. Stage 6 의 `api.error`
+  이벤트에도 `details` 가 실린다.
+- 턴 `usage` 에 `cli_version` 을 싣는다(호스트가 파드별 CLI 버전을 원장에 남긴다).
+
+## [4.89.0] - 2026-10-12
+
+### Changed: 컨텍스트 압축을 다시 짰다 (언제, 얼마나, 무엇을 남기는지)
+
+2026-10-11 검토에서 압축이 너무 늦게 돌거나(한국어 과소 추정), 돌아도 대화를 잃거나(요약 실패 시 이력 삭제),
+provider 의 "prompt too long" 에는 아무것도 하지 않는 문제를 찾았다. Codex · Claude Code 의 방식(provider 가 센
+토큰을 기준으로 삼기, 넘침 시 압축 후 재시도, 사용자 말은 그대로 남기기)에 맞춰 고쳤다. 고친 뒤 세 차례 검토(두 번은
+핵심 정책 · 호스트와 클라이언트 · 실제 파이프라인 시나리오의 세 갈래, 마지막은 확인 검토)에서 나온 문제도 이 판에서 고쳤다.
+
+- **추정 하나** (`core.text_tokens`): 압축 판단과 호출 전 입력 맞춤이 같은 글자 부류 기반 추정을 쓴다. 예전 압축 쪽은
+  4자당 1토큰이라 한국어를 2~3배 적게 셌다. 요청에 붙는 것은 모두 센다(시스템 프롬프트, 도구, Stage 3 이 요청 사본에만
+  붙이는 턴 맥락: 날짜 · 고른 기억 · 턴 노트). 성공한 호출마다 provider 가 보고한 입력 토큰을 기준점으로 삼고
+  (`record_prompt_usage`, 캐시 읽기 · 쓰기 포함, Claude Code CLI 포함), 그 뒤에 붙은 것만 추정한다. 보정 비율은
+  0.9~2.5 로 묶고, 기준점 추정은 보정된 단순 추정의 80% 아래로 내려가지 않는다. 메시지별 추정은 객체마다 기억해
+  긴 대화에서 반복마다 전부 다시 세지 않는다(긴 글 캐시는 LRU, 마지막 메시지의 제자리 수정도 알아챈다).
+- **입력 예산과 문턱** (`core.compaction`): 창에서 답 몫(`output_reserve`: max(4096, max_tokens + 2048), 창의 절반
+  이하)을 뺀 입력 예산을 기준으로, 압축이 줄일 수 없는 몫(시스템 프롬프트 · 도구 · 턴 맥락 · 지금 요청의 첨부,
+  `fixed_tokens`)을 뺀 나머지의 80% 를 넘으면 50% 까지 줄인다(`soft_level`). 큰 PDF 를 붙인 턴이 요약 직후에도 문턱을
+  넘어 요청마다 요약하던 일을 막는다. Stage 4 guard 도 같은 답 몫을 남기므로(`TokenBudgetGuard` 기본값 0 = 이 몫, 매
+  점검마다 상태에서 계산) 약한 압축이 늘 guard 보다 먼저 온다. 예전에는 창의 80% 기준이라 32k 창 · max_tokens 8192 에서
+  guard 가 68% 에서 먼저 터졌다. 결정적 정리(오래된 도구 결과 · 도구 호출 인자 · 이미지)를 먼저, 모자라면 모델 요약.
+  지금 답하는 요청에 붙은 이미지와 PDF 는 정리에서 지우지 않는다.
+- **요약 횟수**: 약한 압박의 요약 시도는 요청 하나에 한 번, 턴당 6번이고 실패한 시도와 모델이 없는 경우도 센다. 두 번
+  실패하면 그 턴의 약한 압박은 모델을 더 부르지 않는다. 백그라운드 요약이 도는 동안에는 약한 압박이 같은 이력을 다시
+  요약하지 않는다. 요약할 구간이 창의 5%(작은 창은 최대 15%, 2,000 바닥)보다 작으면 하지 않는다(강한 압박도 같다).
+  Stage 16 의 압축 요청도 이 규칙을 따른다(사람이 거는 `/compact` 만 예외). 턴 계수는 `begin_turn` 이 비운다.
+- **강한 압박** (guard · 넘침): 요약을 먼저(실패하면 결정적 다이제스트) 하고, 그래도 입력 예산을 넘을 때만 손실을
+  싼 것부터 낸다. 공격적 정리(오래된 이미지 · PDF, 오래된 결과 짧게), 남은 도구 결과(결과 속 이미지 먼저, 그다음 글을
+  비율대로 다시 재며), 마지막으로 지금 요청의 첨부를 하나씩. 어떤 단계든 그것으로 닫을 수 없는 차이면 건드리지 않고
+  guard 가 거절한다. 압축기가 예외를 내도 덜어 낸 만큼은 인정해 guard 가 다시 보고 Stage 6 이 다시 보낸다.
+- **넘침 복구** (Stage 6): provider 가 창을 넘었다고 거절하면(OpenAI · vLLM · Gemini(AI Studio · Vertex) 400 도 이제
+  `TOKEN_LIMIT`) 강하게 압축하고 한 번 다시 보낸다. 오류에 적힌 실제 한도가 믿던 창보다 작으면 그 턴의 창을 그 값으로
+  바꾼다. 메시지가 이미 작고 답 몫 때문에 넘친 경우(vLLM "100 in the messages, 8192 in the completion")는 압축하지 않는다.
+  숫자를 적지 않는 넘침 문구에는 창 교정 없이 압축과 재시도만 한다.
+- **요약 체크포인트** (`LLMSummaryCompactor`): 앞부분을 `[Context checkpoint]` 메시지 하나로 바꾼다. 요약은 사용자
+  요청 · 한 일 · 결정 · 문제 · 남은 일 · 현재 상태 여섯 항목이고, 도구 호출과 결과까지 읽는다(예전에는 글 블록만, 그것도
+  앞 12,000자만). 지금 하던 요청은 원문 그대로(압축 목표의 절반까지) 첨부(이미지 · PDF · 파일, 바로 앞에 따로 보낸
+  첨부 포함)와 함께 붙고, 같은 턴의 두 번째 압축에서도 따로 붙는다. 첨부만 보낸 요청도 요청이다. 그 밖의 사용자 말은 창의 8% 안에서 그대로 붙인다. 런타임이 넣는 안내(산출물 대조, 턴 예산)는
+  사용자 말로 보지 않고, 다른 대화로 바뀐 상태에서는 예전 고정 말을 가져오지 않는다. 이전 체크포인트는 토큰 기준으로
+  읽혀 새 요약에 접힌다. 약한 압박에서 요약이 실패하면 이력을 그대로 둔다(예전에는 지웠다). 요약 요청 자체가 너무
+  길다고 거절되면 provider 수치로 대본을 줄여 다시 보내고 그 비율을 턴의 보정에 반영한다. 기준점이 없을 때(턴 첫
+  호출)는 대본을 창의 40% 로 잡는다.
+- **백그라운드 요약** (상태를 유지하는 호스트): 도는 동안 표시(`state.shared` 의 시각 값, 복사 · 직렬화 가능)를 남겨 같은
+  이력을 다시 요약하지 않고, 결과를 적용할 때 고정한 사용자 말도 함께 옮긴다. 실패는 그 요약을 건 턴에만 센다(이어
+  달리기 조각 포함). Stage 16 의 압축 요청은 도는 요약을 취소하고 바로 요약한다.
+- **기억 기록**: 기록되기 전에 요약으로 빠진 메시지를 STM 기록 · 대화 아카이브가 먼저 기록한다
+  (`memory.compacted_unrecorded`, 기록기마다 최대 300개). 워터마크가 없던 기록기는 0 으로 본다.
+- **도구 결과 상한**: 도구별 상한(기본 10만 자, 넘으면 4.88 과 같이 저장 후 미리보기)과 별개로, 모델이 읽는 글
+  (display_text 가 있으면 그것)이 입력 예산의 25% 토큰을 넘으면 앞뒤만 남긴다. 모든 도구에 적용한다(ToolBatch 포함).
+  글자가 아니라 토큰으로 재고(영어 6만 자는 200k 창에서 그대로 간다), 결과 속 이미지는 남기며, 구조화 오류는
+  `ERROR <code>` 첫 줄을 지킨다. 실패해도 결과를 그대로 돌려준다.
+- **호스트 입력 맞춤** (`fit_input_to_budget`): guard 와 같은 답 몫을 남기고, 맞춤 뒤에 Stage 3 이 붙이는 숨긴 도구 목록 ·
+  이번 턴 안내 · 날짜도 센다. API 백엔드는 이력을 체크포인트가 차지할 수 있는 최대 크기만큼만 세어, 압축할 수 있는 지난
+  대화 때문에 이번 질문을 자르지 않는다. CLI 백엔드(claude_code · codex)도 CLI 창(claude_code 200k, `[1m]` 별칭은 1M,
+  codex 272k, claude_code 는 CLI 의 답 몫과 도구 몫을 더 남김)으로 맞추고, 넘치면 가장 오래된 이력부터 뺀다. 도구는 실제로
+  보내는 것(core + 열린 도구)만 센다. "입력 일부를 생략" 안내는 사용자 입력(질문 · 참조)이 잘렸을 때만 나간다.
+- **메모리 노드 문맥**: DB 메모리 노드가 `(최근 메시지, 이전 대화 문자열)` 로 보낸 둘째 칸을 붙인다(`history_context`).
+  예전에는 버려져 최근 2개 메시지만 모델에 갔다. API 백엔드는 시스템 프롬프트 끝(옛 agent_xgen 과 같은 자리, 한 턴의 여러
+  호출에서 접두 캐시에 든다), CLI 백엔드는 이번 턴 안내(시스템 프롬프트가 argv 로 가서 매 턴 바뀌면 예열 프로세스를 못
+  쓴다). 창의 25% 안으로 줄이고, 입력 맞춤에서 질문 · 참조보다 먼저 줄인다.
+- **내장 메모리 주입**: 주입 상한(기본 10,000자)을 창의 10% 로 묶고, 입력 맞춤의 예약도 같은 값에서 계산한다.
+  자동 검색 층은 압축 기록(`compactions`)을 올리지 않고, 그만큼 조금 더 받아 온다.
+- **창 표**: Claude Opus 4.6 이후 · Sonnet 4.6 이후 · Haiku 5.5 · Fable · Mythos 1M, gpt-5 계열 272k(입력 한도),
+  gpt-5-chat 128k, gpt-5.5 · gpt-6 922k, Gemma(4 · 3 은 128k, 3n · 1b · 270m 은 32k, 2 는 8k), Azure 기본 128k.
+  Bedrock 은 이 런타임에서 Claude 만 부르므로 기본 200k 그대로다. vLLM 은 표를 쓰지 않는다(같은 모델도 창을 줄여 띄우는
+  일이 흔하다: 서버 실측, 카탈로그, 기본 32k 순). 접두는 이름 앞이나 구분자(. / :) 뒤에서만, 숫자를 이어 가지 않을
+  때만 맞춘다('gpt-5.5' 는 'gpt-5.50' 에 맞지 않는다).
+- **Claude Code argv**: 약 100KB(Windows 는 명령줄 한도 때문에 6,000자)를 넘는 시스템 프롬프트는
+  `--system-prompt-file` 로, 넘는 프롬프트는 stream-json stdin 으로 보낸다. 파일은 사용자 전용 폴더에 0600 으로 쓰고
+  (POSIX 는 폴더의 주인과 권한을 확인하고, 이름을 남이 쓰고 있으면 프로세스 전용 임시 폴더로 바꾼다) 하루 지나면 지운다.
+- **`/compact`**: 상태에 수동 압축 요청을 남기고 Stage 2 가 다음 패스에서 문턱과 무관하게 요약한다(예전 명령은 아무
+  파이프라인도 등록하지 않는 전략을 찾아 늘 실패했다). 압축이 꺼진 에이전트에서는 실패로 답한다.
+- 새 사건: `context.overflow` · `context.compaction_skipped` · `context.compaction_deferred`.
+  바뀐 것이 없으면 `context.compacted` 대신 `context.compaction_skipped`(reason `no_change`)를 낸다.
+
+## [4.88.0] - 2026-10-11
+
+### Added — 호스트가 이번 턴 안내를 턴 노트로 넘기는 선택 훅 `turn_notes()`
+
+호스트가 턴마다 바뀌는 글(예: 에이전트 기억이 이번 질문에 고른 답·지도)을 넘길 자리가 Context 포트뿐이었다.
+그 길은 사용자 메시지 본문이 되어 대화 기록·대화 노트·실행 카드·사실 추출·기억 검색어에 사용자 말로 남는다.
+`HostServices.turn_notes()`(OPTIONAL, 동기 함수)가 돌려준 문자열을 실행기의 폴더 안내 뒤에 `SharedKeys.TURN_NOTES` 로
+붙인다. 폴더 안내와 같이 요청 사본에만 실리고 기록에는 남지 않는다. 훅이 없거나 실패하거나 비동기면 예전과 같다(안내 없음).
+
+### Added — 도구 호출 사건이 그 호출의 성격을 싣는다 (`capabilities` · `origin`, 사건 목록 v17)
+
+`tool.call_start` · `tool.call_complete` 에 도구가 스스로 말하는 능력(`Tool.capabilities(input)`)과 출처(`tool_origin`)를
+싣는다. 받는 쪽(호스트 실행 기록 · 기억)이 도구 이름표를 들고 "읽기인지 쓰기인지" 를 다시 추측하지 않는다. 파티션 ·
+순차 · 병렬 · 스트리밍 실행기와 ToolBatch 항목 모두 싣는다. 실행기에 레지스트리가 없거나 도구를 모르면 비워 보낸다(CLI
+백엔드는 싣지 않는다).
+
+이 판이 새로 채우는 능력은 **읽기 전용(read_only)과 바깥 연결(network_egress)**이다(기기 도구는 MCP 주석의 멱등 표시도
+옮긴다). 파괴(destructive) · 병렬(concurrency_safe)은 권한 확인 · 계획 모드 · 병렬 실행을 바꾸므로 지금까지의 값을 그대로 둔다.
+
+- `BashTool.capabilities(input)` · `classify_shell_command`: 명령마다 답한다. 실패-닫힘 - 따옴표 밖의 모든 구간이 아는
+  읽기 프로그램이고, 그 프로그램을 쓰기로 바꾸는 플래그(`sed -i` · `sort -o` · `find -delete/-exec` · `git branch 새이름` ·
+  `curl -o/-X POST/--data` …)가 없고, 파일로 쓰는 리다이렉트(`>` `>>` `2>` `&>`) · 명령 치환 · 프로세스 치환 · 묶음(`{ }`)
+  · 다른 셸이나 인터프리터에 넘기는 코드(`bash -c` · `node -e` …)가 없을 때만 읽기 전용이다. 파이썬 인라인 코드
+  (`-c` · 히어독)는 쓰기 흔적을 본다. 권한을 올리는 명령(sudo 등)과, 언어 · 시간대 같은 것 말고 다른 환경 변수를 앞에 붙인
+  명령(`LD_PRELOAD=…` · `PAGER=…`)은 읽기 전용이 아니다. 2만 자가 넘는 명령은 분석하지
+  않는다(읽기 전용 아님). 결과는 명령 문자열로 캐시한다. 파괴 · 병렬 여부는 기본값.
+- 기기 도구(`host/device_tools.capabilities_from_annotations`): MCP 도구 주석을 MCP 어댑터와 같은 규칙
+  (`tools.mcp.adapter.annotations_to_capabilities`, 이전 이름 `_annotations_to_capabilities` 를 공개로)으로 옮기되
+  파괴 · 병렬은 기본값으로 둔다. 주석이 없으면 기본 능력.
+- 포트 도구(`host/tools.py`): LangChain 도구의 `metadata` · 호출 가능 사전의 `capabilities` 에 적힌 `read_only` ·
+  `network_egress` 를 읽는다(호스트 노드가 적는다). `read_only` 가 없으면 기본 능력.
+- `host/tool_exposure.TURN_ONE_DISCOVERY`(= ToolSearch): 턴 1 표 안의 도구 발견 묶음에 이름을 붙였다. 표의 내용은 같다.
+  호스트가 "도구를 찾은 호출은 한 일이 아니다" 를 가릴 때 읽는다. ToolBatch 는 안에서 실제 도구가 돌아 넣지 않는다.
+
+### Fixed — 호스트가 `set_hooks` 로 붙인 기억 hooks 가 자동 검색에 먹지 않던 것
+
+runner · pipeline 이 검색기(`MemoryAwareRetriever`)를 hooks 없이 만들어, 저장소에 `set_hooks` 로 붙인 `MemoryHooks` 가
+자동 검색에 쓰이지 않았다. 이제 검색기가 저장소의 hooks(`memory.provider.provider_hooks`, MemoryHooks 일 때만)를 받는다.
+`set_hooks` 를 부르는 호스트는 hooks 의 모든 검색 설정(제외 분류 · 결과 수 · 주입 예산 · slim_mode · 층별 예산 …)이
+적용된다. 생성자로 hooks 를 받은 저장소도 같다. hooks 는 파이프라인을 지을 때 한 번 읽으므로 그 전에 붙여야 한다. hooks 를
+주지 않은 저장소는 기본 `MemoryHooks()` 라 검색 결과가 그대로다.
+
+자동 검색에서 뺄 분류(`search_exclude_categories`)가 있으면 키워드 · 벡터 층이 다섯 배를 받아 거른 뒤 결과 수만큼 자른다.
+뺀 분류가 저장소의 대부분일 때 상위 k 가 전부 그 분류라 거르고 나면 비던 것을 막는다. 기억 도구(`memory_search`)로
+직접 찾는 길은 영향이 없다.
+
+## [4.87.1] - 2026-10-11
+
+### Fixed: 도구 사이 진행 메모가 영어로 나오던 것
+
+도구 호출 사이에 모델이 쓰는 짧은 진행 메모("Let me check...")도 스트림으로 사용자 화면에 그대로 나간다.
+한국어로 시켰는데 이 메모가 영어로 나오는 일이 긴 작업에서 잦았다. dev 실사용(21일, qwen3.8-27b, 벤치
+에이전트 제외)에서 모델 호출 10회 이상인 대화 6개 중 4개, 3~9회 14개 중 4개였고, 업무는 예측·광고 심의·
+행사 기획·안내서·고객문의·문서 생성 6종이었다. 최종 답은 0건. 첫 메모가 영어면 이후 메모도 영어로 굳는다.
+runtime 에는 "사용자 언어로 쓰라" 는 공용 원칙이 없었다(메모리 노트용 문구만 있음).
+
+- `USER_LANGUAGE_PROMPT_BLOCK`: 도구 루프 턴에 `EFFICIENCY_PROMPT_BLOCK` 과 같은 조건으로 붙는다(도구가 모델에
+  닿고, 사용자가 시스템 프롬프트를 비우지 않은 턴). 도구 사이 메모까지 사용자 언어로 쓰고, 코드·명령·파일
+  이름·인용 원문은 그대로 둔다.
+- 로컬 실험실(같은 모델·dev 노드 설정)에서는 기준선에서도 영어 메모가 재현되지 않았다(약 20회, 메모 0/30여 개).
+  수정판의 메모·최종 답은 전부 한국어였다. 효과는 dev 실사용 집계로 확인한다.
+
+## [4.87.0] - 2026-10-11
+
+### Added: 보조 호출 사용량을 `turn_usage` 의 `auxiliary` 로 낸다
+
+턴 사용량(`usage` 청크·`usage_sink`)은 메인 루프 호출(Stage 7 이 세는 모델 왕복)만 합산했다. 그래서 대화가
+길어져 Stage 2 가 모델로 압축(`s02.compact`)한 호출은 어디에도 남지 않았고, 호스트(XGEN)의 토큰 한도·사용량
+집계에서 빠졌다. 압축 한 번은 오래된 대화 전체를 읽으므로 작지 않다.
+
+- `PipelineState.add_aux_usage(purpose, usage)`·`aux_usage_entries()`: 메인 루프 밖 호출의 사용량을 턴 단위로
+  남긴다(`begin_turn` 이 비운다). 공개 필드는 늘리지 않았다(비공개 `_turn_aux_usage`).
+- `LLMSummaryCompactor` 가 압축 응답의 사용량을 `compact` 로 남긴다. 백그라운드 압축은 그림자 state 에 모았다가
+  결과를 받을 때 실제 state 로 옮긴다(요약을 버리는 경우에도, 모델은 이미 불렀으므로).
+- `turn_usage` 에 `auxiliary: {input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, calls,
+  by_purpose}` 가 붙는다(있을 때만). 최상위 값은 예전과 같다(메인 루프만, 반복 한도·예산이 읽는 값). 보조
+  호출만 있었던 턴도 이제 usage 를 낸다(메인 값 0).
+- 스킬 fork 실행기는 호스트가 붙일 때만 모델을 부른다(XGEN 은 붙이지 않는다). 그래서 이번에 다루지 않았다.
+
+## [4.86.1] - 2026-10-11
+
+### Fixed: 보통 크기 그림이 결과 길이 상한에 걸려 모델에게 안 가던 것
+
+4.86.0 의 Read 는 그림을 이미지 블록으로 건네지만, Stage 10 의 결과 길이 상한(`max_result_chars`, 기본
+10만 자)이 리스트 결과를 JSON 으로 통째 세면서 base64 까지 글자로 셌다. 그래서 base64 가 10만 자를 넘는
+그림(PNG 약 75KB 이상 — 에이전트가 PDF 를 2배로 렌더한 도면, 화면 캡처, 고해상도 차트가 다 여기 든다)은
+`[tool result truncated: … chars > 100000 limit]` 미리보기로 바뀌어 모델이 base64 앞머리만 받았다.
+dev(2026-10-11) 도면 대조 대화에서 렌더 그림 Read 5회가 모두 잘렸다. 4.86.0 실험 케이스는 30KB 안팎이라
+이 상한을 건드리지 못했다.
+
+- `persistence._render_content` 가 이미지 블록이 섞인 리스트는 이미지를 `[image]` 로 세고 나머지 블록만
+  잰다(`context_prune._content_size`·`core.token_estimate` 와 같은 규칙). 그림 크기는 Read 의
+  `bound_image`(긴 변 1568px·4MB)가 이미 묶는다. 이미지가 없는 리스트·문자열·dict 는 예전과 같다.
+- 글자 부분이 상한을 넘으면 예전처럼 저장하고, 미리보기에 base64 가 들어가지 않는다.
+
+실험실(Qwen 3.8, 실제 크기 그림 base64 10만~19만 자): 설계 1(도면 2배 렌더) + 보류 2(2560x1440 캡처,
+2400x1600 차트). 4.86.1 은 6/6 정답·Read 1회·18~25초, 4.86.0 은 정답은 냈지만 13~25회·210~260초를 OCR·
+픽셀 분석으로 돌았고 그림에 없는 연도("2024 Q2")를 지어냈다.
+
+## [4.86.0] - 2026-10-11
+
+### Added: Read 가 이미지를 보는 모델에게 그림으로 건넨다
+
+예전 Read 는 이미지 파일에 어느 모델에게나 `[Image file: 이름, 크기, 형식]` 한 줄만 돌려줬다. 그림을 보는
+모델도 파일 이름만 받았고, 그 사실을 들은 적이 없었다. dev 30일(2026-10-11) Qwen 대화 24개가 그림을 Read 한
+뒤 OCR(38회)·픽셀 분석(71회) 코드로 우회했고, 광고 영상 프레임 35장을 Read 하고 이름만 받은 대화는 "프레임
+31장을 뽑아 화면 문구까지 전부 확인했습니다" 라고 답했다. 그 모델(qwen3.8-27b)은 그림을 본다.
+
+- 보는 모델: 글 머리(`[Image file: …] The image is attached below.`) + 이미지 블록. 긴 변 1568px·4MB 를 넘으면
+  JPEG 로 줄인 사본만 보낸다(원본은 그대로). OpenAI 호환 서버에는 기존 번역기가 tool 메시지 뒤 user
+  메시지로 옮긴다. 오래된 그림은 기존 정리(context_prune)가 표지로 바꾼다.
+- 못 보는 모델: "이 모델은 그림을 볼 수 없다 — 내용을 짐작하거나 묘사하지 말 것, 글이 필요하면 OCR 도구가
+  있으면 쓰고 없으면 사용자에게 말할 것". 깨진 파일은 보내지 않는다. SVG 는 글로 읽는다.
+- 모델이 그림을 보는가(`host.token_budget.resolve_supports_vision`): 노드 파라미터 `supports_vision` →
+  어드민 카탈로그 `capabilities.supports_vision`(또는 `vision`) → 공개 API 모델 계열 표(claude·gpt-4o/4.1/5·
+  o1/o3/o4·gemini·이름에 `-vl`) → 모르면 못 본다. 못 보는 모델에 그림을 보내면 provider 가 400 으로 턴을
+  깨므로 기본이 "못 본다" 다. **자체 서빙(vLLM) 모델은 같은 이름도 서빙한 체크포인트마다 다르므로 카탈로그에서만
+  켠다** — 배포 환경에서 `supports_vision: true` 를 넣어야 동작한다.
+- 이미지 크기 상한은 `core.images.bound_image` 하나로 — 첨부(provider 요청 직전)와 Read 가 같은 규칙.
+- 도구 결과가 블록 목록(글 + 그림)이면 작업 과정·기록에 쓰는 결과 글을 글 + `[image]` 로 만든다. 예전엔
+  `str(list)` 로 파이썬 표기와 Base64 가 찍혔다(화면 캡처 같은 기기 도구도 같았다).
+
+실험실(harness-bench lab, qwen3.8-27b, 같은 파이프라인): 설계 2갈래(영상 프레임 문구·도면 치수) + 보류 3갈래
+(영수증 합계·막대 차트 비교·글 없는 도형 색) × 2회. 이번 판 10/10 정답, 평균 도구 1.1회·15초. 이전 판은 끝난
+9회 중 2회만 정답(도형 — 픽셀 분석으로), 2회는 지어낸 답("LAB V", 없는 도면 치수 "4HOLE Ø8·두께 10mm"),
+나머지는 우회 코드로 맥락·시간 초과, 평균 도구 11회·250초. 못 보는 모델로 둔 판은 지어낸 답 0회(2회는 "읽을
+수 없다" 고 말함, 2회는 픽셀 분석으로 정답).
+
+## [4.85.0] - 2026-10-08
+
+### Added: 사용자 PC 접속 도구 `UserPc` (host.user_pc)
+
+대화에 연결된 기기 폴더에 닿는 길을 도구 하나로 모았다. 원격 셸로 그 폴더에 들어간 것처럼 명령을
+보내고(run), 파일은 get·put 으로만 sandbox 와 오가며, 오래 걸리는 명령은 작업(job)으로 이어 본다.
+
+- 호스트가 선택 훅 `user_pc_connection()` 으로 접속(연결 폴더 목록 + 기기 호출 함수)을 주면 이 규칙으로
+  돈다. 기기의 폴더 도구(ReadFile·WriteFile·ListDir·SearchFiles·DeleteFile·Shell·ShellJob·Open·Clipboard·
+  Notify·TakePhoto·OpenFile·CopyToWorkspace·CopyFromWorkspace·LocalControl)는 모델에게 보이지 않고, 기록 속
+  옛 호출은 평문으로 바뀐다. 훅이 없는 호스트는 예전 규칙 그대로다.
+- 여러 기기의 폴더를 함께 다룬다. 폴더가 여럿이면 `folder` 로 고르고, 없으면 고를 수 있는 이름을 돌려준다.
+- 판정은 도구가 지킨다: 꺼진 기기·명령을 받지 못하는 기기는 기다리지 않고 거절, 한 턴에서 응답하지 않은
+  기기는 같은 턴에 다시 기다리지 않음, 호출마다 시한, 폴더 밖 경로 거절(폴더의 절대 경로는 상대로 받는다).
+- 턴 안내는 연결 폴더의 사실만 적는다(이름·기기·OS·셸·경로·켜짐). "Two machines" 문단과 sandbox 의
+  "없음" 결과에 기기를 보라고 붙이던 안내는 이 경로에 없다. sandbox 도구가 연결 폴더의 경로를 받았을 때만
+  어느 폴더의 것인지 한 줄을 붙인다.
+- Bash 설명의 "use the device tools" 를 "reached with UserPc" 로.
+
+## [4.84.3] - 2026-10-06
+
+### Changed: `xgen-doc2chunk` 0.4.5 → 0.5.0 (워크시트 처리 개편)
+
+ParseDocument 가 엑셀·CSV 를 제대로 읽는다.
+
+- 엑셀은 앞 1,000행·100열만, CSV 는 100,000행까지만 읽던 것을 끝까지 읽는다.
+- 표시 서식(15.3%, 2026년 10월 6일, ₩1,234.50)을 적용하고, 계산값 없이 저장된 수식은 `=B2*C2` 로 남긴다.
+- 병합 머리글은 한 줄로 편다(`1월 목표`). 표는 언제나 마크다운이다.
+- `.xlsm`·`.xltx`·`.xltm` 도 읽는다.
+- CSV 빈 칸이 앞 셀·윗 셀 값을 받던 것을 고쳤다.
+
+## [4.84.2] — 2026-10-06
+
+### Security — 의존성 보안 수정판
+
+- `xgen-doc2chunk` 0.4.3 → 0.4.5: python-multipart 0.0.32, langsmith 0.8.18, pydantic-settings 2.14.2, psutil 7.2.2.
+- `asyncssh` 2.23.1 → 2.24.1: 서비스가 cryptography 50 으로 올라가 2.24(cryptography>=48 요구)를 받을 수 있게 됐다.
+- CI pip-audit 무시 목록을 실제로 남는 것만으로 — pip 자신과, langchain 계열 셋(langchain·langchain-anthropic·
+  langgraph-sdk). 셋은 langchain-core 1.4·langgraph 1.2 로 계열 전체를 올려야 해서 따로 다룬다.
+
+## [4.84.1] — 2026-10-04
+
+### Fixed — WebSearch `days`: 한 뉴스 엔진의 오류가 다른 엔진이 가져온 결과를 버리던 것
+
+ddgs 는 뉴스 엔진(bing·duckduckgo·yahoo)을 함께 돌리고, 첫 엔진 오류가 나면 그때까지 끝난 엔진의 결과만 모은다
+(`DDGS._search_sync` 가 FIRST_EXCEPTION 으로 기다린 뒤 수집을 끝낸다). dev 에서 duckduckgo 가 5초 만에 시간 초과로
+끝나면 늦게 도착한 bing 결과 6건이 버려지고, ddgs 가 TimeoutException 을 던져 검색이 날짜 없는 웹 결과로 넘어갔다.
+이제 뉴스 엔진이 돌려준 결과를 따로 받아 두고, ddgs 가 아무것도 주지 않으면 그 결과(URL 하나에 한 건)를 쓴다.
+엔진 결과가 정말 없으면 이전처럼 웹 결과로 넘어간다.
+
+## [4.84.0] — 2026-10-03
+
+### Added — WebSearch `days`: 최근 N일 뉴스만, 기사마다 날짜와 매체
+
+"최근·최신" 을 물으면 모델이 검색어에 연도("… 2026 2025")를 넣고, 텍스트 엔진은 관련도로 줄을 세워 옛 기사가
+섞였다. dev 에서 한 시장의 최신 신제품 뉴스를 물은 19턴(09-29~10-02, 검색 91회)은 결과에 2025년이 2026년만큼
+나왔고(278 대 272), "가장 최근 분기" 를 지난 분기로 답한 턴도 있었다. 우리 서버에서 답하는 텍스트 엔진(yandex)은
+ddgs 의 `timelimit` 을 무시하고, 텍스트 결과에는 날짜가 없다.
+
+- `days`(정수)를 주면 ddgs 의 뉴스 엔진으로 그 기간만 찾고, 결과마다 `날짜 · 매체` 줄을 붙인다. 기간 밖 기사는
+  버린다. 그 기간 뉴스가 없으면 웹 결과로 넘어가되 머리말에 "그 기간 뉴스 없음, 날짜 모름" 을 밝힌다.
+- ddgs 9.16 의 bing 뉴스 버그 두 개를 그 검색의 DDGS 인스턴스에서만 비켜 간다: "2026. 9. 28." 을 2026일 전,
+  "4 hours ago" 를 4일 전으로 읽던 날짜를 원문에서 다시 읽고, d·w 를 bing 의 1시간·하루 창으로 보내던 것을 실측한
+  창(7 = 하루, 8 = 일주일, 9 = 한 달)으로 보낸다.
+- `days` 를 모르는 백엔드(brave·tavily·searxng)는 무시했다고 결과에 적는다. `days` 가 없으면 이전과 같다.
+
+실측(10-03):
+- dev 파드, 질의 12개(설계 6·홀드아웃 6): `days=30` 결과 104건이 모두 30일 안. 기사 URL 의 날짜와 대조하면 12/12 가
+  하루 안으로 맞았다(지금 방식은 URL 날짜가 있는 7건 중 30일 안 0건). 검색 시간 중앙 0.9초(지금 2.9초).
+- 옛 기사를 고른 dev 검색어(연도가 들어간 것)를 재생: 홀드아웃 5개는 47/47 이 30일 안, 결과 속 "2025" 23회 → 1회.
+  너무 좁은 검색어 2개는 그 기간 뉴스가 없어 웹 결과로 넘어갔다.
+- Qwen 실험실(실제 호스트·파이프라인, 질문 10×2 + 대조 2×2): 최근 정보를 물은 20턴 중 18턴이 `days` 를 썼고 대조
+  질문은 0턴. 턴당 모델 호출 4.55 → 3.85, 도구 5.4 → 4.1, 입력 토큰 34.5k → 24.6k, 시간 62.8 → 54.6초.
+
+### Fixed — OpenAI 호환 서버에는 시스템 프롬프트를 `system` 역할로
+
+Chat Completions 로 보내는 시스템 프롬프트를 늘 `developer` 역할로 실었다. `developer` 는 OpenAI 고유의 역할이라
+OpenAI 호환 서버는 모를 수 있고, DeepSeek API(XGEN 은 vLLM 채널로 돌린다)는 422 "unknown variant `developer`" 로
+요청을 거절한다. `OpenAIClient.system_role` 은 `developer` 그대로, `VLLMClient` 와 OpenAI 호환 클라이언트(ollama·
+lmstudio·custom)는 `system`. Azure Foundry 는 OpenAI 추론 배포도 서빙해 그대로 둔다.
+DeepSeek: `developer` 422 → `system` 200(시스템 프롬프트대로 답함). dev Qwen(vLLM)은 두 역할의 프롬프트 토큰이
+같다(/tokenize 33개 동일) — 고객 모델의 입력은 바뀌지 않는다.
+
+## [4.83.3] — 2026-10-02
+
+### Fixed — Windows 에서 CLI(claude·codex)를 창 없이 띄우고 트리째 끝낸다
+
+4.83.2 와 같은 문제가 CLI 백엔드에도 있었다: 데스크톱 앱이 엔진을 창 없이 띄우면, 엔진이 띄운 CLI(콘솔
+프로그램)마다 Windows 가 새 콘솔 창을 만든다. `_cli_runtime._spawn` 이 Windows 에서 `CREATE_NO_WINDOW |
+CREATE_NEW_PROCESS_GROUP` 로 띄우고, 끝낼 때는 `taskkill /T /F`(창 없이)로 CLI 가 띄운 MCP 서버까지 트리째
+끝낸다(예전엔 CLI 하나만 끝냈다). POSIX 는 바뀌지 않는다.
+
+## [4.83.2] — 2026-10-02
+
+### Fixed — Windows 에서 이 PC 의 Bash 가 명령마다 콘솔 창을 띄우던 것
+
+데스크톱 앱은 엔진을 창 없이(`CREATE_NO_WINDOW`) 띄운다. 그 엔진에는 콘솔이 없어서, 호스트 경로 Bash 가
+PowerShell(콘솔 프로그램)을 그냥 띄우면 Windows 가 새 콘솔 창을 만들어 명령마다 창이 깜빡였다. 셸과
+`taskkill` 을 `CREATE_NO_WINDOW` 로 띄운다 — 출력은 파이프로 받으므로 창이 필요 없다.
+
+## [4.83.1] — 2026-10-02
+
+### Fixed — 이 PC 에서 도는 Bash 가 취소·시간 초과 때 자식 프로세스를 남기던 것
+
+sandbox 없이 호스트에서 도는 Bash(서버는 늘 sandbox 라 해당 없음 — XD 같은 로컬 호스트의 경로)는 턴을
+취소해도 셸을 건드리지 않아 명령이 끝까지 돌았고, 시간 초과 때는 셸(`/bin/sh`)만 죽여 그 자식(`sleep`·
+`npm` 이 띄운 `node` 등)이 고아로 남았다. 자식이 출력 파이프를 쥐고 있어 1초 시간 초과가 자식이 끝날
+때까지(30초) 돌아오지 않기도 했다(2026-10-02 XD 실측).
+
+- 셸을 자기 프로세스 그룹으로 띄운다(POSIX `start_new_session`, Windows `CREATE_NEW_PROCESS_GROUP`).
+- 취소(`CancelledError`)·시간 초과 때 그룹째 끝낸다 — POSIX 는 SIGTERM 뒤 2초 안에 안 끝나면 SIGKILL,
+  Windows 는 `taskkill /T /F`. 취소는 정리 뒤 그대로 다시 던진다.
+
+## [4.83.0] — 2026-10-02
+
+### Added — 웹 [폴더] 에도 작업 공간 복사 도구
+
+4.82.0 은 데스크톱·CLI·VSCode·모바일 앱의 폴더에만 CopyToWorkspace·CopyFromWorkspace 를 붙였다. 웹 채팅의
+[폴더](브라우저가 고른 폴더, `mcp_web_*`)도 같은 두 도구를 올리므로(xgen-frontend) `FOLDER_TOOLS_BY_SERVER["web"]` 에
+넣는다 — 폴더가 연결된 대화에서만 보이고, 폴더가 그 브라우저에 있으면 어느 화면에서 보낸 턴이든 그 브라우저의 것으로
+붙는다. 턴 안내도 웹에서 복사 도구를 가리킨다.
+
+## [4.82.0] — 2026-10-02
+
+### Added — 기기 폴더 ↔ sandbox 를 옮기는 복사 도구(CopyToWorkspace·CopyFromWorkspace)
+
+폴더 도구는 기기 안에서만 돌았다. ReadFile 은 글만 읽으므로 "카톡으로 받은 문서 세 개를 분석해 줘" 같은 요청에서
+에이전트는 docx·pdf·hwp 를 자기 작업 공간으로 가져올 길이 없었고("이 기능이 없다" 고 답했다, 2026-10-02 사용자
+실측), 작업 공간에서 만든 보고서를 사용자의 폴더에 놓을 길도 없었다. 앱(데스크톱·CLI·VSCode·모바일 1.81.0~)이 두
+도구를 올린다.
+
+- `FOLDER_TOOLS_BY_SERVER` 의 `local`·`mobile` 에 두 도구를 넣는다 — 폴더가 연결된 대화에서만 보이고, 폴더가 다른
+  기기에 있으면 그 기기의 것으로 붙는다(웹 [폴더] 는 아직 이 도구가 없다).
+- 턴 안내(`turn_note`)가 복사 도구가 있으면 "한쪽에서 읽어 다른 쪽에 쓰라" 대신 그 도구를 가리킨다.
+- 기기 경로를 sandbox 도구에 넘겼을 때의 안내(`second_machine`)가 CopyToWorkspace 도 함께 알려 준다.
+
+## [4.81.2] — 2026-10-02
+
+### Fixed — xgen-doc2chunk 0.4.3 과 함께 설치되지 않던 것
+
+workflow 가 doc2chunk 를 0.4.3(PDF 추출을 프로세스 잠금으로 한 번에 하나만)으로 올렸는데, 4.81.1 은 `xgen-doc2chunk==0.4.2`
+로 고정돼 있어 workflow 의 requirements.lock 이 풀리지 않았다(`uv pip compile`: unsatisfiable, 이미지의 `pip install -r
+requirements.lock` 도 같은 이유로 실패한다). 고정을 0.4.3 으로 옮긴다. 4.81.1 의 ParseDocument 추출 잠금은 그대로 둔다 —
+두 잠금은 겹쳐도 해가 없다(같은 프로세스에서 순서만 정한다).
+
+## [4.81.1] — 2026-10-02
+
+### Fixed — ParseDocument 로 PDF 둘을 동시에 읽으면 글자가 깨지고 서버가 죽을 수 있던 것
+
+PDF 를 여는 pypdfium2(PDFium)는 스레드 안전하지 않다. dev 10-02: 모델이 ToolBatch 로 PDF 두 개를 동시에
+읽자 글자가 깨졌고(`æîô WHÅçL…`), 그 뒤 같은 프로세스에서는 하나씩 읽어도 "broken document" 가 났다.
+dev 파드에서 같은 PDF 둘을 스레드 넷으로 동시에 추출하면 프로세스가 Segmentation fault 로 죽었다 —
+워크플로 서버라면 그 파드의 모든 대화가 끊긴다.
+
+- 추출을 프로세스 전체에서 한 번에 하나만 돌게 잠근다(모듈 수준 lock — 다른 세션의 추출과도 겹치지 않게).
+  형식과 상관없이 잠근다(다른 파서도 같은 처지일 수 있다). 한 건이 0.1~0.4초라 줄 세워도 비용이 작다.
+- dev 파드에서 같은 실험(동시 4개 × 3회): 고친 판은 전부 순차 결과와 같고, 뒤이은 순차 읽기도 정상.
+
+## [4.81.0] — 2026-10-01
+
+### Fixed — WebSearch 가 "엔진이 막았다" 를 "결과 없음" 으로 말하던 것
+
+ddgs 는 엔진의 non-200 응답(google·brave 429, mojeek 403, duckduckgo 202)을 빈 페이지와 똑같이 버리고, 아무 엔진도 결과를
+못 내면 `No results found.` 만 남긴다. 우리 서버에서는 대부분의 엔진이 막혀 있고 남은 yahoo 는 절반이 ddgs 가 못 읽는
+레이아웃이라, dev 실사용 WebSearch 101회 중 27회(09-29~10-01)가 이 문구였다. 모델은 검색어 탓으로 알고 바꿔 가며 다시
+찾았다(한 턴은 14번 검색에 7번 실패).
+
+- **엔진마다 무엇을 받았는지 본다.** 이번 검색의 `DDGS` 인스턴스에서만 엔진의 HTTP 응답과 결과 수를 기록한다(ddgs 전역은
+  건드리지 않는다). 훅이 없는 ddgs 버전·테스트 대역이면 예전 동작 그대로.
+- **막혔으면 2초 뒤 한 번 더.** 웹 엔진이 하나도 결과를 못 냈고 거절한 엔진이 있을 때만. 어느 엔진이 답하는지는 호출마다
+  달라서(duckduckgo·google·yahoo 레이아웃) dev·stage·홈서버 세 번 측정에서 24건 중 18건이 두 번째에 결과를 받았다.
+  거절이 한두 개뿐이고 나머지 웹 엔진이 빈 답을 줬으면(brave·mojeek 은 매번 거절) 막힘이 아니라 결과 없음으로 본다.
+- **두 번 다 막히면 그렇다고 말한다(is_error).** `web search failed twice: the search engines refused this server's requests
+  (brave HTTP 429, …) … not a problem with your query — rewording it will not help. WebFetch a page whose URL you already know,
+  or tell the user web search is unavailable right now.` 거절 없이 모두 빈 결과면 진짜 결과 없음 — `No results for 'q'.`
+  (오류 아님, 재시도 안 함).
+- 위키백과류 조회(wikipedia·grokipedia)만 결과를 냈으면 결과 뒤에 "only encyclopedia lookups returned results … incomplete" 한 줄.
+- `metadata["engines"]` 에 엔진별 결과(found·refused·empty·attempts).
+- 실측(dev·stage 파드, ddgs 9.16.0, 질의 12개씩 두 번 = 48회): 첫 시도에 웹 엔진이 막힌 12건 중 6건은 재시도로 결과(재시도한
+  호출은 약 11초), 2건은 위키백과 결과+안내, 4건은 위 문구로 끝났다. 예전 같으면 10건이 `No results found.` 였다.
+
+### Changed — ddgs 가 꺼 둔 yandex 엔진을 우리 검색에서는 다시 쓴다
+
+ddgs 9.15.0(2026-08-16)이 yandex 엔진을 이유 없이 껐다(9.16.0 도 그대로). 우리 이미지는 `ddgs>=9.11` 이라 최신이 깔려
+그때부터 yandex 가 빠졌는데, dev·stage·홈서버에서 yandex 는 36개 질의 모두 결과를 줬다(약 1.4초, 한국어 질의 관련성 양호).
+
+- 이번 검색의 `DDGS` 인스턴스에만 엔진을 더한다(ddgs 전역 레지스트리는 그대로). 순서는 ddgs 가 자기 엔진에 하듯
+  섞은 뒤 우선순위로 — 꺼지기 전 ddgs 와 같다. ddgs 가 이미 돌리는 엔진이면 더하지 않는다(9.14 이하는 그대로).
+- 설정: `extras['web_search']['ddg_extra_engines']` > `GENY_WEBSEARCH_DDG_EXTRA_ENGINES` > 기본 `yandex`. 쉼표 목록,
+  빈 값이면 끈다. **yandex 는 러시아 서비스라 질의를 그쪽으로 보내면 안 되는 고객 환경은 빈 값으로 끌 것.**
+- 실측(dev·stage 파드, ddgs 9.16.0, 질의 12개씩): 첫 시도 24/24 성공·매번 10건, 평균 3.5초(끄면 같은 시각 4건 중
+  1건이 막힘 문구, 1건은 재시도로 회복).
+
+## [4.80.0] — 2026-10-01
+
+### Removed — 외부 실행 엔진 선택점을 걷어 낸다(4.76.0·4.79.0 되돌림)
+
+`AgentTurnExecutor` 를 4.75.0 의 구조로 되돌렸다 — `host/turn_executor.py` 는 4.75.0 과 같다. 이 런타임은 다른 실행 코어를
+알지 않는다. 4.76.0~4.79.0 에 있던 관리자 설정 `XGEN_HARNESS_ENGINE`, 테스트용 kwargs `harness_engine`, `assemble_turn` /
+`TurnPlan` / `SystemPromptParts` 는 없다(런타임·호스트 어디서도 쓰지 않았다). 설정이 없을 때의 동작은 그동안에도 4.75.0 과
+같았으므로 기본 동작은 바뀌지 않는다. 4.77.0(끝나지 못한 턴의 기억)·4.78.x(OpenAI Responses API) 변경은 그대로다.
+
+## [4.79.0] — 2026-10-01
+
+### Changed — 외부 실행 엔진 선택점의 설정값 이름(4.80.0 에서 제거)
+
+## [4.78.1] — 2026-10-01
+
+### Fixed — 4.78.0 검토 보강
+
+- **턴 맥락 위치를 되돌렸다.** 4.78.0 은 `<session-context>`(시각·기억)를 도구 결과가 아니라 이 턴의 사용자 말에
+  붙였는데, 다음 턴은 그 말에서 맥락이 빠지므로 이전 턴의 도구 교환 전체가 프롬프트 캐시에서 다시 쓰였다(재사용
+  구간 수만 자 → 수백 자). 맥락은 예전처럼 가장 최근 user 메시지에 붙이고, **OpenAI Responses 번역기**만 도구 결과
+  곁의 맥락을 `developer` 메시지로 보낸다 — user 로 보내면 도구 출력 뒤의 새 질문으로 읽혀 gpt-6-luna 가 16번 중
+  2번 "Got it." 으로 답했고, developer 로는 16/16 정상이었다(dev 실측). Anthropic·Chat Completions 는 그대로.
+- 검색·chat 변형(`*search*`·`*-chat*`)은 Responses 로 보내지 않는다 — `gpt-5-search-api` 는 Responses 를
+  받지 않는다(400, dev 실측).
+- 출력 상한에 닿아 끊긴 응답은 도구 호출이 있어도 `max_tokens` 로 알린다(인자가 잘렸을 수 있다 — Chat Completions
+  의 "length" 와 같다).
+- 생각만 하다 출력 상한에 닿아 보일 것이 없으면 상한을 넓혀 한 번 다시 부른다(Anthropic 경로와 같은 안전망).
+- 스트림: 도구 인자를 `input_json_delta` 로 흘린다 — 긴 인자를 쓰는 동안 무응답 감시가 끊지 않는다.
+- `openai_output_budget` 은 더하기만 한다 — 천장(100k)보다 크게 둔 설정을 줄이지 않는다.
+- 생각 대기 신호 상한 기본값 600초(SDK 읽기 상한 630초 안쪽).
+- Anthropic 번역기는 빈 content 메시지를 보내지 않는다 — 저장하며 생각 블록을 뺀 뒤 복원된 `content: []`.
+
+## [4.78.0] — 2026-10-01
+
+### Fixed — OpenAI 추론 모델은 Responses API 로: 도구와 생각을 함께
+
+GPT-5.4 부터 Chat Completions 는 **함수 도구와 생각을 함께 받지 않는다** — `Function tools with reasoning_effort are
+not supported for <model> in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to
+'none'.` dev 기록에 gpt-6-sol(생각 "기본")·gpt-5.4(생각 "높음")·gpt-5.6-luna 가 같은 400 으로 실패해 있었다. gpt-6-sol·
+gpt-5.6-*·gpt-6-luna 는 기본 강도가 medium 이라 생각을 고르지 않아도 도구만 있으면 실패했고, gpt-6-astra·gpt-6.1-sol 은
+`none` 도 받지 않아 Chat Completions 로는 도구를 아예 쓸 수 없었다.
+
+- `OpenAIClient` 가 공식 엔드포인트의 추론 모델(`gpt-5*`·`gpt-6*`·`o1/o3/o4*`)을 **Responses API** 로 부른다
+  (`translators/_responses`). 상태 없이(`store=False`) 부르고 생각은 `encrypted_content` 로 받아 같은 턴의 다음 호출에
+  그 자리 그대로 돌려준다(도구 호출 앞의 생각을 모델이 이어 간다). 표준 형식에서는 `{"type":"reasoning","provider":
+  "openai","model":…}` 블록 — 같은 모델에만 돌려주고, 다른 provider 번역기(Anthropic·Chat Completions)는 버린다.
+  STM 에는 저장하지 않는다(수 KB 의 암호문).
+- 스트림: 생각 요약을 `thinking_delta` 로 흘리고, 생각이 시작되면 첫 응답으로 치며, 서버가 조용히 생각하는 동안
+  `heartbeat` 청크로 스트림 감시가 끊지 않게 한다(`XGEN_LLM_REASONING_TIMEOUT_S`, 기본 900초).
+- 생각 토큰은 출력 상한 안에서 자리를 먹는다 — 강도마다 답 위에 자리를 더 둔다(`thinking.openai_output_budget`,
+  low 8k·medium 16k·high 32k·xhigh 48k·max 64k, 천장 100k). 기본 강도로 생각하는 모델도 그 기본만큼.
+- 한 번 고쳐 다시 보내기: 받지 않는 강도는 400 이 알려 준 값 중 가장 가까운 것으로, 생각 파라미터를 모르는
+  모델은 빼고, 돌려준 생각 항목이 거절되면 빼고. 공식이 아닌 base_url·Azure 처럼 Chat Completions 로 가는 곳에서
+  도구+생각 400 이 나면 생각을 끄고 다시 보낸다(경고를 남긴다).
+- 생각 표: `max` 는 Responses 에서만 받는다 — gpt-5.6-*·gpt-6-*·gpt-6.1-sol 에 더하고(Azure·Codex 는 뺀다),
+  gpt-5·5.2·5.5·6.1-sol 을 실측으로 표시했다.
+- 운영 스위치 `XGEN_OPENAI_API_SURFACE` = `auto`(기본)·`responses`·`chat`.
+
+### Fixed — 턴의 시각·기억 맥락은 사용자의 말에 붙는다(도구 결과가 아니라)
+
+`<session-context>`(현재 시각·찾아 온 기억)는 요청 사본의 **가장 최근 user 메시지**에 붙었다. 도구 루프의 두 번째
+호출부터 그 메시지는 도구 결과를 실어 나르는 메시지라, OpenAI 는 도구 출력 **뒤의 새 user 메시지**로 받았고 모델이
+날씨를 말하는 대신 "알겠습니다 — 지금은 10월 1일 15시입니다" 라고 답했다(dev 실측, gpt-6-luna 8번 중 1번). 이제 도구
+결과만 실은 메시지는 건너뛰고 이 턴의 사용자 말에 붙인다 — 같은 턴의 다음 호출에서도 자리가 같아 앞부분이 바이트
+그대로 남는다(예전에는 매 호출 마지막 도구 결과로 자리가 옮겨 다녀 캐시가 그 지점에서 갈렸다).
+
+### 확인(dev, 새 런타임 소스, 실제 API)
+
+- 도구 매트릭스(SDK 직접): 10개 모델 × 생각 강도에서 Chat Completions 는 gpt-5.4·5.5 가 끔/기본만, gpt-5.6·6-sol·6-luna
+  가 끔만 받았고 gpt-6-astra·6.1-sol 은 전부 실패했다. Responses 는 전부 받았다(gpt-5·5.x 의 max, astra·6.1-sol 의 none 처럼
+  그 모델이 받지 않는 값만 400).
+- 런타임 파이프라인(`build_pipeline` + `stream_turn`, 실제 도구)으로 dev 에 등록된 API 모델 × 그 모델의 생각 선택지 전부
+  (OpenAI 13·Anthropic 9·vLLM 2 모델, 117 경우): 도구 호출 → 답 → 같은 대화의 두 번째 질문까지 114 통과. 나머지 3 은
+  vLLM `Qwen/Qwen3-4B` 서버가 꺼져 있어 연결 실패(환경).
+- 긴 생각(gpt-5.4 xhigh·gpt-6-sol/astra/5.6-sol max, 소수 세기 + 도구): 생각 항목을 여러 번(최대 5) 돌려주며 통과.
+- 구조적 출력(JSON 스키마)·이미지 입력, 대화 중 다른 모델로 넘기기(Anthropic·gpt-4.1·gpt-5.4·gpt-6-sol) 통과.
+- 확인하지 못한 것: Vertex·Bedrock(dev 에 자격 없음), Claude Code·Codex CLI(dev 에 로그인 없음), Azure(구성 없음).
+
+## [4.77.0] — 2026-10-01
+
+### Fixed — 끝나지 못한 턴(중단·오류)도 대화 기억에 남는다
+
+STM 기록은 Stage 18 이 맡는데, 그 단계는 파이프라인이 끝까지 가야 돈다. 사용자가 [정지] 를 누른 턴은 그 전에 끊겨
+**질문조차 STM 에 남지 않았고**, 다음 턴의 단기 기억 창은 그 턴을 몰랐다(dev 실측: 중단된 "캐시해서 중복 호출을 막자"
+다음 턴이 "어느 앱 얘기인가요?" 라고 되물었다).
+
+- `stream_turn`·`run_turn` 의 종료 처리가 끝나지 못한 턴의 **아직 기록되지 않은 메시지**(질문·도구 호출·받은 결과)를 STM 에
+  남기고, 끝에 표식(`[The user stopped this turn before it finished. …]`, 오류면 `ended with an error`)을 붙인다.
+- Stage 18 과 같은 워터마크를 보므로 이미 기록된 부분(이어 가기 조각)은 다시 적지 않는다. 질문이 상태에 오기 전에
+  끊겼으면 받은 입력의 글로 질문을 세운다. 짝이 안 맞는 도구 호출 꼬리는 다음 턴의 창이 고친다.
+
+## [4.76.0] — 2026-10-01
+
+### Changed — 턴 조립과 실행 코어를 나누고 외부 실행 엔진 선택점을 두었다(4.80.0 에서 4.75.0 구조로 되돌림)
+
+`AgentTurnExecutor.run` 의 본체를 `assemble_turn` 으로 옮기고, 관리자 설정 `XGEN_HARNESS_ENGINE` 으로 외부 패키지의 실행 코어를
+고를 수 있게 했다. 설정이 없으면 동작은 4.75.0 과 같았다. 4.80.0 에서 모두 되돌렸다.
+
+## [4.75.0] — 2026-10-01
+
+### Added — 생각(thinking·reasoning) 조절을 한 값으로 (`llm_client.thinking`)
+
+호출자는 `ModelConfig.thinking_level` 에 **하나의 값**(`off`·`on`·`minimal`..`max`, 비우면 모델 기본)만 준다. 그 모델이
+실제로 받는 요청으로 옮기는 일은 `thinking_spec(provider, model)` 표와 각 클라이언트가 한다:
+
+- **Anthropic·Bedrock**: Haiku 4.5·Sonnet 4.5·Opus 4.5 는 토큰 예산(`enabled`+`budget_tokens`, `max_tokens` 를 예산 위로),
+  4.6 이후는 `adaptive` + `output_config.effort`(본문 `extra_body`). 끄기는 `disabled`, Sonnet 5.5 는 `between_tools`,
+  Opus 5.5·Fable 은 끌 수 없다(가장 약한 강도로).
+- **OpenAI·Azure**: `reasoning_effort`(끄기 `none`), 생각을 켜면 temperature·top_p 를 내려놓는다. gpt-4.1·4o 는 조절 불가.
+- **Gemini·Vertex**: 2.5 는 `thinking_budget`(0 이면 끔, 2.5 Pro 는 못 끔), 3 계열은 `thinking_level`.
+- **vLLM**: 서빙 모델의 템플릿 변수 — Qwen3 계열 `chat_template_kwargs.enable_thinking`, DeepSeek V3.x `thinking`,
+  gpt-oss `reasoning_effort`. 모르는 모델은 조절 불가(템플릿이 모르는 키는 조용히 버려진다).
+- **Claude Code CLI**: `--effort`, 끄기는 `MAX_THINKING_TOKENS=0`(핫 스페어도 이 env 를 구별한다). **Codex CLI**: `model_reasoning_effort`.
+
+표의 출처: 2026-10-01 dev 에 등록된 모델 실측(받는 값·거절 문구·생각 토큰, `verified=True`)과 vendor 문서.
+`normalize_thinking` 이 모델에 없는 값을 가장 가까운 값으로 옮긴다(끌 수 없는 모델의 끄기 → 가장 약하게, 켜기/끄기
+모델의 강도 → 켜기). `build_pipeline(thinking_level=…)`, 턴 실행기는 노드·대화의 `thinking` 을 넘긴다. 압축 요약은
+사용자의 강도를 따르지 않고 모델 기본으로 돈다.
+
+## [4.74.2] — 2026-10-01
+
+### Fixed — 생각을 끈 Anthropic 호출의 temperature
+
+`AnthropicClient._build_kwargs` 가 `thinking` 칸이 **있기만 하면** `temperature`·`top_p`·`top_k` 를 지웠다.
+`{"type": "disabled"}` 은 생각을 끄는 값이라 표준 샘플러이고 API 는 그 값을 받는다(2026-10-01 live: haiku-4-5·
+sonnet-4-6 모두 200). 그래서 생각을 끄고 `temperature=0` 으로 JSON 을 받으려던 호출(앱 LLM `ask_json`)이 기본값
+1.0 으로 돌았다. 이제 생각이 실제로 켜질 때(`enabled`·`adaptive`)만 지운다. temperature 를 아예 받지 않는 계열
+(Opus 4.7+·Sonnet 5 등)은 예전처럼 지운다.
+
+## [4.74.1] — 2026-09-30
+
+### Fixed — Gemini 로 가는 도구 결과의 이름
+
+`canonical_messages_to_google` 이 `functionResponse.name` 을 `tool_result.name` 에서만 읽었다. 정규 `tool_result` 는
+`tool_use_id` 만 싣기 때문에(에이전트 루프·호스트 모두) Gemini·Vertex 로 가는 도구 결과는 늘 **빈 이름**이었다.
+이제 앞선 `tool_use` 의 같은 id 에서 함수 이름을 찾는다(`name` 이 실려 오면 그것이 먼저). 앱 LLM 의 OpenAI 호환 길
+(도구 결과 왕복) 검증에서 드러났다.
+
+## [4.74.0] — 2026-09-30
+
+### Removed — 문서 편집 도구(edit2docs 기반 Doc*)
+
+`DocGuide` 와 그 가족(`DocAnalyze`·`DocApplyEdits`·`DocArrange`·`DocBuild`·`DocEdit`·`DocGenerate`·`DocRender`·
+`DocXmlEdit`·`DocXmlRead`), `documents` 가족, `DocGuide` 문(gates), `xgen-edit2docs` 의존을 걷어 냈다. 에이전트는
+문서를 **읽기만** 한다.
+
+### Added — `ParseDocument` (가족 `parsing`)
+
+xgen-doc2chunk 의 **추출 단계**(`DocumentProcessor.extract_text`, 청크로 자르지 않는다)로 PDF·Word·PowerPoint·Excel·
+HWP/HWPX·RTF·CSV·HTML 등에서 글 위주의 요소를 뽑는다: 본문 글, 페이지·슬라이드·시트 표식, 글로 옮긴 표, 차트 글,
+`[Image]` 자리표시, 문서 메타데이터. **원본의 전체 구조가 아니다**(글꼴·서식·위치·레이아웃·도형·그림 없음) — 설명과
+결과 첫 줄이 그렇게 말한다. 파일은 `tool_fs` 로 읽는다(샌드박스·로컬 같은 길), 긴 결과는 `offset`·`limit` 로 나눠
+준다, OCR·LLM·네트워크는 쓰지 않는다. `Read` 가 문서 파일을 만나면 이 도구를 가리킨다.
+
+### Changed — 의존성을 정확한 버전으로
+
+필수 의존성을 소비 서비스(xgen-workflow)가 지금 설치하는 정확한 버전으로 고정했다(범위 없음). 우리 라이브러리는
+`xgen-doc2chunk==0.4.2`, `xgen-pdf` 0.1.2 wheel 로 정확히 참조한다. 라이브러리 릴리스가 dev·stage·prod 를 한꺼번에
+바꾸지 않게 하는 XGEN 전체 작업의 일부.
+
+## [4.73.0] — 2026-09-30
+
+### Fixed — API 클라이언트가 SDK 연결 풀을 닫는다 (`BaseClient.aclose`)
+
+OpenAI·Anthropic·Bedrock·Azure·Gemini·Vertex 클라이언트에는 `aclose()` 가 없어서 `Pipeline.aclose` 가 턴 끝에
+불러도 아무 일이 없었다 — 벤더 SDK 클라이언트(httpx 연결 풀)는 닫히지 않고 버려져 가비지 컬렉터가 **나중에** 닫았다.
+그 사이 다른 연결이 같은 소켓 번호를 받으면 옛 연결을 닫는 일이 새 연결을 닫아, 새 호출이 연결 단계에서 연결
+상한(10초)까지 멈추고 `Request timed out` 으로 끝난다. xgen-workflow 앱 LLM 에서 실측했다(httpcore 로그: 새
+`connect_tcp.started` 직후 옛 연결 `close`, 10초 뒤 `ConnectTimeout`). 턴은 턴마다 루프를 새로 만들고 닫으므로 같은
+위험을 안고 있었다.
+
+`BaseClient.aclose()` 가 `self._client` 의 SDK 클라이언트를 닫는다(`close()`, google-genai 는 `aio.aclose()`).
+여러 번 불러도 되고, 닫은 뒤 다시 쓰면 SDK 클라이언트를 새로 만든다. Claude Code CLI 클라이언트는 자기 `aclose`
+(예비 프로세스 정리)를 그대로 쓴다.
+
+## [4.72.0] — 2026-09-30
+
+### Fixed — Gemini·Vertex 가 구조화 출력을 실제로 요청에 싣는다
+
+`GoogleClient` 는 `supports_structured_output=True` 를 선언해 왔지만 `response_format` 을
+`GenerateContentConfig` 에 옮기지 않았다. 부르는 쪽(구조화 증류, xgen-workflow 앱 LLM 의 JSON 받기)은 JSON 이
+강제된다고 믿고 산문을 받았다(2026-09-30 앱 LLM provider 감사에서 발견). 이제 `json_object` → 
+`response_mime_type: application/json`, `json_schema` → 그 스키마까지(`response_json_schema`, 옛 SDK 는
+`response_schema`). OpenAI 식 중첩(`{"json_schema": {"name", "schema"}}`)도 받는다. `VertexClient` 는 같은 요청 조립을
+물려받는다.
+
+## [4.71.0] — 2026-09-30
+
+### Removed — Stage 12(agent)·Stage 13(task_registry)와 하위 에이전트 라이브러리
+
+4.70.0 에서 위임 도구를 없앤 데 이어, 하위 에이전트만을 위해 있던 단계와 라이브러리를 걷어 낸다. 플랫폼 결정:
+하위 에이전트 오케스트레이션은 다시 들이지 않는다(호스트의 Job/Trigger/Cron 스케줄링은 별개로 그대로다).
+
+- `stages/s12_agent` 전부 — `AgentStage`, `SubagentType*`(descriptor·registry·orchestrator·`compile_subagent_descriptors`·
+  `resolve_subagent_provider`·`ManifestSubagentPipelineFactory`·`SubAgentBuildContext`), persistent sub-agent 매니저,
+  sub-agent 카탈로그, orchestrators. 패키지 루트의 같은 export 도 없앴다.
+- `stages/s13_task_registry` 의 **단계** — `TaskRegistryStage` 와 정책(`FireAndForget`/`EagerWait`/`TimedWait`).
+- `PipelineBuilder.with_agent()` / `.with_task_registry()`, 프리셋의 `.with_task_registry()`, `build_manifest` 프리셋의
+  order 12/13 항목(`tests/_fixtures/geny_manifest_layout.json` 도 같이 — 의도한 레이아웃 변경).
+- `Pipeline.from_manifest(_async)(subagent_registry=, subagent_env_resolver=)`, `attach_runtime/refresh_runtime(subagent_registry=)`,
+  `_wire_subagent_orchestrator`, `PipelineState.delegate_requests / agent_results / subagent_registry`.
+- 매니페스트 `subagents` 섹션과 그 검사(`subagent.*` issue 코드), `EnvironmentManifest.subagents` 필드.
+- `SharedKeys.PRIMARY_PROVIDER` 생산(읽는 곳이 하위 에이전트뿐이었다). 상수 자체와 `TASKS_*` 상수는 안정 문자열 계약에 따라
+  남기고 "retired" 로 표시했다.
+- s09 `CompletionSignal.DELEGATE`, s14 의 `delegate` 분기와 `AgentEvaluation`(`agent_evaluation` — Stage 12 평가 오케스트레이터
+  출력만 읽었다), s20 기본 significant 이벤트의 `task.failed`, `LocalAgentExecutor`.
+- `host.runner.build_cli_client(disallow_tools_extra=)` — 부르는 곳이 없다. CLI 자체 하위 에이전트(`Task`·`Agent`·`TaskOutput`)는
+  네이티브 차단 목록이 그대로 막는다.
+
+**번호는 다시 매기지 않는다.** 12·13 은 예약된 빈 자리다(`RETIRED_STAGE_ORDERS = {12: "agent", 13: "task_registry"}`,
+패키지 루트 export). `STAGE_MODULES`·`introspect_all()`·`blank_manifest()`·스냅샷은 두 자리를 건너뛰고, `Pipeline.describe()`
+와 bypass 이벤트는 1..21 을 그대로 걷는다. `create_stage("agent")` 등은 "retired" 를 말하는 `ValueError`.
+
+**저장된 매니페스트는 계속 읽힌다.** `EnvironmentManifest.from_dict` 와 `Pipeline.from_manifest` 가 `agent`/`task_registry`
+항목·`subagents` 섹션을 경고 한 줄과 함께 빼고(빈 `subagents: []` 는 조용히), s14 의 `agent_evaluation` 선택은 `signal_based`
+로, `evaluation_chain` 의 그 항목은 뺀다(`drop_retired_manifest_declarations`). `validate_manifest` 는 남은 항목을
+`stage.retired` 경고로 알린다. v2→v3 이전은 order 13 을 더는 채우지 않는다.
+
+이벤트 카탈로그는 추가만 한다는 규칙에 따라 `agent.*`·`subagent.*`·`task.*`·`task_registry.*` 를 지우지 않고
+`RETIRED_EVENT_TYPES` 로 표시했다(더는 내지 않음, 다음 메이저에서 제거). `EVENT_CATALOG_VERSION` 16, `docs/events.md` 재생성.
+
+### Changed — 작업 레코드·레지스트리는 `xgen_agent_runtime.runtime.tasks` 로
+
+`TaskRecord`·`TaskStatus`·`TaskFilter`·`TaskRegistry`·`InMemoryRegistry`·`FileBackedRegistry` 가 없어진 Stage 13 에서
+`runtime/tasks.py` 로 옮겨 왔다(`xgen_agent_runtime.runtime` 에서도 export). `BackgroundTaskRunner`·`LocalBashExecutor`·
+cron 데몬·`/tasks` 슬래시 명령은 그대로 동작한다. `TaskRegistry` 는 이제 Stage `Strategy` 가 아닌 평범한 ABC 이고
+`name`/`description` 은 기본값이 있는 속성이다.
+
+### Added — 호스트의 도구 결과 필터 (SDK·CLI 같은 후처리)
+
+관리자 정책으로 외부 데이터 도구 결과의 개인정보·금칙어를 가리려면, 결과가 모델·기록·화면으로 가기 전 한 곳에서
+걸러야 한다. 그 한 곳이 Stage 10 라우터다 — SDK 파이프라인·Stage 6 내부 디스패처·CLI 도구 표면(`TurnToolSurface`)·
+ToolBatch 항목이 모두 지난다.
+
+- `ToolContext.result_filter: Optional[Callable[[Tool, ToolResult], Awaitable[ToolResult]]]` — `RegistryRouter.route` 가 도구가
+  돈 직후(큰 결과 파일 저장·미리보기·이벤트·반복 가드보다 먼저) 한 번 부른다. 필터는 **실행된 Tool 인스턴스**와 가공 전
+  결과(오류 결과·이미지 블록 포함)를 받는다. 예외·엉뚱한 반환이면 경고를 남기고 원래 결과(fail-open), `None` 은 "그대로".
+  `build_dispatch_context` 가 싣고 `dataclasses.replace` 로 파생된 컨텍스트에도 따라간다.
+- `HostServices.tool_result_filter()` (선택 훅, 기본 None) — `AgentTurnExecutor` 가 턴마다 한 번 받아 run 도구 컨텍스트,
+  CLI 도구 표면 컨텍스트, `build_pipeline(tool_result_filter=)`(내장 도구가 없어 run 컨텍스트가 없는 SDK 턴)에 싣는다.
+  훅이 없거나 실패하면 필터 없이 돈다.
+- `tools.tool_origin(tool)` / `TOOL_ORIGIN_ATTR` — 이름 접두가 겹쳐도 종류로 판정하도록 런타임 빌더가 표지를 단다:
+  `device`(기기 도구·기기 문), `memory`(기억 도구), `adapted`(연결된 노드의 도구, MCP 노드 포함). 표지가 없으면
+  `mcp`(런타임 MCP 어댑터)·`builtin`(`tools.built_in` 클래스)을 추론한다.
+
+### Fixed — codex 스트림이 경고 줄 하나로 턴을 죽이던 것
+
+codex 는 치명적이지 않은 경고도 `{"type":"error"}` 줄로 낸다(실측 codex-cli 0.159.2: "Model metadata for `gpt-5.3-codex`
+not found. Defaulting to fallback metadata …"). 스트림 경로는 줄마다 바로 `APIError` 를 올려 턴이 죽었고, 같은 출력을
+one-shot 은 성공으로 읽었다. 이제 스트림도 one-shot 처럼 끝에서 판정한다.
+
+- 인증 실패 문구는 여전히 즉시 `CLI_AUTH_FAILED`, `turn.failed` 는 여전히 실패(자기 메시지 또는 앞서 모은 오류 메시지).
+- 그 밖의 오류 줄(`type: error`·오류 item·`msg.type == error`)은 경고 로그로 모은다. 스트림이 끝났을 때 어시스턴트 출력
+  (텍스트·도구 호출)이 있으면 정상 완료, 없으면 마지막 오류 메시지로 `CLI_PROTOCOL_ERROR`. 비정상 종료 코드는 예전처럼 실패.
+
+## [4.70.0] — 2026-09-30
+
+### Changed — 도구 표면은 provider 와 무관하게 하나다
+
+CLI 백엔드(claude_code·codex)는 도구를 MCP 로만 받는다. 예전엔 호스트가 CLI 표면을 **따로 조립**해서 같은
+에이전트가 provider 에 따라 다른 도구·다른 스키마·다른 가드를 받았다(게스트·고정 턴의 쓰기 도구 제외 누락, 문과
+숨김 목록 누락, 기기 도구 스키마 차이, Stage 10 가드 누락 — 2026-09-30 감사).
+
+- `host/tool_surface.py` `TurnToolSurface` — 턴 조립이 만든 **같은 레지스트리·도구 컨텍스트·턴 상태**를 묶어 호스트
+  MCP 브릿지에 넘긴다(`kwargs["_tool_surface"]`). 광고는 Stage 3 와 같은 정의, 실행은 Stage 10 과 같은 함수
+  (`ToolStage.dispatch_calls`)이고 **턴 루프에서** 돈다(`bind_loop` · `on_loop`). 기록 복원·문 도달성 검사도 Stage 3 와 같다.
+- `stages/s10_tool` — 실행 본체를 `dispatch_calls()` 로 추출(파이프라인과 CLI 표면이 같은 함수).
+- `turn_executor` — provider 무관 조립. CLI 프롬프트 = SDK 프롬프트 + 같은 숨김 목록 + 이름 규약 한 줄
+  (`cli_tool_naming_note`). 도구별 CLI 각주(`cli_memory_note`·`cli_self_evolution_note`·`cli_delegation_note`)는 없앴다.
+- codex 는 턴 안에서 도구 목록을 다시 읽지 않아(실측) 평면 노출로 돈다 — 능력은 같고 숨김 목록이 없을 뿐이다.
+
+### Added — 두 CLI 의 한도에 맞춘 도구 정의 (`tools/definition.py`)
+
+실측(가짜 모델 서버로 실제 요청 캡처): Claude Code 는 도구 설명을 2048자에서 자르고 이름의 한글을 `_` 로 바꾸며
+64자 넘는 이름을 그대로 보낸다. Codex 는 스키마가 약 5,000바이트를 넘으면 모든 설명을 지우고 default·format·범위를
+늘 지운다. 런타임 자신도 노드 도구 스키마의 `$defs` 를 버려 `$ref` 가 깨졌다.
+
+- `safe_tool_name` — 48자 이하, 한글 이름은 `tool_<해시>`, 턴 안에서 유일(`_2`), 내장·기억 도구 이름 예약.
+- `normalize_input_schema` — 로컬 `$ref` 인라인, 제약 키워드를 설명에도 적는다, `required` 정리.
+- `fit_definition` — 설명 2,000자·스키마 4,000바이트 안으로, 넘친 원문은 `ToolSearch(query="<이름>")` 가 돌려준다.
+- `ToolRegistry.to_api_format` 과 CLI 표면이 같은 `api_definition` 을 쓴다. 이름이 바뀐 노드 도구는 설명에 원래 이름을 남긴다.
+- 스킬 페이로드가 dataclass 로 와도 받는다(예전엔 조용히 버려졌다). 숨김 목록은 이름 단위로 끊는다.
+
+### Added — CLI 네이티브 도구 끄기
+
+- Claude Code: `--tools ""` (네이티브 0개). `MAX_MCP_OUTPUT_TOKENS=150000` — 결과 크기는 Stage 10 이 정한다.
+- Codex (`host_tools_only`, 기본): 네이티브 기능 끄기(셸·이미지·하위 에이전트·목표·웹 검색…), 환경·권한·스킬·협업 지시 끄기,
+  기본 지시를 시스템 프롬프트로 교체(`model_instructions_file`), MCP 도구 자동 승인(`default_tools_approval_mode="approve"`
+  — 0.159.2 exec 는 승인 정책이 never 라 **우리 도구 호출이 전부 거절**되고 있었다), 도구 제한 3600초, 출력 한도 150,000토큰.
+
+### Changed — 샌드박스와 사용자 기기 폴더를 헷갈리지 않게
+
+- 파일·셸 도구 설명이 "sandbox 에서" 를 말한다(Bash 는 기기에 닿지 못한다고 말한다). Read 는 바이너리 문서에 DocRender 를 안내한다.
+- `second_machine` — sandbox 도구가 연결된 기기 폴더 경로를 받으면 늘 "[Wrong machine]" 안내, "없음" 결과에는 폴더 안내(턴당 2회).
+- `host/device_tools.py` — 기기 도구 공통 래퍼: 스키마 그대로(enum·items 보존), 이미지 블록 통과, 실패·거부 표시,
+  sandbox 경로를 기기 도구에 주면 부르기 전에 거절. 기기의 `Search` 는 모델에게 `SearchFiles`(WebSearch·ToolSearch 와 구분).
+- 폴더 연결 턴 안내가 두 기계를 명시한다.
+
+### Removed
+
+- 하위 에이전트 위임 도구 전부(`Agent`·`SubAgent*`·`Task*`·`DelegationGuide`)와 그 패밀리·문·호스트 훅.
+- 서버 브라우저(an-web) 패밀리(`Browser*`)와 `xgen-an-web` 의존, WebFetch `render_js`. 브라우저는 사용자 기기 앱의 도구뿐이다.
+- 고정본(`_frozen`) 턴은 자기진화를 받지 않는다.
+
+## [4.69.2] — 2026-09-30
+
+### Removed — 커넥터 로컬 실행·동기화의 남은 자리
+
+PC 에서 턴을 돌리던 사이드카와 PC↔서버 파일 동기화는 이미 없어졌다. 모든 턴은 러너 세션 하나에서 돈다.
+
+- `is_connector_local` 분기 셋 — 요청 파일 미리 붙이기(`host/referenced_files.py`), 작업 폴더 빠른 경로
+  (`host/workspace_fast_path.py`, reason `connector_local`), 도구 단계의 "PC 도 확인하라" 안내 생략
+  (`stages/s10_tool/artifact/default/stage.py`). 그 속성을 켜던 sandbox(ConnectorLocalSandbox)를 만드는 곳이
+  없어 늘 거짓이었다.
+- `[project.scripts] xgen-agent-sidecar` — 가리키던 `host.sidecar` 모듈이 없다.
+- `HostServices`·`AgentTurnExecutor`·`host/__init__` 주석의 LocalHostServices·커넥터 동기화 flush·
+  ConnectorLocalSandbox·사이드카 설명을 지금 구조(서버 호스트 하나)에 맞게 고침.
+
+동작 변화 없음.
+
+## [4.69.1] — 2026-09-29
+
+### Fixed — 첨부 파일이 작업 폴더에 있는데 에이전트가 자리를 잃던 것
+
+2026-09-29 dev(gpt-5.4) 시연에서 첫 턴에 첨부한 PDF 두 개는 작업 폴더에 그대로 있었는데, 세 번째 턴에 모델이
+"지금 대화에서는 첨부 원문을 다시 열 수 없다" 고 답했고, 그 말을 믿은 사용자가 엉뚱한 저장소 검색을 붙였다.
+같은 대화 기록으로 단기 기억 창을 재현해 원인 세 가지를 확인했다.
+
+- **지난 턴 첨부 문구** — 모든 백엔드가 첨부를 `[Current-turn attachment: …]` 로 번역했고, 같은 블록이 다음 턴에
+  그대로 재생됐다. 경로는 보였지만 "이번 턴 첨부" 로 읽혔다. 문구를 `[Attached file: 이름 (mime). Saved in your
+  working folder — read it at: 경로]` 로 바꾸고 한 곳(`core/file_blocks.py`)에서 만든다.
+- **단기 기억 창이 첨부 경로를 버림** — 먼 턴을 "대화만" 으로 줄일 때 사용자 메시지의 text 블록만 남겨 file 블록이
+  사라졌고, 예산 때문에 턴이 창에서 빠지면 경로도 같이 빠졌다(실측: 네 번째 턴 창에 경로 0개). 대화만 남기는 턴에도
+  경로 한 줄을 남기고, 창 밖으로 밀려난 턴의 첨부는 창 첫 사용자 메시지 앞에 `[Earlier in this conversation]` 으로
+  포인터만 넘긴다(최대 10줄, 내용은 넘기지 않음). 실측 대화 재현: 세 시점 모두 두 파일 경로 유지, 창 +518자.
+- **대화 노트에 첨부 경로가 없음** — 새 대화는 대화 노트로만 지난 첨부를 아는데 노트가 text 만 적었다. 발화 앞에
+  경로 한 줄을 남긴다(노트 제목·파일명은 사람의 말로).
+
+검증: 전체 테스트 통과, 로컬 Qwen 실험(첨부 뒤 두 턴 지나 원문 세부 묻기 + 새 대화에서 다른 세부 묻기, 3도메인×2회):
+main·수정본 모두 12/12 정답·"못 연다" 0 — Qwen 은 원래 Glob/Grep 으로 찾아낸다. 새 대화 도구 호출 평균 2.3 → 1.0.
+정확도 향상으로 주장하지 않는다 — 정보 손실(결정적)과 잘못된 문구를 고친 것이다. gpt-5.4 의 "못 연다" 는 유료 모델이라
+실험실에서 재현하지 않았다(dev 배포 후 같은 시연으로 확인).
+
+## [4.69.0] — 2026-09-29
+
+### Added — 폴더가 있는 기기와 말하는 화면이 달라도 (`folder_device_info` 훅)
+
+- 대화의 폴더는 이제 어느 화면에서 보낸 턴이든 그 폴더가 있는 기기의 것이다(서버가 사본을 들고
+  폴더 기기의 도구를 붙인다 — xgen-workflow). 턴 안내가 그 사실을 말한다:
+  - 기기 이름을 함께 부른다: `the user's Windows PC "사무실 PC"`.
+  - 다른 화면(웹·휴대폰·다른 PC)에서 보냈으면 그렇다고 말하고, 그 기기에서 창·앱을 열지 말라고 한다.
+  - 그 기기가 꺼져 있으면: PC 는 "켜고 XGEN Dex 를 열어 둔 채 다시", 브라우저는 "그 브라우저에서
+    이 대화를 열고 폴더 접근을 허용" 하라고 안내한다.
+- 호스트 OPTIONAL 훅 `folder_device_info()` → `{name, platform, online, remote}`. 없으면 예전 안내 그대로.
+
+## [4.68.0] — 2026-09-29
+
+### Added — 웹 브라우저도 대화에 폴더를 연결한다 (`web` 기기)
+
+- 웹 채팅의 [폴더] 로 브라우저(File System Access)에서 고른 폴더를 대화에 붙인다. 브라우저는
+  MCP 서버 이름 `web` 으로 파일 도구 다섯(`ReadFile`·`WriteFile`·`ListDir`·`DeleteFile`·`Search`)을
+  올리고, 모델에게는 `mcp_web_<Tool>` 로 보인다. 터미널은 없다.
+- `FOLDER_TOOLS_BY_SERVER["web"]` — 폴더 없는 대화에서는 빠지고 기록 속 옛 호출은 평문으로 바뀐다
+  (데스크톱·모바일과 같은 규칙).
+- 턴 안내: 기기 이름 "web browser", 터미널 없음, 닿지 않을 때는 "XGEN 화면을 열어 두고 폴더 접근을
+  허용" 하라고 말한다. 폴더가 없을 때 안내하는 단추 이름을 [폴더] 로(데스크톱·웹 헤더와 같게).
+
+## [4.67.1] — 2026-09-29
+
+### Fixed — Qwen 에이전트의 메모리 사실 추출이 한 번도 되지 않던 것 + 산출물 계약 헛실패 3유형
+
+- **구조화 출력 미전달 (Qwen 메모리 사실 장부 0개)** — OpenAI 계열 요청 조립(`OpenAIClient._build_kwargs`, vLLM·Custom·Azure 가
+  물려받음)이 `response_format` 을 보내지 않아 스키마가 지시문에만 있었다. Qwen 은 키를 지어내(`{"add": [...]}`, `{"facts": []}`)
+  메모리 사실 추출이 매번 `schema_mismatch` 로 버려졌다. dev 60일: 메모리가 쌓인 Qwen 에이전트 59개 중 사실 장부 **0개**
+  (Claude 에이전트는 지시문만으로 따라 장부가 있음). 표준형 `{"type": "json_schema", "json_schema": <스키마>}` 를 OpenAI 형식
+  (`{"name", "schema"}`)으로 감싸 전달한다(이미 감싼 형태·`json_object` 는 그대로, `strict` 는 넣지 않음).
+  `supports_structured_output` 클라이언트만. 호출자는 메모리 증류(사실 추출·요약)뿐 — 에이전트 대화 본체는 무관.
+- **증류가 세션 마지막 교정을 버림** — 같은 에이전트의 증류가 도는 중이면 건너뛰었는데, 최근 대화(STM)는 세션별이라 앞 턴의
+  증류가 도는 사이 끝난 세션 마지막 턴(대개 사용자의 교정·지시)은 영영 추출되지 않았다. 도는 중 요청은 마지막 것 하나를 맡겨
+  두고 끝난 뒤 한 번 더 돈다.
+- **산출물 계약 헛실패** — 로컬 벤치 521실행의 계약 FAILED 300건 중 65건(22%)이 산출물이 아니라 검사 해석 때문이었다:
+  루트를 JSON Pointer `"/"` 로 적음(10과제), 이름→레코드 객체의 레코드별 키를 최상위에서 찾음(4과제), 객체 항목 수를
+  `array_lengths` 로 셈(6과제). 모두 뜻대로 해석한다. 평범한 객체의 최상위 키 누락은 그대로 실패.
+
+검증
+- 경험 메모리 실험(Qwen, 세션 1 교정 → 새 세션 다른 데이터): 명시 교정("앞으로 항상 …")은 수정 전에도 모델이 스스로 고정해
+  11/12. 암묵 교정은 지난 대화 검색 덕에 수정 전 10/12 → 수정 후 11/12 — 차이는 검색이 못 찾는 교정에서만
+  (원 단위 금액 0/4 → 3/4). **정확도 향상으로 주장하지 않는다 — 고장 수정이다.** 저장된 선호가 상관없는 일에 끼어듦 0/8
+- 로컬 벤치(Qwen, 시간초과 없는 49과제, 1회씩): 0.826 → 0.836, 계약 FAILED 신호 5 → 2
+- 새 테스트 10개. 전체 통과
+
+## [4.67.0] — 2026-09-28
+
+### Added — 대화에 연결된 기기 폴더 (앱 전용)
+
+데스크톱 앱의 설정 [로컬 컨트롤] 탭(전역 스위치 하나로 모든 대화에 PC 도구가 붙던 것)을 없애고, 채팅 헤더의
+[폴더 연결]로 **대화마다** 사용자 기기의 폴더를 붙이는 방식으로 바꾼다. 모바일 앱도 OS 폴더(Android 저장소 접근,
+iOS 폴더 선택)를 같은 방식으로 붙인다. 웹에는 없다. 이 런타임은 무엇을 보여 주고 무엇을 말할지를 정한다 —
+판정의 정본은 기기다(호출마다 그 대화의 폴더인지 다시 확인한다).
+
+- `host/local_folders.py`(신규) — 규칙 한 곳. 서버 SDK 경로와 CLI 브리지(xgen-workflow)가 같은 함수를 쓴다.
+  - 요청 필드 `local_folders`: `None`(옛 앱·웹) = 예전 규칙 그대로, `[]` = 폴더 도구 없음, `[..]` = 폴더 도구를
+    첫 화면에 바로(옛 입구 `LocalControl` 은 뺀다).
+  - 폴더 도구는 앱마다 다르다: 데스크톱(`mcp_local_*`) 파일·셸·열기·클립보드·알림, 모바일(`mcp_mobile_*`)
+    파일·검색·열기·사진. 브라우저·로컬 MCP 관리·휴대폰 알림/위치 같은 다른 기기 도구는 각자 설정이 정한다.
+- 턴 안내 — `TurnNotesBlock`(volatile, `SharedKeys.TURN_NOTES`)이 이번 턴의 연결 상태를 최신 사용자 메시지 옆에
+  붙인다: 연결된 폴더 목록과 "기기에서 돌고 서버 sandbox 가 아니다", 연결 없음, 앱이 지금 닿지 않음. 기록에 남지
+  않아 옛 상태가 쌓이지 않는다. 기본 빌더와 메모리 빌더 둘 다에 들어간다.
+- 혼동 방지 — 이번 턴에 폴더 도구가 없으면 기록 속 옛 호출·결과를 요청 사본에서 평문 한 줄로 바꾼다
+  (`core.message_repair.retire_tool_calls`, `SharedKeys.RETIRED_TOOL_CALLS` → Stage 6). 기록 자체는 그대로다.
+  이전에는 없어진 도구의 `tool_use` 가 원형으로 되풀이돼 모델이 없는 도구를 다시 불렀다.
+- 기억 — 사실 추출·요약 지침이 기기 폴더 경로를 오래 갈 사실로 남기지 않는다("일을 기억하고 기기 경로는 남기지
+  않는다"). 도구 입출력은 원래 증류에 들어가지 않는다(텍스트 블록만 읽는다).
+- 실행기 — 호스트의 OPTIONAL 훅 `local_device_platform()`(Mac·Windows·Linux·Android·iPhone)으로 안내의 기기 이름을
+  정한다(훅이 없으면 "device"). CLI 백엔드도 카탈로그를 읽어 같은 안내를 받는다(도구는 브리지가 광고한다).
+
+검증
+- 새 테스트 `tests/unit/test_local_folders.py` 19개(요청 필드 세대, 이름 규칙, 표면, 안내, 기록 정리, Stage 6,
+  블록 위치)와 `tests/test_host_local_folders.py` 7개(옛 클라이언트·폴더 없음·연결·앱 오프라인·CLI·훅 없는 호스트·모바일).
+
+## [4.66.0] — 2026-09-28
+
+### Changed — 아티팩트 → 앱 (도구 이름·안내)
+
+에이전트가 만들어 띄우는 웹 앱 기능의 이름을 "앱" 으로 통일한다(xgen-workflow 가 도구를 정의한다).
+
+- 문 `ArtifactGuide` → `AppGuide`, 가족 `AppCreate`·`AppPublish`·`AppStatus`·`AppList`·`AppDelete`.
+  턴-1 목록·Bash 백그라운드 안내·SelfExtendGuide 안내가 새 이름을 말한다.
+- 문의 가족을 **이름 목록**으로 적는다(`_named`). 예전 규칙 `startswith("Artifact")` 를 그대로 `App` 으로 옮기면
+  사용자가 만든 `AppendRows` 같은 도구가 앱 가족으로 끌려 들어간다.
+- `tools.renamed`: 옛 이름(`ArtifactCreate` 등, MCP 접두 포함)으로 부르면 라우터와 ToolBatch 가 지금 이름의 도구를
+  돌린다. 표면(도구 목록)에는 새 이름만 있다. 되풀이되는 기록·에이전트 기억이 옛 이름을 부르는 경우를 위한 것이다.
+
+검증
+- 새 테스트 `tests/unit/test_app_rename.py` 6개(문의 가족, 접두, 옛 이름 전달, 라우터·ToolBatch).
+
+## [4.65.1] — 2026-09-28
+
+### Fixed — Claude 5 계열(SDK 경로)이 도구 한 번 뒤 끝나거나 빈 턴으로 끝나던 것
+
+같은 하네스에 모델만 바꿔 돌린 로컬 벤치(claude-sonnet-5, 70과제)에서 드러났다. 모두 `anthropic` 제공자(SDK 경로)만
+해당하고, `claude_code`(CLI)는 무관하다.
+
+- **thinking 서명 누락** — 응답의 thinking 블록에서 `signature` 를 버려, 도구 루프 다음 요청이 400
+  `messages.1.content.0.thinking.signature: Field required` 로 거절됐다. 기본으로 생각하는 claude-sonnet-5·opus-5 에서
+  dev(09-08~) Geny 도구 턴이 전부 모델 호출 1회·최종 답 없음, 로컬 벤치 70과제도 전부 호출 1회(0.578).
+  `signature` 와 `redacted_thinking`(`data`)을 그대로 되돌려 보낸다(파서 두 곳).
+- **temperature 거부** — opus-4-8·opus-5·sonnet-5·fable-5 는 temperature 를 400 으로 거부한다(09-28 실제 API 확인;
+  sonnet-4-6·opus-4-6·haiku-4-5 는 받음). 목록에 없어 매 호출이 400 을 한 번 맞고 치유 경로로 다시 보내졌다 → 목록에 추가.
+- **출력 한도에서 빈 턴** — Claude 5 는 thinking 도 max_tokens 안에서 쓴다. 노드 기본값 8192 로 생각만 하다 한도에 닿아
+  텍스트·도구 호출 없이 끝났다(70과제 중 8, 출력 정확히 8192). 이 경우에만(텍스트가 아직 안 나갔을 때) 한도를 올려
+  한 번 더 부른다(스트리밍 32000·비스트리밍 16000, 실패하면 원래 응답).
+- **생각하는 동안 첫 응답 감시에 걸림** — 기본으로 생각하는 모델은 thinking 표시 기본값이 "omitted" 라 생각하는 동안
+  빈 조각만 온다. 사용자에겐 긴 멈춤이고 스테이지의 첫 내용 감시(180초)는 멈춘 줄 안다. thinking 을 안 보낸 요청에
+  `{"type": "adaptive", "display": "summarized"}` 를 넣는다(Sonnet 4.6 까지의 기본 동작과 같음, 호출자가 정한 display 는 유지).
+
+검증
+- 빈 턴 8과제 재실행: 0.24·0.10·0.13·0.09·0.03·0.17·0.00·0.19 → 0.91·0.98·1.00·0.98·1.00·0.76·0.91·0.92
+- 새 테스트 17개(서명·redacted 왕복, temperature 계열, 한도 재호출 조건 5종, display 3종). 전체 5711 통과
+
+## [4.65.0] — 2026-09-28
+
+### Changed — XGeny → Geny 개명(이름만, 옛 이름은 계속 쓸 수 있다)
+
+에이전트 이름을 Agent-Geny 로 통일한다. 문서·주석·로그·도구 설명의 "XGeny" 는 "Geny" 가 됐고, 코드 이름도 따라 바뀌었다.
+
+- `tools._xgeny_sandbox` → `tools._geny_sandbox`, `XgenySandbox` → `GenySandbox`.
+  옛 경로·이름은 **같은 모듈·같은 클래스를 가리키는 별칭**으로 남는다(호스트가 핀을 올리기 전에도 돈다).
+- 이미지 첨부 예산 env: `GENY_IMAGE_MAX_BYTES`·`GENY_TURN_IMAGE_MAX_BYTES`. 없으면 옛 `XGENY_*` 를 읽는다.
+- **바꾸지 않은 것**(데이터가 사는 주소): 워크스페이스 루트 `/xgeny/workspace`, 선언 파일 `.xgeny/python-env.json`.
+  기존 대화 기록·데스크톱 앱·인프라 마운트가 그 문자열로 찾아간다.
+
+검증
+- 새 테스트 3개(옛 모듈 경로가 같은 모듈, 옛 프로토콜 이름, 옛 env 이름).
+
+## [4.64.0] — 2026-09-28
+
+### Added — 턴 usage 에 하네스 장치 작동 요약(`harness`) — 장치별 실사용 빈도·빠른 경로 판정을 기록만으로
+
+가드·복구·검증·맥락 장치는 단계 코드에 흩어져 있어 "이 장치가 실사용에서 얼마나 자주 켜지나" 를 볼 곳이 없었고,
+작업 폴더 빠른 경로 판정은 `state.shared` 에만 있어 dev 에서 몇 턴이 탔는지 셀 수 없었다.
+
+- `host/harness_components.py` — 장치 10개(repeat_guard·second_machine·user_denied·message_repair·api_retry·
+  repeat_stop·turn_budget·completion_review·context_prune·context_compact)를 **이미 내는 사건**으로 묶은 목록.
+- `turn_usage()` 가 `harness: {"components": {이름: 횟수}, "fast_path": {active, reason, file_count, total_bytes}}` 를
+  싣는다(작동한 것만, 없으면 키 자체가 없다 — 기존 usage 소비자 shape 유지).
+- 사건 수는 `PipelineState._turn_event_counts`(비공개): `events` 는 연속 슬라이스마다 비워져 턴 전체를 못 센다.
+- 빠른 경로를 켜지 않은 턴은 판정 키를 지워 재사용 state 에 앞 턴 값이 남지 않게.
+
+검증
+- 새 테스트 4개(사건 목록 일치·슬라이스 넘어 턴 단위·빠른 경로 판정·usage 에 있을 때만). 전체 5690 통과.
+- 로컬 벤치(qwen3.8-27b, 69과제 ×2)·실사용 로컬 12과제 ×4 기록에 실제로 남는 것 확인
+  (예: 080 repeat_guard 6·repeat_stop 2·context_compact 1 / 실사용 빠른 경로 6/12 `eligible`).
+- 호스트(xgen-workflow)가 `agent_traces.metadata.harness` 에 기록한다(별도 MR).
+
+## [4.63.2] — 2026-09-26
+
+### Fixed — 산출물 계약이 헛돌게 만들던 세 가지 + 에이전트 턴이 오늘 날짜를 모르던 것
+
+dev 실사용 점검(2026-09-26, runtime 4.63.1, qwen3.8-27b, 실제 사용 유형 12과제·웹 채팅과 같은 첨부 방식)에서 나왔다.
+
+- **BOM CSV 오판정**: 엑셀 호환 CSV(utf-8-sig)의 첫 헤더가 `'\ufeff조항'` 으로 읽혀 "헤더 불일치" 실패. 표준 parser 처럼
+  BOM 을 떼고 검사한다.
+- **지어낸 개수로 헛돎**: 요청에 없는 `exact_rows` 를 모델이 넣고, 불일치가 나면 데이터와 기대 개수를 같이 늘리며 반복
+  (계약서 두 버전 비교: 4→9행, Bash 7회·185초 — 같은 과제는 정상일 때 도구 1회·15초). 개수(`exact_rows`/`min_rows`/
+  `max_rows`/`array_lengths`) 불일치는 이제 **실패가 아니라 note** 로 알린다. 형식 검사(파싱·헤더·열 수·허용값·중복)는
+  그대로 실패.
+- **바이너리 파일에 계약**: xlsx 를 계약에 넣으면 읽기 전체가 실패해 같이 적은 CSV 도 검사되지 않았고, 모델이 "검증
+  계약은 xlsx 가 바이너리라 실패 표시였지만…" 을 답에 적었다. `read_texts` 가 텍스트 아닌 파일을 앞 8KiB 로 판정해
+  `skipped` 로 돌려주고, 계약은 그 파일을 "검사 안 함" note 로 넘긴다.
+- **오늘 날짜**: SDK 경로(host/runner.build_pipeline)의 시스템 프롬프트 조립에 `DateTimeBlock` 이 빠져 있었다(메모리
+  없는 경로 = 정적 프롬프트, 메모리 경로 = 기억 블록만). "다음 주 화요일 회의를 목요일로 옮기는 메일" 에 날짜를 비워 두고
+  "(예: 6월 12일)" 을 들었다. 두 경로 모두 넣는다(volatile — 캐시 접두 밖 턴 맥락). 날짜 줄에 요일을 붙인다
+  (`Current date: 2026-09-26 (Sat) 14:37 KST (UTC+09:00)`).
+  - 한계: 토요일에 "다음 주 화요일" 을 한 주 밀어(10/6) 계산하는 경우가 7회 중 2회. ISO 주 경계를 덧붙여도 7회 중 3회로
+    나아지지 않아 넣지 않았다. 답에 날짜를 명시하므로 사용자가 확인할 수 있다.
+
+검증
+- 새 테스트 7개(BOM·개수 note·바이너리 skip·실패 가림 없음·read_texts 바이너리 parity·날짜 두 개) — 수정 전 코드에서
+  실패 확인. 전체 5686 passed.
+- 로컬 실사용 A/B(같은 12과제): 채점 가능한 과제 전부 정답, 계약서 비교 4회 모두 도구 1회.
+- 로컬 Harness-Bench 70과제(빠른 경로 켬): 모델 왕복 4.54·4.67 → **3.91**, 왕복 ≤2 과제 21·26 → **31**, 입력 토큰
+  42k·43k → **34k**, 점수 0.847·0.807 → 0.805(홀드아웃 0.844·0.783 → 0.764; 떨어진 7과제 중 5개는 개수 note 가 없는
+  과제, 나머지 2개도 개수가 아니라 내용 채점에서 감점 — 같은 설정 2회 차이 0.06 범위).
+
+## [4.63.1] — 2026-09-26
+
+### Fixed — 작업 공간이 사용자 PC 인 모드(커넥터 로컬 동기화)는 빠른 경로에 넣지 않는다
+
+4.63.0 의 작은 작업 폴더 빠른 경로는 서버 sandbox 에서만 측정했다. 커넥터 로컬 동기화 모드에서는 스냅샷이
+사용자 PC 로 가는 원격 실행이고(PC 에 python3 필요), "Bash 한 번에 다 하라" 는 지시가 사용자 PC 에서 돈다.
+요청 파일 첨부(`referenced_files`)도 같은 이유로 이 모드를 건너뛴다. `prepare_workspace_fast_path` 가
+`sandbox.is_connector_local` 이면 파일을 건드리기 전에 `reason="connector_local"` 로 원래 루프에 보낸다.
+PC 모드에서 따로 측정하기 전까지 유지한다.
+
+## [4.63.0] — 2026-09-26
+
+### Added — 작은 작업 폴더 빠른 경로 (기본 꺼짐) + Bash 산출물 계약
+
+모델 왕복(usage.calls)을 줄이는 구조 변경. 로컬 Harness-Bench 호출 해부(qwen3.8-27b, 70과제): 초과 왕복의
+57%가 "쓰고 → 돌려 보고 → 고치는" 한 걸음씩 반복이었다(왕복당 도구 1.27개). 프롬프트로 "묶어라" 는 통하지
+않았다 — 구조로 바꾼다.
+
+- `host/workspace_fast_path.py`: 작업 폴더 전체가 작을 때(파일 8개·디렉터리 64개·UTF-8 32 KiB 이하, 요청이
+  그 폴더를 가리킬 때) 첫 요청에 폴더 스냅샷을 싣고 "Bash 한 번에 모든 산출물과 검증" 을 지시한다. 스냅샷 파일은
+  읽은 파일 장부에 올린다. 컨텍스트 예산 절단이 생기면 원래 요청으로 돌아간다. 과제 이름·확장자·업무 용어는
+  보지 않는다. **켜기**: 노드 파라미터 `enable_workspace_fast_path` 또는 호스트 설정 `WORKSPACE_FAST_PATH_ENABLED`.
+- `Bash.artifact_contracts`(선택): 명령이 끝난 뒤 같은 호출 안에서 결과 파일을 표준 parser 로 다시 열어
+  JSON(중복 키·필수 키·배열 길이)·CSV(헤더·열 수·허용값·유일키·행 수)·text(필수/금지 문구)를 검사하고
+  구체적 오류를 `is_error` 로 돌려준다. 모델이 쓴 자체 검증(assert)을 런타임이 그대로 믿던 문제(불투명한
+  assert 13왕복 디버깅, 자체 검증 OK 인데 CSV 열 수 불일치)를 막는다.
+- 빠른 경로가 열리면 요청 파일 첨부(`referenced_files`)는 건너뛴다 — 스냅샷에 이미 다 있다.
+- 요청 길이 게이트 없음: 처음 설계의 1,200바이트 상한이 작은 폴더 과제 45개 중 43개를 막고 있었다.
+
+측정(로컬, qwen3.8-27b 비사고, dev sandbox 이미지, 70과제 × 2회, 기준선 4.61.0):
+
+| | 기준선 | 1회차 | 2회차 |
+|---|---|---|---|
+| 모델 왕복 평균 / 중앙 | 8.21 / 6 | 4.54 / 3 | 4.67 / 3 |
+| 왕복 ≤2 과제 | 4 | 21 | 26 |
+| 왕복 ≥10 과제 | 17 | 3 | 6 |
+| 입력 토큰 평균 | 77k | 42k | 43k |
+| 점수 | 0.807 | 0.847 | 0.807 |
+
+설계(39)·홀드아웃(31) 모두 같은 방향. 점수는 비열등(1회차 상승분은 흔들림). 큰 작업 폴더(9과제)는 거의 그대로
+— 빠른 경로 밖이다. 일반 경로에 계약 사용 안내를 넣는 변형은 점수가 낮아 기각했다.
+
+설계·구현: Codex 세션(feat/autoroute-xgen-validation-20260925 작업본). 4.62.0 위로 옮기고 게이트 조정·측정.
+
+## [4.62.0] — 2026-09-26
+
+### Fixed — 사용자 PC 가 연결된 대화에서 sandbox 에 없는 파일을 "없다" 고 답하던 것
+
+실측(2026-09-26 dev, gpt-4.1, runtime 4.61.0, trace 46792): DeX 대화에서 "작업 폴더의 dex_note_0926.md 첫 줄이
+뭐야?" → sandbox `Read` 한 번 "File not found" → 사용자 PC 는 보지 않고 "파일이 존재하지 않습니다". 파일은
+PC 작업 폴더에 있었다. 시스템 프롬프트의 "sandbox 에 없다고 없는 게 아니다" 는 이미 들어가 있었다 — 부탁은
+통하지 않았다. 09-24 의 trace 46746(sandbox 에서 `rm -rf` 후 "삭제했다")도 같은 모양이다.
+
+- `stages/s10_tool/second_machine.py`: 이번 턴 도구 목록에 사용자 PC 의 문(`…LocalControl`, 접두 필수)이 있을
+  때만, sandbox 파일 도구(Read·Edit·Write·Glob·NotebookEdit·Bash)의 "없음" 결과(`File not found` ·
+  `No files matching` · `No such file or directory`) 끝에 한 줄 — 여기(sandbox)엔 없다, 없다고 답하기 전에
+  사용자 PC 도 확인하라(문 이름을 댄다). 턴당 2번까지. 작업 공간이 이미 사용자 PC 인 커넥터 로컬 모드에서는
+  붙이지 않는다. 사건 `tool.not_in_sandbox`(이벤트 카탈로그 v15).
+- 로컬 실험실(qwen3.8-27b, 위치를 말하지 않고 파일 이름만 말하는 시나리오 5종 × 4회 + sandbox 작업 회귀 3종):
+  Qwen 은 원래도 sandbox 에서 못 찾으면 PC 를 확인해 결과 차이 없음(상태 20/20 → 20/20), sandbox 코딩 작업
+  회귀 없음. 안내가 모델에게 실제로 전달되는지는 파이프라인 한 턴 테스트로 확인(스트림의 tool.call_complete
+  사건은 안내를 붙이기 전에 나가므로 사건 기록으로는 보이지 않는다).
+
+## [4.61.0] — 2026-09-25
+
+로컬 실험실(harness-bench/lab: 실제 호스트·파이프라인 + 격리 컨테이너, Harness-Bench 과제를 dev 배포 없이
+실행, 모델 qwen3.8-27b)에서 설계·홀드아웃 과제를 나눠 판정한 묶음이다.
+
+### Fixed — 이미 있는 파일에 대한 Write 가 늘 거절됐다 (4.51.0~4.60.0)
+
+`_file_witness` 장부 키가 `file.witnessed` 였다. Stage 10 은 도구가 제안한 `state_mutations` 중 허용
+이름공간(`executor.`·`memory.`·`geny.`·`plugin.`) 키만 반영하고 나머지는 경고만 남기고 버린다. 그래서 장부가
+한 번도 기록되지 않았고, 이미 있는 파일의 Write 는 먼저 Read 했든 자기가 방금 썼든 전부
+"you have not read it in this session" 으로 거절됐다 — 모델은 안내대로 Read 한 뒤 다시 Write 해도 또 거절돼
+Bash 로 우회했다. 단위 테스트가 장부를 손으로 `shared` 에 넣어 필터를 우회해 못 잡았다.
+
+- 키를 `executor.file_witnessed` 로. 실제 반영 함수·파이프라인 한 턴(Write→Write, Read→Write)을 거치는
+  테스트 추가(옛 키에서 실패 확인).
+- 효과(설계 38과제): Write 거절 실행당 11~19회 → 0, 도구 오류 20~32 → 9, 과제당 호출 10.6 → 9.6.
+
+### Added — 요청에 이름이 나온 작업 폴더 파일을 첫 턴에 붙인다
+
+호출 해부: 과제당 호출 10.8 중 입력 읽기가 4.2회(39%) — 요청에 적힌 파일을 하나씩 따로 읽는 왕복이었다.
+프롬프트의 "한 번에 묶어라" 는 따르지 않았다(ToolBatch 38과제 중 1회).
+
+- `host/referenced_files.py`: 요청의 경로 후보 중 작업 폴더 안에 실제로 있는 텍스트 파일만 붙인다(파일당
+  16KB·합계 48KB·최대 12개). 비밀처럼 보이는 이름 제외, 바이너리는 이름·크기만, 넘치면 앞부분+잘림 표시.
+  끝까지 실은 파일은 읽은 파일 장부에 올린다. 커넥터(사용자 PC) 세션은 건너뛴다.
+- `GENY_PREFETCH_REFERENCED_FILES=0` 으로 끈다.
+- 효과: 설계 38 호출 9.6→7.9(과제 21개가 기준선 4회 모두보다 적음), 홀드아웃 29 호출 9.1~10.0→7.1
+  (중앙 7→5), 점수 0.760~0.784→0.799, 만점 7→10.
+
+### Fixed — 커넥터 거부가 결과 문자열로 오면 사용자 거부로 알아보지 못했다
+
+4.58.0 은 거부를 예외에서만 알아봤다. workflow 커넥터 어댑터는 MCP `isError` 를 `"Error: …"` 문자열로
+돌려준다 — dev 에서 한 번도 걸리지 않아 모델이 "시스템에서 차단되었습니다" 라고 답했고(2026-09-24 trace
+46748·46749), 로컬 재현에서는 거부 뒤 `shutil.rmtree` 로 **우회 삭제**까지 나왔다. 오류 머리말이 있는
+결과 문자열도 같은 판정을 거친다.
+
+### Fixed — ToolSearch 에 정확한 도구 이름을 여럿 적으면 "없음"
+
+`"mcp_local_ListDir mcp_local_ReadFile"` 처럼 이름을 나열하면 AND 규칙 때문에 미스였다(dev 30일 미스 13회 중
+4건). 정확히 일치하는 이름은 각각 돌려준다 — 퍼지가 아니다.
+
+## [4.60.0] — 2026-09-24
+
+### Fixed — "도구를 만들어 달라" 가 앱(아티팩트)으로 새던 것
+
+실측(2026-09-24): dev XGeny 의 턴-1 표면(시스템 프롬프트·도구 스키마·숨은 카탈로그·문의 실제 결과)을
+파이프라인에서 그대로 뽑아 MCP 스텁으로 되살리고, claude CLI 에 한국어 요청 15개(도구 10·앱 5)를 넣었다.
+sonnet 은 **도구 요청 19개 중 9개**를 `ArtifactGuide → ArtifactCreate` 로 보냈다 — "요약 도구", "환율 계산
+도구", "주식 시세 툴", "PDF 표 → 엑셀 도구", "계산기 도구". 입구에 선 두 문 중 `ArtifactGuide`(xgen-workflow)
+는 "사람이 OPEN 해서 쓰는 것" 을, `SelfExtendGuide` 는 "extend yourself" 를 말했다. 사람이 쓸 도구는 앞쪽으로
+읽혔다. XGEN 화면에서 "도구" 는 ForgeTool 이 만든 것이다([Agent 생성 도구], 에이전트 [도구] 탭).
+
+- `SelfExtendGuide` 첫 문장이 도구 요청의 주인을 밝힌다: "START HERE when the user asks you to make, build
+  or add a TOOL — a tool here is a script you register with ForgeTool…". 지도(`_MAP`)의 ForgeTool 줄도
+  "make a TOOL … A tool is not an app".
+- `ForgeTool` 설명이 "Make (create, build) a TOOL" 로 시작한다. 예전 "Register a script…" 로는
+  `ToolSearch("create tool")` 이 ForgeTool 대신 ArtifactGuide·ToolBatch·Write 를, `ToolSearch("make tool")`
+  이 "이 능력은 없다" 를 돌려줬다(검색은 모든 낱말이 맞아야 한다).
+- 짝: xgen-workflow 의 `ArtifactGuide` 는 앱·화면·페이지·대시보드·웹사이트 요청만 가져간다.
+
+결과(같은 스텁, 15 요청): 도구 요청이 ForgeTool 경로로 간 비율 — sonnet 10/19 → 14/14(반복 포함),
+haiku 8/10 → 10/10, opus 8/10 → 10/10. 앱 요청은 모든 조건에서 5/5 그대로.
+
+### Fixed — 문이 연 도구를 CLI 클라이언트가 같은 턴에 못 부르던 것
+
+같은 스텁에서, 문(게이트)이 방을 열고 브릿지가 `list_changed` 를 보내도 CLI 가 목록을 제때 갱신하지 않았다.
+Claude Code 2.1.236 은 방금 열린 도구를 "No such tool available" 로 거절한 실행이 158회 중 70회(한 번 더
+돌아 대개 성공), Codex 0.156.1 은 **턴 안에서 목록을 갱신하지 않았다** — codex 로는 도구 요청 10개 중 5개만
+ForgeTool 에 닿았다(나머지는 올바른 문을 열고도 멈춤).
+
+- 문의 "Now callable: …" 줄과 `ToolSearch` 의 활성화 줄에 한 문장: 목록에 아직 없으면
+  `ToolBatch(tool="<name>", inputs=[<its input>])` 로 부르라. ToolBatch 는 첫 턴 표면에 있고 이름으로 숨은
+  도구를 연다.
+- 결과: codex 도구 요청 5/10 → 10/10(전부 ToolBatch 경유). claude 는 첫 호출 거절 빈도 자체는 그대로(CLI
+  갱신 타이밍)이고, 거절 뒤 ToolBatch 로 이어 가는 길이 하나 더 생긴다.
+
+재현 테스트: `tests/unit/test_tool_request_routing.py`(9개 — 문 문장·ForgeTool 첫 말·일상어 ToolSearch·
+ToolBatch 안내). `test_turn_one_surface` 의 예시 식구 이름을 현재 이름(ArtifactCreate)으로.
+
+## [4.59.0] — 2026-09-23
+
+### Fixed — 앞 턴에 연 도구가 다음 턴에 다시 숨었다
+
+실측(2026-09-23 dev, gpt-4.1, 시연 준비 "업무 비서"): 모델이 말로 "정말 삭제할까요?" 를 묻고(도구
+0회) 사용자가 "정말 삭제해도 좋다" 고 답한 **다음 턴** — 모델은 문(`LocalControl`)을 다시 열지 않고
+브라우저 안내(`BrowserGuide`)만 5번, `BrowserTabs` 4번 부르다 반복 종료로 끝났다. 말로 확인을 받고
+사용자가 좋다고 하는, **가장 자연스러운 대화 흐름**에서 실패했다.
+
+원인: 호스트가 턴마다 레지스트리를 **새로** 만든다(`host.turn_executor`: `adapt_tools(...)`,
+`PipelineState(...)`). 앞 턴에 문을 열어 `mcp_local_Shell`·`ListDir` 를 쓴 대화도 다음 턴에는 그
+도구들이 다시 숨는다. 모델은 기록에서 자기가 셸을 썼다는 걸 보는데 정작 부를 수 없다. 4.56.0 의
+불변식은 "문이 보이게" 까지만 보장하고, "열린 상태" 는 턴을 넘어 들고 가지 않았다.
+
+- **표면은 기록 속에서 모델이 쓴 도구보다 좁아지지 않는다** (`tools.gates.restore_from_history`).
+  Stage 3 가 표면을 굳히기 직전에, 모델이 볼 수 있는 기록의 `tool_use` 마다 — 그 도구가 숨어 있으면
+  연다. 그 도구가 **문**이면 그 가족까지 연다(문을 열어 둔 대화는 방도 열려 있어야 한다).
+- **상태를 따로 저장하지 않는다.** 기록에서 복원하므로 호스트가 레지스트리를 새로 만들든 재사용하든
+  같게 동작한다. 단기 기억 창이 먼 턴의 도구 블록을 떨구면(4.36.0: 가까운 2턴만 도구까지) 다시
+  닫힌다 — 모델이 더는 볼 수 없는 사용을 표면에 붙잡아 두지 않는다.
+- 이번 턴에 등록되지 않은 도구(커넥터가 끊김 등)는 기록에 있어도 열 수 없다 — 없는 것을 만들지 않는다.
+- `tool.surface_restored` 이벤트. 이벤트 카탈로그 v14.
+
+재현 테스트(`tests/test_surface_survives_turns.py`, 4개): 앞 턴에 문→ListDir 를 쓰고 말로 확인을
+물은 대화에서, 새 레지스트리로 시작한 확인 턴의 **첫 요청 도구 목록**에 `mcp_local_Shell` 이 있다 —
+고치기 전 코드에서는 `[Bash, Read, ToolSearch, mcp_local_LocalControl]` 뿐이었다.
+
+## [4.58.0] — 2026-09-23
+
+### Fixed — 사람이 거부한 동작을 같은 턴에서 다시 묻는다 (안전)
+
+실측(2026-09-23 dev, gpt-4.1, 시연 준비 "업무 비서", trace 46745): 사용자 PC 에서 `rm -rf` 를
+실행하려 하자 커넥터가 확인 창을 띄웠고 사용자가 **거부**했다. 모델은 같은 명령을 다시 불렀다 —
+**세 번, 확인 창도 세 번** 떴다.
+
+그 확인 창은 "되돌릴 수 없는 일은 사람이 멈춘다" 의 전부다. 같은 질문을 거듭 받으면 사람은 결국
+잘못 누르고, **"이번만 허용" 을 한 번이라도 누르면 그대로 실행된다.** 반복 가드는 같은 입력·같은
+오류를 3번까지 경고만 하고(BLOCK_AT 4), **따옴표만 바꾼 재시도는 다른 입력으로 봐서** 아예 못
+막았다 — 재현 테스트에서 고치기 전 코드는 따옴표를 번갈아 바꾸는 모델에게 확인 창을 계속 띄웠다.
+
+- **거부는 그 턴의 답이다** (`stages/s10_tool/denial_guard.py`). 결과가 `ERROR user_denied:` /
+  `ERROR access_denied:` 로 시작하면 거부로 보고, 그 호출의 서명을 이 턴 동안 기억한다. 같은 동작이
+  다시 오면 **실행하지 않는다 — 확인 창도 다시 뜨지 않는다.** 거절은 거부 누적으로 세어 쌓이면
+  반복 종료(4.45.0 RepeatStop)가 턴을 끝내고 사용자에게 넘긴다.
+- **"같은 동작" 은 넓게 본다** — 문자열의 따옴표·연속 공백을 무시한다. 거부된 일을 비슷하게 다시
+  시도하는 쪽으로 잘못 맞히는 것은 안전한 실수이고, 반대쪽은 아니다. 다른 대상(`rm -rf a` vs
+  `rm -rf b`)이나 다른 도구는 다른 동작이다.
+- **턴 단위다** — `begin_turn` 이 비운다. 다음 턴에 사용자가 "해도 돼" 라고 하면 다시 물을 수 있다.
+- **어댑터가 커넥터의 거부를 알아본다** (`host/tools.py`). 도구가 던진 예외의 `code`/`error_code`
+  가 `user_denied`(또는 `access_denied`)이거나 메시지가 `user_denied:` 로 시작하면 거부 — 이게
+  **권장 계약**이다. 결과는 `ERROR user_denied: …` 머리말 + "실행되지 않았다, 다시 시도하지도
+  우회하지도 말고 사용자에게 물어라" 안내로 바뀐다(첫 거부 직후부터 모델이 알게).
+- ⚠ **임시 호환 — DeX 1.56 의 거부 문구.** 지금 커넥터는 구조화 코드 없이 "사용자가 이 명령의
+  실행을 거부했습니다" 문장만 보낸다. 이 문구도 알아본다. **제거 조건: DeX 가 거부를 `user_denied`
+  코드로 보내기 시작하면 `_LEGACY_DENIAL_PHRASES` 를 지운다.**
+- `tool.user_denied` 이벤트. 이벤트 카탈로그 v13.
+
+재현 테스트(`tests/test_user_denial_no_retry.py`, 6개): 파이프라인 끝까지 — 커넥터 Shell 이 실제
+DeX 문구로 거부하고 모델은 따옴표를 바꿔 가며 계속 시도 → **확인 창 1번**(고치기 전 코드에서는
+계속 뜸), 구조화 코드만으로도 동작, 평범한 명령 오류는 거부가 아님, 서명 정규화, 다음 턴에 잊음.
+
+**커넥터(DeX) 쪽에 남은 일**: ① 거부를 `user_denied` 코드로 보내기(그러면 임시 호환을 지운다)
+② 확인 창이 떠 있어도 대화의 중지 버튼으로 취소되게.
+
+## [4.57.0] — 2026-09-23
+
+### Fixed — 파일시스템 포트 마무리: NotebookEdit·SendUserFile 이관 + 직접 파일 I/O 금지 린트 (2c·3단계)
+
+- **직접 파일 I/O 금지 린트** (`tests/unit/test_no_direct_file_io.py`). 내장 도구가 포트
+  (`tools.fs.tool_fs`)를 거치지 않고 파일을 만지면 CI 가 실패한다. 서버에서는 에이전트의 파일이
+  러너에 있으므로, 포트를 우회한 코드는 **파드의 엉뚱한 파일**을 본다 — 그 사고를 규칙으로
+  기억하는 대신 검사한다. 판정은 AST: 포트·세션의 파일 연산은 async 라 `await` 로 불리고,
+  pathlib 의 같은 이름은 sync 다. 그래서 `read_bytes`·`write_text`·`exists` … 는 **await 된
+  호출일 때만** 허용하고, `open()`·`os.remove/rename/…`·`os.path.exists/…`·`shutil.*`(`which`
+  제외)는 위반이다. 허용 목록은 모듈 단위로 **이유와 함께** 두고(작업공간↔러너 전송, 검색 구현,
+  자격 증명 저장소, 파드 거주 문서·음성·SSH — 4단계 대상, 로컬 git worktree), 목록에 있는데 더
+  이상 위반이 없으면 실패한다 — **목록은 줄어들기만 한다.**
+  린트를 고치기 전 코드에 돌리면 NotebookEdit 5곳·SendUserFile 2곳을 정확히 잡는다.
+- **`SendUserFile` — 경로 가드가 없었다.** 파드 로컬 `Path` 를 검사도 없이 채널에 넘겨, 노출되면
+  파드의 아무 파일(설정·시크릿)이나 사용자에게 보낼 수 있었다. 서버에서는 에이전트의 파일이
+  러너에 있으니 엉뚱한 파일을 보기도 했다. 이제 포트로 풀어 허용 트리 밖이면 `ACCESS_DENIED`,
+  러너 파일은 `materialize` 로 파드 전용 임시 사본을 만들어 보낸다. (operator 가족이라 XGeny
+  에는 노출돼 있지 않았다 — 60일 0건. 앞서 손으로 한 배치 감사에서 유일하게 걸린 도구였고,
+  린트가 같은 곳을 자동으로 잡았다.)
+- **`NotebookEdit` 을 포트로 한 벌** — 두 분기의 파싱 오류 문구가 달랐고, 러너 쪽 결과
+  metadata 의 `path` 는 문자열 `"None"` 이었다(`str(resolved)`, 러너에선 resolved 가 None).
+- **로컬 쓰기를 원자적으로** (`LocalFS.write_bytes`): 같은 디렉터리의 임시 파일에 쓰고 fsync 한
+  뒤 rename — 쓰는 도중 죽거나 디스크가 차도 원본이 남는다. 예전엔 NotebookEdit 로컬 분기만
+  이랬고 Write·Edit 은 제자리에 덮어썼다. 그리고 그 NotebookEdit 도 `mkstemp` 의 **0600 권한을
+  그대로 rename 해서** 기존 파일 권한을 바꿔 버렸다 — 이제 있던 파일의 권한을(새 파일은 umask
+  기본값을) 입힌다. 스크립트가 실행 권한을 잃지 않는다.
+- `LocalFS.materialize` 는 디렉터리를 `IsADirectoryError` 로 거절한다(러너와 같은 판정).
+
+테스트: 린트 3(규칙 자체 검증 포함) + 원자적 쓰기 3(권한 유지·임시파일 잔재 없음·실패 시 원본
+유지) + SendUserFile 2(트리 밖 거절·러너 파일 전송). 전체 5,576 통과.
+
+## [4.56.0] — 2026-09-23
+
+### Fixed — "문은 보이는데 방이 안 열린다" 를 부류째로 막는다
+
+턴-1 표면은 기본 동사만 세우고, 나머지 능력은 가족마다 **문 하나** 뒤에 숨긴다. 숨기는 일은
+한 곳(`TURN_ONE_TOOLS`)이 한꺼번에 했지만 **여는 일은 문마다 따로** 선언해야 했다 — 내장 안내
+도구는 모듈마다 `open_family(...)`, 어댑트된 도구는 `metadata["opens_family"]`. 빠뜨려도 아무
+오류가 없었고, 같은 사고가 2주 새 네 번 났다:
+
+| 언제 | 문 | 무슨 일 |
+|---|---|---|
+| 09-09 | `SshListServers` | 방도 문도 숨어 "인증 정보가 없다" 로 멈춤 |
+| — | `DelegationGuide` | 지도만 주고 방을 잠가 둠 |
+| 09-19 | `BrowserGuide`(커넥터) | 안내만 100회 되풀이, 입력 약 750만 토큰 |
+| 09-23 | `LocalControl`(커넥터, SDK 경로) | 지도의 Shell·WriteFile 을 한 번도 못 부르고 브라우저 도구에 `rm -rf` 를 우겨넣음(우연히 실패). 부르지도 않은 쓰기로 "PC 에 저장했다" 고 답함 |
+
+매번 그 문 하나에 여는 코드를 덧댔다. 이 버전은 **문과 방의 관계를 한 표**(`tools/gates.py`
+`GATES`)에 두고, 숨김·열림·검사가 전부 그 표를 읽게 한다.
+
+- **표에 있는 문은 스스로 열 줄 몰라도 열린다.** Stage 10 라우터가 문의 성공을 보고 가족을
+  연다(`family_of`). 문이 스스로 열었으면 새로 연 것이 없으니 "Now callable" 은 한 번만 붙는다.
+  실패한 문은 아무것도 열지 않는다. → 09-23 사례는 **workflow 패치 없이도** 풀린다(재현 테스트).
+- **불변식 — 숨긴 가족에는 보이는 문이 있다.** Stage 3 가 모델에게 표면을 굳히기 직전에
+  검사하고(`reachability_fixes`), 어기면 숨기지 않는다: 문이 등록돼 있는데 숨었으면 **문 하나만**
+  열고, 우리 내장 가족인데 문이 아예 없으면 그 도구를 연다. 최악의 결과가 "도구에 영영 못 닿음"
+  에서 "표면이 조금 커짐" 으로 바뀌고, `tool.gate_reachability_repaired` 이벤트와 WARNING 으로
+  드러난다. 이벤트 카탈로그 v12.
+- **가족은 이름 규칙 + 같은 MCP 접두.** `Browser*`·`Doc*`·`Job*`·`Artifact*` 처럼 규칙으로 적어서
+  workflow 가 가진 가족(작업·아티팩트)도 목록을 두 저장소에 나눠 적을 필요가 없다. 커넥터의
+  `mcp_local_BrowserGuide` 는 `mcp_local_Browser*` 를, 내장 `BrowserGuide` 는 접두 없는 것을 연다.
+  `LocalControl` 은 같은 접두의 나머지 전부(다른 문 제외)를 연다. 접두 없는 `LocalControl`(CLI
+  경로)은 문으로 치지 않는다 — 모든 내장 도구가 그 가족이 되는 사고를 막는다.
+- **긴 꼬리는 건드리지 않는다.** 연결된 DB·API 노드와 사용자가 붙인 MCP 서버의 도구는 어느 문의
+  가족도 아니다 — ToolSearch 뒤에 있는 것이 설계다. 남의 MCP 서버 도구가 이름 규칙에 우연히 맞아도
+  (예: `mcp_github_BrowserNavigate`) 그 서버엔 우리 문이 없으므로 가족이 아니다.
+- **`DocGuide` 는 지금 동작을 선언만 했다(`visible=False`).** 문서 가족은 원래부터 문까지 턴-1 에
+  없었고 ToolSearch(60일 212회)로 찾아 쓰인다. 문을 세우면 호출당 약 211토큰이라, 올릴지는 따로
+  판단한다. 불변식은 이 선언을 존중한다.
+
+**실제 dev 표면에서 확인**: XGeny 내장 등록 경로(27개 / 턴-1 10개)로 표면을 짜서 검사했더니
+불변식이 여는 것은 **없음** — 평소 표면은 그대로다. 커지는 것은 문이 빠지거나 숨었을 때뿐이다.
+
+재현 테스트(`tests/unit/test_gate_table.py`, 19개): 표 ↔ 턴-1 목록 일관성(어긋나면 CI 에서
+잡힘), 접두 분리, **여는 선언 없는 커넥터 LocalControl 이 Shell·WriteFile 을 연다(고치기 전
+라우터에서 실패)**, 실패한 문은 안 연다, 스스로 연 문은 한 번만 알린다, SSH 사례 fail-open,
+숨은 문은 문만 연다, 긴 꼬리·남의 MCP·문서는 안 건드린다, Stage 3 가 굳히기 전에 고친다.
+
+## [4.55.0] — 2026-09-23
+
+### Security — 러너 Glob 이 패턴을 셸 명령으로 실행했다
+
+러너 분기의 Glob 은 모델이 준 패턴을 **따옴표 없이** 셸에 끼워 넣었다:
+
+```bash
+for f in {pattern}; do …
+```
+
+그래서 패턴 안의 `$(…)`·백틱·`; do :; done; …` 가 **그대로 실행됐다**(세 가지 모두 재현).
+Glob 은 `read_only` 로 선언된 도구라 PLAN 모드(destructive 만 확인을 요구)에서도 확인 없이
+돈다 — 사실상 확인 없는 명령 실행기였다. 에이전트가 읽은 웹 문서·사용자 파일의 프롬프트
+주입이 모델을 거쳐 Glob 패턴으로 들어오는 경로가 열려 있었다. 실사용(dev 60일 129건)에서
+셸 문자가 든 패턴은 0건 — 밟힌 적은 없다.
+
+### Fixed — Glob·Grep 이 러너와 로컬에서 다른 답을 했다 (파일시스템 포트 2단계)
+
+두 곳이 **서로 다른 프로그램**이었다 — 러너는 셸 `for`/`grep -E`, 로컬은 `Path.glob`/Python
+`re`. 같은 폴더·같은 질문 12개 중 **11개의 답이 달랐다**:
+
+- **`Grep("order_id = \\d+")` → 러너만 "No matches"** — `grep -E` 에는 `\d` 가 없다. 파일에
+  있는 것을 없다고 말하는, 조용히 틀린 답. (Grep 은 60일 6건이라 실제로 밟힌 적은 없다.)
+- 경로: 러너 상대(`src/a.py`, `./src/a.py`) / 로컬 절대.
+- 출력 모양(`:>` 표시), 결과 순서, 제외 디렉터리 목록.
+
+**이제 같은 코드가 두 곳에서 돈다.** 검색을 표준 라이브러리만 쓰는 `tools/built_in/_search.py`
+한 파일로 옮기고, 로컬은 import 해서, 러너는 **그 파일의 소스를 `python3 -c <소스> <JSON>`
+로** 실행한다(`ToolFileSystem.search`). 러너는 workflow 와 같은 Python 3.14 라 `re`·`glob`
+의미가 구조적으로 같고, 출력 텍스트까지 그 파일이 만들어서 포맷도 같다. 요청은 argv 의 JSON
+한 덩어리라 **셸 해석이 없다.** 경로는 절대 경로 하나로 말한다(4.39.0 원칙).
+
+실제 dev 러너 파드에서 확인: `python3` = 3.14.2, `\d` 매칭 성공, `$(touch …)` 는 글자 그대로의
+패턴으로 취급돼 아무것도 실행되지 않음.
+
+재현 테스트(`tests/unit/test_search_tools_parity.py`, 19개): 같은 질문 12개를 두 백엔드에
+돌려 같은 답인지 + `\d` + 러너 절대 경로 + 잡음 디렉터리 제외 + **주입 페이로드 3종** + 잘못된
+정규식. **고치기 전 코드에 돌리면 16개가 실패한다**(불일치 11 + `\d` + 상대 경로 + 주입 3종
+전부 실행). 기존 5,530개 중 러너 Glob·Grep 의 출력을 검사하던 테스트는 하나도 없었다 — 그래서
+갈린 것이 안 잡혔다.
+
+## [4.54.2] — 2026-09-23
+
+### Changed — edit2docs 0.26.1 (HWP 검토 보완)
+
+- `xgen-edit2docs` 0.26.0 → **0.26.1**.
+  - 복사 방지가 걸린 배포용 hwp 는 DOCX 로 바꾸지 않는다. DOCX 는 글자를 꺼내 쓰는
+    길(Doc* 편집·에이전트 파일 읽기)이라, 0.24.0 까지 모든 배포용 문서를 거부하던 보호를
+    글자에 대해서는 그대로 지킨다(보기는 문서 서비스가 선택·인쇄를 막은 채로).
+  - 스트림당 레코드 수 상한 — 작은 레코드를 수천만 개 늘어놓은 파일이 메모리를 먹지 않게.
+  - HTML 머리말을 구역마다 되풀이하지 않음.
+
+## [4.54.1] — 2026-09-23
+
+### Changed — edit2docs 0.26.0 (AGPL 의존 마지막 정리)
+
+- `xgen-edit2docs` 0.24.0 → **0.26.0**.
+  - 0.25.0: EPUB 경로와 **ebooklib(AGPL-3.0)** 제거 — `.epub` 근거 자료는 이제
+    `Unsupported source format` 으로 분명히 거부된다(예전엔 빈 내용이 조용히 들어갔다).
+  - 0.26.0: HWP 해석 수정 — 날것으로 저장된 png/jpg 그림 누락, 취소선 오판(표 35),
+    컨트롤 뒤 글자 모양 어긋남, 하이픈·묶음/고정폭 빈칸·자동 번호·덧말 글자, 배포용 문서 열기.
+    Doc* 도구가 hwp 를 정규화할 때 그대로 좋아진다.
+- `uv.lock` 재생성 — 0.23.0 시절 그대로여서 xgen-contextifier → **pymupdf(AGPL)** 를
+  품고 있었다(`uv sync --frozen` 이면 개발 환경에 설치됐다). 이제 pymupdf·ebooklib·pyhwp 0건.
+
+## [4.54.0] — 2026-09-23
+
+### Fixed — Read·Write·Edit 가 러너와 로컬에서 다른 말을 했다 (파일시스템 포트 2단계)
+
+4.53.0 의 포트(`tools/fs.py`)로 세 도구의 두 분기를 **한 벌**로 접었다. 접으면서 두 분기가
+실제로 갈라져 있던 곳이 드러났고, 대부분은 **프로덕션이 쓰는 러너 쪽**이 덜 다듬어져 있었다:
+
+| | 로컬(라이브러리·xgeny-cli) | 러너(서버) — 고치기 전 |
+|---|---|---|
+| 이미지 읽기 | `[Image file: …]` | 바이너리 검사에 걸려 `[Binary file: …]` |
+| 경로 탈출 | `Access denied …` | `Read error: 경로가 …` (RuntimeError 가 일반 except 로 샘) |
+| Edit 성공·없는 파일 문구 | 절대 경로 | 모델이 준 표기 |
+| 상대 경로로 읽고 절대 경로로 쓰기 | 통과 | **거절** (Read 가 모델 표기 하나만 장부에 적음) |
+
+이제 두 백엔드가 같은 문구·같은 판정을 낸다. 경로는 4.39.0 부터의 원칙대로 **해석된 절대
+경로 하나**로 말한다.
+
+- **4.51.0 쓰기 가드 회귀 수정 — 방금 만든 파일을 다시 쓰면 거절됐다.** 장부에는 Read 만
+  올렸고 Write·Edit 은 안 올려서, Write→Write 가 "읽지 않은 기존 파일" 로 판정됐다. 4.51.0
+  때 실측에서 "자기가 쓴 걸 다시 씀" 을 월 54건 따로 세 놓고도 이 경로를 놓쳤다. 이제 성공한
+  Write·Edit 도 장부에 올린다(쓴 내용·고친 파일은 에이전트가 안다). dev 배포 후 실제 거절은
+  0건 — 사용자가 밟기 전에 잡았다.
+- **CRLF 파일 Edit.** 모델은 거의 항상 `\n` 으로 쓴다. 로컬 분기는 `read_text()` 가 줄 끝을
+  바꿔 읽고 그대로 저장해 "맞기는 했지만 **파일 전체의 줄 끝을 조용히 LF 로** 바꿨고", 러너
+  분기는 바이트 그대로라 아예 안 맞았다. 사용자 PC 커넥터에는 윈도우도 있다. 이제 파일이
+  CRLF 이고 old_string 에 CR 이 없으면 old/new 를 CRLF 로 맞춰 치환하고, 파일의 줄 끝은
+  그대로 둔다. LF 파일은 건드리지 않는다.
+
+재현 테스트(`tests/unit/test_file_tools_parity.py`, 22개 = 11개 × 두 백엔드). **고치기 전
+코드에 돌리면 정확히 11개가 실패한다** — 위 표의 러너 쪽 4종, 쓰기 가드 회귀(로컬·러너 각 2),
+러너의 상대/절대 경로, CRLF(로컬·러너). 새 코드에서 22개 전부 통과.
+
+## [4.53.0] — 2026-09-23
+
+### Added — 파일시스템 포트: 도구가 파일을 만지는 유일한 입구 (1단계, 동작 변화 없음)
+
+파일 도구는 두 곳에서 돈다 — 호스트가 실행 세션을 붙이면 러너, 아니면 로컬(라이브러리·
+`xgeny-cli`·테스트). 지금까지 **그 선택을 도구가 각자** 했다: 12개 모듈이
+`if context.sandbox is not None:` 을 제각각 구현했고, 같은 이름의 도구가 두 곳에서 다르게
+동작했다.
+
+| | 로컬 | 러너 |
+|---|---|---|
+| 경로 탈출 | `PermissionError` | `SandboxPathError` (`RuntimeError`) |
+| Edit 치환 로직 | 한 벌 | **또 한 벌** |
+| Glob·Grep | `Path.glob` | 셸 `find`/`grep` — 순서·숨김 처리 보장 없음 |
+
+- **`tools/fs.py` — `ToolFileSystem` 포트 + `LocalFS` + `RunnerFS`**. 연산은
+  `resolve / read_bytes / write_bytes / exists / materialize / commit`. 새 의미를 만들지
+  않는다 — `RunnerFS` 는 세션의 1급 연산과 기존 `sandbox_path` 가드를, `LocalFS` 는 기존
+  `resolve_and_validate` 를 그대로 쓴다. 흩어져 있던 것을 한 이름 아래 모은다.
+- **백엔드 선택은 `tool_fs(context)` 한 곳.** 호스트가 `ToolContext.fs` 를 주입했으면
+  그것, 아니면 세션 유무로 러너/로컬. 서버는 세션을 언제나 붙이므로(러너가 죽어도 "미부착
+  세션" — None 이 아니다) 서버 턴이 로컬로 조용히 떨어지는 길은 없다.
+- **탈출 예외를 하나로**: 두 백엔드 모두 `FsAccessError`(`PermissionError` 하위). 기존 로컬
+  호출부가 잡던 `PermissionError` 로도 그대로 잡힌다.
+- **`materialize` 는 러너에서 파드 전용 임시 디렉터리를 쓴다** — 워크스페이스와 같은 경로
+  문자열을 절대 쓰지 않는다. 같은 문자열을 쓰던 시절 지난 턴의 파드 잔재가 러너의 새 파일을
+  조용히 가렸다("방금 고쳤는데 옛날 내용이 나온다"). 그 버그가 구조적으로 불가능해진다.
+
+**만들다가 피한 함정 둘**:
+- `exists` 를 셸(`stat -c`)로 짰다가 되돌렸다. 실제 세션(러너 HTTP 클라이언트·사용자 PC
+  커넥터)은 둘 다 `exists` 를 1급으로 갖고 있고, 셸 `test -f` 는 붙지 않은 세션이 루트를
+  추측해 "없음" 을 답한 프로드 버그의 원인이었다(workflow `sandbox_mount.exists` 주석).
+  커넥터는 맥·윈도우 PC 이기도 해서 리눅스 문법은 통하지도 않는다. 네이티브가 있으면 그것만,
+  없으면 읽어 보기로 판단한다.
+- 첫 구현이 경로를 **먼저** 풀고 세션을 **나중에** 깨웠다. 기존 `sb_read_bytes` 는 반대 —
+  붙지 않은 세션의 `workdir` 은 예상값이라 먼저 풀면 실제 루트와 어긋난다. 순서를 맞추고
+  회귀 테스트로 고정했다.
+
+**이 버전은 어떤 도구도 바꾸지 않는다.** 이관은 모듈 단위로 뒤따른다 — 두 분기를 가진
+도구를 `tool_fs(context)` 한 줄로 접는다.
+
+계약 테스트(`tests/unit/test_tool_fs_contract.py`, 38개): **같은 테스트 11개를 세 백엔드**
+(로컬 / 필수 연산만 가진 러너 세션 / 네이티브 `exists` 를 가진 러너 세션)에 돌린다 — 왕복,
+상위 디렉터리 생성, 상대 경로 해석, 없는 파일, **탈출 예외가 같다**, 빈 경로, exists,
+materialize, commit. 러너 전용 4개(워크스페이스 경로를 쓰지 않는 materialize, 읽기 전용
+트리, 네이티브 exists 는 셸을 안 띄움, 세션을 먼저 깨운다) + 선택 4개.
+
 ## [4.52.0] — 2026-09-23
 
 ### Fixed — LLM 호출 하나가 턴을 무한정 붙잡을 수 있었다 (안정성 감사 F2)
@@ -3880,7 +5252,6 @@ output.
   covering all six ``stream_event`` sub-types + the end-to-end
   delta-then-envelope sequence + the duplicate-text guard. Full
   suite: 3276 passed.
-
 
 ## [2.1.3] — 2026-06-04
 

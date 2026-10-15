@@ -102,6 +102,10 @@ class OpenAICompatibleClient(OpenAIClient):
     #: registered/instantiated directly.
     _profile: ProviderProfile
 
+    #: ``system`` is the role every OpenAI-compatible server knows;
+    #: ``developer`` is OpenAI's own (see ``VLLMClient.system_role``).
+    system_role = "system"
+
     def __init__(
         self,
         api_key: str = "",

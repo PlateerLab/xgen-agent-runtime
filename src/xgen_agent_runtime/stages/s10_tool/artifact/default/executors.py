@@ -70,7 +70,35 @@ def _router_registry(router: ToolRouter) -> Optional[ToolRegistry]:
     return reg if isinstance(reg, ToolRegistry) else None
 
 
-def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) -> None:
+def _tool_facts(registry: Optional[ToolRegistry], tc: Dict[str, Any]) -> Dict[str, Any]:
+    """이 호출의 능력 · 출처. 도구를 모르면 기본 능력으로 꾸미지 않고 빈 사전."""
+    if registry is None:
+        return {}
+    tool = registry.get(tc.get("tool_name", ""))
+    if tool is None:
+        return {}
+    from xgen_agent_runtime.tools.base import tool_origin
+
+    try:
+        caps = tool.capabilities(tc.get("tool_input", {}))
+    except Exception:  # noqa: BLE001 - 능력을 몰라도 호출은 막지 않는다
+        return {"origin": tool_origin(tool)}
+    return {
+        "capabilities": {
+            "read_only": bool(caps.read_only),
+            "destructive": bool(caps.destructive),
+            "network_egress": bool(caps.network_egress),
+            "idempotent": bool(caps.idempotent),
+        },
+        "origin": tool_origin(tool),
+    }
+
+
+def _emit_call_start(
+    on_event: Optional[ToolEventCallback],
+    tc: Dict[str, Any],
+    registry: Optional[ToolRegistry] = None,
+) -> None:
     if on_event is None:
         return
     on_event(
@@ -79,6 +107,7 @@ def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) 
             "tool_use_id": tc.get("tool_use_id", ""),
             "name": tc.get("tool_name", ""),
             "input": tc.get("tool_input", {}),
+            **_tool_facts(registry, tc),
         },
     )
 
@@ -102,6 +131,22 @@ def _error_text(result_dict: Dict[str, Any]) -> str:
     return ""
 
 
+def _blocks_text(blocks: List[Any]) -> str:
+    """블록 목록(글 + 이미지) 결과를 사람이 읽을 글로 — 이미지는 ``[image]`` 한 낱말.
+
+    목록을 ``str()`` 로 찍으면 작업 과정·기록에 파이썬 표기와 Base64 가 그대로 찍혔다.
+    """
+    parts: List[str] = []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "image":
+            parts.append("[image]")
+        elif isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+        else:
+            parts.append(str(block))
+    return "\n".join(p for p in parts if p).strip()
+
+
 def _result_text(result_dict: Dict[str, Any]) -> str:
     """성공한 도구가 낸 결과. 없으면 빈 문자열.
 
@@ -112,6 +157,8 @@ def _result_text(result_dict: Dict[str, Any]) -> str:
         value = result_dict.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()[:_RESULT_TEXT_CAP]
+        if isinstance(value, list) and value:
+            return _blocks_text(value)[:_RESULT_TEXT_CAP]
         if value not in (None, "", [], {}):
             return str(value)[:_RESULT_TEXT_CAP]
     return ""
@@ -122,6 +169,7 @@ def _emit_call_complete(
     tc: Dict[str, Any],
     result_dict: Dict[str, Any],
     duration_ms: int,
+    registry: Optional[ToolRegistry] = None,
 ) -> None:
     if on_event is None:
         return
@@ -131,6 +179,7 @@ def _emit_call_complete(
         "name": tc.get("tool_name", ""),
         "is_error": is_error,
         "duration_ms": duration_ms,
+        **_tool_facts(registry, tc),
     }
     if is_error:
         # **사유를 함께 싣는다.** 성공 결과는 크고 모델이 이미 받지만, 실패
@@ -177,7 +226,7 @@ class SequentialExecutor(ToolExecutor):
         registry = _router_registry(router)
         results = []
         for tc in tool_calls:
-            _emit_call_start(on_event, tc)
+            _emit_call_start(on_event, tc, registry)
             t0 = time.monotonic()
             result = await router.route(
                 tc["tool_name"],
@@ -195,7 +244,7 @@ class SequentialExecutor(ToolExecutor):
             )
             _apply_state_mutations_via_ctx(result, tc, context)
             result_dict = result.to_api_format(tc["tool_use_id"])
-            _emit_call_complete(on_event, tc, result_dict, duration_ms)
+            _emit_call_complete(on_event, tc, result_dict, duration_ms, registry)
             results.append(result_dict)
         return results
 
@@ -267,7 +316,7 @@ class ParallelExecutor(ToolExecutor):
 
         async def _execute_one(tc: Dict[str, Any]) -> Dict[str, Any]:
             async with semaphore:
-                _emit_call_start(on_event, tc)
+                _emit_call_start(on_event, tc, registry)
                 t0 = time.monotonic()
                 result = await router.route(
                     tc["tool_name"],
@@ -285,7 +334,7 @@ class ParallelExecutor(ToolExecutor):
                 )
                 _apply_state_mutations_via_ctx(result, tc, context)
                 result_dict = result.to_api_format(tc["tool_use_id"])
-                _emit_call_complete(on_event, tc, result_dict, duration_ms)
+                _emit_call_complete(on_event, tc, result_dict, duration_ms, registry)
                 return result_dict
 
         tasks = [_execute_one(tc) for tc in tool_calls]
@@ -395,7 +444,7 @@ class PartitionExecutor(ToolExecutor):
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def _run_one(tc: Dict[str, Any]) -> Dict[str, Any]:
-            _emit_call_start(on_event, tc)
+            _emit_call_start(on_event, tc, self._registry)
             t0 = time.monotonic()
             result = await router.route(
                 tc["tool_name"],
@@ -413,7 +462,7 @@ class PartitionExecutor(ToolExecutor):
             )
             _apply_state_mutations_via_ctx(result, tc, context)
             result_dict = result.to_api_format(tc["tool_use_id"])
-            _emit_call_complete(on_event, tc, result_dict, duration_ms)
+            _emit_call_complete(on_event, tc, result_dict, duration_ms, self._registry)
             return result_dict
 
         async def _run_bounded(tc: Dict[str, Any]) -> Dict[str, Any]:

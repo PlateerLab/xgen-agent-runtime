@@ -4,6 +4,7 @@ from xgen_agent_runtime.events.bus import EventBus
 from xgen_agent_runtime.events.catalog import (
     EVENT_CATALOG_VERSION,
     PAYLOADS,
+    RETIRED_EVENT_TYPES,
     EventTypes,
     known_event_types,
 )
@@ -15,5 +16,6 @@ __all__ = [
     "EventTypes",
     "PAYLOADS",
     "PipelineEvent",
+    "RETIRED_EVENT_TYPES",
     "known_event_types",
 ]

@@ -237,12 +237,16 @@ class WebFetchTool(Tool):
     @property
     def description(self) -> str:
         # 스키마는 매 호출에 실린다(4.33.0, 371 → ~200 토큰). 광고하는 파라미터는 실제로
-        # 쓰이는 것만: dev 28일 332회 중 url 332 · render_js 34 · max_chars 31 · timeout 26,
-        # headers 1 · max_bytes 0. 빠진 둘은 execute 가 여전히 받는다(스키마는 열려 있다).
+        # 쓰이는 것만: dev 28일 332회 중 url 332 · max_chars 31 · timeout 26, headers 1 ·
+        # max_bytes 0. 빠진 둘은 execute 가 여전히 받는다(스키마는 열려 있다).
+        #
+        # render_js(서버 브라우저 엔진 an-web 으로 JS 를 돌려 읽기)는 4.70.0 에서 an-web 과 함께
+        # 없앴다. 웹 도구는 일반 검색·읽기 둘뿐이다.
         return (
-            "Fetch an HTTP(S) URL and return its text (HTML stripped). Good for docs, "
-            "READMEs, small API responses. For JavaScript-rendered pages set render_js=true; "
-            "for interactive sessions use BrowserNavigate."
+            "Fetch an HTTP(S) URL and return its text (HTML stripped). Good for articles, "
+            "docs, READMEs and API responses. A page that builds its content with JavaScript "
+            "may come back nearly empty — then try another source for the same content "
+            "(a search result, an API, a print or text view)."
         )
 
     @property
@@ -253,10 +257,6 @@ class WebFetchTool(Tool):
                 "url": {
                     "type": "string",
                     "description": "Absolute http(s) URL (https:// assumed if no scheme).",
-                },
-                "render_js": {
-                    "type": "boolean",
-                    "description": "Run the page's JavaScript first (SPA/React). Slower; default false.",
                 },
                 "max_chars": {
                     "type": "integer",
@@ -291,9 +291,6 @@ class WebFetchTool(Tool):
         max_chars = int(input.get("max_chars", _DEFAULT_MAX_CHARS))
         max_bytes = int(input.get("max_bytes", _DEFAULT_MAX_BYTES))
         user_headers = input.get("headers") or {}
-
-        if input.get("render_js"):
-            return await self._fetch_rendered(url, timeout=timeout, max_chars=max_chars)
 
         request_headers: Dict[str, str] = {
             "User-Agent": _DEFAULT_USER_AGENT,
@@ -378,49 +375,6 @@ class WebFetchTool(Tool):
                 "content_type": content_type,
                 "text_chars": len(text),
                 "truncated_bytes": truncated_bytes,
-                "truncated_chars": truncated_chars,
-            },
-        )
-
-    async def _fetch_rendered(self, url: str, *, timeout: float, max_chars: int) -> ToolResult:
-        """render_js=true path — one-shot JS-rendered fetch via an-web.
-
-        Uses an ephemeral engine session (WebFetch stays stateless; the
-        persistent per-session tab belongs to the Browser* tools). The
-        an-web dependency is optional — a missing engine surfaces as a
-        ToolResult error carrying the install hint.
-        """
-        from xgen_agent_runtime.tools.built_in.browser_tools import fetch_rendered_text
-
-        try:
-            final_url, title, text = await fetch_rendered_text(url, timeout=timeout)
-        except RuntimeError as exc:
-            return ToolResult(content=str(exc), is_error=True)
-        except Exception as exc:  # noqa: BLE001 — engine faults become tool errors
-            return ToolResult(
-                content=f"render_js fetch failed for {url}: {type(exc).__name__}: {exc}",
-                is_error=True,
-            )
-
-        truncated_chars = False
-        if len(text) > max_chars:
-            text = text[:max_chars]
-            truncated_chars = True
-
-        header_lines = [f"Fetched: {final_url} (JS-rendered)"]
-        if title:
-            header_lines.append(f"Title: {title}")
-        if final_url != url:
-            header_lines.append(f"Redirected from: {url}")
-        if truncated_chars:
-            header_lines.append(f"[text truncated at {max_chars} chars]")
-
-        return ToolResult(
-            content="\n".join(header_lines) + "\n\n" + text,
-            metadata={
-                "final_url": final_url,
-                "render_js": True,
-                "text_chars": len(text),
                 "truncated_chars": truncated_chars,
             },
         )
