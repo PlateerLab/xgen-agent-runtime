@@ -94,7 +94,9 @@ def tool_span(*, tool_name: str) -> Iterator[SpanHandle]:
         attrs.GEN_AI_TOOL_NAME: tool_name,
         attrs.GEN_AI_TOOL_TYPE: attrs.TOOL_TYPE_FUNCTION,
     }
-    with current_span(_span_name(attrs.OP_EXECUTE_TOOL, tool_name), internal_kind(), attributes) as span:
+    with current_span(
+        _span_name(attrs.OP_EXECUTE_TOOL, tool_name), internal_kind(), attributes
+    ) as span:
         yield span
 
 
@@ -110,10 +112,12 @@ def record_tool_result(span: SpanHandle, result: Any) -> None:
     if not span.recording or result is None:
         return
     is_error = bool(getattr(result, "is_error", False))
-    span.set({
-        attrs.XGEN_TOOL_IS_ERROR: is_error,
-        attrs.XGEN_TOOL_RESULT_SIZE: _result_size(result),
-    })
+    span.set(
+        {
+            attrs.XGEN_TOOL_IS_ERROR: is_error,
+            attrs.XGEN_TOOL_RESULT_SIZE: _result_size(result),
+        }
+    )
     if is_error:
         span.fail("tool_error")
 
