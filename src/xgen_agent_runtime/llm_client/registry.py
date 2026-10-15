@@ -102,6 +102,17 @@ def _azure_foundry_factory() -> Type[BaseClient]:
     return AzureFoundryClient
 
 
+def _openrouter_factory() -> Type[BaseClient]:
+    try:
+        from xgen_agent_runtime.llm_client.openrouter import OpenRouterClient
+    except ImportError as e:
+        raise ImportError(
+            "OpenRouter client requires the 'openai' package. "
+            "Install with: pip install xgen-agent-runtime[openai]"
+        ) from e
+    return OpenRouterClient
+
+
 def _codex_cli_factory() -> Type[BaseClient]:
     from xgen_agent_runtime.llm_client.codex import CodexCLIClient
 
@@ -139,6 +150,8 @@ ClientRegistry.register("azure_foundry", _azure_foundry_factory)
 #  "azure_openai" 는 그 문으로 들어오는 것의 일부만 가리킨다.)
 ClientRegistry.register("azure", _azure_foundry_factory)
 ClientRegistry.register("azure_openai", _azure_foundry_factory)
+# 한 키로 여러 회사의 모델을 부르는 중계 (OpenAI Chat Completions 모양).
+ClientRegistry.register("openrouter", _openrouter_factory)
 
 
 # Branded local (OpenAI-compatible) providers, generated from profiles.

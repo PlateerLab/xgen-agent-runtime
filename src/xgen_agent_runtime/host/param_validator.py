@@ -21,6 +21,8 @@ PROVIDER_TEMPERATURE_RANGES = {
     "openai": (0.0, 2.0),
     "deepseek": (0.0, 2.0),
     "vllm": (0.0, 2.0),
+    # OpenRouter 는 OpenAI 범위로 받고 모델마다 옮긴다(받지 않는 모델은 무시한다).
+    "openrouter": (0.0, 2.0),
     "google": (0.0, 2.0),
     "anthropic": (0.0, 1.0),
     "bedrock": (0.0, 1.0),
@@ -33,6 +35,7 @@ PROVIDER_LABELS = {
     "openai": "OpenAI",
     "deepseek": "DeepSeek (OpenAI 호환)",
     "vllm": "vLLM (OpenAI 호환)",
+    "openrouter": "OpenRouter",
     "google": "Google (Gemini)",
     "anthropic": "Anthropic",
     "bedrock": "AWS Bedrock",
