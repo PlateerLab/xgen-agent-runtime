@@ -4,6 +4,20 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.93.0] - 2026-10-16
+
+### Fixed — 묶음 호출(ToolBatch)의 호출 사건이 안쪽 호출들의 성격을 싣는다
+
+`tool.call_start` · `tool.call_complete` 의 능력(capabilities)이 ToolBatch 에서는 늘 `read_only=false` 였다. ToolBatch 의
+`capabilities()` 는 안쪽 도구를 모르는 채 실행 일정을 정하는 값이라 보수적으로 둔 것인데, 같은 값이 호출 사건에도 실려
+웹 조회 몇 건을 한 번에 부른 호출이 '쓰기' 로 기록됐다. 호스트(기억 지도)는 이것을 결과물을 만든 턴으로 읽어 그 턴을
+지도에 남기지 않았다.
+
+- 다른 도구를 대신 부르는 도구는 `dispatched_calls(input, registry)` 로 그 (도구, 입력) 목록을 밝힌다. ToolBatch 가 구현한다.
+- 호출 사건의 능력은 안쪽 호출들을 합친 것이다: 읽기 전용 · 멱등은 전부일 때, 바깥 연결 · 파괴는 하나라도 있을 때.
+  출처는 안쪽 도구의 것. 안쪽 도구를 찾지 못하면 능력 없이 출처만 싣는다(모른다).
+- 실행 일정(병렬 여부)에 쓰는 ToolBatch 자신의 `capabilities()` 는 그대로다.
+
 ## [4.92.0] - 2026-10-15
 
 ### Added: OpenRouter 제공자 (`openrouter`)

@@ -255,6 +255,29 @@ def test_executor_events_carry_capabilities_and_origin(executor: str) -> None:
     assert "origin" in starts["look"]
 
 
+class _WebTool(_RoTool):
+    def capabilities(self, input):
+        return ToolCapabilities(concurrency_safe=True, read_only=True, network_egress=True)
+
+
+def test_batch_call_carries_the_nature_of_the_calls_it_dispatches() -> None:
+    from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import _tool_facts
+    from xgen_agent_runtime.tools.built_in.tool_batch_tool import ToolBatchTool
+
+    reg = ToolRegistry()
+    reg.register(ToolBatchTool())
+    reg.register(_WebTool("fetch", True))
+    reg.register(_RoTool("make", False))
+    web = _tool_facts(reg, {"tool_name": "ToolBatch", "tool_input": {"tool": "fetch", "inputs": [{"u": 1}, {"u": 2}]}})
+    assert web["capabilities"]["read_only"] is True and web["capabilities"]["network_egress"] is True
+    made = _tool_facts(reg, {"tool_name": "ToolBatch", "tool_input": {"tool": "make", "inputs": [{}]}})
+    assert made["capabilities"]["read_only"] is False
+    unknown = _tool_facts(reg, {"tool_name": "ToolBatch", "tool_input": {"tool": "functions.fetch", "inputs": [{}]}})
+    assert "capabilities" not in unknown and "origin" in unknown
+    # 일정 · 병렬 판단에 쓰는 바깥 도구 자체의 능력은 그대로 보수적이다
+    assert ToolBatchTool().capabilities({"tool": "fetch", "inputs": [{}]}).read_only is False
+
+
 # ── 턴 1 표: 도구 발견 ──
 
 def test_turn_one_discovery_is_part_of_the_table() -> None:
