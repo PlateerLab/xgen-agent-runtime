@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from typing import Any, Dict, List, Optional
 
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
@@ -164,14 +166,26 @@ class LoopStage(Stage[Any, Any]):
         if decision == "complete" and self._completion_reviewers:
             # 산출물 대조 등 — 완료를 한 번 미루고 검토 내용을 모델에게 보낸다.
             # suspend/error/escalate 는 건드리지 않는다 (마무리할 것이 없다).
-            for reviewer in self._completion_reviewers:
-                note = await reviewer.review(state)
-                if note:
-                    state.add_message("user", note)
-                    state.completion_signal = None
-                    state.completion_detail = None
-                    decision = "continue"
-                    break
+            # 검토는 답에 나온 파일을 작업 공간에서 읽는다(답이 다 나온 뒤의 기다림). 그 구간을
+            # 알려 호스트가 "답에 쓴 파일을 점검하고 있습니다" 를 보일 수 있게 한다.
+            review_started = time.monotonic()
+            state.add_event("loop.review_start", {"reviewers": len(self._completion_reviewers)})
+            sent_back = False
+            try:
+                for reviewer in self._completion_reviewers:
+                    note = await reviewer.review(state)
+                    if note:
+                        state.add_message("user", note)
+                        state.completion_signal = None
+                        state.completion_detail = None
+                        decision = "continue"
+                        sent_back = True
+                        break
+            finally:
+                state.add_event(
+                    "loop.review_end",
+                    {"elapsed_ms": int((time.monotonic() - review_started) * 1000), "note": sent_back},
+                )
 
         if self._repeat_stop is not None:
             # 반복 거부 종료 — 검토자 뒤, 예산 앞. 마무리 응답이 온 뒤에는 무엇이든 끝낸다.

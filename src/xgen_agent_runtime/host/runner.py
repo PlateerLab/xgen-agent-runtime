@@ -1527,6 +1527,39 @@ def _stop_notice(state: Any) -> str:
     return ""
 
 
+class _TurnPhaseNotifier:
+    """턴 단계 알림을 호스트에 넘긴다(``host.note_turn_phase(phase, state, **extra)``).
+
+    서버 호스트는 이 알림을 화면에 보낸다(``turn_phase``). 시작 시각을 기억해 끝날 때 걸린 시간을
+    싣는다. 알리기가 실패해도 턴은 계속된다(표시일 뿐이다).
+    """
+
+    def __init__(self, note: Callable[..., None]) -> None:
+        self._note = note
+        self._started: Dict[str, float] = {}
+
+    @classmethod
+    def for_host(cls, host: Any) -> Optional["_TurnPhaseNotifier"]:
+        note = getattr(host, "note_turn_phase", None) if host is not None else None
+        return cls(note) if callable(note) else None
+
+    def _send(self, phase: str, state: str, **extra: Any) -> None:
+        try:
+            self._note(phase, state, **extra)
+        except Exception:  # noqa: BLE001
+            logger.debug("turn phase note failed: %s %s", phase, state, exc_info=True)
+
+    def start(self, phase: str) -> None:
+        self._started[phase] = time.monotonic()
+        self._send(phase, "start")
+
+    def done(self, phase: str, elapsed_ms: Any = None) -> None:
+        started = self._started.pop(phase, None)
+        if not isinstance(elapsed_ms, (int, float)) or isinstance(elapsed_ms, bool):
+            elapsed_ms = int((time.monotonic() - started) * 1000) if started is not None else None
+        self._send(phase, "done", **({"elapsed_ms": int(elapsed_ms)} if elapsed_ms is not None else {}))
+
+
 def stream_turn(
     pipeline: Pipeline,
     text: Any,
@@ -1590,6 +1623,9 @@ def stream_turn(
     cli_tool_started: Dict[str, float] = {}
     last_message_chunk = ""
     turn_started = time.monotonic()
+    # 답이 다 나온 뒤의 기다림(파일 점검·기억 저장·실행 기록)을 호스트에 알린다 — 화면이 "..." 대신
+    # 무엇을 하는지 보인다. 호스트에 ``note_turn_phase`` 가 없으면(커넥터 등) 아무것도 하지 않는다.
+    note_phase = _TurnPhaseNotifier.for_host(host)
     out_parts: List[str] = []
     turn_error = ""
     turn_completed = False
@@ -1718,6 +1754,20 @@ def stream_turn(
                             tool_use_id=tool_use_id,
                         ),
                     }
+                elif note_phase is not None and event.type == "loop.review_start":
+                    note_phase.start("review")
+                elif note_phase is not None and event.type == "loop.review_end":
+                    note_phase.done("review", event.data.get("elapsed_ms"))
+                elif (
+                    note_phase is not None
+                    and event.type in ("stage.enter", "stage.exit")
+                    and event.stage == "memory"
+                ):
+                    # Stage 18 — 이번 턴을 대화 기억에 쓰는 구간(답이 다 나온 뒤의 기다림).
+                    if event.type == "stage.enter":
+                        note_phase.start("remember")
+                    else:
+                        note_phase.done("remember")
             if cancelled:
                 break
             agen = None
@@ -1811,6 +1861,9 @@ def stream_turn(
                 reason="error" if turn_error else "cancelled",
             )
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
+            recording = note_phase is not None and getattr(pipeline, "_memory_provider", None) is not None
+            if recording:
+                note_phase.start("record")
             _record_execution(
                 pipeline,
                 loop,
@@ -1826,6 +1879,8 @@ def stream_turn(
                 ),
                 cancelled=not turn_completed and not turn_error,
             )
+            if recording:
+                note_phase.done("record")
         else:
             logger.debug(
                 "geny_bridge: execution record skipped — failed before any output "
