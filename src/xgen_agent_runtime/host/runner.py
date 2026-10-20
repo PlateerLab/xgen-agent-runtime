@@ -1557,7 +1557,9 @@ class _TurnPhaseNotifier:
         started = self._started.pop(phase, None)
         if not isinstance(elapsed_ms, (int, float)) or isinstance(elapsed_ms, bool):
             elapsed_ms = int((time.monotonic() - started) * 1000) if started is not None else None
-        self._send(phase, "done", **({"elapsed_ms": int(elapsed_ms)} if elapsed_ms is not None else {}))
+        self._send(
+            phase, "done", **({"elapsed_ms": int(elapsed_ms)} if elapsed_ms is not None else {})
+        )
 
 
 def stream_turn(
@@ -1861,7 +1863,9 @@ def stream_turn(
                 reason="error" if turn_error else "cancelled",
             )
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
-            recording = note_phase is not None and getattr(pipeline, "_memory_provider", None) is not None
+            recording = (
+                note_phase is not None and getattr(pipeline, "_memory_provider", None) is not None
+            )
             if recording:
                 note_phase.start("record")
             _record_execution(

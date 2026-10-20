@@ -184,7 +184,10 @@ class LoopStage(Stage[Any, Any]):
             finally:
                 state.add_event(
                     "loop.review_end",
-                    {"elapsed_ms": int((time.monotonic() - review_started) * 1000), "note": sent_back},
+                    {
+                        "elapsed_ms": int((time.monotonic() - review_started) * 1000),
+                        "note": sent_back,
+                    },
                 )
 
         if self._repeat_stop is not None:
