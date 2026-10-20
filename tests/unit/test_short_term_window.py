@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.memory.short_term_window import (  # noqa: F401
+    SCAN_MAX,
     SCAN_ROWS,
     WindowConfig,
     build_window,
@@ -130,21 +131,104 @@ class TestResultTrimming:
         assert res["content"] == "result 1.0"
 
 
+def _dialogue_turn(n: int, *, answer_chars: int) -> List[Any]:
+    return [_t("user", f"request {n}"), _t("assistant", [{"type": "text", "text": "y" * answer_chars}])]
+
+
+def _heavy_turn(n: int, *, tools: int, input_chars: int, result_chars: int) -> List[Any]:
+    """도구를 많이 쓴 턴: 긴 명령(입력)과 긴 결과. 그것만으로 예산을 넘긴다."""
+    msgs: List[Any] = [_t("user", f"request {n}")]
+    for i in range(tools):
+        tid = f"toolu_{n}_{i}"
+        msgs.append(_t("assistant", [
+            {"type": "text", "text": f"step {i}"},
+            {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "c" * input_chars}},
+        ]))
+        msgs.append(_t("user", [{"type": "tool_result", "tool_use_id": tid, "content": "r" * result_chars}]))
+    msgs.append(_t("assistant", [{"type": "text", "text": f"answer {n}: 1. a 2. b 3. c"}]))
+    return msgs
+
+
+def _user_texts(msgs: List[Dict[str, Any]]) -> List[str]:
+    out = []
+    for m in msgs:
+        if m["role"] != "user":
+            continue
+        c = m["content"]
+        if isinstance(c, str):
+            out.append(c)
+        else:
+            out += [b["text"] for b in c if b.get("type") == "text"]
+    return out
+
+
 class TestBudgetDegradation:
-    def test_order_results_then_oldest_dialogue_then_demote(self):
+    def test_order_results_inputs_demote_then_dialogue(self):
         cfg = WindowConfig(max_chars=2_500, result_trim_over=200, result_keep=1200)
         msgs, report = build_window(_turns(6, tools=2, big_result=3_000), cfg)
         assert report.degraded and report.degraded[0].startswith("result_keep=")
-        assert "drop_oldest_dialogue" in report.degraded
-        assert report.turns >= 1 and msgs[0]["content"].startswith("request")
+        assert "demote_oldest_full" in report.degraded
+        # 결과를 다 줄이기 전에는 턴을 강등하지 않는다
+        first_demote = report.degraded.index("demote_oldest_full")
+        assert all(d.startswith("result_keep=") for d in report.degraded[:first_demote])
+        assert msgs[0]["content"].startswith("request")
         # T-1 은 끝까지 남는다
         assert any(m["content"] == "request 6" for m in msgs)
 
     def test_t1_is_never_dropped(self):
         cfg = WindowConfig(max_chars=1_000)
         msgs, report = build_window(_turns(6, tools=3, big_result=2_000), cfg)
-        assert report.turns == 1 and report.full == 1
-        assert msgs[0]["content"] == "request 6"
+        assert report.full == 1
+        assert "request 6" in _user_texts(msgs)
+
+    def test_dialogue_survives_when_t1_alone_overflows(self):
+        """2026-10-20 dev: 도구 49번 턴(줄인 뒤 11.8만 자) 뒤에 창이 T-1 하나만 남겼다.
+        몇백 자짜리 지난 질문과 답은 버려도 예산이 맞지 않는다. 버리지 않는다."""
+        turns = [
+            *_dialogue_turn(1, answer_chars=300),
+            *_dialogue_turn(2, answer_chars=300),
+            *_dialogue_turn(3, answer_chars=300),
+            *_dialogue_turn(4, answer_chars=300),
+            *_heavy_turn(5, tools=40, input_chars=3_000, result_chars=5_000),
+        ]
+        msgs, report = build_window(turns, WindowConfig(max_chars=20_000))
+        assert report.turns == 5 and report.full == 1 and report.dialogue == 4
+        assert "drop_oldest_dialogue" not in report.degraded
+        assert _user_texts(msgs)[:5] == [f"request {i}" for i in range(1, 6)]
+        # T-1 의 최종 답변은 줄이지 않는다
+        assert msgs[-1]["content"][0]["text"] == "answer 5: 1. a 2. b 3. c"
+
+    def test_tool_use_inputs_shrink_but_pairs_hold(self):
+        turns = _heavy_turn(1, tools=10, input_chars=6_000, result_chars=100)
+        msgs, report = build_window(turns, WindowConfig(max_chars=8_000))
+        assert any(d.startswith("input_keep=") for d in report.degraded)
+        uses = [b for m in msgs if isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_use"]
+        assert len(uses) == 10
+        assert all(len(b["input"]["command"]) < 6_000 and "chars trimmed" in b["input"]["command"] for b in uses)
+        assert _tool_use_ids(msgs) == _tool_result_ids(msgs)
+
+    def test_inputs_are_verbatim_without_budget_pressure(self):
+        turns = _heavy_turn(1, tools=2, input_chars=3_000, result_chars=10)
+        msgs, report = build_window(turns)
+        assert not report.degraded
+        uses = [b for m in msgs if isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_use"]
+        assert all(b["input"]["command"] == "c" * 3_000 for b in uses)
+
+    def test_oversized_dialogue_is_shortened_first(self):
+        turns = [*(_dialogue_turn(i, answer_chars=4_000) for i in range(1, 5))]
+        turns = [m for t in turns for m in t] + _turn(5) + _turn(6)
+        msgs, report = build_window(turns, WindowConfig(max_chars=3_000))
+        assert any(d.startswith("message_chars=") for d in report.degraded)
+        assert "drop_oldest_dialogue" not in report.degraded  # 줄여서 맞으면 턴은 버리지 않는다
+        assert report.turns == 5 and report.chars <= 3_000
+
+    def test_dialogue_is_dropped_oldest_first_when_shortening_is_not_enough(self):
+        turns = [*(_dialogue_turn(i, answer_chars=4_000) for i in range(1, 5))]
+        turns = [m for t in turns for m in t] + _turn(5) + _turn(6)
+        msgs, report = build_window(turns, WindowConfig(max_chars=1_500))
+        assert f"message_chars={400}" in report.degraded
+        assert "drop_oldest_dialogue" in report.degraded
+        assert "request 6" in _user_texts(msgs) and "request 1" not in _user_texts(msgs)
 
 
 class TestPairInvariant:
@@ -175,6 +259,39 @@ class TestLoadWindow:
 
         msgs, report = asyncio.run(load_window(_P()))
         assert report.turns == 2 and msgs[0]["content"] == "request 1"
+
+    def test_a_turn_longer_than_the_scan_still_comes_back_whole(self):
+        """반복 200번짜리 턴은 400행을 넘는다. 그 턴의 사용자 지시가 범위 밖이면 창에서 통째로 빠졌다."""
+        rows = _turns(1) + _turn(2, tools=300)  # T-1 = 1 + 600 + 1 행
+        asked: List[int] = []
+
+        class _STM:
+            async def recent(self, n=20):
+                asked.append(n)
+                return rows[-n:]
+
+        class _P:
+            def stm(self):
+                return _STM()
+
+        msgs, report = asyncio.run(load_window(_P()))
+        assert asked[-1] == SCAN_MAX and len(asked) == 3
+        assert "request 2" in _user_texts(msgs)
+
+    def test_ordinary_turns_do_not_read_the_wide_scan(self):
+        asked: List[int] = []
+
+        class _STM:
+            async def recent(self, n=20):
+                asked.append(n)
+                return _turns(8, tools=30)[-n:]
+
+        class _P:
+            def stm(self):
+                return _STM()
+
+        asyncio.run(load_window(_P()))
+        assert SCAN_MAX not in asked
 
     def test_provider_without_stm_or_failing_stm_gives_nothing(self):
         assert asyncio.run(load_window(object())) == ([], asyncio.run(load_window(object()))[1])

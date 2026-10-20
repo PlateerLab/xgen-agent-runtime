@@ -122,6 +122,12 @@ class ContextStage(Stage[Any, Any]):
     after legacy retriever output, deduplicated by `key`. The result
     is rendered into `state.metadata["memory_context"]` (string form
     suitable for prompt injection).
+
+    ``short_term_source`` is a provider used ONLY for the short-term
+    window (recent turns replayed as messages). Hosts whose retriever
+    already covers the knowledge layers set this instead of
+    ``provider``: ``provider`` would also run ``provider.retrieve``
+    and inject its layers a second time, outside the retriever budget.
     """
 
     def __init__(
@@ -132,6 +138,7 @@ class ContextStage(Stage[Any, Any]):
         *,
         stateless: bool = False,
         provider: Optional[MemoryProvider] = None,
+        short_term_source: Optional[MemoryProvider] = None,
         retrieval_timeout_s: float = 10.0,
         compaction_enabled: bool = True,
         background_compaction: bool = True,
@@ -171,6 +178,7 @@ class ContextStage(Stage[Any, Any]):
         }
         self._stateless = stateless
         self._provider = provider
+        self._short_term_source = short_term_source
         self._retrieval_timeout_s = max(0.0, float(retrieval_timeout_s))
         # Host-level compaction switch. False → this stage NEVER compacts
         # (no proactive run, no background scheduling, no deterministic
@@ -207,6 +215,18 @@ class ContextStage(Stage[Any, Any]):
     @provider.setter
     def provider(self, value: Optional[MemoryProvider]) -> None:
         self._provider = value
+
+    @property
+    def short_term_source(self) -> Optional[MemoryProvider]:
+        """단기 기억 창만 읽는 provider. ``provider`` 가 있으면 그쪽이 우선이다."""
+        return self._short_term_source
+
+    @short_term_source.setter
+    def short_term_source(self, value: Optional[MemoryProvider]) -> None:
+        self._short_term_source = value
+
+    def _window_source(self) -> Optional[MemoryProvider]:
+        return self._provider if self._provider is not None else self._short_term_source
 
     @property
     def _strategy(self) -> ContextStrategy:
@@ -382,7 +402,7 @@ class ContextStage(Stage[Any, Any]):
 
     def _window_hooks(self) -> Any:
         """창 설정의 출처 — provider 에 붙은 hooks, 없으면 retriever 의 것, 그것도 없으면 기본값."""
-        for owner in (self._provider, self._retriever):
+        for owner in (self._window_source(), self._retriever):
             for attr in ("hooks", "_hooks"):
                 h = getattr(owner, attr, None)
                 if h is not None and hasattr(h, "window_full_turns"):
@@ -407,7 +427,8 @@ class ContextStage(Stage[Any, Any]):
             return
         if _RECORDED_KEY in state.metadata or WINDOW_KEY in state.metadata:
             return  # 호스트가 이력을 preload 했거나(워터마크 존재) 이미 창을 넣었다
-        if self._provider is None:
+        source = self._window_source()
+        if source is None:
             return
         cfg = WindowConfig.from_hooks(self._window_hooks())
         if not cfg.enabled:
@@ -421,7 +442,7 @@ class ContextStage(Stage[Any, Any]):
         )
         try:
             window, report = await asyncio.wait_for(
-                load_window(self._provider, cfg), timeout=self._retrieval_timeout_s or None
+                load_window(source, cfg), timeout=self._retrieval_timeout_s or None
             )
         except Exception:  # noqa: BLE001 — 창이 없어도 턴은 돈다
             logger.debug("context: short-term window load failed", exc_info=True)

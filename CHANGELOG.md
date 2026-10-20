@@ -4,6 +4,32 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.94.0] - 2026-10-20
+
+### Fixed: 단기 기억 창이 호스트 경로에서 돈다 (지난 턴 답변이 잘리던 문제)
+
+4.36.0 의 단기 기억 창(최근 5 논리 턴을 messages 로, T-1 은 그대로)이 `host.runner.build_pipeline` 경로에서
+한 번도 돌지 않았다. 창은 Stage 2 의 `provider` 가 있어야 STM 을 읽는데, build_pipeline 은 Stage 2 에 아무 provider 도
+주지 않았다(attach_runtime 은 검색기만 바꾼다). 그래서 턴마다 새로 만드는 파이프라인에서 지난 턴은 시스템 프롬프트의
+지식 불릿(L0 `recent_turns`)으로만 실렸고, 그 불릿은 발화마다 앞 1,200자만 남기고(예산 압박 때 200자까지) 줄바꿈도 뭉갰다.
+dev 에서 앞 턴 답변 끝의 "1. … 2. … 3. … 1~3번은 바로 진행해도 되나요?" 가 잘려, 사용자가 "1~3번 전부 하자" 고 한
+다음 턴이 다른 일을 했다. 창의 단위 시험은 `ContextStage(provider=…)` 를 직접 만들어 이 빈틈을 보지 못했다.
+
+- `ContextStage.short_term_source`: 창만 읽는 자리. `provider` 자리는 `provider.retrieve` 도 돌려 검색기가 이미 맡은
+  층(STM 원문·노트·벡터)을 예산 밖에서 한 번 더 싣기 때문에 따로 둔다. `provider` 가 있으면 그쪽이 우선이다.
+- `build_pipeline` 은 메모리를 붙일 때 Stage 2 의 `short_term_source` 에 memory provider 를 준다. 창이 들어가면 L0 는
+  꺼지고(기존 게이트), STM 기록·대화 아카이브는 창 길이만큼 건너뛴다(기존 워터마크).
+- 예산 강등 순서를 바꿨다: ① 가까운 턴의 결과 ② 가까운 턴의 tool_use 입력(새로) ③ T-2 를 대화만으로 ④ 먼 대화 턴의 발화
+  ⑤ 가장 먼 대화 턴 제거 ⑥ T-1 은 남긴다. 예전에는 ② 가 없고 먼 대화 턴을 가장 먼저 버렸다. 도구를 많이 쓴 T-1 은 그것만으로
+  예산을 넘기 때문에(dev: 도구 49번 턴), 그때마다 창이 T-1 하나만 남겨 두 턴 전 질문과 답이 사라졌다. 먼 대화 턴은 예산의
+  1/4 까지 지키고, 그 몫을 넘을 때만 버린다.
+- 예산 압박 때는 `window_result_trim_over`(4,000자) 이하 결과도 줄인다. 예전에는 4,000자 이하 결과가 몇 개든 그대로 남아
+  "결과를 300자로 줄인" 창이 11만 자였다.
+- 400행 안에 가까운 턴의 시작 행이 없으면 1,600행까지 한 번 더 읽는다(`SCAN_MAX`). 한 턴은 반복 200번까지 이어질 수 있고,
+  시작 행이 범위 밖이면 그 턴이 창에서 통째로 빠졌다.
+- dev 실데이터(43턴 대화, DB 읽기 전용)로 확인: 세 시점 모두 창에 5턴이 들어가고 T-1 최종 답변이 목록까지 온전하다.
+  창 크기는 2.4만~6.2만 자(예전 규칙은 T-1 하나에 4.7만~11.8만 자).
+
 ## [4.93.0] - 2026-10-16
 
 ### Fixed — 묶음 호출(ToolBatch)의 호출 사건이 안쪽 호출들의 성격을 싣는다

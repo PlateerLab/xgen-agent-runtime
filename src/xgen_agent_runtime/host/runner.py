@@ -807,6 +807,16 @@ def build_pipeline(
                     ]
                 ),
             )
+            # 단기 기억 창(4.36.0)의 출처. 이 파이프라인은 턴마다 새로 만들어져 지난 턴이 messages 에
+            # 없다. 창이 STM 에서 최근 논리 턴을 messages 앞에 되살린다. attach_runtime 은 검색기만
+            # 바꾸므로 따로 붙인다. ``provider`` 가 아니라 창 전용 자리다. ``provider`` 는
+            # provider.retrieve 도 돌려 검색기가 이미 맡은 층(STM 원문·노트·벡터)을 예산 밖에서
+            # 한 번 더 싣는다. 이 배선이 빠져 있던 동안(4.36.0~4.93.0) 창은 한 번도 돌지 않았고,
+            # 모델은 지난 턴을 발화마다 1,200자 머리만 남은 지식 불릿(L0)으로만 봤다. 2026-10-20
+            # dev 에서는 바로 앞 답변의 "1~3번" 제안이 잘려 다음 턴이 다른 일을 했다.
+            context_stage = pipeline.get_stage(2)
+            if context_stage is not None and hasattr(context_stage, "short_term_source"):
+                context_stage.short_term_source = memory_provider
             # 턴-종료 증류(distillation) 스펙 — teardown 이 백그라운드로 발사.
             setattr(pipeline, "_memory_distill_spec", memory_distill_spec)
             logger.info(
