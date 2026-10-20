@@ -889,6 +889,9 @@ class APIStage(Stage[Any, APIResponse]):
 
         timeouts_seen = 0
         for attempt in range(self._retry.max_retries + 1):
+            boundary = getattr(self, "_host_model_boundary", None)
+            if boundary is not None:
+                boundary()
             try:
                 limit = self._request_timeout_s()
                 try:
@@ -953,6 +956,9 @@ class APIStage(Stage[Any, APIResponse]):
         timeouts_seen = 0
 
         for attempt in range(self._retry.max_retries + 1):
+            boundary = getattr(self, "_host_model_boundary", None)
+            if boundary is not None:
+                boundary()
             try:
                 return await self._call_streaming(client, cfg, state, extra_messages=extra_messages)
             except APIError as e:

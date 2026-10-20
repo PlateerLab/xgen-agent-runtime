@@ -180,9 +180,15 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
         return None
     try:
         result_filter = probe()
-    except Exception:  # noqa: BLE001 — 훅 실패는 필터 없음
-        logger.warning("agents/geny: tool_result_filter 훅 실패 — 필터 없이 진행", exc_info=True)
+    except Exception:
+        if getattr(host, "tool_security_required", False) is True:
+            from xgen_agent_runtime.host.execution_scope import ExecutionBoundaryError
+            raise ExecutionBoundaryError("result_policy_unavailable") from None
+        logger.warning("tool_result_filter unavailable for optional host")
         return None
+    if not callable(result_filter) and getattr(host, "tool_security_required", False) is True:
+        from xgen_agent_runtime.host.execution_scope import ExecutionBoundaryError
+        raise ExecutionBoundaryError("result_policy_unavailable")
     return result_filter if callable(result_filter) else None
 
 
@@ -822,6 +828,12 @@ class AgentTurnExecutor:
 
             # 호스트의 도구 결과 필터(선택 훅) — 턴마다 한 번 받아 SDK·CLI 두 경로의 도구
             # 컨텍스트에 똑같이 싣는다. 적용은 Stage 10 라우터 한 곳(RegistryRouter.route)이다.
+            configure_security = getattr(host, "configure_tool_security", None)
+            if callable(configure_security):
+                if run_tool_context is None:
+                    from xgen_agent_runtime.tools.base import ToolContext
+                    run_tool_context = ToolContext(session_id=interaction_id)
+                configure_security(run_tool_context, kwargs)
             _result_filter = _tool_result_filter(host)
             if _result_filter is not None and run_tool_context is not None:
                 run_tool_context.result_filter = _result_filter
@@ -1263,7 +1275,10 @@ class AgentTurnExecutor:
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - surface build errors as output, never crash the graph
-            logger.exception("agents/geny: failed to build pipeline")
+            if getattr(host, "tool_security_required", False) is True:
+                logger.warning("pipeline build failed: code=execution_start_unavailable")
+            else:
+                logger.exception("agents/geny: failed to build pipeline")
             # 파이프라인 조립 실패 시 이미 만든 메모리 provider 가 turn teardown 을
             # 못 타므로 여기서 직접 정리한다 (FD/락 누수 방지).
             try:
@@ -1273,7 +1288,8 @@ class AgentTurnExecutor:
                     _asyncio.run(locals()["memory_provider"].close())
             except Exception:  # noqa: BLE001
                 pass
-            err = f"[ERROR] geny agent could not start: {exc}"
+            err = ("[ERROR] execution_start_unavailable" if getattr(host, "tool_security_required", False) is True
+                   else f"[ERROR] geny agent could not start: {exc}")
             return iter([err]) if streaming else err
 
         # 호스트가 턴 단위 취소 훅을 줄 수 있다(같은 interaction 의 다음 턴을
@@ -1287,8 +1303,13 @@ class AgentTurnExecutor:
                 from xgen_agent_runtime.host.cancel_context import is_cancelled
 
                 return is_cancelled(interaction_id, response_io_id, cancel_check=_extra_cancel)
-            except Exception:  # noqa: BLE001
-                return False
+            except Exception:
+                return getattr(host, "tool_security_required", False) is True
+
+        if run_tool_context is not None and run_tool_context.cancellation_scope is not None:
+            scope = run_tool_context.cancellation_scope
+            host_check = scope.cancel_check
+            scope.cancel_check = lambda: _cancelled() or (host_check is not None and bool(host_check()))
 
         def _teardown() -> None:
             # 턴이 만든/바꾼 파일을 원본(MinIO + DB 인덱스)에 반영한다. 이걸
@@ -1298,13 +1319,15 @@ class AgentTurnExecutor:
             # 실패한 빈 캐시로 삭제를 전파하면 원본이 통째로 날아간다.
             # 러너 publish / 파드 publish 는 host 가 캡슐화한다. delete_missing
             # 은 hydrate 성공 턴에서만(빈 캐시 삭제 전파 방지) — host 가 판정한다.
-            host.finalize_turn(
-                sandbox=_sandbox,
-                workflow_id=str(kwargs.get("workflow_id") or ""),
-                user_id=kwargs.get("user_id"),
-                hydrated_wf=_hydrated_wf,
-                hydrated_ws=_hydrated_ws,
-            )
+            scope = getattr(run_tool_context, "cancellation_scope", None)
+            if not _cancelled() and not (scope is not None and scope.cancelled):
+                host.finalize_turn(
+                    sandbox=_sandbox,
+                    workflow_id=str(kwargs.get("workflow_id") or ""),
+                    user_id=kwargs.get("user_id"),
+                    hydrated_wf=_hydrated_wf,
+                    hydrated_ws=_hydrated_ws,
+                )
             # CLI 워크스페이스/브릿지 토큰 + built-in run workspace 정리 (순서 무관, 둘 다 방어적)
             for fn in (cli_cleanup, run_dir_cleanup):
                 if fn is None:

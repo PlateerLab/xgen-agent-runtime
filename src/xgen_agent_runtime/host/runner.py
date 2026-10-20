@@ -723,6 +723,10 @@ def build_pipeline(
                     DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
                 )
 
+    if tool_context is not None:
+        from xgen_agent_runtime.host.execution_scope import bind_run_guard
+        bind_run_guard(pipeline, tool_context)
+
     if tool_result_filter is not None:
         # attach_runtime(tool_context=) 뒤라야 한다 — 그 호출이 스테이지 컨텍스트를 갈아 끼운다.
         _tool_stage = pipeline.get_stage(10)

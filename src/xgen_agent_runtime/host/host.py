@@ -169,6 +169,9 @@ class HostServices(Protocol):
     def build_run_tool_context(self, **kwargs: Any) -> Any: ...
     def load_ssh_servers(self) -> List[Any]: ...
 
+    # Optional configure_tool_security(context, params) binds serving security.
+    # It is deliberately absent from this runtime-checkable legacy Protocol.
+
     def tool_result_filter(self) -> Optional[ToolResultFilter]:
         """**OPTIONAL** — 이 턴의 모든 도구 결과에 거는 후처리 (4.71.0). 기본은 없음(None).
 

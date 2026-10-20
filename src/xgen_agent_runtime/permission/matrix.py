@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
 
 from xgen_agent_runtime.permission.types import (
+    PermissionBehavior,
     PermissionDecision,
     PermissionMode,
     PermissionPosture,
@@ -103,15 +104,24 @@ async def evaluate_permission(
             explicit allowlist". The 3.0 default flips to ``DENY``; see
             :class:`~xgen_agent_runtime.permission.types.PermissionPosture`.
     """
-    # 1. BYPASS short-circuit
+    # Mandatory human approval is a host policy, never a session-mode hint.
+    matcher = None
+    ordered = _sort_by_source_priority(rules)
+    for rule in ordered:
+        if not getattr(rule, "mandatory", False) or not rule.matches_name(tool.name):
+            continue
+        if matcher is None:
+            matcher = await tool.prepare_permission_matcher(tool_input)
+        if rule.pattern is not None and not matcher(rule.pattern):
+            continue
+        if rule.behavior is PermissionBehavior.DENY:
+            return PermissionDecision.deny("mandatory policy denied", matched_rule=rule)
+        if rule.behavior is PermissionBehavior.ASK:
+            return PermissionDecision.ask("mandatory human approval", matched_rule=rule)
     if mode is PermissionMode.BYPASS:
         return PermissionDecision.allow(reason="bypass mode")
-
-    # Resolve the matcher exactly once — some tools may do non-trivial
-    # work (parsing the command, building regexes) so we avoid repeating.
-    matcher = await tool.prepare_permission_matcher(tool_input)
-
-    ordered = _sort_by_source_priority(rules)
+    if matcher is None:
+        matcher = await tool.prepare_permission_matcher(tool_input)
     for rule in ordered:
         if not rule.matches_name(tool.name):
             continue

@@ -126,19 +126,29 @@ class MCPToolAdapter(Tool):
         the router converts them into a structured ``ToolError`` rather
         than leaking raw exception strings into the model context.
         """
+        scope = getattr(context, "cancellation_scope", None)
+        remove_cleanup = None
+        if scope is not None:
+            scope.check()
+            cleanup = getattr(self._server, "disconnect", None)
+            if not callable(cleanup):
+                raise ToolFailure("MCP cancellation unavailable", code=ToolErrorCode.TRANSPORT)
+            remove_cleanup = scope.add_cleanup(cleanup)
         try:
             result = await self._server.call_tool(self._raw_name, input)
+            if scope is not None:
+                scope.check()
         except Exception as exc:
             raise ToolFailure(
-                f"MCP call failed on '{self.server_name}.{self._raw_name}': {exc}",
-                code=ToolErrorCode.TRANSPORT,
-                details={
-                    "server": self.server_name,
-                    "tool": self._raw_name,
-                    "exception_type": type(exc).__name__,
-                    "exception_message": str(exc),
-                },
-            ) from exc
+                "MCP transport failed", code=ToolErrorCode.TRANSPORT,
+                details={"server": self.server_name, "tool": self._raw_name,
+                         "exception_type": type(exc).__name__},
+            ) from None
+        finally:
+            # Keep cleanup registered until the cancellation scope finishes its
+            # teardown. Successful calls must not disconnect the shared server.
+            if remove_cleanup is not None and (scope is None or not scope.cancelled):
+                remove_cleanup()
 
         # call_tool returns str for a single text block and list[dict] for
         # multi-block / non-text content. ToolResult.content is Any and
