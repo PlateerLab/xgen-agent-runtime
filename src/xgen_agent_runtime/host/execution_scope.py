@@ -30,6 +30,11 @@ class RunBudget:
         self._usage_seen: dict[str, tuple[int, float]] = {}
         self._lock = threading.Lock()
 
+    def before_model_call(self) -> None:
+        """Host port invoked before every provider dispatch, including retries."""
+        if time.monotonic() >= self.deadline:
+            raise ExecutionBoundaryError("run_budget_exceeded")
+
     def reserve(self) -> None:
         with self._lock:
             if time.monotonic() >= self.deadline or self.calls >= self.max_calls or self.active >= self.max_active:
@@ -117,6 +122,15 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
     if token_stage is not None:
         # Charge the final response too, before tool dispatch, emit or persist.
         token_stage._host_usage_boundary = enforce
+    api_stage = pipeline.get_stage(6)
+    if api_stage is not None:
+        def before_model_call() -> None:
+            if context.cancellation_scope is not None:
+                context.cancellation_scope.check()
+            if context.run_budget is not None:
+                context.run_budget.before_model_call()
+
+        api_stage._host_model_boundary = before_model_call
 
 
 class CancellationScope:
