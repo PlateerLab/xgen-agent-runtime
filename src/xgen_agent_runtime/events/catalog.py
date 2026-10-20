@@ -65,7 +65,9 @@ from typing import Any, Dict, FrozenSet, List
 #: stay (removal is a major-version change) but nothing emits them any more;
 #: see :data:`RETIRED_EVENT_TYPES`.
 #: v17: ``tool.call_start`` / ``tool.call_complete`` gain ``capabilities`` / ``origin``.
-EVENT_CATALOG_VERSION = 17
+#: v18: + ``loop.review_start`` / ``loop.review_end`` (4.95.0 the completion review's span, so a host can
+#: say "checking the files in the answer" while it reads them).
+EVENT_CATALOG_VERSION = 18
 
 
 class EventTypes(str, Enum):
@@ -107,6 +109,8 @@ class EventTypes(str, Enum):
     LOOP_BLOCKED = "loop.blocked"
     LOOP_BUDGET_EXCEEDED = "loop.budget_exceeded"
     LOOP_COMPLETION_REVIEW = "loop.completion_review"
+    LOOP_REVIEW_START = "loop.review_start"
+    LOOP_REVIEW_END = "loop.review_end"
     LOOP_REPEAT_STOP = "loop.repeat_stop"
     LOOP_TURN_BUDGET = "loop.turn_budget"
 
@@ -416,6 +420,13 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "missing": "int — claimed files that do not exist",
         "problems": "int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV)",
         "paths": "list[str] — paths shown to the model, in order",
+    },
+    EventTypes.LOOP_REVIEW_START: {
+        "reviewers": "int — completion reviewers about to run (the turn's final response is being checked)",
+    },
+    EventTypes.LOOP_REVIEW_END: {
+        "elapsed_ms": "int — time the reviewers took",
+        "note": "bool — a reviewer sent the model back with a note (the loop continues)",
     },
     EventTypes.LOOP_REPEAT_STOP: {
         "phase": "str — final (report-and-stop note appended) | stop (turn ended)",
