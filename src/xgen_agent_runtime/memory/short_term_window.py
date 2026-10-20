@@ -19,8 +19,12 @@ Sessions·Hermes·Claude Code·LangChain trim_messages)는 모두 이력을 mess
   ``tool_use``/``tool_result`` **양쪽 다** 뺀다(쌍을 가르지 않는다). 답변 끝에 한 줄
   ``[used tools: ForgeTool ×4 (3 failed), Bash ×2]`` — 두 턴 전에 무엇을 했는지 모르면 같은
   조회를 또 한다.
-* **예산이 모자라면 깎는 순서**: ① 가까운 턴의 tool_result 를 더 짧게 ② 가장 먼 대화 턴부터 제거
-  ③ T-2 의 도구 블록 제거(대화만) ④ T-1 은 마지막까지 남긴다(결과를 최소로 줄여서라도).
+* **예산이 모자라면 깎는 순서** (4.94.0): ① 가까운 턴의 tool_result 를 더 짧게 ② 가까운 턴의
+  tool_use 입력(긴 명령·파일 내용)을 더 짧게 ③ T-2 의 도구 블록 제거(대화만) ④ 먼 대화 턴의 발화를
+  더 짧게 ⑤ 가장 먼 대화 턴부터 제거 ⑥ T-1 은 마지막까지 남긴다(결과를 최소로 줄여서라도).
+  먼 대화 턴은 예산의 1/4 까지는 지킨다. 도구를 많이 쓴 T-1 은 그것만으로 예산을 넘기도 하는데
+  (2026-10-20 dev: 도구 49번 턴이 결과를 줄인 뒤에도 11.8만 자), 그때 몇백 자짜리 지난 질문과 답을
+  버려도 예산은 맞지 않고 "두 턴 전에 무엇을 했나" 만 사라진다.
 * **쌍 불변**: 결과 없는 ``tool_use`` 에는 합성 결과를 붙이고(Hermes stub), 앞머리의 고아
   ``tool_result`` 는 버린다 — :mod:`xgen_agent_runtime.core.message_repair` 재사용.
 * 지난 턴의 ``thinking`` 블록은 재생하지 않는다(서명이 있는 블록은 다른 요청에서 거부될 수 있다).
@@ -74,8 +78,18 @@ MIN_RESULT_KEEP = 300
 #: 먼 턴의 발화 상한(사용자·답변 각각).
 DEFAULT_DIALOGUE_MESSAGE_CHARS = 4_000
 MIN_DIALOGUE_MESSAGE_CHARS = 400
+#: 예산 압박 때 가까운 턴의 tool_use 입력 문자열을 처음 줄이는 길이. 압박이 없으면 입력은 그대로다.
+DEFAULT_INPUT_KEEP = 2_000
+MIN_INPUT_KEEP = 200
+#: 먼 대화 턴 몫으로 지키는 예산 비율.
+DIALOGUE_RESERVE_RATIO = 0.25
 #: STM 에서 읽어 오는 행 상한 — 한 턴이 도구 40행일 수 있다.
 SCAN_ROWS = 400
+#: 그래도 가까운 턴(T-1, T-2)의 시작 행이 안 보일 때만 가는 마지막 상한. 한 턴은 반복 20번 × 이어
+#: 달리기 10번 = 반복 200번, 반복마다 assistant·tool_result 두 행이라 400행을 넘을 수 있다. 시작 행이
+#: 범위 밖이면 그 턴은 통째로 버려진다(앞머리 꼬리는 버린다). 가장 중요한 바로 앞 턴이 그렇게 사라지지
+#: 않게, 긴 작업 턴 뒤에만 한 번 더 넓게 읽는다.
+SCAN_MAX = 1_600
 #: 첫 시도 행 수. STM 행은 도구 결과 **원문** 을 들고 있어 400행을 늘 읽으면 버릴 데이터를
 #: 매 턴 다 읽는다(턴 시작 지연에 그대로 얹힌다). 작게 읽어 보고, 필요한 턴 수를 못 덮었을
 #: 때만 상한까지 한 번 더 간다.
@@ -97,6 +111,7 @@ class WindowConfig:
     result_trim_over: int = DEFAULT_RESULT_TRIM_OVER
     result_keep: int = DEFAULT_RESULT_KEEP
     dialogue_message_chars: int = DEFAULT_DIALOGUE_MESSAGE_CHARS
+    input_keep: int = DEFAULT_INPUT_KEEP
     used_tools_line: bool = True
 
     @classmethod
@@ -112,6 +127,7 @@ class WindowConfig:
                 MIN_DIALOGUE_MESSAGE_CHARS,
                 g("window_dialogue_message_chars", DEFAULT_DIALOGUE_MESSAGE_CHARS),
             ),
+            input_keep=max(MIN_INPUT_KEEP, g("window_input_keep", DEFAULT_INPUT_KEEP)),
             used_tools_line=bool(getattr(hooks, "window_used_tools_line", True)),
         )
 
@@ -275,10 +291,53 @@ def _shrink_result_block(block: Dict[str, Any], *, trim_over: int, keep: int) ->
     return block
 
 
+def _clip_input_value(value: Any, keep: int) -> Any:
+    """tool_use 입력 값 안의 긴 문자열만 앞머리로 줄인다. 키·구조는 그대로 둔다."""
+    if isinstance(value, str):
+        return _clip_text(value, keep) if len(value) > keep else value
+    if isinstance(value, dict):
+        return {k: _clip_input_value(v, keep) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clip_input_value(v, keep) for v in value]
+    return value
+
+
+def _longest_input_string(value: Any) -> int:
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, dict):
+        return max((_longest_input_string(v) for v in value.values()), default=0)
+    if isinstance(value, list):
+        return max((_longest_input_string(v) for v in value), default=0)
+    return 0
+
+
+def _shrink_tool_use_block(block: Dict[str, Any], *, keep: int) -> Dict[str, Any]:
+    """tool_use 블록의 입력만 줄인다. id·name 은 그대로라 짝(tool_result)이 깨지지 않는다.
+
+    ``keep`` 이 0 이면 줄이지 않는다(예산 압박이 없을 때).
+    """
+    if keep <= 0 or not isinstance(block.get("input"), dict):
+        return block
+    if _longest_input_string(block["input"]) <= keep:
+        return block
+    return {**block, "input": _clip_input_value(block["input"], keep)}
+
+
 def _full_messages(
-    turn: LogicalTurn, cfg: WindowConfig, *, result_keep: int
+    turn: LogicalTurn,
+    cfg: WindowConfig,
+    *,
+    result_keep: int,
+    input_keep: int = 0,
+    trim_over: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """가까운 턴: 순서·블록 그대로. 큰 결과와 이미지만 줄이고, thinking 은 뺀다."""
+    """가까운 턴: 순서·블록 그대로. 큰 결과와 이미지만 줄이고, thinking 은 뺀다.
+
+    ``trim_over`` 보다 긴 결과를 ``result_keep`` 으로 줄인다(기본 ``cfg.result_trim_over``).
+    ``input_keep`` 이 0 보다 크면 tool_use 입력의 긴 문자열도 그 길이로 줄인다(예산 강등 ②).
+    """
+    over = cfg.result_trim_over if trim_over is None else trim_over
     out: List[Dict[str, Any]] = []
     for m in turn.messages:
         role = _msg_role(m)
@@ -295,7 +354,9 @@ def _full_messages(
             if btype in ("thinking", "redacted_thinking", "reasoning"):
                 continue
             if btype == "tool_result":
-                b = _shrink_result_block(b, trim_over=cfg.result_trim_over, keep=result_keep)
+                b = _shrink_result_block(b, trim_over=over, keep=result_keep)
+            elif btype == "tool_use":
+                b = _shrink_tool_use_block(b, keep=input_keep)
             elif btype == "image":
                 b = {"type": "text", "text": _IMAGE_NOTE}
             blocks.append(b)
@@ -363,10 +424,16 @@ def build_window(
     dialogue = groups[: len(groups) - n_full]
 
     result_keep = cfg.result_keep
+    #: 줄일 결과의 문턱. 압박이 없으면 큰 결과(cfg.result_trim_over 초과)만 줄인다. 압박이 오면
+    #: result_keep 보다 긴 결과는 모두 줄인다. 문턱을 그대로 두면 4,000자 이하 결과는 아무리 많아도
+    #: 그대로 남는다(2026-10-20 dev: 결과를 300자로 줄였다는 창이 11만 자였다).
+    trim_over = cfg.result_trim_over
+    #: 0 = 입력은 줄이지 않는다. 결과를 다 줄이고도 넘칠 때 cfg.input_keep 부터 반씩.
+    input_keep = 0
     message_chars = cfg.dialogue_message_chars
 
     def _trimmable(keep: int) -> bool:
-        """더 깎을 tool_result 가 남았는가 — 없으면 result_keep 을 줄여도 크기가 안 준다."""
+        """더 깎을 tool_result 가 남았는가. 없으면 result_keep 을 줄여도 크기가 안 준다."""
         for turn in full:
             for m in turn.messages:
                 for b in _blocks(_msg_content(m)):
@@ -385,35 +452,69 @@ def build_window(
                                 return True
         return False
 
-    def _assemble() -> List[Dict[str, Any]]:
-        msgs: List[Dict[str, Any]] = []
-        for t in dialogue:
-            msgs.extend(_dialogue_messages(t, cfg, message_chars=message_chars))
+    def _inputs_trimmable(keep: int) -> bool:
+        """``keep`` 보다 긴 tool_use 입력 문자열이 가까운 턴에 남았는가."""
+        for turn in full:
+            for m in turn.messages:
+                for b in _blocks(_msg_content(m)):
+                    if b.get("type") == "tool_use" and _longest_input_string(b.get("input")) > keep:
+                        return True
+        return False
+
+    def _full_part() -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         for t in full:
-            msgs.extend(_full_messages(t, cfg, result_keep=result_keep))
-        return _sanitize_pairs(msgs)
+            out.extend(
+                _full_messages(
+                    t, cfg, result_keep=result_keep, input_keep=input_keep, trim_over=trim_over
+                )
+            )
+        return out
+
+    def _dialogue_part() -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for t in dialogue:
+            out.extend(_dialogue_messages(t, cfg, message_chars=message_chars))
+        return out
+
+    def _assemble() -> List[Dict[str, Any]]:
+        return _sanitize_pairs(_dialogue_part() + _full_part())
+
+    reserve = int(cfg.max_chars * DIALOGUE_RESERVE_RATIO)
+
+    def _dialogue_over() -> bool:
+        """먼 대화 턴이 자기 몫보다 큰가. 몫 = 가까운 턴이 남긴 예산, 최소 예산의 1/4."""
+        if not dialogue:
+            return False
+        allowed = max(cfg.max_chars - _size(_full_part()), reserve)
+        return _size(_dialogue_part()) > allowed
 
     msgs = _assemble()
-    # 예산 강등 — 순서가 계약이다(모듈 docstring).
+    # 예산 강등. 순서가 계약이다(모듈 docstring).
     guard = 0
-    while _size(msgs) > cfg.max_chars and guard < 40:
+    while _size(msgs) > cfg.max_chars and guard < 60:
         guard += 1
         if result_keep > MIN_RESULT_KEEP and _trimmable(result_keep):
             result_keep = max(MIN_RESULT_KEEP, result_keep // 2)
+            trim_over = result_keep
             report.degraded.append(f"result_keep={result_keep}")
-        elif dialogue:
-            dialogue = dialogue[1:]
-            report.degraded.append("drop_oldest_dialogue")
+        elif input_keep != MIN_INPUT_KEEP and _inputs_trimmable(MIN_INPUT_KEEP):
+            input_keep = max(MIN_INPUT_KEEP, input_keep // 2) if input_keep else cfg.input_keep
+            report.degraded.append(f"input_keep={input_keep}")
         elif len(full) > 1:
             demoted = full[0]
             full = full[1:]
-            dialogue = [demoted]
+            dialogue = [*dialogue, demoted]
             report.degraded.append("demote_oldest_full")
-        elif message_chars > MIN_DIALOGUE_MESSAGE_CHARS:
+        elif message_chars > MIN_DIALOGUE_MESSAGE_CHARS and _dialogue_over():
             message_chars = max(MIN_DIALOGUE_MESSAGE_CHARS, message_chars // 2)
             report.degraded.append(f"message_chars={message_chars}")
+        elif _dialogue_over():
+            dialogue = dialogue[1:]
+            report.degraded.append("drop_oldest_dialogue")
         else:
-            break  # T-1 하나만 남았고 최소까지 줄였다 — 그대로 둔다(턴을 버리지 않는다)
+            # 남은 초과는 T-1 몫이다. 대화 턴을 더 버려도 맞지 않는다. T-1 은 버리지 않는다.
+            break
         msgs = _assemble()
     msgs = _carry_dropped_attachments(msgs, turns, kept=[*dialogue, *full])
     report.turns = len(full) + len(dialogue)
@@ -507,6 +608,10 @@ async def load_window(
         # 오래된 턴까지 온전히 덮었다. 둘 다 아니면 상한까지 한 번 더.
         if len(rows) >= SCAN_FIRST and _turn_starts(rows) <= needed:
             rows = list(await stm.recent(n=SCAN_ROWS) or [])
+        # 400행 안에 가까운 턴의 시작 행이 없다 = 긴 작업 턴이 범위를 다 차지했다. 그 턴의 사용자
+        # 지시가 안 보이면 창에서 턴이 통째로 빠지므로 마지막 상한까지 한 번 더.
+        if len(rows) >= SCAN_ROWS and _turn_starts(rows) < max(1, min(cfg.full_turns, needed)):
+            rows = list(await stm.recent(n=SCAN_MAX) or [])
     except Exception:  # noqa: BLE001 — 창이 없어도 턴은 돈다
         return [], WindowReport()
     return build_window(rows, cfg)
