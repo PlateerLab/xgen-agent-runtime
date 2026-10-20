@@ -315,3 +315,18 @@ async def test_last_model_response_exhausts_budget_before_emit_or_tools():
     with pytest.raises(ExecutionBoundaryError):
         await token_stage.execute(None, state)
     assert context.run_budget.tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_serving_tool_failure_never_exposes_exception_details_to_hooks_or_result():
+    from xgen_agent_runtime.tools.errors import ToolFailure
+    errors = []
+    async def execute(_input, _context):
+        raise ToolFailure("secret-uri-canary", details={"stderr": "secret-uri-canary"})
+    async def observe(error, _context):
+        errors.append(error)
+    tool = RecordingTool(callback=execute)
+    tool.on_error = observe
+    result = await router(tool).route("record", {}, ToolContext(enforce_external_results=True))
+    assert result.is_error and "secret-uri-canary" not in repr(result)
+    assert errors == [None]

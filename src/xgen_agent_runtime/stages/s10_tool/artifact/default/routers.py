@@ -20,7 +20,7 @@ from xgen_agent_runtime.permission.types import (
     PermissionPosture,
     coerce_posture,
 )
-from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult, tool_origin
+from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult, tool_origin
 from xgen_agent_runtime.permission.approval import ApprovalContext, ApprovalEnvelope, ApprovalError, canonical_digest
 from xgen_agent_runtime.host.execution_scope import CancellationScope, ExecutionBoundaryError
 from xgen_agent_runtime.tools.errors import (
@@ -343,9 +343,17 @@ class RegistryRouter(ToolRouter):
         posture = coerce_posture(getattr(context, "permission_default_posture", None))
         mode = _coerce_permission_mode(getattr(context, "permission_mode", None))
 
+        strict_execution = bool(context.result_filter_required or context.enforce_external_results or context.redact_tool_events)
+
         async def decide(inp):
             try:
-                caps = tool.capabilities(inp)
+                capability_reader = getattr(tool, "capabilities", None)
+                if not callable(capability_reader):
+                    if strict_execution:
+                        raise ExecutionBoundaryError("tool_capabilities_unavailable")
+                    caps = ToolCapabilities()
+                else:
+                    caps = capability_reader(inp)
             except Exception:
                 raise ExecutionBoundaryError("tool_capabilities_unavailable") from None
             decision = None
@@ -414,6 +422,7 @@ class RegistryRouter(ToolRouter):
         effective_scope = scope
         if effective_scope is None and budget is not None:
             effective_scope = CancellationScope(deadline=budget.deadline)
+        execution_failed = False
         try:
             if effective_scope is not None:
                 result = await effective_scope.run(tool.execute(execute_input, context), timeout=timeout_s)
@@ -422,18 +431,22 @@ class RegistryRouter(ToolRouter):
             else:
                 result = await tool.execute(execute_input, context)
         except asyncio.TimeoutError:
+            execution_failed = True
             result = make_error_result(ToolError.tool_crashed(tool.name, TimeoutError("tool deadline exceeded")))
             await _fire_hook("on_error", tool.name, tool, None, context)
         except ToolFailure as failure:
-            result = make_error_result(failure.error)
-            await _fire_hook("on_error", tool.name, tool, failure, context)
+            execution_failed = True
+            safe_failure = ToolError(failure.error.code, "Tool operation failed") if strict_execution else failure.error
+            result = make_error_result(safe_failure)
+            await _fire_hook("on_error", tool.name, tool, None if strict_execution else failure, context)
         except (ExecutionBoundaryError, asyncio.CancelledError):
             raise
         except Exception as exc:
+            execution_failed = True
             # Serving hosts do not forward backend stderr, paths or credentials.
             logger.warning("tool execution failed: tool=%s type=%s", tool.name, type(exc).__name__)
             result = make_error_result(ToolError.tool_crashed(tool.name, RuntimeError("tool_execution_failed")))
-            await _fire_hook("on_error", tool.name, tool, None, context)
+            await _fire_hook("on_error", tool.name, tool, None if strict_execution else exc, context)
         if scope is not None:
             scope.check()
         if not isinstance(result, ToolResult):
@@ -451,7 +464,8 @@ class RegistryRouter(ToolRouter):
         result = await _apply_result_filter(tool, result, context)
         # Sanitized data is all that lifecycle/POST observers may see.
         before_exit = repr(result)
-        await _fire_hook("on_exit", tool.name, tool, result, context)
+        if not execution_failed:
+            await _fire_hook("on_exit", tool.name, tool, result, context)
         if repr(result) != before_exit:
             result = await _apply_result_filter(tool, result, context)
         if external and getattr(context, "enforce_external_results", False) and (result.state_mutations or result.new_messages):
