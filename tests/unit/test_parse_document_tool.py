@@ -13,12 +13,17 @@ import pytest
 pytest.importorskip("xgen_doc2chunk")
 
 from xgen_agent_runtime.tools.base import ToolContext  # noqa: E402
+from xgen_agent_runtime.tools.fs import LocalFS  # noqa: E402
 from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES, BUILT_IN_TOOL_FEATURES  # noqa: E402
 from xgen_agent_runtime.tools.built_in.parse_document_tool import ParseDocumentTool  # noqa: E402
 
 
 def _run(tool_input, tmp_path):
-    ctx = ToolContext(session_id="s", working_dir=str(tmp_path))
+    ctx = ToolContext(
+        session_id="s",
+        working_dir=str(tmp_path),
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
     return asyncio.run(ParseDocumentTool().execute(tool_input, ctx))
 
 

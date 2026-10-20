@@ -3,12 +3,18 @@ import asyncio
 from pathlib import Path
 
 from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.fs import LocalFS
 from xgen_agent_runtime.tools.built_in.glob_tool import GlobTool
 from xgen_agent_runtime.tools.built_in.grep_tool import GrepTool
 
 
 def _ctx(ws: Path) -> ToolContext:
-    return ToolContext(sandbox=None, working_dir=str(ws), allowed_paths=[str(ws)])
+    return ToolContext(
+        sandbox=None,
+        working_dir=str(ws),
+        allowed_paths=[str(ws)],
+        fs=LocalFS(str(ws), [str(ws)]),
+    )
 
 
 def test_glob_and_grep_reject_paths_outside_allowed(tmp_path):

@@ -6,7 +6,13 @@ import asyncio
 import sys
 from typing import Any, Dict
 
-from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolResult
+from xgen_agent_runtime.tools.base import (
+    Tool,
+    ToolCapabilities,
+    ToolResult,
+    execution_backend_unavailable,
+    host_is_execution_target,
+)
 
 
 def _err(code: str, message: str) -> ToolResult:
@@ -161,8 +167,8 @@ class REPLTool(Tool):
                 )
             except asyncio.TimeoutError:
                 return _err("REPL_TIMEOUT", f"expression exceeded {timeout}s")
-            except Exception as exc:  # noqa: BLE001
-                return _err("SPAWN_FAILED", str(exc))
+            except Exception:  # noqa: BLE001
+                return execution_backend_unavailable("REPL")
             return ToolResult(
                 content={
                     "stdout": stdout_s[:64_000],
@@ -171,8 +177,12 @@ class REPLTool(Tool):
                 }
             )
 
-        # No sandbox (feature disabled / non-agent context): run on the host,
-        # but with a SCRUBBED env — never hand the model the backend's secrets.
+        # Host execution is a separate, explicit trusted-local mode. A missing
+        # sandbox in a serving process must never turn into arbitrary Python on
+        # that process merely because the environment is scrubbed.
+        if not host_is_execution_target(context):
+            return execution_backend_unavailable("REPL")
+
         from xgen_agent_runtime.tools.built_in.bash_tool import _scrubbed_env
 
         try:

@@ -36,6 +36,7 @@ from tests._fixtures.manifest_entries import required_stage_entries
 from xgen_agent_runtime.core.pipeline import Pipeline
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
 from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -217,6 +218,7 @@ async def test_registered_write_tool_writes_file_in_working_dir(tmp_path) -> Non
         session_id="test-session",
         working_dir=str(tmp_path),
         allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
     )
     result = await write_tool.execute(
         {"file_path": str(target), "content": "안녕 test.txt"},
@@ -238,6 +240,7 @@ async def test_write_tool_refuses_path_outside_working_dir(tmp_path) -> None:
         session_id="test-session",
         working_dir=str(tmp_path),
         allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
     )
     result = await write_tool.execute(
         {"file_path": str(outside), "content": "should fail"},

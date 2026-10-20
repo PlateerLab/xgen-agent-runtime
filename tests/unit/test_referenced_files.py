@@ -1,6 +1,8 @@
 """요청에 이름이 나온 작업 폴더 파일을 첫 턴에 붙인다 (host/referenced_files.py)."""
 
 import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from xgen_agent_runtime.host.referenced_files import candidates, collect
 from xgen_agent_runtime.tools.fs import LocalFS
@@ -64,3 +66,21 @@ def test_total_budget_stops_attaching(tmp_path):
 
 def test_nothing_named_means_no_block(tmp_path):
     assert _run("안녕하세요, 오늘 일정 알려줘", tmp_path).block == ""
+
+
+def test_explicit_virtual_fs_is_materialized_instead_of_host_open(tmp_path):
+    class _VirtualFS:
+        kind = "virtual"
+
+        def resolve(self, path, *, write=False):
+            return "/virtual/input.txt"
+
+        @asynccontextmanager
+        async def materialize(self, path):
+            local = tmp_path / "materialized.txt"
+            local.write_bytes(b"virtual contents")
+            yield local
+
+    pre = asyncio.run(collect("use input.txt", _VirtualFS()))
+    assert "virtual contents" in pre.block
+    assert not Path("/virtual/input.txt").exists()

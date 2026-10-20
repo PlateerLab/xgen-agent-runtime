@@ -51,6 +51,15 @@ class TestBuildDispatchContextCarriesRuntimeHandles:
         # sandbox handle the host attached, not None.
         assert ctx.sandbox is sandbox
 
+    def test_explicit_filesystem_is_propagated(self):
+        filesystem = object()
+        stage = ToolStage(context=ToolContext(session_id="s", fs=filesystem))
+        state = PipelineState(session_id="s")
+
+        ctx = stage.build_dispatch_context(state)
+
+        assert ctx.fs is filesystem
+
     def test_event_emit_and_parent_tool_use_id_are_propagated(self):
         stage = ToolStage(
             context=ToolContext(

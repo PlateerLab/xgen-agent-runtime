@@ -144,13 +144,18 @@ async def _head(fs: Any, resolved: str, cap: int) -> Optional[Tuple[bytes, int]]
             return None
         return head.stdout, int(size.stdout.strip())
 
-    def _local() -> Optional[Tuple[bytes, int]]:
-        if not os.path.isfile(resolved):
+    # A non-runner port is not necessarily LocalFS: hosts may inject an
+    # in-memory or remote file-only capability whose resolved names do not
+    # exist on this process. Materialize through the port before opening.
+    async with fs.materialize(resolved) as local:
+        if not local.is_file():
             return None
-        with open(resolved, "rb") as f:
-            return f.read(cap + 1), os.path.getsize(resolved)
 
-    return await asyncio.to_thread(_local)
+        def _materialized_head() -> Tuple[bytes, int]:
+            with local.open("rb") as stream:
+                return stream.read(cap + 1), local.stat().st_size
+
+        return await asyncio.to_thread(_materialized_head)
 
 
 async def collect(text: str, fs: Any, *, per_file: int = PER_FILE, total: int = TOTAL) -> Prefetch:

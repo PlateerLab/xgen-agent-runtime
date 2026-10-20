@@ -4,6 +4,14 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.96.0] - 2026-10-20
+
+### Security — 실행 백엔드가 없는 서버 호출 차단
+
+- 파일·셸·REPL·스킬은 연결된 sandbox 또는 명시적으로 주입한 파일 capability를 사용한다. 호스트 명령 실행은 신뢰한 호스트 코드의 정확한 boolean opt-in이 필요하다.
+- 오디오·SSH 파일 전송·참조 파일·산출물 검토도 같은 파일 포트를 사용하며, backend 실패를 serving-host 실행으로 우회하지 않는다.
+- 오디오 목록은 파일 본문 전송 없이 제한된 검색 메타데이터를 사용한다.
+
 ## [4.94.0] - 2026-10-20
 
 ### Fixed: 단기 기억 창이 호스트 경로에서 돈다 (지난 턴 답변이 잘리던 문제)

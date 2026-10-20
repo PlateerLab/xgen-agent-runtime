@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 import pytest
 
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 from xgen_agent_runtime.tools.built_in import (
     BUILT_IN_TOOL_CLASSES,
     BriefTool,
@@ -73,9 +73,16 @@ class TestLSP:
 
 
 class TestREPL:
+    @staticmethod
+    def _local_context(tmp_path):
+        return ToolContext(
+            working_dir=str(tmp_path),
+            extras={HOST_IS_EXECUTION_TARGET: True},
+        )
+
     @pytest.mark.asyncio
     async def test_runs_expression(self, tmp_path):
-        ctx = ToolContext(working_dir=str(tmp_path), extras={})
+        ctx = self._local_context(tmp_path)
         result = await REPLTool().execute({"expression": "print(2 + 3)"}, ctx)
         assert result.is_error is False
         assert "5" in result.content["stdout"]
@@ -83,7 +90,7 @@ class TestREPL:
 
     @pytest.mark.asyncio
     async def test_captures_stderr(self, tmp_path):
-        ctx = ToolContext(working_dir=str(tmp_path), extras={})
+        ctx = self._local_context(tmp_path)
         result = await REPLTool().execute(
             {"expression": "import sys; print('e', file=sys.stderr)"}, ctx,
         )
@@ -91,7 +98,7 @@ class TestREPL:
 
     @pytest.mark.asyncio
     async def test_nonzero_exit(self, tmp_path):
-        ctx = ToolContext(working_dir=str(tmp_path), extras={})
+        ctx = self._local_context(tmp_path)
         result = await REPLTool().execute(
             {"expression": "import sys; sys.exit(7)"}, ctx,
         )
@@ -99,7 +106,7 @@ class TestREPL:
 
     @pytest.mark.asyncio
     async def test_timeout(self, tmp_path):
-        ctx = ToolContext(working_dir=str(tmp_path), extras={})
+        ctx = self._local_context(tmp_path)
         result = await REPLTool().execute(
             {"expression": "import time; time.sleep(10)", "timeout_seconds": 1}, ctx,
         )

@@ -978,14 +978,10 @@ class AgentTurnExecutor:
 
                     from xgen_agent_runtime.host.referenced_files import collect as _collect_refs
                     from xgen_agent_runtime.tools.built_in._file_witness import WITNESSED_KEY
-                    from xgen_agent_runtime.tools.fs import LocalFS, RunnerFS
+                    from xgen_agent_runtime.tools.fs import tool_fs
 
-                    _ref_fs = None
-                    if _sandbox is not None:
-                        _ref_fs = RunnerFS(_sandbox, str(getattr(_sandbox, "workdir", "") or ""))
-                    elif getattr(run_tool_context, "working_dir", ""):
-                        _ref_fs = LocalFS(str(run_tool_context.working_dir))
-                    if _ref_fs is not None:
+                    _ref_fs = tool_fs(run_tool_context)
+                    if getattr(_ref_fs, "kind", "") != "unavailable":
                         _pre = _asyncio.run(_collect_refs(text, _ref_fs))
                         if _pre.block:
                             rag_block = f"{rag_block}\n\n{_pre.block}" if rag_block else _pre.block

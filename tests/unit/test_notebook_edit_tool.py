@@ -9,6 +9,7 @@ import pytest
 
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.built_in.notebook_edit_tool import NotebookEditTool
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 def _minimal_notebook(cells: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
@@ -50,7 +51,7 @@ def _read(path: str) -> Dict[str, Any]:
 
 
 def _ctx() -> ToolContext:
-    return ToolContext(session_id="s", working_dir="")
+    return ToolContext(session_id="s", working_dir="", fs=LocalFS(""))
 
 
 class TestCapabilitiesAndSchema:
