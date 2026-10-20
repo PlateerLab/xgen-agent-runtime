@@ -407,17 +407,20 @@ class RegistryRouter(ToolRouter):
             return make_error_result(ToolError.access_denied(tool.name, "approval_input_changed"))
         if scope is not None:
             scope.check()
+        # Hooks may retain their input reference. The executable copy is detached
+        # after the last digest check and before the next suspension point.
+        execute_input = copy.deepcopy(tool_input)
         timeout_s = float(getattr(caps, "timeout_s", 0.0) or 0.0)
         effective_scope = scope
         if effective_scope is None and budget is not None:
             effective_scope = CancellationScope(deadline=budget.deadline)
         try:
             if effective_scope is not None:
-                result = await effective_scope.run(tool.execute(tool_input, context), timeout=timeout_s)
+                result = await effective_scope.run(tool.execute(execute_input, context), timeout=timeout_s)
             elif timeout_s > 0:
-                result = await asyncio.wait_for(tool.execute(tool_input, context), timeout=timeout_s)
+                result = await asyncio.wait_for(tool.execute(execute_input, context), timeout=timeout_s)
             else:
-                result = await tool.execute(tool_input, context)
+                result = await tool.execute(execute_input, context)
         except asyncio.TimeoutError:
             result = make_error_result(ToolError.tool_crashed(tool.name, TimeoutError("tool deadline exceeded")))
             await _fire_hook("on_error", tool.name, tool, None, context)

@@ -275,3 +275,43 @@ def test_cancelled_model_guard_stops_before_provider_dispatch():
     context = ToolContext(cancellation_scope=CancellationScope(cancel_check=lambda: True))
     bind_run_guard(SimpleNamespace(get_stage=lambda _: SimpleNamespace(add_guard=guards.append)), context)
     assert not guards[0].check(SimpleNamespace()).passed
+
+
+@pytest.mark.asyncio
+async def test_retained_hook_reference_cannot_mutate_executed_arguments():
+    retained = []
+    started = asyncio.Event()
+    proceed = asyncio.Event()
+
+    async def enter(input, _context):
+        retained.append(input)
+
+    async def execute(input, _context):
+        started.set()
+        await proceed.wait()
+        return ToolResult(content=input["nested"]["target"])
+
+    tool = RecordingTool(callback=execute)
+    tool.on_enter = enter
+    task = asyncio.create_task(router(tool).route("record", {"nested": {"target": "approved"}}, ToolContext()))
+    await started.wait()
+    retained[0]["nested"]["target"] = "changed"
+    proceed.set()
+    result = await task
+    assert result.content == "approved"
+
+
+@pytest.mark.asyncio
+async def test_last_model_response_exhausts_budget_before_emit_or_tools():
+    from xgen_agent_runtime.core.state import PipelineState, TokenUsage
+    from xgen_agent_runtime.llm_client.types import APIResponse
+    from xgen_agent_runtime.stages.s07_token.artifact.default.stage import TokenStage
+
+    token_stage = TokenStage()
+    context = ToolContext(run_budget=RunBudget(max_tokens=5))
+    bind_run_guard(SimpleNamespace(get_stage=lambda number: token_stage if number == 7 else None), context)
+    state = PipelineState()
+    state.last_api_response = APIResponse(usage=TokenUsage(input_tokens=4, output_tokens=2))
+    with pytest.raises(ExecutionBoundaryError):
+        await token_stage.execute(None, state)
+    assert context.run_budget.tokens == 6

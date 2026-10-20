@@ -33,6 +33,7 @@ class TokenStage(Stage[Any, Any]):
         tracker: Optional[TokenTracker] = None,
         calculator: Optional[CostCalculator] = None,
     ):
+        self._host_usage_boundary = None
         self._slots: Dict[str, StrategySlot] = {
             "tracker": StrategySlot(
                 name="tracker",
@@ -90,6 +91,8 @@ class TokenStage(Stage[Any, Any]):
         # Calculate cost
         cost = self._calculator.calculate(usage, state.model)
         state.accumulate_cost(cost)
+        if self._host_usage_boundary is not None:
+            self._host_usage_boundary(state)
 
         # Update cache metrics
         if usage.cache_creation_input_tokens > 0:

@@ -85,24 +85,27 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
     from xgen_agent_runtime.stages.s04_guard.interface import Guard
     from xgen_agent_runtime.stages.s04_guard.types import GuardResult
 
+    def enforce(state: Any) -> None:
+        if context.cancellation_scope is not None:
+            context.cancellation_scope.check()
+        if context.run_budget is not None:
+            if time.monotonic() >= context.run_budget.deadline:
+                raise ExecutionBoundaryError("run_budget_exceeded")
+            usage = getattr(state, "turn_token_usage", []) or []
+            tokens = sum(int(u.input_tokens or 0) + int(u.output_tokens or 0) +
+                         int(getattr(u, "cache_read_input_tokens", 0) or 0) +
+                         int(getattr(u, "cache_creation_input_tokens", 0) or 0) for u in usage)
+            context.run_budget.reconcile_usage(
+                str(getattr(state, "_run_id", "") or id(state)), tokens=tokens,
+                cost=float(getattr(state, "total_cost_usd", 0) or 0),
+            )
+
     class RunGuard(Guard):
         name = "host_run_boundary"
 
         def check(self, state: Any) -> Any:
             try:
-                if context.cancellation_scope is not None:
-                    context.cancellation_scope.check()
-                if context.run_budget is not None:
-                    if time.monotonic() >= context.run_budget.deadline:
-                        raise ExecutionBoundaryError("run_budget_exceeded")
-                    usage = getattr(state, "turn_token_usage", []) or []
-                    tokens = sum(int(u.input_tokens or 0) + int(u.output_tokens or 0) +
-                                 int(getattr(u, "cache_read_input_tokens", 0) or 0) +
-                                 int(getattr(u, "cache_creation_input_tokens", 0) or 0) for u in usage)
-                    context.run_budget.reconcile_usage(
-                        str(getattr(state, "_run_id", "") or id(state)), tokens=tokens,
-                        cost=float(getattr(state, "total_cost_usd", 0) or 0),
-                    )
+                enforce(state)
                 return GuardResult(passed=True, guard_name=self.name)
             except ExecutionBoundaryError as exc:
                 return GuardResult(passed=False, guard_name=self.name, message=str(exc), action="reject")
@@ -110,6 +113,10 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
     stage = pipeline.get_stage(4)
     if stage is not None and callable(getattr(stage, "add_guard", None)):
         stage.add_guard(RunGuard())
+    token_stage = pipeline.get_stage(7)
+    if token_stage is not None:
+        # Charge the final response too, before tool dispatch, emit or persist.
+        token_stage._host_usage_boundary = enforce
 
 
 class CancellationScope:
