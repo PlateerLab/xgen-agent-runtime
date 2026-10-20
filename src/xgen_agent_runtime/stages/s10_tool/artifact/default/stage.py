@@ -187,6 +187,8 @@ class ToolStage(Stage[Any, Any]):
         from xgen_agent_runtime.tools.base import ToolResult as _TR
 
         def _state_apply(mutations: Dict[str, Any], tool_name: str) -> Dict[str, Any]:
+            if self._context.cancellation_scope is not None:
+                self._context.cancellation_scope.check()
             if not mutations:
                 return {}
             return _apply_raw(
@@ -254,6 +256,14 @@ class ToolStage(Stage[Any, Any]):
             # CLI tool surface (all build their context HERE) apply the same
             # post-processing. ToolBatch members reuse this context.
             result_filter=getattr(self._context, "result_filter", None),
+            approval_context=getattr(self._context, "approval_context", None),
+            approval_store=getattr(self._context, "approval_store", None),
+            approval_timeout_s=getattr(self._context, "approval_timeout_s", 120.0),
+            cancellation_scope=getattr(self._context, "cancellation_scope", None),
+            run_budget=getattr(self._context, "run_budget", None),
+            result_filter_required=getattr(self._context, "result_filter_required", False),
+            enforce_external_results=getattr(self._context, "enforce_external_results", False),
+            redact_tool_events=getattr(self._context, "redact_tool_events", False),
         )
 
         # 2.2.0 (audit §1-5 — policy via config): the permission posture

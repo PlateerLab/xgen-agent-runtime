@@ -66,6 +66,7 @@ class ToolCapabilities:
     interrupt: str = "block"
     max_result_chars: int = 100_000
     timeout_s: float = 0.0
+    mandatory_approval: bool = False
 
 
 @dataclass(frozen=True)
@@ -199,6 +200,15 @@ class ToolContext:
     # original result is used. ``None`` (default) = no filtering. Set by the
     # host through ``HostServices.tool_result_filter`` (see host/host.py).
     result_filter: Optional[Callable[["Tool", "ToolResult"], Awaitable["ToolResult"]]] = None
+    # Serving hosts bind verified identity, durable approval and one run ledger.
+    approval_context: Optional[Any] = None
+    approval_store: Optional[Any] = None
+    approval_timeout_s: float = 120.0
+    cancellation_scope: Optional[Any] = None
+    run_budget: Optional[Any] = None
+    result_filter_required: bool = False
+    enforce_external_results: bool = False
+    redact_tool_events: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -241,6 +251,7 @@ class ToolResult:
     artifacts: Dict[str, Any] = field(default_factory=dict)
     new_messages: List[Dict[str, Any]] = field(default_factory=list)
     mcp_meta: Optional[Dict[str, Any]] = None
+    provenance: Optional[Dict[str, Any]] = None
 
     def to_api_format(self, tool_use_id: str) -> Dict[str, Any]:
         """Convert to Anthropic API tool_result format.

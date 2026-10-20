@@ -41,6 +41,9 @@ class HITLRequest:
     tool_call_id: str = ""
     payload: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=_now)
+    mandatory: bool = False
+    approval: Optional[Any] = None
+    approval_store: Optional[Any] = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -50,6 +53,8 @@ class HITLRequest:
             "tool_call_id": self.tool_call_id,
             "payload": dict(self.payload),
             "created_at": self.created_at.isoformat(),
+            "mandatory": self.mandatory,
+            "approval": self.approval.to_dict() if self.approval is not None else None,
         }
 
 

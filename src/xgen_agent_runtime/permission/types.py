@@ -163,6 +163,7 @@ class PermissionRule:
     source: PermissionSource
     pattern: Optional[str] = None
     reason: Optional[str] = None
+    mandatory: bool = False
 
     def matches_name(self, tool_name: str) -> bool:
         """True if ``self.tool_name`` targets ``tool_name``."""

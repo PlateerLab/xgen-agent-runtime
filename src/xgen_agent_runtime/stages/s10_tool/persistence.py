@@ -284,6 +284,8 @@ def maybe_persist_large_result(
     bound protects the request and applies to every tool. Never raises: a failure here returns the
     result as it was (the turn must not die in result bookkeeping).
     """
+    if context.cancellation_scope is not None:
+        context.cancellation_scope.check()
     out = result
     if capabilities.max_result_chars > 0:
         out = _persist_over_tool_cap(
