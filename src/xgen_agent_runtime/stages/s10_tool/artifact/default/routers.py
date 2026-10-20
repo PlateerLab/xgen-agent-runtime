@@ -444,7 +444,7 @@ class RegistryRouter(ToolRouter):
         except Exception as exc:
             execution_failed = True
             # Serving hosts do not forward backend stderr, paths or credentials.
-            logger.warning("tool execution failed: tool=%s type=%s", tool.name, type(exc).__name__)
+            logger.error("tool execution failed: tool=%s type=%s", tool.name, type(exc).__name__)
             result = make_error_result(ToolError.tool_crashed(tool.name, RuntimeError("tool_execution_failed")))
             await _fire_hook("on_error", tool.name, tool, None if strict_execution else exc, context)
         if scope is not None:
