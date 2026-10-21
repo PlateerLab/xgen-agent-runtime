@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 from xgen_agent_runtime.tools.built_in import (
     EnterWorktreeTool,
     ExitWorktreeTool,
@@ -39,7 +39,9 @@ class TestEnterPushesWorkspace:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         await EnterWorktreeTool().execute({"branch": "feat-a", "base": "main"}, ctx)
         ws_stack = ctx.extras.get("workspace_stack")
         assert isinstance(ws_stack, WorkspaceStack)
@@ -53,7 +55,9 @@ class TestEnterPushesWorkspace:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         await EnterWorktreeTool().execute({"branch": "x", "base": "main"}, ctx)
         await ExitWorktreeTool().execute({}, ctx)
         ws_stack = ctx.extras["workspace_stack"]
@@ -80,7 +84,10 @@ class TestLSPUsesWorkspace:
 
         ctx = ToolContext(
             working_dir=str(repo),
-            extras={"lsp_adapters": {"python": adapter}},
+            extras={
+                "lsp_adapters": {"python": adapter},
+                HOST_IS_EXECUTION_TARGET: True,
+            },
         )
         await EnterWorktreeTool().execute({"branch": "feat-b", "base": "main"}, ctx)
         await LSPTool().execute(

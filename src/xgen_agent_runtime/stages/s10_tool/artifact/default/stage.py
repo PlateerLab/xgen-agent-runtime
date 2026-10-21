@@ -239,12 +239,15 @@ class ToolStage(Stage[Any, Any]):
             # Read / Write / Edit / Glob / Grep run inside the agent's own
             # isolated sandbox instead of on the serving pod. The host
             # attaches it via ``attach_runtime(tool_context=...)``; if it is
-            # dropped here every file/shell tool silently degrades to the
-            # pod (context.sandbox is None -> local subprocess), which is a
-            # correctness + tenancy bug, not a graceful fallback. Read live
+            # dropped here every file/shell tool fails closed rather than
+            # silently touching the pod. Read live
             # off ``self._context`` so a session attached after the stage
             # was constructed still routes correctly.
             sandbox=getattr(self._context, "sandbox", None),
+            # Explicit file port is an operation-specific capability: it lets
+            # file tools work without also authorising Bash/REPL host execution.
+            # Preserve it across this per-dispatch context rebuild.
+            fs=getattr(self._context, "fs", None),
             # Structured-event sink so long-running tools (Bash streaming)
             # can surface progress; ``None`` is the no-op default.
             event_emit=getattr(self._context, "event_emit", None),

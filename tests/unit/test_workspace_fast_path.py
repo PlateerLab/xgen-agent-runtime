@@ -13,10 +13,15 @@ from xgen_agent_runtime.host.workspace_fast_path import (
     register_snapshot_witnesses,
 )
 from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 def _prepare(tmp_path, text, *, attachments=(), enabled=True):
-    context = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    context = ToolContext(
+        working_dir=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
     return asyncio.run(
         prepare_workspace_fast_path(text, attachments, context, enabled=enabled)
     )

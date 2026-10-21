@@ -278,11 +278,14 @@ def test_opt_in_workspace_fast_path_is_wired_before_the_model_call(
 
         def build_run_tool_context(self, **kwargs):
             run_dir = str(kwargs["run_dir"])
+            from xgen_agent_runtime.tools.fs import LocalFS
+
             return ToolContext(
                 session_id="inter-1",
                 working_dir=run_dir,
                 allowed_paths=[run_dir],
                 extras=dict(kwargs.get("extras") or {}),
+                fs=LocalFS(run_dir, [run_dir]),
             )
 
     source = tmp_path / "source"

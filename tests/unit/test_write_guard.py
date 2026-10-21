@@ -27,6 +27,7 @@ from xgen_agent_runtime.tools.built_in._file_witness import (
 )
 from xgen_agent_runtime.tools.built_in.read_tool import ReadTool
 from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 def _ctx(tmp_path, shared=None):
@@ -34,6 +35,7 @@ def _ctx(tmp_path, shared=None):
         session_id="t",
         working_dir=str(tmp_path),
         state_view=SimpleNamespace(shared=shared if shared is not None else {}),
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
     )
 
 
@@ -195,7 +197,11 @@ class TestWitnessThroughTheRealApplyPath:
         pipe = runner.build_pipeline(
             name="t", provider="openai", model="m", api_key="k", llm_client=_Scripted(api_key="k"), stream=False,
             enable_compaction=False, registry=reg, max_iterations=20, turn_input_budget_tokens=None,
-            tool_context=ToolContext(session_id="t", working_dir=str(tmp_path)),
+            tool_context=ToolContext(
+                session_id="t",
+                working_dir=str(tmp_path),
+                fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+            ),
         )
         runner.run_turn(pipe, "go", PipelineState(session_id="t", model="m"))
         assert mine.read_text(encoding="utf-8") == "v2"

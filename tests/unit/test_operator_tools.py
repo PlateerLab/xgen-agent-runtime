@@ -11,6 +11,7 @@ import pytest
 
 from xgen_agent_runtime.channels import UserFileChannel
 from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.fs import LocalFS
 from xgen_agent_runtime.tools.built_in import (
     BUILT_IN_TOOL_CLASSES,
     ConfigTool,
@@ -175,7 +176,11 @@ class TestSendUserFile:
         f = tmp_path / "report.txt"
         f.write_text("hello\n")
         channel = _FakeChannel()
-        ctx = ToolContext(working_dir=str(tmp_path), extras={"user_file_channel": channel})
+        ctx = ToolContext(
+            working_dir=str(tmp_path),
+            extras={"user_file_channel": channel},
+            fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+        )
         result = await SendUserFileTool().execute({"file_path": "report.txt"}, ctx)
         assert result.is_error is False
         assert result.content["delivered"] is True
@@ -184,7 +189,11 @@ class TestSendUserFile:
     @pytest.mark.asyncio
     async def test_missing_file(self, tmp_path: Path):
         channel = _FakeChannel()
-        ctx = ToolContext(working_dir=str(tmp_path), extras={"user_file_channel": channel})
+        ctx = ToolContext(
+            working_dir=str(tmp_path),
+            extras={"user_file_channel": channel},
+            fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+        )
         result = await SendUserFileTool().execute({"file_path": "ghost.txt"}, ctx)
         assert result.is_error is True
         assert result.content["error"]["code"] == "FILE_NOT_FOUND"
@@ -201,7 +210,11 @@ class TestSendUserFile:
         f = tmp_path / "x.txt"
         f.write_text("x")
         channel = _FakeChannel(raise_exc=RuntimeError("bucket full"))
-        ctx = ToolContext(working_dir=str(tmp_path), extras={"user_file_channel": channel})
+        ctx = ToolContext(
+            working_dir=str(tmp_path),
+            extras={"user_file_channel": channel},
+            fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+        )
         result = await SendUserFileTool().execute({"file_path": "x.txt"}, ctx)
         assert result.is_error is True
         assert result.content["error"]["code"] == "SEND_FAILED"
@@ -210,7 +223,11 @@ class TestSendUserFile:
     async def test_directory_rejected(self, tmp_path: Path):
         sub = tmp_path / "sub"
         sub.mkdir()
-        ctx = ToolContext(working_dir=str(tmp_path), extras={"user_file_channel": _FakeChannel()})
+        ctx = ToolContext(
+            working_dir=str(tmp_path),
+            extras={"user_file_channel": _FakeChannel()},
+            fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+        )
         result = await SendUserFileTool().execute({"file_path": "sub"}, ctx)
         assert result.is_error is True
         assert result.content["error"]["code"] == "NOT_A_FILE"
@@ -233,7 +250,12 @@ def test_send_user_file_refuses_paths_outside_the_workspace(tmp_path):
             sent.append(path)
             return "ok"
 
-    ctx = ToolContext(session_id="s", working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    ctx = ToolContext(
+        session_id="s",
+        working_dir=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
     ctx.extras["user_file_channel"] = _Chan()
     r = asyncio.run(SendUserFileTool().execute({"file_path": "/etc/passwd"}, ctx))
     assert r.is_error and "ACCESS_DENIED" in str(r.content)

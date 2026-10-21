@@ -40,13 +40,23 @@ import shutil
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    AsyncContextManager,
+    AsyncIterator,
+    List,
+    NoReturn,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 __all__ = [
     "FsAccessError",
     "LocalFS",
     "RunnerFS",
     "ToolFileSystem",
+    "UnavailableFS",
     "tool_fs",
 ]
 
@@ -56,6 +66,49 @@ class FsAccessError(PermissionError):
 
     ``PermissionError`` 를 잇는다 — 로컬 경로를 쓰던 도구가 이미 이것을 잡고 있다.
     """
+
+
+class UnavailableFS:
+    """Fail-closed filesystem returned when no backend was authorised.
+
+    Returning a protocol object, rather than raising from :func:`tool_fs`, lets
+    existing file tools keep their normal error-shaping paths.  Every operation
+    still fails before resolving or touching a host path.
+    """
+
+    kind = "unavailable"
+
+    @staticmethod
+    def _raise() -> NoReturn:
+        from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+        raise FsAccessError(
+            f"{EXECUTION_BACKEND_UNAVAILABLE}: file access requires an attached "
+            "sandbox, an explicit filesystem, or a trusted-local execution context."
+        )
+
+    def resolve(self, path: str, *, write: bool = False) -> str:
+        self._raise()
+
+    async def read_bytes(self, path: str) -> bytes:
+        self._raise()
+
+    async def write_bytes(self, path: str, data: bytes) -> int:
+        self._raise()
+
+    async def exists(self, path: str) -> bool:
+        self._raise()
+
+    @asynccontextmanager
+    async def materialize(self, path: str) -> AsyncIterator[Path]:
+        self._raise()
+        yield Path(path)  # pragma: no cover - keeps this an async context manager
+
+    async def commit(self, local: Path, path: str) -> int:
+        self._raise()
+
+    async def search(self, req: dict) -> dict:
+        self._raise()
 
 
 @runtime_checkable
@@ -75,7 +128,7 @@ class ToolFileSystem(Protocol):
 
     async def exists(self, path: str) -> bool: ...
 
-    def materialize(self, path: str) -> "AsyncIterator[Path]":
+    def materialize(self, path: str) -> "AsyncContextManager[Path]":
         """``async with fs.materialize(p) as local:`` — 로컬 경로로 읽을 수 있게 한다."""
         ...
 
@@ -217,16 +270,46 @@ class RunnerFS:
     # 세션을 **먼저** 깨우고 경로를 푼다 — ``sb_read_bytes`` 와 같은 순서다. 붙지 않은
     # 세션의 ``workdir`` 은 예상값이라, 그걸로 먼저 풀면 러너의 실제 루트와 어긋날 수 있다.
 
+    async def _ensure(self) -> None:
+        try:
+            await self.sandbox.ensure()
+        except Exception as exc:  # noqa: BLE001 - backend types live outside this package
+            from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+            raise FsAccessError(
+                f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox filesystem is unavailable."
+            ) from exc
+
     async def read_bytes(self, path: str) -> bytes:
-        await self.sandbox.ensure()
-        return await self.sandbox.read_bytes(self.resolve(path))
+        await self._ensure()
+        resolved = self.resolve(path)
+        try:
+            return await self.sandbox.read_bytes(resolved)
+        except (FileNotFoundError, IsADirectoryError, FsAccessError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - backend types live outside this package
+            from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+            raise FsAccessError(
+                f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox filesystem is unavailable."
+            ) from exc
 
     async def write_bytes(self, path: str, data: bytes) -> int:
-        await self.sandbox.ensure()
-        return await self.sandbox.write_bytes(self.resolve(path, write=True), data)
+        await self._ensure()
+        resolved = self.resolve(path, write=True)
+        try:
+            return await self.sandbox.write_bytes(resolved, data)
+        except (FileNotFoundError, IsADirectoryError, FsAccessError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - backend types live outside this package
+            from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+            raise FsAccessError(
+                f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox filesystem is unavailable."
+            ) from exc
 
     async def exists(self, path: str) -> bool:
-        await self.sandbox.ensure()
+        await self._ensure()
         resolved = self.resolve(path)
         # **셸로 묻지 않는다.** 실제 세션(러너 HTTP 클라이언트·사용자 PC 커넥터)은
         # 둘 다 ``exists`` 를 1급으로 갖고 있고, 경로 해석을 루트를 아는 쪽에 맡긴다.
@@ -235,7 +318,16 @@ class RunnerFS:
         # ``stat -c`` 같은 리눅스 문법은 거기서 통하지도 않는다.
         native = getattr(self.sandbox, "exists", None)
         if callable(native):
-            return bool(await native(resolved))
+            try:
+                return bool(await native(resolved))
+            except (FileNotFoundError, IsADirectoryError, FsAccessError):
+                raise
+            except Exception as exc:  # noqa: BLE001 - backend types live outside this package
+                from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+                raise FsAccessError(
+                    f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox filesystem is unavailable."
+                ) from exc
         # 프로토콜의 필수 연산만 가진 세션 — 읽어 보는 것이 이식 가능한 유일한 길이다.
         try:
             await self.sandbox.read_bytes(resolved)
@@ -243,6 +335,14 @@ class RunnerFS:
             return False
         except IsADirectoryError:
             return True
+        except FsAccessError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - backend types live outside this package
+            from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+            raise FsAccessError(
+                f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox filesystem is unavailable."
+            ) from exc
         return True
 
     @asynccontextmanager
@@ -275,11 +375,20 @@ class RunnerFS:
         )
         from xgen_agent_runtime.tools.built_in import _search
 
-        await self.sandbox.ensure()
+        await self._ensure()
         roots = [sandbox_root(self.sandbox), *sandbox_extra_roots(self.sandbox)]
         payload = json.dumps(dict(req, roots=roots), ensure_ascii=False)
         source = Path(_search.__file__).read_text(encoding="utf-8")
-        result = await self.sandbox.exec(["python3", "-c", source, payload], timeout_s=60.0)
+        try:
+            result = await self.sandbox.exec(
+                ["python3", "-c", source, payload], timeout_s=60.0
+            )
+        except Exception as exc:  # noqa: BLE001 - backend types live outside this package
+            from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+            raise FsAccessError(
+                f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox filesystem is unavailable."
+            ) from exc
         if result.rc == 127:
             return {
                 "ok": False,
@@ -299,9 +408,9 @@ def tool_fs(context: Any) -> ToolFileSystem:
     """이 호출의 파일시스템 — **백엔드를 고르는 유일한 자리.**
 
     호스트가 ``ToolContext.fs`` 를 직접 주입했으면 그것을 쓴다. 아니면 실행
-    세션이 붙어 있는지로 정한다 — 붙어 있으면 러너, 아니면 로컬. 서버는 세션을
-    **언제나** 붙인다(러너가 죽어도 "미부착 세션" 이 온다 — None 이 아니다).
-    그래서 서버 턴이 로컬 파일시스템으로 조용히 떨어지는 길은 없다.
+    세션이 붙어 있으면 러너를 쓴다. 로컬 파일 접근은 호스트가 이 프로세스를 실행
+    대상으로 정확히 표시한 경우에만 허용한다. 어느 것도 아니면 실패 전용 포트를
+    돌려 serving host 파일시스템으로 조용히 떨어지지 않는다.
     """
     explicit = getattr(context, "fs", None)
     if explicit is not None:
@@ -310,4 +419,8 @@ def tool_fs(context: Any) -> ToolFileSystem:
     working_dir = str(getattr(context, "working_dir", "") or "")
     if sandbox is not None:
         return RunnerFS(sandbox, working_dir)
-    return LocalFS(working_dir, getattr(context, "allowed_paths", None))
+    from xgen_agent_runtime.tools.base import host_is_execution_target
+
+    if host_is_execution_target(context):
+        return LocalFS(working_dir, getattr(context, "allowed_paths", None))
+    return UnavailableFS()

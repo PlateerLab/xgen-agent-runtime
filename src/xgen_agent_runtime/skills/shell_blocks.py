@@ -216,6 +216,7 @@ async def execute_blocks(
     timeout_s: float = 30.0,
     trust_shell: bool = True,
     sandbox: Optional[Any] = None,
+    allow_host_execution: bool = False,
 ) -> ShellRunSummary:
     r"""Find every shell block in ``body``, execute it, and return the
     body with blocks replaced by their captured output.
@@ -236,6 +237,8 @@ async def execute_blocks(
             replaced with a clear marker. Hosts pass ``False`` for
             MCP-sourced skills and any other skill whose body comes
             from an untrusted remote.
+        allow_host_execution: Trusted host-code opt-in for local execution when
+            no sandbox is attached. Only the exact boolean ``True`` enables it.
 
     Returns:
         :class:`ShellRunSummary` with the rendered body + per-block
@@ -280,12 +283,20 @@ async def execute_blocks(
                     ShellRunOutcome(block=b, exit_code=-1, stdout="", stderr="", timed_out=True)
                 )
             except Exception as exc:  # noqa: BLE001
+                from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
                 outcomes.append(
                     ShellRunOutcome(
-                        block=b, exit_code=-1, stdout="", stderr=f"sandbox exec failed: {exc}"
+                        block=b,
+                        exit_code=-1,
+                        stdout="",
+                        stderr=(
+                            f"{EXECUTION_BACKEND_UNAVAILABLE}: sandbox exec failed "
+                            f"({type(exc).__name__})"
+                        ),
                     )
                 )
-    else:
+    elif allow_host_execution is True:
         loop = asyncio.get_running_loop()
         for b in blocks:
             outcome = await loop.run_in_executor(
@@ -299,6 +310,23 @@ async def execute_blocks(
                 ),
             )
             outcomes.append(outcome)
+    else:
+        from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
+
+        for b in blocks:
+            outcomes.append(
+                ShellRunOutcome(
+                    block=b,
+                    exit_code=-1,
+                    stdout="",
+                    stderr="",
+                    skipped=True,
+                    skipped_reason=(
+                        f"{EXECUTION_BACKEND_UNAVAILABLE}: no sandbox or "
+                        "trusted-local execution context"
+                    ),
+                )
+            )
 
     rendered = _splice(body, outcomes)
     any_failed = any((not o.skipped) and (o.exit_code != 0 or o.timed_out) for o in outcomes)

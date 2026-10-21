@@ -266,6 +266,10 @@ class SkillTool(Tool):
             execute_blocks,
             is_trusted_source,
         )
+        from xgen_agent_runtime.tools.base import (
+            EXECUTION_BACKEND_UNAVAILABLE,
+            host_is_execution_target,
+        )
 
         trusted = is_trusted_source(self._skill.source, self._skill.metadata.extras)
         shell_summary = await execute_blocks(
@@ -278,8 +282,14 @@ class SkillTool(Tool):
             # Route skill shell blocks into the agent's sandbox session (not
             # the serving pod) when one is attached.
             sandbox=context.sandbox,
+            allow_host_execution=host_is_execution_target(context),
         )
         body = shell_summary.rendered_body
+        backend_unavailable = any(
+            EXECUTION_BACKEND_UNAVAILABLE
+            in f"{outcome.skipped_reason or ''}\n{outcome.stderr}"
+            for outcome in shell_summary.outcomes
+        )
 
         header_lines = [
             f"Skill invoked: {self._skill.name} ({self._skill.id})",
@@ -317,7 +327,7 @@ class SkillTool(Tool):
             if failed:
                 parts.append(f"{failed} failed")
             if skipped:
-                parts.append(f"{skipped} skipped (untrusted source)")
+                parts.append(f"{skipped} skipped")
             header_lines.append(f"shell blocks: {', '.join(parts)}")
 
         header = "\n".join(header_lines)
@@ -335,6 +345,7 @@ class SkillTool(Tool):
 
         return ToolResult(
             content=content,
+            is_error=backend_unavailable,
             metadata={
                 "skill_id": self._skill.id,
                 "skill_name": self._skill.name,
@@ -352,6 +363,7 @@ class SkillTool(Tool):
                     for o in shell_summary.outcomes
                     if (not o.skipped) and (o.exit_code != 0 or o.timed_out)
                 ),
+                "execution_backend_unavailable": backend_unavailable,
                 "skill_context": {
                     "session_id": skill_ctx.session_id,
                     "parent_tool_use_id": skill_ctx.parent_tool_use_id,

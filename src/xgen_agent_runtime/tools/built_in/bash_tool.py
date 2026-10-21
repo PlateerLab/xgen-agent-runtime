@@ -13,11 +13,12 @@ import sys
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import (
-    HOST_IS_EXECUTION_TARGET,
     Tool,
     ToolCapabilities,
     ToolContext,
     ToolResult,
+    execution_backend_unavailable,
+    host_is_execution_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -1173,7 +1174,8 @@ class BashTool(Tool):
             except asyncio.TimeoutError:
                 return ToolResult(content=f"Command timed out after {timeout_ms}ms", is_error=True)
             except Exception as e:  # noqa: BLE001
-                return ToolResult(content=f"Sandbox exec failed: {e}", is_error=True)
+                logger.error("Bash sandbox backend unavailable (%s)", type(e).__name__)
+                return execution_backend_unavailable("Bash")
             return await _finish_result(
                 stdout=stdout,
                 stderr=stderr,
@@ -1187,8 +1189,9 @@ class BashTool(Tool):
         #
         #   (a) The host IS the execution target: the desktop connector's local
         #       turn runs on the user's own PC, where "no sandbox" is the whole
-        #       point (path guard = allowed_paths). Hosts say so by setting
-        #       ``extras[HOST_IS_EXECUTION_TARGET]``.
+        #       point. This is full host shell authority; ``allowed_paths`` only
+        #       fences file-tool adapters. Hosts say so by setting
+        #       ``extras[HOST_IS_EXECUTION_TARGET] is True``.
         #   (b) Anything else: a serving pod that was supposed to have a runner
         #       session. The command then quietly touches the pod and the files
         #       vanish with it — that must never pass silently.
@@ -1196,15 +1199,12 @@ class BashTool(Tool):
         # Warning on (a) too would be a false alarm every single local turn, and
         # it told the reader to go "check sandbox propagation" for something that
         # is working exactly as designed.
-        if context.extras.get(HOST_IS_EXECUTION_TARGET):
-            logger.debug("Bash executing on the host (local run — no sandbox by design)")
-        else:
-            logger.warning(
-                "Bash executing on the HOST (no sandbox attached to ToolContext); "
-                "command will run on the serving pod, not in an isolated session. "
-                "This is a degraded path — check that the agent's sandbox session "
-                "is being propagated into the tool dispatch context."
+        if not host_is_execution_target(context):
+            logger.error(
+                "Bash refused host execution: no sandbox and no explicit trusted-local marker"
             )
+            return execution_backend_unavailable("Bash")
+        logger.debug("Bash executing on the host (local run — no sandbox by design)")
         cwd = context.working_dir or None
 
         # Build a SCRUBBED environment (audit S3): a benign base +

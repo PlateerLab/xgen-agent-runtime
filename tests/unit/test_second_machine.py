@@ -66,6 +66,7 @@ def test_the_model_actually_receives_the_note_in_a_real_turn(tmp_path):
     from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
     from xgen_agent_runtime.tools.base import ToolContext
     from xgen_agent_runtime.tools.built_in.read_tool import ReadTool
+    from xgen_agent_runtime.tools.fs import LocalFS
 
     class _NoArgs(BaseModel):
         pass
@@ -98,7 +99,11 @@ def test_the_model_actually_receives_the_note_in_a_real_turn(tmp_path):
     pipe = runner.build_pipeline(
         name="t", provider="openai", model="m", api_key="k", llm_client=client, stream=False,
         enable_compaction=False, registry=reg, max_iterations=5, turn_input_budget_tokens=None,
-        tool_context=ToolContext(session_id="t", working_dir=str(tmp_path)),
+        tool_context=ToolContext(
+            session_id="t",
+            working_dir=str(tmp_path),
+            fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+        ),
     )
     runner.run_turn(pipe, "dex_note_0926.md 첫 줄?", PipelineState(session_id="t", model="m"))
     seen = str(client.requests[1].messages[-1])
