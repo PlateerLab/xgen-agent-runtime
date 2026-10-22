@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 from xgen_agent_runtime.tools.built_in import (
     BUILT_IN_TOOL_CLASSES,
     EnterWorktreeTool,
@@ -48,7 +48,9 @@ class TestEnter:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         result = await EnterWorktreeTool().execute(
             {"branch": "feature-x", "base": "main"}, ctx,
         )
@@ -62,7 +64,9 @@ class TestEnter:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         await EnterWorktreeTool().execute({"branch": "a", "base": "main"}, ctx)
         await EnterWorktreeTool().execute({"branch": "b", "base": "main"}, ctx)
         stack = ctx.extras["worktree_stack"]
@@ -71,7 +75,9 @@ class TestEnter:
 
     @pytest.mark.asyncio
     async def test_not_a_git_repo(self, tmp_path: Path):
-        ctx = ToolContext(working_dir=str(tmp_path), extras={})
+        ctx = ToolContext(
+            working_dir=str(tmp_path), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         result = await EnterWorktreeTool().execute({"branch": "x"}, ctx)
         assert result.is_error is True
         assert result.content["error"]["code"] == "NOT_A_GIT_REPO"
@@ -81,7 +87,9 @@ class TestEnter:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         # Worktree to a path that already has a non-empty dir → git fails.
         existing = repo / "blocker"
         existing.mkdir()
@@ -102,7 +110,9 @@ class TestExit:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         await EnterWorktreeTool().execute({"branch": "x", "base": "main"}, ctx)
         result = await ExitWorktreeTool().execute({}, ctx)
         assert result.is_error is False
@@ -116,7 +126,9 @@ class TestExit:
         repo = tmp_path / "repo"
         repo.mkdir()
         _git_init(repo)
-        ctx = ToolContext(working_dir=str(repo), extras={})
+        ctx = ToolContext(
+            working_dir=str(repo), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         await EnterWorktreeTool().execute({"branch": "x", "base": "main"}, ctx)
         result = await ExitWorktreeTool().execute({"remove": True}, ctx)
         assert result.is_error is False
@@ -124,7 +136,9 @@ class TestExit:
 
     @pytest.mark.asyncio
     async def test_empty_stack(self, tmp_path: Path):
-        ctx = ToolContext(working_dir=str(tmp_path), extras={})
+        ctx = ToolContext(
+            working_dir=str(tmp_path), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         result = await ExitWorktreeTool().execute({}, ctx)
         assert result.is_error is True
         assert result.content["error"]["code"] == "NO_WORKTREE"

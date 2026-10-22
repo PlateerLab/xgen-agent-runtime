@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from xgen_agent_runtime.core.schema import ConfigField, ConfigSchema
 from xgen_agent_runtime.tools.base import ToolCapabilities, ToolContext
 from xgen_agent_runtime.tools.registry import ToolRegistry
+from xgen_agent_runtime.permission.approval import canonical_digest
 from xgen_agent_runtime.stages.s10_tool.interface import (
     ToolEventCallback,
     ToolExecutor,
@@ -25,6 +26,8 @@ def _apply_state_mutations_via_ctx(result, tc: Dict[str, Any], context: ToolCont
     (e.g. a test harness using an executor without ToolStage), mutations
     are silently discarded — the sink is optional.
     """
+    if context.cancellation_scope is not None:
+        context.cancellation_scope.check()
     if getattr(result, "is_error", False):
         return
     if not getattr(result, "state_mutations", None):
@@ -108,7 +111,10 @@ def _emit_call_start(
     on_event: Optional[ToolEventCallback],
     tc: Dict[str, Any],
     registry: Optional[ToolRegistry] = None,
+    context: Optional[ToolContext] = None,
 ) -> None:
+    if context is not None and context.cancellation_scope is not None:
+        context.cancellation_scope.check()
     if on_event is None:
         return
     on_event(
@@ -116,7 +122,11 @@ def _emit_call_start(
         {
             "tool_use_id": tc.get("tool_use_id", ""),
             "name": tc.get("tool_name", ""),
-            "input": tc.get("tool_input", {}),
+            "input": (
+                {"args_digest": canonical_digest(tc.get("tool_input", {}))}
+                if context is not None and context.redact_tool_events
+                else tc.get("tool_input", {})
+            ),
             **_tool_facts(registry, tc),
         },
     )
@@ -180,7 +190,10 @@ def _emit_call_complete(
     result_dict: Dict[str, Any],
     duration_ms: int,
     registry: Optional[ToolRegistry] = None,
+    context: Optional[ToolContext] = None,
 ) -> None:
+    if context is not None and context.cancellation_scope is not None:
+        context.cancellation_scope.check()
     if on_event is None:
         return
     is_error = bool(result_dict.get("is_error"))
@@ -236,7 +249,7 @@ class SequentialExecutor(ToolExecutor):
         registry = _router_registry(router)
         results = []
         for tc in tool_calls:
-            _emit_call_start(on_event, tc, registry)
+            _emit_call_start(on_event, tc, registry, context)
             t0 = time.monotonic()
             result = await router.route(
                 tc["tool_name"],
@@ -254,7 +267,7 @@ class SequentialExecutor(ToolExecutor):
             )
             _apply_state_mutations_via_ctx(result, tc, context)
             result_dict = result.to_api_format(tc["tool_use_id"])
-            _emit_call_complete(on_event, tc, result_dict, duration_ms, registry)
+            _emit_call_complete(on_event, tc, result_dict, duration_ms, registry, context)
             results.append(result_dict)
         return results
 
@@ -326,7 +339,7 @@ class ParallelExecutor(ToolExecutor):
 
         async def _execute_one(tc: Dict[str, Any]) -> Dict[str, Any]:
             async with semaphore:
-                _emit_call_start(on_event, tc, registry)
+                _emit_call_start(on_event, tc, registry, context)
                 t0 = time.monotonic()
                 result = await router.route(
                     tc["tool_name"],
@@ -344,7 +357,7 @@ class ParallelExecutor(ToolExecutor):
                 )
                 _apply_state_mutations_via_ctx(result, tc, context)
                 result_dict = result.to_api_format(tc["tool_use_id"])
-                _emit_call_complete(on_event, tc, result_dict, duration_ms, registry)
+                _emit_call_complete(on_event, tc, result_dict, duration_ms, registry, context)
                 return result_dict
 
         tasks = [_execute_one(tc) for tc in tool_calls]
@@ -454,7 +467,7 @@ class PartitionExecutor(ToolExecutor):
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def _run_one(tc: Dict[str, Any]) -> Dict[str, Any]:
-            _emit_call_start(on_event, tc, self._registry)
+            _emit_call_start(on_event, tc, self._registry, context)
             t0 = time.monotonic()
             result = await router.route(
                 tc["tool_name"],
@@ -472,7 +485,7 @@ class PartitionExecutor(ToolExecutor):
             )
             _apply_state_mutations_via_ctx(result, tc, context)
             result_dict = result.to_api_format(tc["tool_use_id"])
-            _emit_call_complete(on_event, tc, result_dict, duration_ms, self._registry)
+            _emit_call_complete(on_event, tc, result_dict, duration_ms, self._registry, context)
             return result_dict
 
         async def _run_bounded(tc: Dict[str, Any]) -> Dict[str, Any]:

@@ -23,6 +23,7 @@ from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import _resul
 from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
 from xgen_agent_runtime.tools.built_in.read_tool import MODEL_VISION_KEY, ReadTool
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 class _Session:
@@ -58,7 +59,13 @@ def _png(size=(64, 32), color="red") -> bytes:
 def _ctx(root: Path, backend: str, vision: bool) -> ToolContext:
     meta = {MODEL_VISION_KEY: True} if vision else {}
     if backend == "local":
-        return ToolContext(session_id="t", working_dir=str(root), allowed_paths=[str(root)], metadata=meta)
+        return ToolContext(
+            session_id="t",
+            working_dir=str(root),
+            allowed_paths=[str(root)],
+            metadata=meta,
+            fs=LocalFS(str(root), [str(root)]),
+        )
     return ToolContext(session_id="t", working_dir=str(root), sandbox=_Session(root), metadata=meta)
 
 

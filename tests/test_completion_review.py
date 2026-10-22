@@ -24,6 +24,7 @@ from xgen_agent_runtime.stages.s16_loop.completion_review import (
     is_problem,
 )
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.fs import LocalFS
 from xgen_agent_runtime.tools.registry import ToolRegistry
 
 # ── 주장한 경로 ────────────────────────────────────────────────────────
@@ -89,7 +90,11 @@ def test_describe_file_states_missing_csv_json_and_text() -> None:
 
 
 def _local_reviewer(tmp: Path) -> DeliverableReviewer:
-    ctx = ToolContext(working_dir=str(tmp), allowed_paths=[str(tmp)])
+    ctx = ToolContext(
+        working_dir=str(tmp),
+        allowed_paths=[str(tmp)],
+        fs=LocalFS(str(tmp), [str(tmp)]),
+    )
     return DeliverableReviewer(lambda: ctx)
 
 
@@ -147,7 +152,14 @@ def test_reviewer_is_silent_when_every_claimed_file_is_sound(tmp_path: Path) -> 
     assert asyncio.run(_local_reviewer(tmp_path).review(state)) is None
     assert REVIEW_KEY not in state.shared  # 다음 완료 시점에 다시 볼 수 있다
 
-    always = DeliverableReviewer(lambda: ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)]), mode="always")
+    always = DeliverableReviewer(
+        lambda: ToolContext(
+            working_dir=str(tmp_path),
+            allowed_paths=[str(tmp_path)],
+            fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+        ),
+        mode="always",
+    )
     note = asyncio.run(always.review(state))
     assert note and "- out/audit.csv — 2 lines" in note and "- out/s.json — valid JSON object" in note
 
@@ -213,6 +225,21 @@ def test_reviewer_reads_through_the_sandbox() -> None:
     note = asyncio.run(DeliverableReviewer(lambda: ctx).review(state))
     assert note and "- out/rows.csv — " in note and "ragged rows" in note
     assert "(1 other claimed file exist" in note and "summary.json —" not in note
+
+
+def test_reviewer_reads_an_explicit_virtual_file_port() -> None:
+    class _VirtualFS:
+        kind = "virtual"
+
+        async def read_bytes(self, path):
+            if path == "out/rows.csv":
+                return b"a,b\n1\n2,3,4\n"
+            raise FileNotFoundError(path)
+
+    ctx = ToolContext(fs=_VirtualFS())
+    state = _state_with("out/rows.csv 완료")
+    note = asyncio.run(DeliverableReviewer(lambda: ctx).review(state))
+    assert note and "ragged rows" in note
 
 
 # ── 파이프라인 끝까지: 완료를 한 번 미루고, 고친 뒤 끝난다 ──────────────
@@ -293,7 +320,11 @@ def test_pipeline_defers_completion_once_and_shows_the_digest(tmp_path: Path) ->
     reg = ToolRegistry()
     reg.register(_Write(tmp_path), core=True)
     client = _Client(api_key="k")
-    ctx = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    ctx = ToolContext(
+        working_dir=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
     pipe = runner.build_pipeline(
         name="t", provider="openai", model="m", api_key="k", llm_client=client,
         stream=False, enable_compaction=False, registry=reg, tool_context=ctx,
@@ -322,7 +353,11 @@ def test_pipeline_does_not_add_a_round_trip_when_the_written_file_is_sound(tmp_p
     reg = ToolRegistry()
     reg.register(_Write(tmp_path), core=True)
     client = _Sound(api_key="k")
-    ctx = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    ctx = ToolContext(
+        working_dir=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
     pipe = runner.build_pipeline(name="t", provider="openai", model="m", api_key="k", llm_client=client,
                                  stream=False, enable_compaction=False, registry=reg, tool_context=ctx)
     runner.run_turn(pipe, "3행짜리 out/audit.csv 를 내라", PipelineState(session_id="s", model="m"))
@@ -343,7 +378,11 @@ def test_pipeline_without_claimed_files_or_with_review_off_does_not_add_a_round_
             return APIResponse(content=[ContentBlock(type="text", text="파일 없이 답합니다.")],
                                stop_reason="end_turn", usage=TokenUsage(input_tokens=1, output_tokens=1), model="fake")
 
-    ctx = ToolContext(working_dir=str(tmp_path), allowed_paths=[str(tmp_path)])
+    ctx = ToolContext(
+        working_dir=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
     for review in (True, False):
         client = _Plain(api_key="k")
         pipe = runner.build_pipeline(

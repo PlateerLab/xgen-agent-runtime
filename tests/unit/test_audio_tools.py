@@ -30,6 +30,7 @@ from xgen_agent_runtime.tools.built_in.audio_tools import (
     AudioListFilesTool,
     AudioTranscribeTool,
 )
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 class FakeSTT:
@@ -77,6 +78,7 @@ def _ctx(tmp_path, provider: str = "fake-test") -> ToolContext:
         storage_path=str(tmp_path),
         allowed_paths=[str(ws)],
         extras={"stt": {"provider": provider, "api_url": "http://stt.local", "model": "m"}},
+        fs=LocalFS(str(ws), [str(ws)]),
     )
 
 
@@ -91,6 +93,27 @@ def _mk_audio(ctx: ToolContext, name: str = "회의록.wav", content: bytes = b"
 
 def _run(tool, input, ctx):
     return asyncio.run(tool.execute(input, ctx))
+
+
+class _Sandbox:
+    workdir = "/workspace"
+    extra_roots: list = []
+    readonly_roots: list = []
+
+    def __init__(self, files=None):
+        self.files = dict(files or {})
+
+    async def ensure(self):
+        return None
+
+    async def read_bytes(self, path):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_bytes(self, path, data):
+        self.files[path] = data
+        return len(data)
 
 
 # ── gate ──────────────────────────────────────────────────────────────
@@ -134,6 +157,55 @@ def test_transcribe_writes_sidecar_and_returns_text(tmp_path):
     assert data["text"] == "안녕하세요 테스트입니다"
     assert data["provider"] == "fake/stt-test"
     assert len(data["source_sha256"]) == 64
+
+
+def test_transcribe_reads_and_commits_through_an_attached_sandbox():
+    sb = _Sandbox({"/workspace/voice.wav": b"RIFFsandbox"})
+    ctx = ToolContext(
+        session_id="s",
+        working_dir=sb.workdir,
+        sandbox=sb,
+        extras={"stt": {"provider": "fake-test", "api_url": "http://stt.local"}},
+    )
+
+    result = _run(AudioTranscribeTool(), {"file_path": "voice.wav"}, ctx)
+
+    assert not result.is_error
+    assert FakeSTT.calls == 1
+    assert "/workspace/voice.wav.transcript.json" in sb.files
+
+
+def test_missing_backend_refuses_before_read_or_stt(tmp_path):
+    ctx = ToolContext(
+        working_dir=str(tmp_path),
+        extras={"stt": {"provider": "fake-test", "api_url": "http://stt.local"}},
+    )
+
+    result = _run(AudioTranscribeTool(), {"file_path": "voice.wav"}, ctx)
+
+    assert result.is_error
+    assert result.content["error"]["code"] == "EXECUTION_BACKEND_UNAVAILABLE"
+    assert FakeSTT.calls == 0
+
+
+def test_unavailable_sandbox_refuses_without_exposing_backend_detail():
+    class _Broken(_Sandbox):
+        async def read_bytes(self, path):
+            raise RuntimeError("CANARY_AUDIO_BACKEND_SECRET")
+
+    sandbox = _Broken()
+    ctx = ToolContext(
+        working_dir=sandbox.workdir,
+        sandbox=sandbox,
+        extras={"stt": {"provider": "fake-test", "api_url": "http://stt.local"}},
+    )
+
+    result = _run(AudioTranscribeTool(), {"file_path": "voice.wav"}, ctx)
+
+    assert result.is_error
+    assert result.content["error"]["code"] == "EXECUTION_BACKEND_UNAVAILABLE"
+    assert "CANARY_AUDIO_BACKEND_SECRET" not in str(result.content)
+    assert FakeSTT.calls == 0
 
 
 def test_sidecar_cache_prevents_repeat_stt_calls(tmp_path):
@@ -456,6 +528,23 @@ def test_list_prunes_heavy_dirs_and_reports_truncation(tmp_path):
         _mk_audio(ctx, f"많음/f{i:03d}.wav")
     res2 = _run(AudioListFilesTool(), {}, ctx)
     assert "truncated at 200" in res2.content, "silent truncation forbidden"
+
+
+def test_list_uses_metadata_without_materializing_audio(tmp_path):
+    ctx = _ctx(tmp_path)
+    _mk_audio(ctx, "large.wav")
+
+    class MetadataOnly(LocalFS):
+        def materialize(self, path):
+            raise AssertionError("listing must not transfer audio bytes")
+
+        async def read_bytes(self, path):
+            raise AssertionError("listing must not read audio bytes")
+
+    ctx.fs = MetadataOnly(ctx.working_dir, ctx.allowed_paths)
+    result = _run(AudioListFilesTool(), {}, ctx)
+    assert not result.is_error
+    assert "large.wav" in result.content
 
 
 def test_mp4_no_longer_advertised(tmp_path):

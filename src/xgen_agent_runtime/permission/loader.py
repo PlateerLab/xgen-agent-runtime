@@ -93,6 +93,7 @@ def parse_permission_rules(
                     behavior=behavior,
                     source=source,
                     reason=reason,
+                    mandatory=entry.get("mandatory") is True,
                 )
             )
     return out

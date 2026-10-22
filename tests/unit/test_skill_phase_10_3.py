@@ -15,7 +15,7 @@ from xgen_agent_runtime.skills.shell_blocks import (
 )
 from xgen_agent_runtime.skills.skill_tool import SkillTool, _render_body
 from xgen_agent_runtime.skills.types import Skill, SkillMetadata
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 
 
 HAS_BASH = shutil.which("bash") is not None
@@ -26,6 +26,7 @@ def _ctx(working_dir: str = "") -> ToolContext:
         session_id="s",
         working_dir=working_dir,
         permission_rules=[],
+        extras={HOST_IS_EXECUTION_TARGET: True},
     )
 
 
@@ -105,7 +106,7 @@ def test_parse_ignores_inline_with_newline() -> None:
 @pytest.mark.asyncio
 async def test_execute_fenced_block_substitutes_stdout() -> None:
     body = "before\n```!\necho hello\n```\nafter\n"
-    summary = await execute_blocks(body)
+    summary = await execute_blocks(body, allow_host_execution=True)
     assert "hello" in summary.rendered_body
     assert "```!" not in summary.rendered_body
     assert summary.any_failed is False
@@ -115,7 +116,7 @@ async def test_execute_fenced_block_substitutes_stdout() -> None:
 @pytest.mark.asyncio
 async def test_execute_inline_block_substitutes_stdout() -> None:
     body = "the word is !`echo magic` today\n"
-    summary = await execute_blocks(body)
+    summary = await execute_blocks(body, allow_host_execution=True)
     assert "the word is magic today" in summary.rendered_body
 
 
@@ -123,7 +124,7 @@ async def test_execute_inline_block_substitutes_stdout() -> None:
 @pytest.mark.asyncio
 async def test_execute_failed_block_includes_exit_code() -> None:
     body = "```!\nexit 42\n```\n"
-    summary = await execute_blocks(body)
+    summary = await execute_blocks(body, allow_host_execution=True)
     assert "exit=42" in summary.rendered_body
     assert summary.any_failed is True
 
@@ -132,7 +133,7 @@ async def test_execute_failed_block_includes_exit_code() -> None:
 @pytest.mark.asyncio
 async def test_execute_failed_block_includes_stderr_when_present() -> None:
     body = "```!\nls /nonexistent_path_xyz_123\n```\n"
-    summary = await execute_blocks(body)
+    summary = await execute_blocks(body, allow_host_execution=True)
     assert summary.any_failed is True
     # bash + ls writes to stderr; either the message or the exit
     # marker should land in the rendered body.
@@ -143,7 +144,7 @@ async def test_execute_failed_block_includes_stderr_when_present() -> None:
 @pytest.mark.asyncio
 async def test_execute_timeout_marker() -> None:
     body = "```!\nsleep 5\n```\n"
-    summary = await execute_blocks(body, timeout_s=0.5)
+    summary = await execute_blocks(body, timeout_s=0.5, allow_host_execution=True)
     assert "[shell timed out" in summary.rendered_body
     assert summary.any_failed is True
 
@@ -152,7 +153,7 @@ async def test_execute_timeout_marker() -> None:
 @pytest.mark.asyncio
 async def test_execute_uses_cwd(tmp_path: Path) -> None:
     body = "```!\npwd\n```\n"
-    summary = await execute_blocks(body, cwd=str(tmp_path))
+    summary = await execute_blocks(body, cwd=str(tmp_path), allow_host_execution=True)
     assert str(tmp_path) in summary.rendered_body
 
 
@@ -160,7 +161,9 @@ async def test_execute_uses_cwd(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_execute_uses_env_overlay() -> None:
     body = '```!\necho "$GENY_TEST_VAR"\n```\n'
-    summary = await execute_blocks(body, env={"GENY_TEST_VAR": "from-overlay"})
+    summary = await execute_blocks(
+        body, env={"GENY_TEST_VAR": "from-overlay"}, allow_host_execution=True
+    )
     assert "from-overlay" in summary.rendered_body
 
 
@@ -170,6 +173,15 @@ async def test_execute_skips_when_trust_false() -> None:
     summary = await execute_blocks(body, trust_shell=False)
     assert "[shell skipped" in summary.rendered_body
     assert "danger" not in summary.rendered_body
+    assert summary.any_skipped is True
+
+
+@pytest.mark.asyncio
+async def test_execute_skips_without_an_execution_backend() -> None:
+    body = "```!\necho should-not-run\n```\n"
+    summary = await execute_blocks(body)
+    assert "EXECUTION_BACKEND_UNAVAILABLE" in summary.rendered_body
+    assert "should-not-run" not in summary.rendered_body
     assert summary.any_skipped is True
 
 
@@ -329,6 +341,24 @@ async def test_skill_tool_strips_shell_for_mcp_skill() -> None:
     assert "[shell skipped" in res.content
     assert res.metadata["shell_blocks_skipped"] == 1
     assert res.metadata["shell_blocks_run"] == 0
+
+
+@pytest.mark.asyncio
+async def test_skill_tool_fails_when_trusted_shell_has_no_backend() -> None:
+    skill = Skill(
+        id="local__missing_backend",
+        metadata=SkillMetadata(name="x", description="x"),
+        body="```!\necho should-not-run\n```\n",
+        source=Path("/trusted/SKILL.md"),
+    )
+    result = await SkillTool(skill).execute(
+        {"args": {}}, ToolContext(session_id="s", extras={})
+    )
+
+    assert result.is_error is True
+    assert "EXECUTION_BACKEND_UNAVAILABLE" in result.content
+    assert "should-not-run" not in result.content
+    assert result.metadata["execution_backend_unavailable"] is True
 
 
 @pytest.mark.skipif(not HAS_BASH, reason="bash not available")

@@ -135,7 +135,7 @@ Cutting a release is a single step — bump the version and merge:
 1. In your PR, bump `version` in `pyproject.toml` (e.g. `4.0.0` → `4.0.1`).
 2. Merge to `main`.
 
-Once `main`'s CI (lint/type-check/test/security-audit/build) is green, the `auto-tag` job reads the new version straight out of `pyproject.toml`. If a matching `vX.Y.Z` tag doesn't exist yet, it creates and pushes one — which in turn triggers [`release.yml`](.github/workflows/release.yml) to build the wheel/sdist and publish them as a GitHub Release. No one has to remember to run `git tag` by hand anymore (that manual step is exactly how [v4.0.1 briefly landed on `main` with no release at all](https://github.com/PlateerLab/xgen-agent-runtime/compare/v4.0.0...v4.0.1) — merged, but never actually shipped).
+Once `main`'s CI (lint/type-check/test/security-audit/build) is green, the `auto-tag` job reads the new version straight out of `pyproject.toml`. If a matching `vX.Y.Z` tag doesn't exist yet, it creates and pushes one, then explicitly dispatches [`release.yml`](.github/workflows/release.yml) for that tag to build the wheel/sdist and publish them as a GitHub Release. No one has to remember to run `git tag` by hand anymore (that manual step is exactly how [v4.0.1 briefly landed on `main` with no release at all](https://github.com/PlateerLab/xgen-agent-runtime/compare/v4.0.0...v4.0.1) — merged, but never actually shipped).
 
 If you ever do need to cut a release without a version bump (e.g. re-running a failed build), trigger [`release.yml`](.github/workflows/release.yml) manually via `workflow_dispatch`, or push a `vX.Y.Z` tag by hand — both still work.
 

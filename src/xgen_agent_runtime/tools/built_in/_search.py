@@ -69,17 +69,23 @@ def glob_files(req):
     for m in matches:
         try:
             if m.is_file() and _inside(m, roots):
-                files.append((m.stat().st_mtime, str(m)))
+                stat = m.stat()
+                files.append((stat.st_mtime, str(m), stat.st_size))
         except OSError:
             continue
     if not files:
         return {"ok": True, "text": "No files matching '%s' in %s" % (pattern, base)}
     files.sort(reverse=True)  # 최근 수정 순
-    shown = [p for _, p in files[:GLOB_MAX_RESULTS]]
+    shown = [p for _, p, _ in files[:GLOB_MAX_RESULTS]]
     text = "\n".join(shown)
     if len(files) > GLOB_MAX_RESULTS:
         text += "\n\n... (showing %d of %d matches)" % (GLOB_MAX_RESULTS, len(files))
-    return {"ok": True, "text": _cap(text)}
+    result = {"ok": True, "text": _cap(text)}
+    if req.get("include_metadata") is True:
+        result["files"] = [
+            {"path": p, "size_bytes": size} for _, p, size in files[:GLOB_MAX_RESULTS]
+        ]
+    return result
 
 
 def grep_files(req):

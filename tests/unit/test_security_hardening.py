@@ -58,10 +58,12 @@ class TestBashEnvScrub:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-should-not-leak")
         monkeypatch.setenv("GENY_AUTH_SECRET", "top-secret")
         from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
-        from xgen_agent_runtime.tools.base import ToolContext
+        from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 
         tool = BashTool()
-        ctx = ToolContext(working_dir=str(tmp_path))
+        ctx = ToolContext(
+            working_dir=str(tmp_path), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
         res = await tool.execute({"command": "env"}, ctx)
         assert "sk-secret-should-not-leak" not in res.content
         assert "top-secret" not in res.content
@@ -72,10 +74,14 @@ class TestBashEnvScrub:
     @pytest.mark.asyncio
     async def test_inject_env_reaches_shell(self, monkeypatch, tmp_path):
         from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
-        from xgen_agent_runtime.tools.base import ToolContext
+        from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 
         tool = BashTool()
-        ctx = ToolContext(working_dir=str(tmp_path), env_vars={"MY_VAR": "injected"})
+        ctx = ToolContext(
+            working_dir=str(tmp_path),
+            env_vars={"MY_VAR": "injected"},
+            extras={HOST_IS_EXECUTION_TARGET: True},
+        )
         res = await tool.execute({"command": "echo $MY_VAR"}, ctx)
         assert "injected" in res.content
 
@@ -84,11 +90,14 @@ class TestBashEnvScrub:
         monkeypatch.setenv("GENY_BASH_INHERIT_ENV", "1")
         monkeypatch.setenv("SOME_HOST_VAR", "visible-when-opted-in")
         from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
-        from xgen_agent_runtime.tools.base import ToolContext
+        from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 
         tool = BashTool()
         res = await tool.execute(
-            {"command": "echo $SOME_HOST_VAR"}, ToolContext(working_dir=str(tmp_path))
+            {"command": "echo $SOME_HOST_VAR"},
+            ToolContext(
+                working_dir=str(tmp_path), extras={HOST_IS_EXECUTION_TARGET: True}
+            ),
         )
         assert "visible-when-opted-in" in res.content
 

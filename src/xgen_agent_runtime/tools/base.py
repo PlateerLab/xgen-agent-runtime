@@ -66,6 +66,7 @@ class ToolCapabilities:
     interrupt: str = "block"
     max_result_chars: int = 100_000
     timeout_s: float = 0.0
+    mandatory_approval: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,11 +92,30 @@ class PermissionDecision:
 
 #: ``ToolContext.extras`` key: this host **is** the execution target, so a
 #: missing ``sandbox`` is by design, not a lost runner session. The desktop
-#: connector's local turn sets it — there the user's own PC is where work is
-#: supposed to land, and ``allowed_paths`` is the fence. Without this flag a
-#: missing sandbox means a serving pod lost its runner, which tools must
+#: connector's local turn sets it in host code — there the user's own PC is
+#: where work is supposed to land. File tools still apply ``allowed_paths``;
+#: shell/REPL access is full host code execution. Without this exact-``True``
+#: flag a missing sandbox means a serving pod lost its runner, which tools must
 #: surface loudly (files written there vanish with the pod).
 HOST_IS_EXECUTION_TARGET = "host_is_execution_target"
+
+#: Stable error code returned when a file/process operation has no explicitly
+#: authorised execution backend.  Keep this independent of any one host's
+#: sandbox exception type: hosts implement :class:`GenySandbox` out of tree.
+EXECUTION_BACKEND_UNAVAILABLE = "EXECUTION_BACKEND_UNAVAILABLE"
+
+
+def host_is_execution_target(context: Any) -> bool:
+    """Whether trusted host code explicitly selected local execution.
+
+    The marker is deliberately strict: only the singleton boolean ``True``
+    authorises host file/process access.  Truthy request strings, integers and
+    other model-controlled values must not turn a missing sandbox into host
+    execution.  Hosts set this on ``ToolContext.extras`` while constructing the
+    context; tools never derive it from their input payload.
+    """
+    extras = getattr(context, "extras", None)
+    return isinstance(extras, dict) and extras.get(HOST_IS_EXECUTION_TARGET) is True
 
 
 @dataclass
@@ -164,8 +184,9 @@ class ToolContext:
     # _geny_sandbox.GenySandbox``: ``workdir`` + async ``ensure``/``exec``/
     # ``read_bytes``/``write_bytes``). When set, the built-in fs/shell tools
     # (bash/read/write/edit/grep/glob/ls) do their I/O *there* instead of on
-    # this host. ``None`` (default) = host execution. Typed ``Any`` so this
-    # module stays free of the protocol import.
+    # this host. ``None`` means no sandbox backend; tools fail closed unless
+    # trusted host code explicitly selects local execution. Typed ``Any`` so
+    # this module stays free of the protocol import.
     sandbox: Optional[Any] = None
     # 파일시스템 포트(``tools.fs.ToolFileSystem``)를 호스트가 **직접** 정할 때만 채운다.
     # 비워 두면 ``tools.fs.tool_fs`` 가 ``sandbox`` 유무로 러너/로컬을 고른다 — 그 선택은
@@ -199,6 +220,15 @@ class ToolContext:
     # original result is used. ``None`` (default) = no filtering. Set by the
     # host through ``HostServices.tool_result_filter`` (see host/host.py).
     result_filter: Optional[Callable[["Tool", "ToolResult"], Awaitable["ToolResult"]]] = None
+    # Serving hosts bind verified identity, durable approval and one run ledger.
+    approval_context: Optional[Any] = None
+    approval_store: Optional[Any] = None
+    approval_timeout_s: float = 120.0
+    cancellation_scope: Optional[Any] = None
+    run_budget: Optional[Any] = None
+    result_filter_required: bool = False
+    enforce_external_results: bool = False
+    redact_tool_events: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -241,6 +271,7 @@ class ToolResult:
     artifacts: Dict[str, Any] = field(default_factory=dict)
     new_messages: List[Dict[str, Any]] = field(default_factory=list)
     mcp_meta: Optional[Dict[str, Any]] = None
+    provenance: Optional[Dict[str, Any]] = None
 
     def to_api_format(self, tool_use_id: str) -> Dict[str, Any]:
         """Convert to Anthropic API tool_result format.
@@ -294,6 +325,22 @@ class ToolResult:
             result["is_error"] = True
 
         return result
+
+
+def execution_backend_unavailable(operation: str = "execution") -> ToolResult:
+    """Return the common fail-closed result for an unauthorised backend."""
+    return ToolResult(
+        content={
+            "error": {
+                "code": EXECUTION_BACKEND_UNAVAILABLE,
+                "message": (
+                    f"{operation} requires an attached sandbox or an explicit "
+                    "trusted-local execution context."
+                ),
+            }
+        },
+        is_error=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────

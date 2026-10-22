@@ -301,8 +301,8 @@ class DeliverableReviewer:
     """주장한 산출물을 읽어 요약하고, 요청 조건과 대조하라고 한 번 돌려보낸다.
 
     ``context_getter`` 는 살아 있는 Stage-10 ``ToolContext`` 를 돌려준다 (세션이
-    나중에 붙어도 보이도록 매번 읽는다). ``sandbox`` 가 있으면 그 안에서, 없으면
-    ``working_dir``/``allowed_paths`` 기준 로컬 파일을 읽는다 — Read 도구와 같은 경로.
+    나중에 붙어도 보이도록 매번 읽는다). 파일은 ``tool_fs`` 포트를 통해 읽으며,
+    로컬 실행은 호스트가 명시한 경우에만 가능하다 — Read 도구와 같은 경로.
     """
 
     name = "deliverable"
@@ -326,23 +326,14 @@ class DeliverableReviewer:
 
     async def _read(self, ctx: Any, path: str) -> Optional[bytes]:
         """없으면 None. 허용 밖 경로·읽기 오류는 None 이 아니라 예외 → 호출자가 건너뜀."""
-        sandbox = getattr(ctx, "sandbox", None)
-        wd = str(getattr(ctx, "working_dir", "") or "")
-        if sandbox is not None:
-            from xgen_agent_runtime.tools._geny_sandbox import sb_read_bytes
+        from xgen_agent_runtime.tools.fs import tool_fs
 
-            try:
-                data = await sb_read_bytes(sandbox, path, workdir=wd or "/workspace")
-            except FileNotFoundError:
-                return None
-            return data[: self._max_read_bytes]
-        from xgen_agent_runtime.tools.built_in._path_guard import resolve_and_validate
-
-        resolved = resolve_and_validate(path, wd or ".", getattr(ctx, "allowed_paths", None))
-        if not resolved.is_file():
+        fs = tool_fs(ctx)
+        try:
+            data = await fs.read_bytes(path)
+        except FileNotFoundError:
             return None
-        with open(resolved, "rb") as fh:
-            return fh.read(self._max_read_bytes)
+        return data[: self._max_read_bytes]
 
     async def review(self, state: PipelineState) -> Optional[str]:
         marker = state.shared.get(REVIEW_KEY)

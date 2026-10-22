@@ -25,6 +25,7 @@ import pytest
 
 from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.fs import LocalFS
 from xgen_agent_runtime.tools.built_in.edit_tool import EditTool
 from xgen_agent_runtime.tools.built_in.read_tool import ReadTool
 from xgen_agent_runtime.tools.built_in.write_tool import WriteTool
@@ -78,7 +79,11 @@ def env(request, tmp_path) -> _Env:
     view = SimpleNamespace(shared=shared)
     if request.param == "local":
         ctx = ToolContext(
-            session_id="t", working_dir=str(root), allowed_paths=[str(root)], state_view=view
+            session_id="t",
+            working_dir=str(root),
+            allowed_paths=[str(root)],
+            state_view=view,
+            fs=LocalFS(str(root), [str(root)]),
         )
     else:
         ctx = ToolContext(

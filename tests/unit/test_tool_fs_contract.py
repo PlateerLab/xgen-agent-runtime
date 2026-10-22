@@ -14,12 +14,13 @@ from pathlib import Path
 import pytest
 
 from xgen_agent_runtime.tools._geny_sandbox import ExecResult
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.base import HOST_IS_EXECUTION_TARGET, ToolContext
 from xgen_agent_runtime.tools.fs import (
     FsAccessError,
     LocalFS,
     RunnerFS,
     ToolFileSystem,
+    UnavailableFS,
     tool_fs,
 )
 
@@ -431,8 +432,14 @@ def test_selected_text_does_not_follow_a_workspace_symlink_into_an_extra_root(tm
 
 
 class TestSelection:
-    def test_no_session_means_local(self, tmp_path):
-        assert isinstance(tool_fs(ToolContext(working_dir=str(tmp_path))), LocalFS)
+    def test_no_session_is_unavailable_by_default(self, tmp_path):
+        assert isinstance(tool_fs(ToolContext(working_dir=str(tmp_path))), UnavailableFS)
+
+    def test_exact_trusted_local_marker_means_local(self, tmp_path):
+        ctx = ToolContext(
+            working_dir=str(tmp_path), extras={HOST_IS_EXECUTION_TARGET: True}
+        )
+        assert isinstance(tool_fs(ctx), LocalFS)
 
     def test_a_session_means_runner(self, tmp_path):
         ctx = ToolContext(working_dir=str(tmp_path), sandbox=_Session(tmp_path))

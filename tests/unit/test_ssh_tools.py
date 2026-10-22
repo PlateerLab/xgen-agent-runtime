@@ -22,15 +22,24 @@ from xgen_agent_runtime.tools._ssh import (
 from xgen_agent_runtime.tools.built_in._ssh_store import SSHServerStore
 from xgen_agent_runtime.tools.built_in import ssh_tools
 from xgen_agent_runtime.tools.built_in.ssh_tools import (
+    SshDownloadTool,
     SshListServersTool,
     SshRunTool,
     SshUploadTool,
 )
+from xgen_agent_runtime.tools.fs import LocalFS
 
 
 def _ctx(tmp_path, servers=None):
     extras = {"ssh": {"servers": servers}} if servers is not None else {}
-    return ToolContext(session_id="s1", storage_path=str(tmp_path), extras=extras)
+    return ToolContext(
+        session_id="s1",
+        working_dir=str(tmp_path),
+        storage_path=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
+        extras=extras,
+        fs=LocalFS(str(tmp_path), [str(tmp_path)]),
+    )
 
 
 _PW_SERVER = {"name": "prod", "host": "1.2.3.4", "port": 2222, "user": "hrjang", "password": "secret", "description": "web"}
@@ -282,3 +291,112 @@ async def test_upload_path_guard_and_missing(tmp_path, monkeypatch):
         {"server": "prod", "local_path": "f.txt", "remote_path": "/tmp/x"}, ctx
     )
     assert not ok.is_error and ok.content["uploaded"] == "/tmp/x"
+
+
+class _FileSandbox:
+    workdir = "/workspace"
+    extra_roots: list = []
+    readonly_roots: list = []
+
+    def __init__(self, files=None):
+        self.files = dict(files or {})
+
+    async def ensure(self):
+        return None
+
+    async def read_bytes(self, path):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_bytes(self, path, data):
+        self.files[path] = data
+        return len(data)
+
+
+@pytest.mark.asyncio
+async def test_upload_and_download_use_the_attached_file_port(monkeypatch):
+    sandbox = _FileSandbox({"/workspace/input.txt": b"sandbox-input"})
+    ctx = ToolContext(
+        session_id="s",
+        working_dir=sandbox.workdir,
+        sandbox=sandbox,
+        extras={"ssh": {"servers": [_PW_SERVER]}},
+    )
+    uploaded = {}
+
+    async def fake_put(server, local, remote, **kw):
+        uploaded["bytes"] = open(local, "rb").read()
+
+    async def fake_get(server, remote, local, **kw):
+        with open(local, "wb") as stream:
+            stream.write(b"downloaded")
+
+    monkeypatch.setattr(ssh_tools, "sftp_put", fake_put)
+    monkeypatch.setattr(ssh_tools, "sftp_get", fake_get)
+
+    up = await SshUploadTool().execute(
+        {"server": "prod", "local_path": "input.txt", "remote_path": "/tmp/input"},
+        ctx,
+    )
+    down = await SshDownloadTool().execute(
+        {"server": "prod", "remote_path": "/tmp/out", "local_path": "out.txt"},
+        ctx,
+    )
+
+    assert not up.is_error and uploaded["bytes"] == b"sandbox-input"
+    assert not down.is_error and sandbox.files["/workspace/out.txt"] == b"downloaded"
+
+
+@pytest.mark.asyncio
+async def test_missing_file_backend_refuses_before_sftp(tmp_path, monkeypatch):
+    calls = 0
+
+    async def forbidden(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(ssh_tools, "sftp_put", forbidden)
+    context = ToolContext(
+        working_dir=str(tmp_path), extras={"ssh": {"servers": [_PW_SERVER]}}
+    )
+
+    result = await SshUploadTool().execute(
+        {"server": "prod", "local_path": "input.txt", "remote_path": "/tmp/input"},
+        context,
+    )
+
+    assert result.is_error
+    assert result.content["error"]["code"] == "EXECUTION_BACKEND_UNAVAILABLE"
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unavailable_sandbox_refuses_without_exposing_backend_detail(monkeypatch):
+    calls = 0
+
+    async def forbidden(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+
+    class _Broken(_FileSandbox):
+        async def read_bytes(self, path):
+            raise RuntimeError("CANARY_SSH_BACKEND_SECRET")
+
+    monkeypatch.setattr(ssh_tools, "sftp_put", forbidden)
+    sandbox = _Broken()
+    context = ToolContext(
+        working_dir=sandbox.workdir,
+        sandbox=sandbox,
+        extras={"ssh": {"servers": [_PW_SERVER]}},
+    )
+
+    result = await SshUploadTool().execute(
+        {"server": "prod", "local_path": "input.txt", "remote_path": "/tmp/input"},
+        context,
+    )
+
+    assert result.is_error
+    assert result.content["error"]["code"] == "EXECUTION_BACKEND_UNAVAILABLE"
+    assert "CANARY_SSH_BACKEND_SECRET" not in str(result.content)
+    assert calls == 0

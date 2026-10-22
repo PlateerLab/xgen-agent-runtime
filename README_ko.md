@@ -135,7 +135,7 @@ pip install "xgen-agent-runtime[dev] @ https://github.com/PlateerLab/xgen-agent-
 1. PR에서 `pyproject.toml`의 `version`을 올립니다 (예: `4.0.0` → `4.0.1`).
 2. `main`에 merge합니다.
 
-`main`의 CI(lint/type-check/test/security-audit/build)가 전부 통과하면, `auto-tag` job이 `pyproject.toml`에서 새 버전을 바로 읽습니다. 해당 `vX.Y.Z` 태그가 아직 없으면 만들어 push하고, 그 태그 push가 [`release.yml`](.github/workflows/release.yml)을 트리거해 wheel/sdist를 빌드하고 GitHub Release로 게시합니다. 더 이상 `git tag`를 수동으로 기억해서 실행할 필요가 없습니다 (그 수동 단계가 정확히 [v4.0.1이 `main`에 merge만 되고 릴리즈는 전혀 안 나간 채로 방치됐던](https://github.com/PlateerLab/xgen-agent-runtime/compare/v4.0.0...v4.0.1) 원인입니다).
+`main`의 CI(lint/type-check/test/security-audit/build)가 전부 통과하면, `auto-tag` job이 `pyproject.toml`에서 새 버전을 바로 읽습니다. 해당 `vX.Y.Z` 태그가 아직 없으면 만들어 push한 다음, 해당 태그로 [`release.yml`](.github/workflows/release.yml)을 명시적으로 dispatch해 wheel/sdist를 빌드하고 GitHub Release로 게시합니다. 더 이상 `git tag`를 수동으로 기억해서 실행할 필요가 없습니다 (그 수동 단계가 정확히 [v4.0.1이 `main`에 merge만 되고 릴리즈는 전혀 안 나간 채로 방치됐던](https://github.com/PlateerLab/xgen-agent-runtime/compare/v4.0.0...v4.0.1) 원인입니다).
 
 버전을 올리지 않고 릴리즈를 다시 내야 할 때(예: 실패한 빌드 재시도)는 [`release.yml`](.github/workflows/release.yml)을 `workflow_dispatch`로 수동 실행하거나 `vX.Y.Z` 태그를 직접 push해도 됩니다 — 두 방법 모두 여전히 동작합니다.
 

@@ -22,6 +22,7 @@ import pytest
 
 from xgen_agent_runtime.tools._geny_sandbox import ExecResult
 from xgen_agent_runtime.tools.base import ToolContext
+from xgen_agent_runtime.tools.fs import LocalFS
 from xgen_agent_runtime.tools.built_in.glob_tool import GlobTool
 from xgen_agent_runtime.tools.built_in.grep_tool import GrepTool
 
@@ -68,7 +69,12 @@ def ws(tmp_path) -> Path:
 
 
 def _both(ws: Path, tool, payload):
-    local = ToolContext(session_id="t", working_dir=str(ws), allowed_paths=[str(ws)])
+    local = ToolContext(
+        session_id="t",
+        working_dir=str(ws),
+        allowed_paths=[str(ws)],
+        fs=LocalFS(str(ws), [str(ws)]),
+    )
     runner = ToolContext(session_id="t", working_dir=str(ws), sandbox=_Session(ws))
     a = asyncio.run(tool.execute(payload, local))
     b = asyncio.run(tool.execute(payload, runner))

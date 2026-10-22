@@ -17,10 +17,16 @@ Tools:
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolResult
+from xgen_agent_runtime.tools.base import (
+    Tool,
+    ToolCapabilities,
+    ToolResult,
+    execution_backend_unavailable,
+)
 from xgen_agent_runtime.tools._ssh import (
     SSHConfigError,
     SSHUnavailableError,
@@ -30,6 +36,7 @@ from xgen_agent_runtime.tools._ssh import (
 )
 from xgen_agent_runtime.tools.built_in._skill_gateway import open_family, with_opened
 from xgen_agent_runtime.tools.built_in._ssh_store import SSHServerStore
+from xgen_agent_runtime.tools.fs import FsAccessError, tool_fs
 
 _SSH_FEATURE_KEY = "feature:ssh_enabled"
 _MAX_OUTPUT = 100_000  # chars per stream, matching BashTool
@@ -67,23 +74,16 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text, False
 
 
-def _storage_root(context: Any) -> Optional[Path]:
-    sp = getattr(context, "storage_path", None)
-    return Path(sp).resolve() if sp else None
-
-
 def _guarded_local(context: Any, path: str):
-    """Resolve *path* under the session storage root, refusing escapes."""
-    root = _storage_root(context)
-    if root is None:
-        return None, _err("NO_STORAGE", "This session has no storage_path for local files.")
-    p = Path(path)
-    target = (p if p.is_absolute() else root / p).resolve()
+    """Resolve *path* through the call's explicit file capability."""
+    fs = tool_fs(context)
+    if getattr(fs, "kind", "") == "unavailable":
+        return None, None, execution_backend_unavailable("SSH file access")
     try:
-        target.relative_to(root)
-    except ValueError:
-        return None, _err("PATH_ESCAPE", f"Local path escapes the session storage: {path}")
-    return target, None
+        resolved = fs.resolve(path)
+    except (PermissionError, ValueError) as exc:
+        return None, None, _err("PATH_ESCAPE", str(exc))
+    return fs, resolved, None
 
 
 class _SSHToolBase(Tool):
@@ -295,30 +295,39 @@ class SshUploadTool(_SSHToolBase):
         server, err = _resolve_or_error(store, input.get("server"))
         if err is not None:
             return err
-        local, lerr = _guarded_local(context, str(input.get("local_path") or ""))
+        fs, _resolved, lerr = _guarded_local(context, str(input.get("local_path") or ""))
         if lerr is not None:
             return lerr
-        if not local.is_file():
-            return _err("NOT_FOUND", f"Local file not found: {input.get('local_path')}")
-        if local.stat().st_size > _MAX_TRANSFER_BYTES:
-            return _err(
-                "TOO_LARGE", f"File exceeds {_MAX_TRANSFER_BYTES // (1024 * 1024)} MB transfer cap."
-            )
         remote_path = str(input.get("remote_path") or "").strip()
         if not remote_path:
             return _err("NO_REMOTE_PATH", "Provide 'remote_path'.")
         name = server.get("name")
         try:
-            await sftp_put(server, str(local), remote_path, resolver=store.resolve)
+            assert fs is not None
+            async with fs.materialize(str(input.get("local_path") or "")) as local:
+                if not local.is_file():
+                    return _err("NOT_FOUND", f"Local file not found: {input.get('local_path')}")
+                size = local.stat().st_size
+                if size > _MAX_TRANSFER_BYTES:
+                    return _err(
+                        "TOO_LARGE",
+                        f"File exceeds {_MAX_TRANSFER_BYTES // (1024 * 1024)} MB transfer cap.",
+                    )
+                await sftp_put(server, str(local), remote_path, resolver=store.resolve)
+                local_name = local.name
         except SSHUnavailableError as exc:
             return _err("SSH_UNAVAILABLE", str(exc))
+        except FileNotFoundError:
+            return _err("NOT_FOUND", f"Local file not found: {input.get('local_path')}")
+        except FsAccessError:
+            return execution_backend_unavailable("SSH file access")
         except SSHConfigError as exc:
             return _err("BAD_SERVER", f"Server '{name}': {exc}")
         except Exception as exc:  # noqa: BLE001
             return _err("SFTP_ERROR", f"{type(exc).__name__}: {exc}")
         return ToolResult(
-            content={"server": name, "uploaded": remote_path, "bytes": local.stat().st_size},
-            display_text=f"Uploaded {local.name} → {name}:{remote_path}",
+            content={"server": name, "uploaded": remote_path, "bytes": size},
+            display_text=f"Uploaded {local_name} → {name}:{remote_path}",
         )
 
 
@@ -358,7 +367,7 @@ class SshDownloadTool(_SSHToolBase):
         server, err = _resolve_or_error(store, input.get("server"))
         if err is not None:
             return err
-        local, lerr = _guarded_local(context, str(input.get("local_path") or ""))
+        fs, resolved, lerr = _guarded_local(context, str(input.get("local_path") or ""))
         if lerr is not None:
             return lerr
         remote_path = str(input.get("remote_path") or "").strip()
@@ -366,17 +375,29 @@ class SshDownloadTool(_SSHToolBase):
             return _err("NO_REMOTE_PATH", "Provide 'remote_path'.")
         name = server.get("name")
         try:
-            local.parent.mkdir(parents=True, exist_ok=True)
-            await sftp_get(server, remote_path, str(local), resolver=store.resolve)
+            assert fs is not None
+            with tempfile.TemporaryDirectory(prefix="xgen-sftp-") as scratch:
+                local = Path(scratch) / (Path(resolved or "download").name or "download")
+                await sftp_get(server, remote_path, str(local), resolver=store.resolve)
+                if not local.is_file():
+                    return _err("SFTP_ERROR", "SFTP download produced no local file.")
+                size = local.stat().st_size
+                if size > _MAX_TRANSFER_BYTES:
+                    return _err(
+                        "TOO_LARGE",
+                        f"File exceeds {_MAX_TRANSFER_BYTES // (1024 * 1024)} MB transfer cap.",
+                    )
+                await fs.commit(local, str(input.get("local_path") or ""))
         except SSHUnavailableError as exc:
             return _err("SSH_UNAVAILABLE", str(exc))
+        except FsAccessError:
+            return execution_backend_unavailable("SSH file access")
         except SSHConfigError as exc:
             return _err("BAD_SERVER", f"Server '{name}': {exc}")
         except Exception as exc:  # noqa: BLE001
             return _err("SFTP_ERROR", f"{type(exc).__name__}: {exc}")
-        size = local.stat().st_size if local.is_file() else 0
         return ToolResult(
-            content={"server": name, "downloaded": str(local), "bytes": size},
+            content={"server": name, "downloaded": resolved, "bytes": size},
             display_text=f"Downloaded {name}:{remote_path} → {input.get('local_path')} ({size} bytes)",
         )
 

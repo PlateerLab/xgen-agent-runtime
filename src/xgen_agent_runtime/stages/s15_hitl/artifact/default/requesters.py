@@ -29,7 +29,7 @@ class NullRequester(Requester):
         return "Always approves — no human in the loop"
 
     async def request(self, request: HITLRequest, state: PipelineState) -> Optional[HITLDecision]:
-        return HITLDecision.APPROVE
+        return HITLDecision.REJECT if request.mandatory else HITLDecision.APPROVE
 
 
 CallbackFn = Callable[[HITLRequest, PipelineState], Awaitable[Optional[HITLDecision]]]
@@ -100,13 +100,21 @@ class PipelineResumeRequester(Requester):
     async def request(self, request: HITLRequest, state: PipelineState) -> Optional[HITLDecision]:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
+        if request.token in self._pipeline._pending_hitl:
+            raise RuntimeError("approval_replay")
         self._pipeline._pending_hitl[request.token] = future
+        if request.mandatory:
+            guards = getattr(self._pipeline, "_pending_hitl_guards", None)
+            if guards is None:
+                guards = self._pipeline._pending_hitl_guards = {}
+            guards[request.token] = (request.approval, request.approval_store)
         try:
             return await future
         finally:
             # Drop the registration whether resolved, cancelled, or
             # exceptioned out — never leak entries on the pipeline.
             self._pipeline._pending_hitl.pop(request.token, None)
+            getattr(self._pipeline, "_pending_hitl_guards", {}).pop(request.token, None)
 
 
 __all__ = [

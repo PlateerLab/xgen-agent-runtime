@@ -18,7 +18,14 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
 
-from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_agent_runtime.tools.base import (
+    Tool,
+    ToolCapabilities,
+    ToolContext,
+    ToolResult,
+    execution_backend_unavailable,
+    host_is_execution_target,
+)
 
 
 _DEFAULT_WORKTREE_BASE = ".worktrees"
@@ -139,6 +146,11 @@ class EnterWorktreeTool(Tool):
         return ToolCapabilities(concurrency_safe=False, destructive=False)
 
     async def execute(self, input, context):
+        # This implementation invokes host git and host Path APIs; it has no
+        # sandbox adapter yet. Never let a dropped sandbox route a server turn
+        # here implicitly.
+        if context.sandbox is not None or not host_is_execution_target(context):
+            return execution_backend_unavailable("EnterWorktree")
         cwd = context.working_dir or "."
         if not (Path(cwd) / ".git").exists() and not Path(cwd).joinpath(".git").is_file():
             return _err("NOT_A_GIT_REPO", f"{cwd} is not a git repository")
@@ -188,6 +200,8 @@ class ExitWorktreeTool(Tool):
         return ToolCapabilities(concurrency_safe=False, destructive=True)
 
     async def execute(self, input, context):
+        if context.sandbox is not None or not host_is_execution_target(context):
+            return execution_backend_unavailable("ExitWorktree")
         stack = _stack(context)
         if not stack:
             return _err("NO_WORKTREE", "session stack is empty")
