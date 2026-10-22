@@ -4,9 +4,11 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [4.96.0] - 2026-10-20
+## [4.96.0] - 2026-10-22
 
-### Security — 실행 백엔드가 없는 서버 호출 차단
+### Security — 실행 백엔드 경계와 Pillow 보안 수정
+
+- Pillow13.0.0과 호환 xgen-pdf0.1.3·doc2chunk0.5.1을 고정한다. 기존 감사 예외를 늘리지 않고 취약한 이미지 처리 의존성을 교체한다.
 
 - 파일·셸·REPL·스킬은 연결된 sandbox 또는 명시적으로 주입한 파일 capability를 사용한다. 호스트 명령 실행은 신뢰한 호스트 코드의 정확한 boolean opt-in이 필요하다.
 - 오디오·SSH 파일 전송·참조 파일·산출물 검토도 같은 파일 포트를 사용하며, backend 실패를 serving-host 실행으로 우회하지 않는다.
