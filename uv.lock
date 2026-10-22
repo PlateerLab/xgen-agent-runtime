@@ -3526,7 +3526,7 @@ requires-dist = [
     { name = "openai", specifier = "==2.54.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.30" },
     { name = "pgvector", specifier = "==0.5.0" },
-    { name = "pillow", specifier = "==12.3.0" },
+    { name = "pillow", specifier = "==13.0.0" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.6" },
     { name = "pydantic", specifier = "==2.12.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -3536,8 +3536,8 @@ requires-dist = [
     { name = "qdrant-client", specifier = "==1.16.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "websockets", specifier = "==16.1.1" },
-    { name = "xgen-doc2chunk", specifier = "==0.5.0" },
-    { name = "xgen-pdf", url = "https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl" },
+    { name = "xgen-doc2chunk", specifier = "==0.5.1" },
+    { name = "xgen-pdf", url = "https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.3/xgen_pdf-0.1.3-py3-none-any.whl" },
 ]
 
 [[package]]
