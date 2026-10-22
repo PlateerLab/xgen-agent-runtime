@@ -3,6 +3,7 @@
 The runtime never authenticates an actor. Hosts supply verified identifiers and
 call ``decide`` only after authorizing the human answering the request.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -46,7 +47,9 @@ def canonical_digest(value: Any, *, max_bytes: int = 1_048_576) -> str:
 
     check(value)
     try:
-        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        raw = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
     except (TypeError, ValueError, UnicodeError, OverflowError):
         raise ApprovalError("approval_input_invalid") from None
     if len(raw) > max_bytes:
@@ -75,12 +78,20 @@ class ApprovalEnvelope:
     expires_at: float
 
     @classmethod
-    def issue(cls, context: ApprovalContext, tool_name: str, tool_input: dict, *, ttl_s: float = 120) -> "ApprovalEnvelope":
+    def issue(
+        cls, context: ApprovalContext, tool_name: str, tool_input: dict, *, ttl_s: float = 120
+    ) -> "ApprovalEnvelope":
         if not isinstance(context, ApprovalContext) or not tool_name:
             raise ApprovalError("approval_identity_required")
         if not math.isfinite(ttl_s) or not 0 < ttl_s <= 300:
             raise ApprovalError("approval_expiry_invalid")
-        return cls(secrets.token_urlsafe(32), context, tool_name, canonical_digest(tool_input), time.time() + ttl_s)
+        return cls(
+            secrets.token_urlsafe(32),
+            context,
+            tool_name,
+            canonical_digest(tool_input),
+            time.time() + ttl_s,
+        )
 
     def to_dict(self) -> dict:
         return {"version": 1, **asdict(self)}
@@ -123,7 +134,13 @@ return 1
         ttl = math.ceil(envelope.expires_at - time.time())
         if ttl <= 0 or ttl > 300:
             raise ApprovalError("approval_expired")
-        row = json.dumps({"envelope": envelope.canonical(), "status": "pending", "expires_at": envelope.expires_at})
+        row = json.dumps(
+            {
+                "envelope": envelope.canonical(),
+                "status": "pending",
+                "expires_at": envelope.expires_at,
+            }
+        )
         try:
             if not self.client.set(self.prefix + envelope.token, row, ex=ttl, nx=True):
                 raise ApprovalError("approval_replay")
@@ -134,14 +151,25 @@ return 1
 
     def _transition(self, envelope: ApprovalEnvelope, before: str, after: str) -> bool:
         try:
-            return bool(self.client.eval(self._TRANSITION, 1, self.prefix + envelope.token, envelope.canonical(), before, after))
+            return bool(
+                self.client.eval(
+                    self._TRANSITION,
+                    1,
+                    self.prefix + envelope.token,
+                    envelope.canonical(),
+                    before,
+                    after,
+                )
+            )
         except Exception:
             raise ApprovalError() from None
 
     def decide(self, envelope: ApprovalEnvelope, actor: ApprovalContext, decision: str) -> bool:
         if actor != envelope.context or decision not in ("approve", "reject", "cancel"):
             return False
-        return self._transition(envelope, "pending", "approved" if decision == "approve" else "rejected")
+        return self._transition(
+            envelope, "pending", "approved" if decision == "approve" else "rejected"
+        )
 
     def consume(self, envelope: ApprovalEnvelope) -> bool:
         return self._transition(envelope, "approved", "consumed")
@@ -164,14 +192,23 @@ class MemoryApprovalStore:
 
     def _transition(self, envelope: ApprovalEnvelope, before: str, after: str) -> bool:
         with self._lock:
-            if envelope.expires_at <= time.time() or self._rows.get(envelope.token) != (envelope.canonical(), before):
+            if envelope.expires_at <= time.time() or self._rows.get(envelope.token) != (
+                envelope.canonical(),
+                before,
+            ):
                 return False
             self._rows[envelope.token] = (envelope.canonical(), after)
             return True
 
     def decide(self, envelope: ApprovalEnvelope, actor: ApprovalContext, decision: str) -> bool:
-        return actor == envelope.context and decision in ("approve", "reject", "cancel") and self._transition(
-            envelope, "pending", "approved" if decision == "approve" else "rejected",
+        return (
+            actor == envelope.context
+            and decision in ("approve", "reject", "cancel")
+            and self._transition(
+                envelope,
+                "pending",
+                "approved" if decision == "approve" else "rejected",
+            )
         )
 
     def consume(self, envelope: ApprovalEnvelope) -> bool:

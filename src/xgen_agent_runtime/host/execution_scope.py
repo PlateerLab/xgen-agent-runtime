@@ -1,4 +1,5 @@
 """Run-wide tool accounting and cancellation shared by parallel/nested calls."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,14 +16,35 @@ class ExecutionBoundaryError(RuntimeError):
 
 
 class RunBudget:
-    def __init__(self, *, max_calls: int = 1000, max_active: int = 16,
-                 max_result_bytes: int = 16 * 1024 * 1024, max_wall_seconds: float = 300,
-                 max_cost: float = 0, max_tokens: int = 0) -> None:
-        if min(max_calls, max_active, max_result_bytes) <= 0 or not math.isfinite(max_wall_seconds) or max_wall_seconds <= 0:
+    def __init__(
+        self,
+        *,
+        max_calls: int = 1000,
+        max_active: int = 16,
+        max_result_bytes: int = 16 * 1024 * 1024,
+        max_wall_seconds: float = 300,
+        max_cost: float = 0,
+        max_tokens: int = 0,
+    ) -> None:
+        if (
+            min(max_calls, max_active, max_result_bytes) <= 0
+            or not math.isfinite(max_wall_seconds)
+            or max_wall_seconds <= 0
+        ):
             raise ValueError("invalid run budget")
-        self.max_calls, self.max_active, self.max_result_bytes = max_calls, max_active, max_result_bytes
+        self.max_calls, self.max_active, self.max_result_bytes = (
+            max_calls,
+            max_active,
+            max_result_bytes,
+        )
         self.deadline = time.monotonic() + max_wall_seconds
-        if not math.isfinite(max_cost) or max_cost < 0 or isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 0:
+        if (
+            not math.isfinite(max_cost)
+            or max_cost < 0
+            or isinstance(max_tokens, bool)
+            or not isinstance(max_tokens, int)
+            or max_tokens < 0
+        ):
             raise ValueError("invalid run usage budget")
         self.max_cost, self.max_tokens = max_cost, max_tokens
         self.calls = self.active = self.result_bytes = self.tokens = 0
@@ -37,7 +59,11 @@ class RunBudget:
 
     def reserve(self) -> None:
         with self._lock:
-            if time.monotonic() >= self.deadline or self.calls >= self.max_calls or self.active >= self.max_active:
+            if (
+                time.monotonic() >= self.deadline
+                or self.calls >= self.max_calls
+                or self.active >= self.max_active
+            ):
                 raise ExecutionBoundaryError("run_budget_exceeded")
             self.calls += 1
             self.active += 1
@@ -49,6 +75,7 @@ class RunBudget:
     def charge_result(self, value: Any) -> None:
         # A bounded traversal prevents cyclic/deep results becoming a bypass.
         from xgen_agent_runtime.permission.approval import canonical_digest
+
         try:
             canonical_digest(value, max_bytes=self.max_result_bytes)
             size = len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
@@ -60,12 +87,20 @@ class RunBudget:
                 raise ExecutionBoundaryError("run_budget_exceeded")
 
     def charge_usage(self, *, cost: float = 0, tokens: int = 0) -> None:
-        if not math.isfinite(cost) or cost < 0 or isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+        if (
+            not math.isfinite(cost)
+            or cost < 0
+            or isinstance(tokens, bool)
+            or not isinstance(tokens, int)
+            or tokens < 0
+        ):
             raise ExecutionBoundaryError("run_usage_invalid")
         with self._lock:
             self.cost += cost
             self.tokens += tokens
-            if (self.max_cost > 0 and self.cost > self.max_cost) or (self.max_tokens > 0 and self.tokens > self.max_tokens):
+            if (self.max_cost > 0 and self.cost > self.max_cost) or (
+                self.max_tokens > 0 and self.tokens > self.max_tokens
+            ):
                 raise ExecutionBoundaryError("run_budget_exceeded")
 
     def reconcile_usage(self, key: str, *, cost: float, tokens: int) -> None:
@@ -79,7 +114,9 @@ class RunBudget:
             self.tokens += tokens - old_tokens
             self.cost += cost - old_cost
             self._usage_seen[key] = (tokens, cost)
-            if (self.max_cost > 0 and self.cost >= self.max_cost) or (self.max_tokens > 0 and self.tokens >= self.max_tokens):
+            if (self.max_cost > 0 and self.cost >= self.max_cost) or (
+                self.max_tokens > 0 and self.tokens >= self.max_tokens
+            ):
                 raise ExecutionBoundaryError("run_budget_exceeded")
 
 
@@ -97,11 +134,16 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
             if time.monotonic() >= context.run_budget.deadline:
                 raise ExecutionBoundaryError("run_budget_exceeded")
             usage = getattr(state, "turn_token_usage", []) or []
-            tokens = sum(int(u.input_tokens or 0) + int(u.output_tokens or 0) +
-                         int(getattr(u, "cache_read_input_tokens", 0) or 0) +
-                         int(getattr(u, "cache_creation_input_tokens", 0) or 0) for u in usage)
+            tokens = sum(
+                int(u.input_tokens or 0)
+                + int(u.output_tokens or 0)
+                + int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                + int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+                for u in usage
+            )
             context.run_budget.reconcile_usage(
-                str(getattr(state, "_run_id", "") or id(state)), tokens=tokens,
+                str(getattr(state, "_run_id", "") or id(state)),
+                tokens=tokens,
                 cost=float(getattr(state, "total_cost_usd", 0) or 0),
             )
 
@@ -113,7 +155,9 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
                 enforce(state)
                 return GuardResult(passed=True, guard_name=self.name)
             except ExecutionBoundaryError as exc:
-                return GuardResult(passed=False, guard_name=self.name, message=str(exc), action="reject")
+                return GuardResult(
+                    passed=False, guard_name=self.name, message=str(exc), action="reject"
+                )
 
     stage = pipeline.get_stage(4)
     if stage is not None and callable(getattr(stage, "add_guard", None)):
@@ -124,6 +168,7 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
         token_stage._host_usage_boundary = enforce
     api_stage = pipeline.get_stage(6)
     if api_stage is not None:
+
         def before_model_call() -> None:
             if context.cancellation_scope is not None:
                 context.cancellation_scope.check()
@@ -134,8 +179,13 @@ def bind_run_guard(pipeline: Any, context: Any) -> None:
 
 
 class CancellationScope:
-    def __init__(self, *, deadline: Optional[float] = None, cancel_check: Optional[Callable[[], bool]] = None,
-                 cleanup_timeout: float = 5) -> None:
+    def __init__(
+        self,
+        *,
+        deadline: Optional[float] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        cleanup_timeout: float = 5,
+    ) -> None:
         if deadline is not None and not math.isfinite(deadline):
             raise ValueError("invalid deadline")
         self.deadline, self.cancel_check = deadline, cancel_check
@@ -149,7 +199,11 @@ class CancellationScope:
             cancelled = self.cancel_check is not None and bool(self.cancel_check())
         except Exception:
             cancelled = True
-        if self.cancelled or cancelled or (self.deadline is not None and time.monotonic() >= self.deadline):
+        if (
+            self.cancelled
+            or cancelled
+            or (self.deadline is not None and time.monotonic() >= self.deadline)
+        ):
             self.cancelled = True
             raise ExecutionBoundaryError("run_cancelled")
 
@@ -193,5 +247,7 @@ class CancellationScope:
             if pending:
                 # Discard all late completions. The scope remains closed; the
                 # host must not reuse this backend until cleanup is confirmed.
-                task.add_done_callback(lambda future: future.exception() if not future.cancelled() else None)
+                task.add_done_callback(
+                    lambda future: future.exception() if not future.cancelled() else None
+                )
             raise

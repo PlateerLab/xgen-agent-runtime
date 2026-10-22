@@ -380,9 +380,7 @@ class RunnerFS:
         payload = json.dumps(dict(req, roots=roots), ensure_ascii=False)
         source = Path(_search.__file__).read_text(encoding="utf-8")
         try:
-            result = await self.sandbox.exec(
-                ["python3", "-c", source, payload], timeout_s=60.0
-            )
+            result = await self.sandbox.exec(["python3", "-c", source, payload], timeout_s=60.0)
         except Exception as exc:  # noqa: BLE001 - backend types live outside this package
             from xgen_agent_runtime.tools.base import EXECUTION_BACKEND_UNAVAILABLE
 

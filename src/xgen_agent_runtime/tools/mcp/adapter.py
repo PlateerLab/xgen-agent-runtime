@@ -140,9 +140,13 @@ class MCPToolAdapter(Tool):
                 scope.check()
         except Exception as exc:
             raise ToolFailure(
-                "MCP transport failed", code=ToolErrorCode.TRANSPORT,
-                details={"server": self.server_name, "tool": self._raw_name,
-                         "exception_type": type(exc).__name__},
+                "MCP transport failed",
+                code=ToolErrorCode.TRANSPORT,
+                details={
+                    "server": self.server_name,
+                    "tool": self._raw_name,
+                    "exception_type": type(exc).__name__,
+                },
             ) from None
         finally:
             # Keep cleanup registered until the cancellation scope finishes its

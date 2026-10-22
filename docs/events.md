@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-12.
-> Catalogue version: **17** · events: **143**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-20.
+> Catalogue version: **18** · events: **145**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -227,6 +227,23 @@ Enum member: `EventTypes.LOOP_COMPLETION_REVIEW`
 | `missing` | int — claimed files that do not exist |
 | `problems` | int — files with a deterministic problem (missing/empty/invalid JSON/ragged CSV) |
 | `paths` | list[str] — paths shown to the model, in order |
+
+### `loop.review_start`
+
+Enum member: `EventTypes.LOOP_REVIEW_START`
+
+| Field | Description |
+|---|---|
+| `reviewers` | int — completion reviewers about to run (the turn's final response is being checked) |
+
+### `loop.review_end`
+
+Enum member: `EventTypes.LOOP_REVIEW_END`
+
+| Field | Description |
+|---|---|
+| `elapsed_ms` | int — time the reviewers took |
+| `note` | bool — a reviewer sent the model back with a note (the loop continues) |
 
 ### `loop.repeat_stop`
 

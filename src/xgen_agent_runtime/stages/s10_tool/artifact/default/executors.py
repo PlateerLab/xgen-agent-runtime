@@ -122,8 +122,11 @@ def _emit_call_start(
         {
             "tool_use_id": tc.get("tool_use_id", ""),
             "name": tc.get("tool_name", ""),
-            "input": ({"args_digest": canonical_digest(tc.get("tool_input", {}))}
-                      if context is not None and context.redact_tool_events else tc.get("tool_input", {})),
+            "input": (
+                {"args_digest": canonical_digest(tc.get("tool_input", {}))}
+                if context is not None and context.redact_tool_events
+                else tc.get("tool_input", {})
+            ),
             **_tool_facts(registry, tc),
         },
     )

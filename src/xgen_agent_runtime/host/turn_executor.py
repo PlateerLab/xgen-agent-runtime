@@ -183,11 +183,13 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
     except Exception:
         if getattr(host, "tool_security_required", False) is True:
             from xgen_agent_runtime.host.execution_scope import ExecutionBoundaryError
+
             raise ExecutionBoundaryError("result_policy_unavailable") from None
         logger.warning("tool_result_filter unavailable for optional host")
         return None
     if not callable(result_filter) and getattr(host, "tool_security_required", False) is True:
         from xgen_agent_runtime.host.execution_scope import ExecutionBoundaryError
+
         raise ExecutionBoundaryError("result_policy_unavailable")
     return result_filter if callable(result_filter) else None
 
@@ -832,6 +834,7 @@ class AgentTurnExecutor:
             if callable(configure_security):
                 if run_tool_context is None:
                     from xgen_agent_runtime.tools.base import ToolContext
+
                     run_tool_context = ToolContext(session_id=interaction_id)
                 configure_security(run_tool_context, kwargs)
             _result_filter = _tool_result_filter(host)
@@ -1284,8 +1287,11 @@ class AgentTurnExecutor:
                     _asyncio.run(locals()["memory_provider"].close())
             except Exception:  # noqa: BLE001
                 pass
-            err = ("[ERROR] execution_start_unavailable" if getattr(host, "tool_security_required", False) is True
-                   else f"[ERROR] geny agent could not start: {exc}")
+            err = (
+                "[ERROR] execution_start_unavailable"
+                if getattr(host, "tool_security_required", False) is True
+                else f"[ERROR] geny agent could not start: {exc}"
+            )
             return iter([err]) if streaming else err
 
         # 호스트가 턴 단위 취소 훅을 줄 수 있다(같은 interaction 의 다음 턴을
@@ -1305,7 +1311,9 @@ class AgentTurnExecutor:
         if run_tool_context is not None and run_tool_context.cancellation_scope is not None:
             scope = run_tool_context.cancellation_scope
             host_check = scope.cancel_check
-            scope.cancel_check = lambda: _cancelled() or (host_check is not None and bool(host_check()))
+            scope.cancel_check = lambda: (
+                _cancelled() or (host_check is not None and bool(host_check()))
+            )
 
         def _teardown() -> None:
             # 턴이 만든/바꾼 파일을 원본(MinIO + DB 인덱스)에 반영한다. 이걸

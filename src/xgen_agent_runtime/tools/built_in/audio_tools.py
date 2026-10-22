@@ -113,10 +113,14 @@ def _resolve_audio_path(context: Any, path: str):
         return None, None, _err("BAD_PATH", str(exc))
     suffix = Path(resolved).suffix.lower()
     if suffix not in AUDIO_EXTENSIONS:
-        return None, None, _err(
-            "NOT_AUDIO",
-            f"'{Path(resolved).name}' is not a supported audio format "
-            f"({', '.join(sorted(AUDIO_EXTENSIONS))}).",
+        return (
+            None,
+            None,
+            _err(
+                "NOT_AUDIO",
+                f"'{Path(resolved).name}' is not a supported audio format "
+                f"({', '.join(sorted(AUDIO_EXTENSIONS))}).",
+            ),
         )
     return fs, resolved, None
 
@@ -471,16 +475,24 @@ class AudioListFilesTool(_AudioToolBase):
         for suffix in AUDIO_EXTENSIONS:
             try:
                 result = await fs.search(
-                    {"op": "glob", "base": root, "pattern": f"**/*{suffix}",
-                     "include_metadata": True}
+                    {
+                        "op": "glob",
+                        "base": root,
+                        "pattern": f"**/*{suffix}",
+                        "include_metadata": True,
+                    }
                 )
             except FsAccessError:
                 return execution_backend_unavailable("Audio file access")
             if not result.get("ok"):
                 return _err("NOT_FOUND", str(result.get("text") or base))
             for item in result.get("files", []):
-                if (isinstance(item, dict) and isinstance(item.get("path"), str)
-                        and type(item.get("size_bytes")) is int and item["size_bytes"] >= 0):
+                if (
+                    isinstance(item, dict)
+                    and isinstance(item.get("path"), str)
+                    and type(item.get("size_bytes")) is int
+                    and item["size_bytes"] >= 0
+                ):
                     paths[item["path"]] = item["size_bytes"]
 
         files: List[dict] = []
@@ -508,9 +520,7 @@ class AudioListFilesTool(_AudioToolBase):
                 return execution_backend_unavailable("Audio file access")
             except (OSError, ValueError, PermissionError):
                 continue
-            files.append(
-                {"path": rel, "size_bytes": size, "transcribed": transcribed}
-            )
+            files.append({"path": rel, "size_bytes": size, "transcribed": transcribed})
         if not files:
             return ToolResult(content="No audio files found in the workspace.")
         files.sort(key=lambda f: f["path"])

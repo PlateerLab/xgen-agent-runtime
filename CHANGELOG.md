@@ -12,6 +12,22 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - 오디오·SSH 파일 전송·참조 파일·산출물 검토도 같은 파일 포트를 사용하며, backend 실패를 serving-host 실행으로 우회하지 않는다.
 - 오디오 목록은 파일 본문 전송 없이 제한된 검색 메타데이터를 사용한다.
 - 도구의 예상치 못한 예외는 원문 없는 오류 요약을 ERROR 수준으로 기록한다.
+- 도구 hook이 바꾼 최종 입력으로 권한을 확인하고, 필수 승인은 세션 모드로 우회하지 않는다. 승인 결정은 실행 주체·워크플로우·실행·세션과 입력에 묶어 만료·재사용을 검사한다.
+- 취소와 실행 예산은 도구·모델 호출 경계에서 확인한다. 모델 재시도도 실제 provider 호출마다 예산에 센다.
+
+## [4.95.0] - 2026-10-20
+
+### Added: 답이 다 나온 뒤의 기다림을 호스트에 알린다 (`host.note_turn_phase`)
+
+Agent Geny 의 턴은 마지막 글자 뒤에도 한동안 끝나지 않는다. 답에 나온 파일을 작업 공간에서 읽어 점검하고(Stage 16
+완료 점검), 이번 턴을 대화 기억에 쓰고(Stage 18), 실행 기록을 남긴다. 그동안 화면에는 커서만 깜박여 무엇을 하는지
+알 수 없었다.
+
+- `stream_turn` 이 이 구간을 `host.note_turn_phase(phase, state, **extra)` 로 알린다. 단계는 `review`(완료 점검),
+  `remember`(대화 기억 쓰기), `record`(실행 기록), 상태는 `start`·`done`(`elapsed_ms` 함께). 호스트에 이 함수가
+  없으면(커넥터 등) 아무 일도 없고, 호스트가 예외를 내도 턴은 계속된다.
+- Stage 16 이 완료 점검 앞뒤로 `loop.review_start` / `loop.review_end`(`elapsed_ms`, `note`) 를 낸다(이벤트 목록 v18).
+  기억 쓰기는 기존 `stage.enter` / `stage.exit`(stage="memory") 로 잡는다.
 
 ## [4.94.0] - 2026-10-20
 

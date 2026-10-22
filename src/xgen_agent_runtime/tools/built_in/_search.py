@@ -83,8 +83,7 @@ def glob_files(req):
     result = {"ok": True, "text": _cap(text)}
     if req.get("include_metadata") is True:
         result["files"] = [
-            {"path": p, "size_bytes": size}
-            for _, p, size in files[:GLOB_MAX_RESULTS]
+            {"path": p, "size_bytes": size} for _, p, size in files[:GLOB_MAX_RESULTS]
         ]
     return result
 

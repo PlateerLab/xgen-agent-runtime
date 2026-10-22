@@ -2939,10 +2939,18 @@ class Pipeline:
         """
         return [t for t, fut in self._pending_hitl.items() if not fut.done()]
 
-    def resume(self, token: str, decision: Any, *, principal_id: Optional[str] = None,
-               workflow_id: Optional[str] = None, run_id: Optional[str] = None,
-               session_id: Optional[str] = None, tool_name: Optional[str] = None,
-               args_digest: Optional[str] = None) -> None:
+    def resume(
+        self,
+        token: str,
+        decision: Any,
+        *,
+        principal_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        args_digest: Optional[str] = None,
+    ) -> None:
         """Resolve a pending HITL request by token.
 
         ``decision`` is normally an :class:`HITLDecision`; strings
@@ -2979,6 +2987,7 @@ class Pipeline:
         guard = getattr(self, "_pending_hitl_guards", {}).get(token)
         if guard is not None:
             from xgen_agent_runtime.permission.approval import ApprovalContext, ApprovalError
+
             envelope, store = guard
             actor = ApprovalContext(principal_id, workflow_id, run_id, session_id)
             if tool_name != envelope.tool_name or args_digest != envelope.args_digest:

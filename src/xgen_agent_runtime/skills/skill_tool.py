@@ -286,8 +286,7 @@ class SkillTool(Tool):
         )
         body = shell_summary.rendered_body
         backend_unavailable = any(
-            EXECUTION_BACKEND_UNAVAILABLE
-            in f"{outcome.skipped_reason or ''}\n{outcome.stderr}"
+            EXECUTION_BACKEND_UNAVAILABLE in f"{outcome.skipped_reason or ''}\n{outcome.stderr}"
             for outcome in shell_summary.outcomes
         )
 
