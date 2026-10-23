@@ -360,6 +360,41 @@ class TurnNotesBlock(PromptBlock):
         return "\n\n".join(str(n).strip() for n in notes if str(n or "").strip())
 
 
+class TaskBoardBlock(PromptBlock):
+    """The task board (memory.tasks): this conversation's current task in full and the other open
+    tasks, every turn, whatever the message says (2026-10-23).
+
+    Volatile: Stage 2 builds it at the turn's start and the Task tool rebuilds it when the agent
+    changes a task, so the next call reads the change.
+    """
+
+    @property
+    def name(self) -> str:
+        return "task_board"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        from xgen_agent_runtime.memory.tasks import BOARD_GUIDE, BOARD_KEY, BOARD_READ_ONLY
+
+        board = state.shared.get(BOARD_KEY)
+        if not isinstance(board, str) or not board.strip():
+            return ""
+        # How to use it only when the Task tool is there: a backend without the memory tools must
+        # not be told to call one.
+        names = state.shared.get("_offered_tools")
+        if not isinstance(names, list):
+            names = [
+                t.get("name") or (t.get("function") or {}).get("name")
+                for t in (getattr(state, "tools", None) or [])
+                if isinstance(t, dict)
+            ]
+        offered = "Task" in names
+        return f"{board.strip()}\n\n{BOARD_GUIDE if offered else BOARD_READ_ONLY}"
+
+
 class CustomBlock(PromptBlock):
     """User-defined custom block."""
 

@@ -4,6 +4,38 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.98.0] - 2026-10-23
+
+### Added: TASK 기억, 여러 단계·여러 턴 일을 하나의 기억 단위로 (`memory.tasks`)
+
+사실은 사용자가 누구인지, 원문은 무슨 말이 오갔는지를 담는다. 지금 무슨 일을 하던 중인지는 어디에도 없었다. 여러 턴짜리
+요청은 원문에만 있었고, 창이 그 턴을 지나거나 압축이 요약으로 접으면 목표·계획·결정·파일이 함께 사라졌다. "계속" 은 이어 갈
+것이 없었다.
+
+- **기억 층**: `Task`(제목, 목표, 완료 조건, 상태, 계획, 결정, 파일, 다음 할 일, 프로젝트)와 `TaskEvent`(열기·바꾸기·턴·
+  계획·체크포인트·메모·닫기). 저장 계약 `TaskStore`(호스트 구현, 사람 단위 범위), 참조 구현 `InMemoryTaskStore`.
+  provider 의 선택 층 `tasks()`(`provider_tasks()` 로 읽는다). 대화를 넘어 이어진다.
+- **판단(모델 선언 + 호스트 보완)**: 새 도구 `Task(action=open|update|switch|close|list)`. 호스트는 턴이 끝나면 LLM 없이
+  기록한다. 현재 TASK 에 그 턴(요청·답·도구 수·파일·결과)을 덧붙이고, TodoWrite 목록을 계획으로 옮기며, 압축 요약을
+  체크포인트로 남긴다. 모델이 열지 않았어도 여러 단계 일이 분명하면 요청으로 TASK 를 연다(호스트가 열었다고 적는다).
+  기준은 끝나지 않은 계획 2단계 이상, 또는 도구를 쓰다 끝나지 못한 턴이다. 도구도 Task 도 쓰지 않은 짧은 질문은 현재
+  TASK 의 기록에 넣지 않는다.
+- **회상**: 매 턴 TASK 판(`TaskBoardBlock`, volatile)이 실린다. 이 대화의 현재 TASK 는 전부, 다른 열린 TASK 는 한 줄씩이다.
+  검색을 거치지 않으므로 "계속" 에도 일의 상태가 온다. 판의 몫은 창의 5%(최소 3,000자)이고, 넘치면 오래된 항목부터 빼고
+  뺀 수와 `TaskRecall` 을 적는다. 기억 검색 질의에 현재 TASK 의 제목·목표를 더한다. 새 도구
+  `TaskRecall(view=card|history|turn)` 는 TASK 의 전체 기록을 읽는다. 그 턴의 원문도 읽는데, 이 대화는 ConversationHistory,
+  다른 대화는 provider 의 `session_stm(session_id)` 로 읽는다. TASK 마다 `tasks/task-<id>.md` 노트를 만들어 기억 검색에도 오른다.
+- TASK 노트는 기록에서 다시 쓰는 화면용이라고 첫 줄에 적는다(노트를 고쳐도 TASK 는 바뀌지 않는다). 이 대화의 현재 TASK
+  노트는 판이 이미 실으므로 기억 검색에서 뺀다.
+- 판의 사용 안내(Task 를 부르라는 말)는 그 호출에 Task 도구가 있을 때만 붙는다. 메모리 도구가 없는 백엔드에는 "호스트가
+  기록한다" 만 적는다. Stage 3 은 블록을 그리기 전에 이번 호출에 나가는 도구 이름을 알린다(`_offered_tools`).
+- TASK 는 사람의 것이다. 노트가 에이전트 공용인 provider 는 `task_notes = False` 로 TASK 노트를 받지 않는다(다른 사람이
+  기억 검색으로 남의 TASK 를 보지 않게). 그런 provider 에서는 판과 `Task(action="list", query=...)`(열린·닫힌 TASK 를 낱말로
+  찾는다)로 찾는다.
+- 실행 기록(Executions)과 잇는다: 실행 카드에 그 턴이 기록된 TASK(`> **Task:** [id] 제목`, frontmatter `task_id`)를,
+  날짜 일지 줄에 `task <id>` 를 적는다.
+- 이벤트 `context.task_board`(카탈로그 v19).
+
 ## [4.97.0] - 2026-10-23
 
 ### Fixed: 모델과 사용자가 받는 것이 실제와 같다 (정직성 감사)

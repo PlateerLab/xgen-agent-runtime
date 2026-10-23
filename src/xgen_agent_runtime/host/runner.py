@@ -778,6 +778,7 @@ def build_pipeline(
                 DateTimeBlock,
                 PinnedFactsBlock,
                 RetrievedMemoryBlock,
+                TaskBoardBlock,
                 TurnNotesBlock,
             )
 
@@ -807,6 +808,7 @@ def build_pipeline(
                         PinnedFactsBlock(),
                         DateTimeBlock(),
                         RetrievedMemoryBlock(),
+                        TaskBoardBlock(),
                         TurnNotesBlock(),
                     ]
                 ),
@@ -1277,6 +1279,19 @@ def _record_execution(
         return
     spec = getattr(pipeline, "_memory_distill_spec", None)
     calls, failures, blocked = _tool_stats_from_events(state)
+    # TASK 먼저: 실행 카드가 이 턴이 기록된 TASK 를 적는다(Executions ↔ TASK 연결).
+    task = _record_task_turn(
+        provider,
+        loop,
+        state=state,
+        input_text=input_text,
+        output_text=output_text,
+        success=success,
+        cancelled=cancelled,
+        calls=calls,
+        failures=failures,
+        blocked=blocked,
+    )
     try:
         from xgen_agent_runtime.host.execution_record import record_turn_execution
 
@@ -1297,12 +1312,92 @@ def _record_execution(
                     tool_calls=calls,
                     tool_failures=failures,
                     blocked=blocked,
+                    task_id=getattr(task, "id", "") or "",
+                    task_title=getattr(task, "title", "") or "",
                 ),
                 timeout=10.0,
             )
         )
     except Exception:  # noqa: BLE001 — 기록은 best-effort
         logger.debug("geny_bridge: execution record failed (turn unaffected)", exc_info=True)
+
+
+def _record_task_turn(
+    provider: Any,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    state: PipelineState,
+    input_text: Any,
+    output_text: str,
+    success: bool,
+    cancelled: bool,
+    calls: int,
+    failures: int,
+    blocked: int,
+) -> Any:
+    """이 턴이 한 일을 이 대화의 현재 TASK 에 남긴다(memory.tasks, LLM 없음). 기록한 TASK 를 돌려준다.
+
+    모델이 TASK 를 열지 않았어도 여러 단계 일이 분명하면(끝나지 않은 계획 2단계 이상, 도구를 쓰다
+    끝나지 못한 턴) 요청으로 TASK 를 연다(호스트가 열었다고 적는다). 실패는 로그만.
+    """
+    from xgen_agent_runtime.memory.tasks import (
+        CURRENT_KEY,
+        provider_tasks,
+        record_turn,
+        tool_calls_in,
+        turn_messages,
+    )
+
+    store = provider_tasks(provider)
+    if store is None:
+        return None
+    try:
+        from xgen_agent_runtime.host.execution_record import _as_text, classify_outcome
+        from xgen_agent_runtime.host.task_tools import sync_task_note
+        from xgen_agent_runtime.stages.s16_loop.completion_review import written_paths
+
+        msgs = turn_messages(list(state.messages or []))
+        n_calls = max(int(calls or 0), tool_calls_in(msgs))
+        outcome = classify_outcome(
+            success,
+            tool_calls=n_calls,
+            tool_failures=failures,
+            blocked=blocked,
+            cancelled=cancelled,
+        )
+        # TodoWrite 를 이번 턴에 썼을 때만 그 목록이 이 TASK 의 계획이다(지난 턴의 목록을 다른 TASK 에
+        # 덮어쓰지 않는다).
+        used = {
+            str(b.get("name") or "")
+            for m in msgs
+            if isinstance(m, dict) and isinstance(m.get("content"), list)
+            for b in m["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_use"
+        }
+        wrote_todos = "TodoWrite" in used
+
+        async def _go() -> Any:
+            task = await record_turn(
+                store,
+                session_id=str(getattr(state, "session_id", "") or ""),
+                request=_as_text(input_text),
+                answer=str(output_text or ""),
+                outcome=outcome,
+                tool_calls=n_calls,
+                tool_failures=int(failures or 0),
+                files=written_paths(msgs),
+                todos=state.shared.get("executor.todos") if wrote_todos else None,
+                current_id=str(state.shared.get(CURRENT_KEY) or ""),
+                task_tool_used="Task" in used,
+            )
+            if task is not None:
+                await sync_task_note(provider, store, task)
+            return task
+
+        return loop.run_until_complete(asyncio.wait_for(_go(), timeout=10.0))
+    except Exception:  # noqa: BLE001 — 기록은 best-effort
+        logger.debug("geny_bridge: task record failed (turn unaffected)", exc_info=True)
+        return None
 
 
 #: 끝나지 못한 턴을 기억에 남길 때 그 턴 끝에 붙이는 표식 — 다음 턴의 단기 기억 창이 이 턴을 "끝나지
