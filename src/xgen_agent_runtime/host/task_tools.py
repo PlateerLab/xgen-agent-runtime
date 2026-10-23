@@ -93,7 +93,13 @@ def _strings(value: Any) -> List[str]:
 
 
 async def sync_task_note(provider: Any, store: Any, task: Task) -> None:
-    """The task as a note in category ``tasks`` (memory search, the memory screen). Best-effort."""
+    """The task as a note in category ``tasks`` (memory search, the memory screen). Best-effort.
+
+    Tasks belong to one person; a provider whose notes are shared by everyone using the agent says
+    ``task_notes = False`` and gets no task notes (its tasks are found through the board and
+    ``Task(action="list", query=...)`` instead)."""
+    if not getattr(provider, "task_notes", True):
+        return
     try:
         from xgen_agent_runtime.memory.provider import NoteDraft, NotePatch
 
@@ -200,9 +206,30 @@ def build_task_tools(provider: Any) -> List[Any]:
 
         if action == "list":
             include_done = bool(tool_input.get("include_done"))
-            rows = await store.list(statuses=None if include_done else OPEN_STATUSES, limit=100)
-            total = await store.count(statuses=None if include_done else OPEN_STATUSES)
+            query = str(tool_input.get("query") or "").strip().lower()
+            statuses = None if include_done or query else OPEN_STATUSES
+            rows = await store.list(statuses=statuses, limit=500 if query else 100)
+            total = await store.count(statuses=statuses)
+            if query:
+                # Words in the title, goal, decisions, files or next step ("last week's report").
+                words = query.split()
+                rows = [
+                    t
+                    for t in rows
+                    if all(
+                        w
+                        in " ".join(
+                            [t.title, t.goal, t.next_step, " ".join(t.decisions), " ".join(t.files)]
+                        ).lower()
+                        for w in words
+                    )
+                ]
+                total = len(rows)
             if not rows:
+                if query:
+                    return ToolResult(
+                        content=f"No task matches {query!r} (open and closed tasks were searched)."
+                    )
                 return ToolResult(content="No tasks." if include_done else "No open tasks.")
             current = await store.current(session_id)
             lines = [f"[{len(rows)} of {total} task(s), most recently updated first]"]
@@ -413,7 +440,8 @@ def build_task_tools(provider: Any) -> List[Any]:
                 "action='update' records progress: a plan step done (step={n, status}), a new plan, a "
                 "decision, files, the next step, status active/blocked/open, or a note; "
                 "action='switch' (task_id) picks up another task; action='close' (outcome done or "
-                "dropped, summary) finishes it; action='list' lists open tasks. The current task is "
+                "dropped, summary) finishes it; action='list' lists open tasks (query finds any task "
+                "by its words). The current task is "
                 "shown to you every turn, so keep it accurate. One-step questions need no task."
             ),
             input_schema={
@@ -472,6 +500,13 @@ def build_task_tools(provider: Any) -> List[Any]:
                     "include_done": {
                         "type": "boolean",
                         "description": "For list: include closed tasks.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "For list: words to find in a task, open or closed (a task from an "
+                            "earlier conversation)."
+                        ),
                     },
                 },
                 "required": ["action"],

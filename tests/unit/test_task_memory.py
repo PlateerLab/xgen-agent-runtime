@@ -478,3 +478,23 @@ def test_end_to_end_tasks_carry_across_turns_and_conversations():
     assert after.focus_session == "B" and after.plan[0]["status"] == "done"
     kinds = [e.kind for e in asyncio.run(provider.tasks().events(task.id, limit=50))]
     assert kinds.count("turn") == 3, kinds  # 세 턴 모두 Task 를 만졌다
+
+
+def test_list_finds_a_closed_task_by_its_words_and_shared_notes_are_skipped():
+    provider = EphemeralMemoryProvider()
+    task_tool = _tools(provider)["Task"]
+
+    async def go():
+        opened = await _call(task_tool, _ctx(), action="open", title="3분기 매출 보고서", goal="부서별 표")
+        tid = opened.state_mutations[CURRENT_KEY]
+        await _call(task_tool, _ctx(), action="close", outcome="done")
+        found = await _call(task_tool, _ctx("other"), action="list", query="매출 보고서")
+        assert tid in found.content
+        miss = await _call(task_tool, _ctx("other"), action="list", query="이관")
+        assert "No task matches" in miss.content
+
+        provider.task_notes = False  # 노트가 에이전트 공용인 provider: TASK 노트를 쓰지 않는다
+        other = await _call(task_tool, _ctx(), action="open", title="비공개 일")
+        assert await provider.notes().read(f"task-{other.state_mutations[CURRENT_KEY]}.md") is None
+
+    _run(go())

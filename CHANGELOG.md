@@ -29,6 +29,9 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   노트는 판이 이미 실으므로 기억 검색에서 뺀다.
 - 판의 사용 안내(Task 를 부르라는 말)는 그 호출에 Task 도구가 있을 때만 붙는다. 메모리 도구가 없는 백엔드에는 "호스트가
   기록한다" 만 적는다. Stage 3 은 블록을 그리기 전에 이번 호출에 나가는 도구 이름을 알린다(`_offered_tools`).
+- TASK 는 사람의 것이다. 노트가 에이전트 공용인 provider 는 `task_notes = False` 로 TASK 노트를 받지 않는다(다른 사람이
+  기억 검색으로 남의 TASK 를 보지 않게). 그런 provider 에서는 판과 `Task(action="list", query=...)`(열린·닫힌 TASK 를 낱말로
+  찾는다)로 찾는다.
 - 이벤트 `context.task_board`(카탈로그 v19).
 
 ## [4.97.0] - 2026-10-23
