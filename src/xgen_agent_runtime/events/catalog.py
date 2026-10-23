@@ -67,7 +67,8 @@ from typing import Any, Dict, FrozenSet, List
 #: v17: ``tool.call_start`` / ``tool.call_complete`` gain ``capabilities`` / ``origin``.
 #: v18: + ``loop.review_start`` / ``loop.review_end`` (4.95.0 the completion review's span, so a host can
 #: say "checking the files in the answer" while it reads them).
-EVENT_CATALOG_VERSION = 18
+#: v19: + ``context.task_board`` (4.98.0 TASK memory: the board loaded at the start of each turn).
+EVENT_CATALOG_VERSION = 19
 
 
 class EventTypes(str, Enum):
@@ -142,6 +143,8 @@ class EventTypes(str, Enum):
     #: 단기 기억 창(4.36.0) — 호스트가 이력을 preload 하지 않은 턴에서 STM 의 최근 논리 턴을
     #: messages 앞에 되살렸다(가까운 턴은 도구까지, 먼 턴은 대화만).
     CONTEXT_SHORT_TERM_WINDOW = "context.short_term_window"
+    #: TASK 판(4.98.0) — 이 대화의 현재 TASK 와 열린 TASK 를 이번 턴 프롬프트에 실었다.
+    CONTEXT_TASK_BOARD = "context.task_board"
     MEMORY_COMPACTION_SUMMARIZED = "memory.compaction.summarized"
     MEMORY_COMPACTION_LLM_FAILED = "memory.compaction.llm_failed"
 
@@ -463,6 +466,10 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "dialogue": "int — 대화만 넣은 턴 수",
         "chars": "int — 창의 직렬화 길이",
         "degraded": "list[str] — 예산 강등 단계",
+    },
+    EventTypes.CONTEXT_TASK_BOARD: {
+        "current": "str — 이 대화의 현재 TASK id (없으면 빈 문자열)",
+        "chars": "int — 판의 길이",
     },
     EventTypes.CONTEXT_COMPACTED: {
         "strategy": "str — compactor name/class, or 'prune' when the deterministic pass alone met the target",

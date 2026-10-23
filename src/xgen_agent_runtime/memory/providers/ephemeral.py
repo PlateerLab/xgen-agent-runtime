@@ -606,6 +606,9 @@ class EphemeralMemoryProvider(MemoryProvider):
         self._ltm = _LTMStore()
         self._notes = _NotesStore(scope=scope)
         self._index = _IndexCache(self._notes)
+        from xgen_agent_runtime.memory.tasks import InMemoryTaskStore
+
+        self._tasks = InMemoryTaskStore()
         self._closed = False
         # Hook bag — STM/Notes stores in this in-memory provider don't
         # currently fire `after_*` callbacks (test fixture provider),
@@ -678,6 +681,10 @@ class EphemeralMemoryProvider(MemoryProvider):
 
     def index(self) -> _IndexCache:
         return self._index
+
+    def tasks(self):
+        """The TASK layer (memory.tasks): optional on providers, present here."""
+        return self._tasks
 
     # ── Cross-layer ─────────────────────────────────────────────────
     async def record_turn(self, turn: Turn) -> None:

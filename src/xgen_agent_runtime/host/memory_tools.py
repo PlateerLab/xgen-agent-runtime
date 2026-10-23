@@ -429,6 +429,10 @@ def build_memory_tools(provider: Any) -> List[Any]:
             capabilities=read_caps,
         ),
     ]
+    # TASK 층(memory.tasks)이 있는 provider 면 Task·TaskRecall 도 준다.
+    from xgen_agent_runtime.host.task_tools import build_task_tools
+
+    tools.extend(build_task_tools(provider))
     # 종류 표지 — 호스트의 결과 필터가 이름이 아니라 종류로 판정한다(tools.base.tool_origin).
     return [with_origin(t, "memory") for t in tools]
 

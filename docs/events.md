@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-10-23.
-> Catalogue version: **18** · events: **145**
+> Catalogue version: **19** · events: **146**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -444,6 +444,15 @@ Enum member: `EventTypes.CONTEXT_SHORT_TERM_WINDOW`
 | `dialogue` | int — 대화만 넣은 턴 수 |
 | `chars` | int — 창의 직렬화 길이 |
 | `degraded` | list[str] — 예산 강등 단계 |
+
+### `context.task_board`
+
+Enum member: `EventTypes.CONTEXT_TASK_BOARD`
+
+| Field | Description |
+|---|---|
+| `current` | str — 이 대화의 현재 TASK id (없으면 빈 문자열) |
+| `chars` | int — 판의 길이 |
 
 ## Stage 18 — Memory (+ Stage 2 compaction)
 
