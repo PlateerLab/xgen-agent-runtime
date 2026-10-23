@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.99.0] - 2026-10-23
+
+### Changed: 사용자의 지시는 메모리에, `assignment` 태그 노트로 (4.98.0 의 TASK 층을 걷어냈다)
+
+4.98.0 은 TASK 를 별도의 층(저장 계약·표·Task 도구·판·호스트 기록)으로 만들었다. 사용자의 지시와 사용자가 중요하다고
+말한 것은 메모리 안에서만 관리하면 된다. 그래서 그 층을 모두 걷어내고 메모리 노트 하나로 바꾼다.
+
+- **모델이 필요할 때 스스로 남긴다.** 메모리 지침(쓰기 도구가 있는 대화에만 붙는다)에 한 단락을 더했다. 사용자가 일을 맡기거나
+  지시를 하거나 중요하다고 말하면, 사용자의 말 그대로·정한 조건·해 준 것을 `assignment` 태그 노트로 남긴다. 일이 바뀌면 그
+  노트를 고쳐 쓰고, 끝나거나 취소되면 `done` 태그를 단다.
+- **메모리는 매 턴 되살린다.** 열린 assignment 노트(`assignment` 태그, `done`·`dropped` 없음)를 검색과 무관하게 매 턴
+  싣는다. 검색은 이번 메시지로 찾으므로 "계속"·"그거 고쳐 줘" 로는 지시가 돌아오지 않았다. 자리는 `# Assignments` 절
+  (`AssignmentsBlock`, volatile)이고, 몫은 기억 주입 예산의 40%다. 맞지 않는 노트는 잘렸다고 노트 이름과 함께 적고,
+  못 실은 노트는 이름으로 적는다. 같은 노트는 검색 층에 다시 싣지 않는다.
+- `memory_write` 에 `filename` 을 더했다. 그 노트를 고쳐 쓴다(제목·본문·분류·태그를 바꾼다). 같은 제목을 다시 쓰면
+  저장소마다 덮어쓰거나 사본을 만들어 달랐다.
+- 고정 사실이 예산을 넘어 잘릴 때 표식과 읽는 길을 적는다.
+- 걷어낸 것: `memory.tasks`, `Task`·`TaskRecall` 도구, TASK 판(`TaskBoardBlock`), 턴 끝 TASK 기록, 압축 요약의 TASK 보관,
+  실행 카드의 task_id, provider 의 `tasks()` 층. 이벤트 `context.task_board` 는 은퇴(`RETIRED_EVENT_TYPES`), 새 이벤트
+  `memory.assignments_loaded`(카탈로그 v20).
+
 ## [4.98.0] - 2026-10-23
 
 ### Added: TASK 기억, 여러 단계·여러 턴 일을 하나의 기억 단위로 (`memory.tasks`)

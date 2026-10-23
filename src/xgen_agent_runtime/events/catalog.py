@@ -68,7 +68,9 @@ from typing import Any, Dict, FrozenSet, List
 #: v18: + ``loop.review_start`` / ``loop.review_end`` (4.95.0 the completion review's span, so a host can
 #: say "checking the files in the answer" while it reads them).
 #: v19: + ``context.task_board`` (4.98.0 TASK memory: the board loaded at the start of each turn).
-EVENT_CATALOG_VERSION = 19
+#: v20: ``context.task_board`` retired (4.99.0: the TASK layer was replaced by assignment notes in
+#: memory); + ``memory.assignments_loaded``.
+EVENT_CATALOG_VERSION = 20
 
 
 class EventTypes(str, Enum):
@@ -143,8 +145,10 @@ class EventTypes(str, Enum):
     #: 단기 기억 창(4.36.0) — 호스트가 이력을 preload 하지 않은 턴에서 STM 의 최근 논리 턴을
     #: messages 앞에 되살렸다(가까운 턴은 도구까지, 먼 턴은 대화만).
     CONTEXT_SHORT_TERM_WINDOW = "context.short_term_window"
-    #: TASK 판(4.98.0) — 이 대화의 현재 TASK 와 열린 TASK 를 이번 턴 프롬프트에 실었다.
+    #: TASK 판(4.98.0). 4.99.0 에 걷어냈다(RETIRED_EVENT_TYPES).
     CONTEXT_TASK_BOARD = "context.task_board"
+    #: 열린 assignment 노트(사용자의 지시, 메모리)를 이번 턴 프롬프트에 실었다(4.99.0).
+    MEMORY_ASSIGNMENTS_LOADED = "memory.assignments_loaded"
     MEMORY_COMPACTION_SUMMARIZED = "memory.compaction.summarized"
     MEMORY_COMPACTION_LLM_FAILED = "memory.compaction.llm_failed"
 
@@ -470,6 +474,11 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
     EventTypes.CONTEXT_TASK_BOARD: {
         "current": "str — 이 대화의 현재 TASK id (없으면 빈 문자열)",
         "chars": "int — 판의 길이",
+    },
+    EventTypes.MEMORY_ASSIGNMENTS_LOADED: {
+        "open": "int — 열린 assignment 노트 수",
+        "shown": "int — 프롬프트에 실은 수(나머지는 이름으로 적었다)",
+        "chars": "int — 실은 길이",
     },
     EventTypes.CONTEXT_COMPACTED: {
         "strategy": "str — compactor name/class, or 'prune' when the deterministic pass alone met the target",
@@ -1054,6 +1063,8 @@ RETIRED_EVENT_TYPES: FrozenSet[EventTypes] = frozenset(
         EventTypes.TASK_REGISTRY_SYNCED,
         EventTypes.TASK_REGISTRY_INVALID_PAYLOAD,
         EventTypes.TASK_REGISTRY_POLICY_ERROR,
+        # 4.99.0: the TASK board went with the TASK layer (assignments live in memory notes).
+        EventTypes.CONTEXT_TASK_BOARD,
     }
 )
 

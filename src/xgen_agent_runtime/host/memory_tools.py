@@ -136,18 +136,36 @@ def build_memory_tools(provider: Any) -> List[Any]:
         if not title or not content:
             return ToolResult(content=_err("title and content are required"), is_error=True)
         category = str(tool_input.get("category") or "topics").strip() or "topics"
+        # 같은 노트를 고쳐 쓰는 길(파일명). 제목만으로는 저장소마다 달랐다: 같은 제목을 덮어쓰는 곳도,
+        # 사본을 하나 더 만드는 곳도 있었다. 고쳐 쓸 노트는 파일명으로 가리킨다.
+        filename = str(tool_input.get("filename") or "").strip()
+        existed = False
+        if filename:
+            try:
+                existed = await provider.notes().read(filename) is not None
+            except Exception:  # noqa: BLE001
+                existed = False
+            if not existed:
+                return ToolResult(
+                    content=_err(
+                        f"no note named {filename!r} to rewrite; leave filename out to create a new note "
+                        "(memory_list or memory_search gives real filenames)"
+                    ),
+                    is_error=True,
+                )
         draft = NoteDraft(
             title=title,
             body=content,
             category=category,
             tags=_split_tags(tool_input.get("tags")),
             importance=_importance(str(tool_input.get("importance") or "medium")),
+            filename=filename,
         )
         meta = await provider.notes().write(draft)
         return ToolResult(
             content=_ok(
                 {
-                    "status": "created",
+                    "status": "updated" if existed else "created",
                     "filename": meta.ref.filename,
                     "title": meta.title,
                     "category": meta.category,
@@ -303,14 +321,19 @@ def build_memory_tools(provider: Any) -> List[Any]:
         build_tool(
             name="memory_write",
             description=(
-                "Create a persistent memory note (survives across conversations). "
-                "Use for durable knowledge, decisions, insights. Link related notes "
-                "with [[filename]] wikilinks in the content."
+                "Create a persistent memory note (survives across conversations), or rewrite an "
+                "existing one by its filename. Use for durable knowledge, decisions, insights, and "
+                "the user's instructions (tag them `assignment`). Link related notes with "
+                "[[filename]] wikilinks in the content."
             ),
             input_schema=_schema(
                 {
                     "title": {"type": "string", "description": "Note title"},
                     "content": {"type": "string", "description": "Markdown body"},
+                    "filename": {
+                        "type": "string",
+                        "description": "To rewrite an existing note: its filename (title, body, category and tags are replaced). Leave out to create a new note.",
+                    },
                     "category": {
                         "type": "string",
                         "description": "topics|projects|insights|daily|critical (default topics)",
@@ -429,10 +452,6 @@ def build_memory_tools(provider: Any) -> List[Any]:
             capabilities=read_caps,
         ),
     ]
-    # TASK 층(memory.tasks)이 있는 provider 면 Task·TaskRecall 도 준다.
-    from xgen_agent_runtime.host.task_tools import build_task_tools
-
-    tools.extend(build_task_tools(provider))
     # 종류 표지 — 호스트의 결과 필터가 이름이 아니라 종류로 판정한다(tools.base.tool_origin).
     return [with_origin(t, "memory") for t in tools]
 

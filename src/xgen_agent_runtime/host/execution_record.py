@@ -112,8 +112,6 @@ def _build_card_body(
     tool_calls: int = 0,
     tool_failures: int = 0,
     blocked: int = 0,
-    task_id: str = "",
-    task_title: str = "",
 ) -> str:
     """Geny ``_build_execution_entry`` 형식 미러 (구조 동일, 필드 간소)."""
     outcome = outcome or classify_outcome(
@@ -126,9 +124,6 @@ def _build_card_body(
         f"> **Task:** {_clip(input_text, _TASK_CLIP)}",
         f"> **Duration:** {secs:.1f}s · **Session:** {session_id or '-'}",
     ]
-    if task_id:
-        # 이 턴이 기록된 TASK(memory.tasks) — 실행 기록과 일을 잇는다.
-        lines.append(f"> **Task:** [{task_id}] {_clip(task_title, 80)}")
     if tool_calls:
         tools_line = f"> **Tools:** {int(tool_calls)} calls · {int(tool_failures)} failed"
         if blocked:
@@ -171,8 +166,6 @@ async def record_turn_execution(
     tool_calls: int = 0,
     tool_failures: int = 0,
     blocked: int = 0,
-    task_id: str = "",
-    task_title: str = "",
 ) -> None:
     """실행 1회를 daily 카드 + executions 저널에 기록 (best-effort).
 
@@ -226,8 +219,6 @@ async def record_turn_execution(
         tool_calls=tool_calls,
         tool_failures=tool_failures,
         blocked=blocked,
-        task_id=task_id,
-        task_title=task_title,
     )
     try:
         await notes.write(
@@ -246,7 +237,6 @@ async def record_turn_execution(
                     "tool_calls": int(tool_calls),
                     "tool_failures": int(tool_failures),
                     "duration_ms": int(duration_ms),
-                    "task_id": task_id or None,
                 },
             )
         )
@@ -259,7 +249,6 @@ async def record_turn_execution(
     line = (
         f"- {now.strftime('%H:%M')} {mark} #{number} "
         f"{_clip(input_text, 60)} ({duration_ms / 1000.0:.1f}s)"
-        + (f" · task {task_id}" if task_id else "")
     )
     try:
         existing = await notes.read(journal_filename)

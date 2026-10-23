@@ -480,51 +480,11 @@ class ContextStage(Stage[Any, Any]):
         state.metadata[WINDOW_KEY] = report.as_event()
         state.add_event("context.short_term_window", report.as_event())
 
-    async def _preload_task_board(self, state: PipelineState) -> str:
-        """턴 첫 반복에서 TASK 판(memory.tasks)을 만든다: 이 대화의 현재 TASK 전체 + 다른 열린 TASK.
-
-        검색을 거치지 않고 매 턴 실린다(Stage 3 TaskBoardBlock). 그래서 "계속" 같은 짧은 후속에도
-        일의 상태가 온다. 돌려주는 것은 기억 검색 질의에 더할 현재 TASK 의 제목·목표다.
-        """
-        if state.iteration != 0 or state._is_continuation_slice:
-            return ""
-        from xgen_agent_runtime.memory.tasks import (
-            BOARD_KEY,
-            CURRENT_KEY,
-            load_board,
-            provider_tasks,
-        )
-
-        store = provider_tasks(self._window_source())
-        if store is None:
-            return ""
-        from xgen_agent_runtime.host.task_tools import board_budget_chars
-
-        try:
-            board, current = await asyncio.wait_for(
-                load_board(store, str(state.session_id or ""), max_chars=board_budget_chars(state)),
-                timeout=self._retrieval_timeout_s or None,
-            )
-        except Exception:  # noqa: BLE001 — 판이 없어도 턴은 돈다(다음 턴에 다시 읽는다)
-            logger.warning("task board could not be loaded", exc_info=True)
-            return ""
-        state.shared[BOARD_KEY] = board
-        state.shared[CURRENT_KEY] = current.id if current else ""
-        state.add_event(
-            "context.task_board",
-            {"current": current.id if current else "", "chars": len(board)},
-        )
-        if current is None:
-            return ""
-        return f"{current.title} {current.goal}".strip()
-
     async def execute(self, input: Any, state: PipelineState) -> Any:
         # Build context via strategy
         await self._strategy.build_context(state)
         # 단기 기억 창 — 이력 preload 가 없는 호스트에서 최근 5 논리 턴을 messages 로.
         await self._preload_short_term_window(state)
-        # TASK 판 — 이 대화의 현재 일과 열린 일(검색과 무관하게 매 턴).
-        task_hint = await self._preload_task_board(state)
 
         # Retrieve memory — extract query from the last user message, not final_text
         # (final_text is only populated after Stage 9 Parse, not available here)
@@ -539,9 +499,6 @@ class ContextStage(Stage[Any, Any]):
                 b.get("text", "") for b in query if isinstance(b, dict) and b.get("type") == "text"
             )
         query = str(query)
-        if task_hint:
-            # 기억 검색은 이번 메시지만이 아니라 지금 하는 일로도 찾는다("계속" 은 아무것도 못 찾는다).
-            query = f"{query}\n{task_hint}" if query.strip() else task_hint
 
         # Clear last turn's retrieved memory BEFORE this turn's retrieval
         # (audit C1). ``state.metadata`` is sticky, and the injection below
@@ -551,6 +508,7 @@ class ContextStage(Stage[Any, Any]):
         if state.iteration == 0 and not state._is_continuation_slice:
             state.metadata.pop("memory_context", None)
             state.metadata.pop("memory_pinned", None)
+            state.metadata.pop("memory_assignments", None)
             state.shared[_TURN_SEQ_KEY] = int(state.shared.get(_TURN_SEQ_KEY) or 0) + 1
 
         # TTFT program (finding B2): retrieval results are only injected
@@ -586,7 +544,13 @@ class ContextStage(Stage[Any, Any]):
                 for c in chunks
                 if c.source == "pinned" or (c.metadata or {}).get("layer") == "pinned"
             ]
-            other_chunks = [c for c in chunks if c not in pinned_chunks]
+            # The user's open assignments (memory.assignments) have their own section.
+            assignment_chunks = [
+                c for c in chunks if (c.metadata or {}).get("layer") == "assignments"
+            ]
+            other_chunks = [
+                c for c in chunks if c not in pinned_chunks and c not in assignment_chunks
+            ]
 
             if state.messages and state.iteration == 0 and not state._is_continuation_slice:
                 if pinned_chunks:
@@ -594,6 +558,19 @@ class ContextStage(Stage[Any, Any]):
                     # join with blank lines instead of the bullet
                     # form used for search results.
                     state.metadata["memory_pinned"] = "\n\n".join(c.content for c in pinned_chunks)
+                if assignment_chunks:
+                    state.metadata["memory_assignments"] = "\n\n".join(
+                        c.content for c in assignment_chunks
+                    )
+                    meta = assignment_chunks[0].metadata or {}
+                    state.add_event(
+                        "memory.assignments_loaded",
+                        {
+                            "open": int(meta.get("open") or 0),
+                            "shown": state.metadata["memory_assignments"].count("(note: "),
+                            "chars": len(state.metadata["memory_assignments"]),
+                        },
+                    )
                 if other_chunks:
                     memory_text = "\n".join(
                         f"- [{c.source}] {c.key}: {c.content}" for c in other_chunks

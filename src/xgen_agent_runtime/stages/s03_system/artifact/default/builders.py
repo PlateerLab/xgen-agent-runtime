@@ -12,6 +12,11 @@ from xgen_agent_runtime.stages.s03_system.interface import PromptBlock, PromptBu
 #: The line under ``# Relevant Knowledge``. Entries there are excerpts the store cut (a 400-char
 #: preview, a snippet around the first hit); without saying so the model treated a fragment as the
 #: whole note (2026-10-23 audit).
+#: Under the Assignments section: what these notes are and how to treat them.
+ASSIGNMENTS_NOTE = (
+    "(Notes tagged `assignment` in your memory: what the user asked for and what they said matters, "
+    "kept in their words. Follow them; where they conflict, the latest instruction wins.)"
+)
 RELEVANT_KNOWLEDGE_NOTE = (
     "(Excerpts recalled from memory for this message; an entry may be cut. "
     "Read the full note with memory_read before relying on its details.)"
@@ -246,6 +251,28 @@ class PinnedFactsBlock(PromptBlock):
         return ""
 
 
+class AssignmentsBlock(PromptBlock):
+    """The user's open assignments (``state.metadata["memory_assignments"]``): notes tagged
+    ``assignment`` that memory loads on every turn (memory.assignments, 4.99.0).
+
+    Volatile: the agent rewrites these notes as the work changes, so they change between turns.
+    """
+
+    @property
+    def name(self) -> str:
+        return "memory_assignments"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        body = state.metadata.get("memory_assignments", "")
+        if isinstance(body, str) and body.strip():
+            return f"# Assignments\n{ASSIGNMENTS_NOTE}\n{body}"
+        return ""
+
+
 class RetrievedMemoryBlock(PromptBlock):
     """T2 per-turn retrieved memory (``state.metadata["memory_context"]``).
 
@@ -358,41 +385,6 @@ class TurnNotesBlock(PromptBlock):
         if not isinstance(notes, (list, tuple)):
             return ""
         return "\n\n".join(str(n).strip() for n in notes if str(n or "").strip())
-
-
-class TaskBoardBlock(PromptBlock):
-    """The task board (memory.tasks): this conversation's current task in full and the other open
-    tasks, every turn, whatever the message says (2026-10-23).
-
-    Volatile: Stage 2 builds it at the turn's start and the Task tool rebuilds it when the agent
-    changes a task, so the next call reads the change.
-    """
-
-    @property
-    def name(self) -> str:
-        return "task_board"
-
-    @property
-    def volatile(self) -> bool:
-        return True
-
-    def render(self, state: PipelineState) -> str:
-        from xgen_agent_runtime.memory.tasks import BOARD_GUIDE, BOARD_KEY, BOARD_READ_ONLY
-
-        board = state.shared.get(BOARD_KEY)
-        if not isinstance(board, str) or not board.strip():
-            return ""
-        # How to use it only when the Task tool is there: a backend without the memory tools must
-        # not be told to call one.
-        names = state.shared.get("_offered_tools")
-        if not isinstance(names, list):
-            names = [
-                t.get("name") or (t.get("function") or {}).get("name")
-                for t in (getattr(state, "tools", None) or [])
-                if isinstance(t, dict)
-            ]
-        offered = "Task" in names
-        return f"{board.strip()}\n\n{BOARD_GUIDE if offered else BOARD_READ_ONLY}"
 
 
 class CustomBlock(PromptBlock):
