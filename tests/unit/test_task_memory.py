@@ -377,3 +377,17 @@ def test_bad_calls_say_what_is_wrong(bad):
         return await _tools(provider)["Task"].execute(bad, _ctx())
 
     assert _run(go()).is_error
+
+
+def test_search_does_not_bring_back_the_current_tasks_own_note():
+    from xgen_agent_runtime.memory.retriever import _is_note
+
+    hit = SimpleNamespace(key="tasks/task-T-1.md", metadata={"filename": "tasks/task-T-1.md"}, content="")
+    assert _is_note(hit, "task-T-1.md") and not _is_note(hit, "task-T-2.md") and not _is_note(hit, "")
+
+
+def test_the_task_note_says_it_is_rewritten_from_the_record():
+    from xgen_agent_runtime.memory.tasks import task_note
+
+    _, _, body = task_note(Task(id="T-9", title="x"))
+    assert body.startswith("> Written from the record of task T-9") and "edits here do not stick" in body

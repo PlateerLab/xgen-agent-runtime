@@ -148,6 +148,15 @@ def _is_current_session_record(hit: Any, session_id: str) -> bool:
     return False
 
 
+def _is_note(hit: Any, filename: str) -> bool:
+    """검색 히트가 이 노트(파일명)인가."""
+    if not filename:
+        return False
+    meta = getattr(hit, "metadata", None) or {}
+    fn = str(meta.get("filename") or getattr(hit, "key", "") or "")
+    return fn.rsplit("/", 1)[-1] == filename
+
+
 def _is_current_session_name(filename: str, session_id: str) -> bool:
     """파일명이 이 세션의 대화 아카이브인가 (``<safe sid>__user…``)."""
     sid = str(session_id or "").strip()
@@ -227,6 +236,10 @@ class MemoryAwareRetriever(MemoryRetriever):
         )
         # 이 세션이 남긴 기록(대화 아카이브·실행 카드)은 창/이력과 중복이다 — 검색 층에서 뺀다.
         self._current_session_id = str(getattr(state, "session_id", "") or "")
+        # 이 대화의 현재 TASK 는 TASK 판(memory.tasks)이 매 턴 통째로 싣는다 — 그 노트를 검색 층에 다시
+        # 올리면 같은 내용이 두 번 실린다.
+        current_task = str((getattr(state, "shared", None) or {}).get("memory.task_current") or "")
+        self._current_task_note = f"task-{current_task}.md" if current_task else ""
 
         def _record(layer: str, before: int) -> None:
             breakdown[layer] = sum(1 for c in chunks if (c.metadata or {}).get("layer") == layer)
@@ -831,6 +844,8 @@ class MemoryAwareRetriever(MemoryRetriever):
         for h in hits:
             if _is_current_session_record(h, getattr(self, "_current_session_id", "")):
                 continue
+            if _is_note(h, getattr(self, "_current_task_note", "")):
+                continue
             if (getattr(h, "metadata", None) or {}).get("category") == _COMPACTIONS_CATEGORY:
                 continue  # 프리페치 없이 불린 경로도 같은 규칙(위 _drop_excluded)
             text = h.content or ""
@@ -917,6 +932,8 @@ class MemoryAwareRetriever(MemoryRetriever):
         already = {_dedup_key(c) for c in chunks}
         for r in results:
             if _is_current_session_record(r, getattr(self, "_current_session_id", "")):
+                continue
+            if _is_note(r, getattr(self, "_current_task_note", "")):
                 continue
             text = r.content or ""
             if not text:

@@ -25,6 +25,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   뺀 수와 `TaskRecall` 을 적는다. 기억 검색 질의에 현재 TASK 의 제목·목표를 더한다. 새 도구
   `TaskRecall(view=card|history|turn)` 는 TASK 의 전체 기록을 읽는다. 그 턴의 원문도 읽는데, 이 대화는 ConversationHistory,
   다른 대화는 provider 의 `session_stm(session_id)` 로 읽는다. TASK 마다 `tasks/task-<id>.md` 노트를 만들어 기억 검색에도 오른다.
+- TASK 노트는 기록에서 다시 쓰는 화면용이라고 첫 줄에 적는다(노트를 고쳐도 TASK 는 바뀌지 않는다). 이 대화의 현재 TASK
+  노트는 판이 이미 싣으므로 기억 검색에서 뺀다.
 - 이벤트 `context.task_board`(카탈로그 v19).
 
 ## [4.97.0] - 2026-10-23

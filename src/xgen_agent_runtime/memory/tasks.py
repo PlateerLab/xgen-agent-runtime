@@ -507,8 +507,15 @@ async def load_board(
 
 
 def task_note(task: Task, events: Sequence[TaskEvent] = ()) -> Tuple[str, str, str]:
-    """(filename, title, body) of the note that makes a task findable by memory search."""
-    body = render_card(task, events, total_events=len(events))
+    """(filename, title, body) of the note that makes a task findable by memory search.
+
+    The note is a view of the task record and is rewritten whenever the task changes; it says so,
+    so an edit made to the note in the memory screen is not mistaken for a change to the task."""
+    body = (
+        f"> Written from the record of task {task.id}; it is rewritten whenever the task changes, so "
+        "edits here do not stick. Ask the agent to change the task (Task tool).\n\n"
+        + render_card(task, events, total_events=len(events))
+    )
     return f"task-{task.id}.md", f"Task: {task.title}", body
 
 
