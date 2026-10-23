@@ -704,11 +704,16 @@ class MemoryAwareRetriever(MemoryRetriever):
             return total
         if len(body) > room:
             logger.debug("memory_aware: pinned facts truncated %d → %d chars", len(body), room)
-            marker = (
-                f"\n…[pinned facts cut here: {room:,} of {len(body):,} chars shown; "
-                f'memory_list(category="{hooks.pin_category}") and memory_read show them all]'
-            )
-            body = body[: max(0, room - len(marker))].rstrip() + marker
+
+            def _marker(shown: int) -> str:
+                return (
+                    f"\n…[pinned facts cut here: {shown:,} of {len(body):,} chars shown; "
+                    f'memory_list(category="{hooks.pin_category}") and memory_read show them all]'
+                )
+
+            # The count is of what is actually shown (room minus the marker itself), not of the room.
+            kept = body[: max(0, room - len(_marker(room)))].rstrip()
+            body = kept + _marker(len(kept))
         chunks.append(
             MemoryChunk(
                 key="pinned_facts",

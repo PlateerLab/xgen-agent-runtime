@@ -517,7 +517,12 @@ class RegistryRouter(ToolRouter):
     async def _after_execution(
         self, tool, tool_input, context, result, caps, scope, budget, execution_failed
     ):
-        """Everything that happens to a result after the tool ran (checks, filters, accounting)."""
+        """Everything that happens to a result after the tool ran (checks, filters, accounting).
+
+        The tool has run here, so a check that fails withholds the result; it never says the call was
+        denied. "Access denied" after a mail, Jira or Write call had gone through made the model run it
+        again (2026-10-23 review).
+        """
         runner = getattr(context, "hook_runner", None)
         if scope is not None:
             scope.check()
@@ -547,7 +552,7 @@ class RegistryRouter(ToolRouter):
             and (result.state_mutations or result.new_messages)
         ):
             return make_error_result(
-                ToolError.access_denied(tool.name, "external_result_authority_rejected")
+                ToolError.result_withheld(tool.name, "external_result_authority_rejected")
             )
         result = await _apply_result_filter(tool, result, context)
         # Sanitized data is all that lifecycle/POST observers may see.
@@ -562,7 +567,7 @@ class RegistryRouter(ToolRouter):
             and (result.state_mutations or result.new_messages)
         ):
             return make_error_result(
-                ToolError.access_denied(tool.name, "external_result_authority_rejected")
+                ToolError.result_withheld(tool.name, "external_result_authority_rejected")
             )
         if scope is not None:
             scope.check()
@@ -589,7 +594,9 @@ class RegistryRouter(ToolRouter):
                     max_bytes=16 * 1024 * 1024,
                 )
             except ApprovalError:
-                return make_error_result(ToolError.access_denied(tool.name, "tool_result_invalid"))
+                return make_error_result(
+                    ToolError.result_withheld(tool.name, "tool_result_invalid")
+                )
             result = _dc_replace(
                 result, provenance={**(result.provenance or provenance), "integrity_digest": digest}
             )
@@ -627,7 +634,7 @@ async def _apply_result_filter(tool: Tool, result: ToolResult, context: ToolCont
     if result_filter is None:
         if required:
             return make_error_result(
-                ToolError.access_denied(tool.name, "result_policy_unavailable")
+                ToolError.result_withheld(tool.name, "result_policy_unavailable")
             )
         return result
     try:
@@ -647,7 +654,7 @@ async def _apply_result_filter(tool: Tool, result: ToolResult, context: ToolCont
         logger.warning("tool result filter policy failed: tool=%s required=%s", tool.name, required)
         if required:
             return make_error_result(
-                ToolError.access_denied(tool.name, "result_policy_unavailable")
+                ToolError.result_withheld(tool.name, "result_policy_unavailable")
             )
         return result
 

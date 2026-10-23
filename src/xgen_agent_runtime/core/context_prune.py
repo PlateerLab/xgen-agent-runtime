@@ -88,6 +88,20 @@ _RESULT_TRIM_NOTE = (
     "\n…[{n} chars of this result trimmed here to fit the context window; "
     'ToolResultRead(id="{id}") shows all of it]…\n'
 )
+#: The same note when the result has no id to read it by (Gemini often leaves the call id empty): the
+#: record keeps the original, so ConversationHistory finds the trimmed part.
+_RESULT_TRIM_NOTE_NO_ID = (
+    "\n…[{n} chars of this result trimmed here to fit the context window; "
+    "ConversationHistory (view='search') finds the trimmed part]…\n"
+)
+
+
+def _result_trim_note(n: int, note_id: str) -> str:
+    if str(note_id or "").strip():
+        return _RESULT_TRIM_NOTE.format(n=n, id=note_id)
+    return _RESULT_TRIM_NOTE_NO_ID.format(n=n)
+
+
 _INPUT_TRIM_NOTE = (
     "\n…[{n} chars of this call's input trimmed here to fit the context window; "
     "the call ran with the full input]"
@@ -210,7 +224,8 @@ def _trim_tool_inputs(
 
 _RESULT_TRIM_RE = re.compile(
     r"\n…\[(\d+) chars of this result trimmed here to fit the context window; "
-    r'ToolResultRead\(id="[^"]*"\) shows all of it\](?:…\n)?'
+    r'(?:ToolResultRead\(id="[^"]*"\) shows all of it|'
+    r"ConversationHistory \(view='search'\) finds the trimmed part)\](?:…\n)?"
 )
 
 
@@ -246,9 +261,7 @@ def _trim_result(block: Dict[str, Any], keep: int, on_change: Callable[[], None]
         if removed <= 0:
             return 0
         on_change()
-        block["content"] = (
-            new_head + _RESULT_TRIM_NOTE.format(n=removed + (before or 0), id=note_id) + new_tail
-        )
+        block["content"] = new_head + _result_trim_note(removed + (before or 0), note_id) + new_tail
         return removed
     if isinstance(content, list):
         if _content_size(block) <= keep:
@@ -284,9 +297,7 @@ def _trim_result(block: Dict[str, Any], keep: int, on_change: Callable[[], None]
                 block["content"] = [b for b in content if id(b) not in drop]
             parts = _result_text_parts(block)
             if parts:
-                parts[-1]["text"] += _RESULT_TRIM_NOTE.format(
-                    n=dropped + before, id=note_id
-                ).rstrip("\n…")
+                parts[-1]["text"] += _result_trim_note(dropped + before, note_id).rstrip("\n…")
         return dropped
     return 0
 

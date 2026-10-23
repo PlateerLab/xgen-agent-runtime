@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from xgen_agent_runtime.tools.base import Tool, ToolContext, ToolResult
-from xgen_agent_runtime.tools.built_in._file_witness import witnessed_mutation
+from xgen_agent_runtime.tools.built_in._file_witness import is_witnessed, witnessed_mutation
 from xgen_agent_runtime.tools.fs import tool_fs
 
 
@@ -113,8 +113,15 @@ class EditTool(Tool):
 
         return ToolResult(
             content=f"Successfully edited {resolved} ({count} replacement{'s' if count > 1 else ''})",
-            # 방금 고친 파일은 내용을 안다(old_string 이 정확히 맞아야 고칠 수 있다).
-            state_mutations=witnessed_mutation(context.state_view, file_path, resolved),
+            # 고친 자리를 안다고 파일 전체를 본 것은 아니다. 예전에는 Edit 한 번이 파일 전체를 "읽음" 으로
+            # 올려, 일부만 읽고 Edit 한 뒤 Write 가 파일 전체를 갈아 끼웠다(2026-10-23 점검). 이미 읽은 파일만
+            # 장부를 이어 간다(두 표기 모두).
+            state_mutations=(
+                witnessed_mutation(context.state_view, file_path, resolved)
+                if is_witnessed(context.state_view, file_path)
+                or is_witnessed(context.state_view, resolved)
+                else {}
+            ),
         )
 
 

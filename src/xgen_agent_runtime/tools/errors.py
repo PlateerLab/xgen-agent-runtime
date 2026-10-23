@@ -110,7 +110,14 @@ class ToolError:
         why = {
             "run_budget_exceeded": "this run has used up its tool-result size or time budget",
             "result_policy_unavailable": "the data policy could not check this result",
-            "tool_result_invalid": "the result could not be serialized",
+            "tool_result_invalid": (
+                "the result could not be checked (it is not serializable, or larger than the 16 MiB "
+                "check limit)"
+            ),
+            "external_result_authority_rejected": (
+                "an external tool's result tried to change the agent's state or add messages, "
+                "which it may not do"
+            ),
         }.get(reason, reason)
         return cls(
             code=ToolErrorCode.RESULT_WITHHELD,

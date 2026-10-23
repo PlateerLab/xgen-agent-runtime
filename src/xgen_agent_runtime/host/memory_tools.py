@@ -16,7 +16,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("editor.geny_bridge.memory_tools")
 
@@ -34,11 +34,54 @@ def _err(msg: str) -> str:
 
 
 def _split_tags(tags: Any) -> List[str]:
-    if isinstance(tags, list):
-        return [str(t).strip() for t in tags if str(t).strip()]
+    """Tags as a clean list. Models also send ``#assignment``, ``"assignment"`` or a JSON array as text;
+    kept as given those never matched a tag lookup (``memory_list(tag="assignment")``)."""
     if isinstance(tags, str):
-        return [t.strip() for t in tags.split(",") if t.strip()]
-    return []
+        text = tags.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            tags = parsed if isinstance(parsed, list) else text[1:-1]
+    if isinstance(tags, str):
+        items: List[Any] = tags.split(",")
+    elif isinstance(tags, list):
+        items = tags
+    else:
+        return []
+    out: List[str] = []
+    for item in items:
+        tag = str(item).strip().strip("'\"").strip().lstrip("#").strip()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
+async def _visible_written_in(
+    provider: Any, entries: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], int]:
+    """The ``written_in`` entries this reader may see, and how many were left out.
+
+    Notes are shared by everyone who uses the agent, conversations are not. A host that knows whose
+    conversation is whose answers ``visible_conversations(ids)`` (sync or async) with the ids this reader
+    may see; then the others' ids are not shown (a shared agent showed every user's conversation ids).
+    A host without it shows all of them (one person's agent).
+    """
+    check = getattr(provider, "visible_conversations", None)
+    if check is None or not entries:
+        return entries, 0
+    ids = [str(e.get("conversation") or "") for e in entries]
+    try:
+        allowed = check(ids)
+        if inspect.isawaitable(allowed):
+            allowed = await allowed
+        allowed_set = {str(a) for a in (allowed or ())}
+    except Exception:  # noqa: BLE001 (cannot tell: show none rather than someone else's)
+        logger.warning("memory_read: could not check whose conversations these are", exc_info=True)
+        allowed_set = set()
+    shown = [e for e in entries if str(e.get("conversation") or "") in allowed_set]
+    return shown, len(entries) - len(shown)
 
 
 def _summary_dict(s: Any) -> Dict[str, Any]:
@@ -138,7 +181,6 @@ def build_memory_tools(provider: Any) -> List[Any]:
         content = str(tool_input.get("content") or "").strip()
         if not title or not content:
             return ToolResult(content=_err("title and content are required"), is_error=True)
-        category = str(tool_input.get("category") or "topics").strip() or "topics"
         # 같은 노트를 고쳐 쓰는 길(파일명). 제목만으로는 저장소마다 달랐다: 같은 제목을 덮어쓰는 곳도,
         # 사본을 하나 더 만드는 곳도 있었다. 고쳐 쓸 노트는 파일명으로 가리킨다.
         filename = str(tool_input.get("filename") or "").strip()
@@ -158,6 +200,34 @@ def build_memory_tools(provider: Any) -> List[Any]:
                     ),
                     is_error=True,
                 )
+            # 저장된 이름으로 쓴다. 읽기는 느슨한 이름('projects/x.md', 확장자 없음, 대소문자)도 찾아 주는데
+            # 쓰기는 받은 글자 그대로 새 행을 만들어, 사본이 둘 생기고 원본은 옛 내용으로 남았다(2026-10-23 점검).
+            filename = str(getattr(getattr(previous, "ref", None), "filename", "") or filename)
+        category_in = str(tool_input.get("category") or "").strip()
+        tags = _split_tags(tool_input.get("tags"))
+        importance_in = str(tool_input.get("importance") or "").strip()
+        if previous is not None:
+            # 고쳐 쓸 때 주지 않은 것은 그대로 둔다. 예전에는 기본값으로 돌아가(분류 topics, 태그 없음) 끝난 일을
+            # `done` 으로만 다시 쓰면 `assignment` 가 빠져 그 일을 다시 찾지 못했다.
+            prev_importance = getattr(previous, "importance", None)
+            category = category_in or str(getattr(previous, "category", "") or "topics")
+            if not tags:
+                tags = list(getattr(previous, "tags", None) or [])
+            from xgen_agent_runtime.memory.assignments import ASSIGNMENT_TAG
+
+            had_assignment = any(
+                str(t).lower() == ASSIGNMENT_TAG for t in (getattr(previous, "tags", None) or [])
+            )
+            if had_assignment and not any(str(t).lower() == ASSIGNMENT_TAG for t in tags):
+                # 지시였던 노트는 지시로 남는다(끝나면 `done` 이 더해질 뿐이다).
+                tags.append(ASSIGNMENT_TAG)
+            importance = _importance(
+                importance_in,
+                default=str(getattr(prev_importance, "value", prev_importance) or "medium"),
+            )
+        else:
+            category = category_in or "topics"
+            importance = _importance(importance_in or "medium")
         # 이 노트를 쓴 대화를 메모리가 적는다(모델이 아니라). 나중에 "예전에 했던 그 일" 을 찾으면 그 대화의
         # 원문까지 따라간다(ConversationHistory(conversation=...)). 고쳐 쓰면 앞의 대화와 다른 frontmatter 는 둔다.
         conversation = str(
@@ -172,8 +242,8 @@ def build_memory_tools(provider: Any) -> List[Any]:
             title=title,
             body=content,
             category=category,
-            tags=_split_tags(tool_input.get("tags")),
-            importance=_importance(str(tool_input.get("importance") or "medium")),
+            tags=tags,
+            importance=importance,
             filename=filename,
             frontmatter=frontmatter,
         )
@@ -231,6 +301,9 @@ def build_memory_tools(provider: Any) -> List[Any]:
             )
         from xgen_agent_runtime.memory.assignments import written_in
 
+        shown, hidden = await _visible_written_in(
+            provider, written_in(getattr(note, "frontmatter", None))
+        )
         return ToolResult(
             content=_ok(
                 {
@@ -240,7 +313,14 @@ def build_memory_tools(provider: Any) -> List[Any]:
                     "tags": list(note.tags or []),
                     # The conversations this note was written in (stamped by memory). Read one word
                     # for word with ConversationHistory(conversation=...).
-                    "written_in": written_in(getattr(note, "frontmatter", None)),
+                    "written_in": shown,
+                    **(
+                        {
+                            "written_in_by_others": f"{hidden} conversation(s) of other people, not shown"
+                        }
+                        if hidden
+                        else {}
+                    ),
                     "importance": note.importance.value
                     if hasattr(note.importance, "value")
                     else str(note.importance),
@@ -353,7 +433,7 @@ def build_memory_tools(provider: Any) -> List[Any]:
                     "content": {"type": "string", "description": "Markdown body"},
                     "filename": {
                         "type": "string",
-                        "description": "To rewrite an existing note: its filename (title, body, category and tags are replaced). Leave out to create a new note.",
+                        "description": "To rewrite an existing note: its filename (title and body are replaced; category, tags and importance stay unless you give them, and a note tagged assignment stays one). Leave out to create a new note.",
                     },
                     "category": {
                         "type": "string",

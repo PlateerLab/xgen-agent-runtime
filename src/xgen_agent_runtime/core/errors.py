@@ -362,12 +362,24 @@ CONTEXT_OVERFLOW_PHRASES: tuple = (
     "exceeds the context window",
     "context window exceeded",
     "longer than the model's context length",
+    # vLLM V1 engine (0.16~0.20, also streamed as an SSE error frame): "The decoder prompt (length 41234)
+    # is longer than the maximum model length of 32768." The encoder variant is excluded below: its limit
+    # is the multimodal encoder budget, not the window, and dropping history cannot fix it.
+    "longer than the maximum model length",
+    # llama.cpp server (llama-server, GGUF): "the request exceeds the available context size, try
+    # increasing it" with type exceed_context_size_error (newer builds add n_prompt_tokens / n_ctx).
+    "exceeds the available context size",
+    "exceed_context_size_error",
 )
+
+_ENCODER_PROMPT = re.compile(r"\bencoder prompt\b", re.I)
 
 
 def is_context_overflow_message(message: str) -> bool:
     """True when an error message says the prompt does not fit the model's context window."""
     text = str(message or "").lower()
+    if _ENCODER_PROMPT.search(text) and "maximum model length" in text:
+        return False
     return any(phrase in text for phrase in CONTEXT_OVERFLOW_PHRASES)
 
 
@@ -382,6 +394,14 @@ _OVERFLOW_COUNT_PATTERNS = (
     re.compile(r"\(([\d,]+)\s*in the messages", re.I),
     # vLLM >= 0.6: "your request has 40000 input tokens"
     re.compile(r"request has\s*([\d,]+)\s*input tokens", re.I),
+    # vLLM 0.20 serving: "you requested 256 output tokens and your prompt contains at least 1793 input
+    # tokens" (measured on 177, 2026-07-24). Without it the count was 0 and an overflow caused by the
+    # answer room alone (max_tokens) was compacted for nothing and retried into the same refusal.
+    re.compile(r"prompt contains at least\s*([\d,]+)\s*input tokens", re.I),
+    # vLLM V1 engine: "The decoder prompt (length 41234) is longer than the maximum model length of ..."
+    re.compile(r"decoder prompt\s*\(length\s*([\d,]+)\)", re.I),
+    # llama.cpp: {"n_prompt_tokens": 9000, "n_ctx": 8192} (JSON or the SDK's dict repr)
+    re.compile(r"n_prompt_tokens['\"]?\s*[:=]\s*([\d,]+)", re.I),
     # Gemini: "The input token count (1234567) exceeds the maximum number of tokens allowed"
     # Vertex: "... because the input token count is 1234567 but model only supports up to 1048576"
     re.compile(r"input token count\s*(?:is\s*)?\(?\s*([\d,]+)", re.I),
@@ -397,6 +417,10 @@ _OVERFLOW_LIMIT_PATTERNS = (
     re.compile(r"exceed context limit:\s*[\d,]+\s*\+\s*[\d,]+\s*>\s*([\d,]+)", re.I),
     # OpenAI / vLLM: "This model's maximum context length is 128000 tokens."
     re.compile(r"maximum context length is\s*([\d,]+)", re.I),
+    # vLLM V1 engine: "... is longer than the maximum model length of 32768."
+    re.compile(r"decoder prompt.*?maximum model length of\s*([\d,]+)", re.I | re.S),
+    # llama.cpp: "n_ctx": 8192 (the slot's context; with --parallel N it is the total / N)
+    re.compile(r"\bn_ctx['\"]?\s*[:=]\s*([\d,]+)", re.I),
     # Gemini: "... exceeds the maximum number of tokens allowed (1048576)."
     re.compile(r"maximum number of tokens allowed\s*\(?\s*([\d,]+)", re.I),
     # Vertex: "... but model only supports up to 1048576."

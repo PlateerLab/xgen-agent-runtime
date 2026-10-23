@@ -1981,7 +1981,10 @@ def run_turn(
             )
         from xgen_agent_runtime.core.shared_keys import SharedKeys
 
-        _texts_before = len(state.shared.get(SharedKeys.TURN_ASSISTANT_TEXTS) or [])
+        # 이번 턴에 쓴 글만 모은다. 상태를 다시 쓰는 호스트에서 지난 턴의 글이 계속 쌓이고(체크포인트에도
+        # 실렸다) 이 목록이 끝없이 커졌다(2026-10-23 점검).
+        state.shared[SharedKeys.TURN_ASSISTANT_TEXTS] = []
+        _texts_before = 0
         result = loop.run_until_complete(pipeline.run(text, state))
         continuation_count = 0
         max_continuations = max(0, int(max_continuation_slices))

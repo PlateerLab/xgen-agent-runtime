@@ -449,7 +449,7 @@ Enum member: `EventTypes.CONTEXT_SHORT_TERM_WINDOW`
 
 Enum member: `EventTypes.CONTEXT_TASK_BOARD`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.99.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -462,7 +462,7 @@ Enum member: `EventTypes.CONTEXT_TASK_BOARD`
 
 Enum member: `EventTypes.MEMORY_ASSIGNMENTS_LOADED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.100.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -908,7 +908,7 @@ Enum member: `EventTypes.TOOL_REVIEW_REVIEWER_ERROR`
 
 Enum member: `EventTypes.AGENT_ORCHESTRATE_START`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -919,7 +919,7 @@ Enum member: `EventTypes.AGENT_ORCHESTRATE_START`
 
 Enum member: `EventTypes.AGENT_ORCHESTRATE_COMPLETE`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -930,7 +930,7 @@ Enum member: `EventTypes.AGENT_ORCHESTRATE_COMPLETE`
 
 Enum member: `EventTypes.AGENT_DELEGATIONS_CAPPED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -943,7 +943,7 @@ Enum member: `EventTypes.AGENT_DELEGATIONS_CAPPED`
 
 Enum member: `EventTypes.SUBAGENT_SPAWNED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -956,7 +956,7 @@ Enum member: `EventTypes.SUBAGENT_SPAWNED`
 
 Enum member: `EventTypes.SUBAGENT_ASSIGNED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -968,7 +968,7 @@ Enum member: `EventTypes.SUBAGENT_ASSIGNED`
 
 Enum member: `EventTypes.SUBAGENT_COMPLETED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -982,7 +982,7 @@ Enum member: `EventTypes.SUBAGENT_COMPLETED`
 
 Enum member: `EventTypes.SUBAGENT_FAILED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -995,7 +995,7 @@ Enum member: `EventTypes.SUBAGENT_FAILED`
 
 Enum member: `EventTypes.SUBAGENT_STOPPED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1007,7 +1007,7 @@ Enum member: `EventTypes.SUBAGENT_STOPPED`
 
 Enum member: `EventTypes.TASK_REGISTERED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1019,7 +1019,7 @@ Enum member: `EventTypes.TASK_REGISTERED`
 
 Enum member: `EventTypes.TASK_DONE`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1030,7 +1030,7 @@ Enum member: `EventTypes.TASK_DONE`
 
 Enum member: `EventTypes.TASK_FAILED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1042,7 +1042,7 @@ Enum member: `EventTypes.TASK_FAILED`
 
 Enum member: `EventTypes.TASK_TIMEOUT`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1054,7 +1054,7 @@ Enum member: `EventTypes.TASK_TIMEOUT`
 
 Enum member: `EventTypes.TASK_REGISTRY_SYNCED`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1066,7 +1066,7 @@ Enum member: `EventTypes.TASK_REGISTRY_SYNCED`
 
 Enum member: `EventTypes.TASK_REGISTRY_INVALID_PAYLOAD`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|
@@ -1076,7 +1076,7 @@ Enum member: `EventTypes.TASK_REGISTRY_INVALID_PAYLOAD`
 
 Enum member: `EventTypes.TASK_REGISTRY_POLICY_ERROR`
 
-**Retired (4.71.0) — no longer emitted.**
+**Retired (4.71.0): no longer emitted.**
 
 | Field | Description |
 |---|---|

@@ -70,6 +70,9 @@ from xgen_agent_runtime.memory.transcript import (
 WINDOW_KEY = "memory.short_term_window"
 #: 창의 메시지 수 — 대화 아카이브(호스트)가 워터마크 기본값으로 읽는다.
 WINDOW_LEN_KEY = "memory.short_term_window_len"
+#: state.metadata: 이번 턴에 ConversationHistory 를 부를 수 있는가(호스트가 적는다, 없으면 True). 부를 수 없는
+#: 턴(도구가 닿지 않는 CLI 등)에 "ConversationHistory 로 읽으라" 고 쓰면 거짓 안내다(2026-10-23 점검).
+HISTORY_READABLE_KEY = "memory.history_readable"
 
 DEFAULT_FULL_TURNS = 2
 DEFAULT_DIALOGUE_TURNS = 3
@@ -106,7 +109,19 @@ _IMAGE_NOTE = "[image removed from an earlier turn]"
 #: 창이 user 메시지로 끝나면 이번 턴의 사용자 지시와 맞붙어 user 가 둘 연속이 된다. 끊긴 턴
 #: (도구 호출 중 중단)이 딱 그 모양을 만든다. 합성 tool_result 와 같은 계열의 표식 한 줄로
 #: 창을 닫아 역할이 교대하게 둔다 — 백엔드마다 연속 역할 허용치가 다르다.
-_INTERRUPTED_TAIL = "[The previous turn was interrupted before it finished.]"
+#: 끊긴 턴만이 아니라 답 없이 끝난 턴(빈 답, 생각만)도 이 모양이 된다. 원인을 단정하지 않는다.
+_INTERRUPTED_TAIL = "[The previous turn ended without a final answer.]"
+#: 먼 턴에서 뺀 도구 블록을 알린다(used tools 줄 끝에 붙는다).
+_TOOLS_OMITTED = "calls and results not shown here; ConversationHistory shows them"
+#: ConversationHistory 를 부를 수 없을 때 위 안내들을 바꿔 쓴다.
+_UNREADABLE_HINTS = (
+    ("; ConversationHistory shows it word for word]", "; it cannot be read in this conversation]"),
+    ("; ConversationHistory shows them", ""),
+    (
+        " Read them word for word with ConversationHistory before relying on what was said or done then.]",
+        " They cannot be read here: do not rely on what you think was said or done then.]",
+    ),
+)
 
 
 def full_turns_for_window(window_tokens: int) -> int:
@@ -129,6 +144,8 @@ class WindowConfig:
     dialogue_message_chars: int = DEFAULT_DIALOGUE_MESSAGE_CHARS
     input_keep: int = DEFAULT_INPUT_KEEP
     used_tools_line: bool = True
+    #: ConversationHistory 를 부를 수 있는가. 아니면 표식이 그 도구를 가리키지 않는다.
+    history_readable: bool = True
     #: 예산(토큰). 0 이 아니면 ``max_chars`` 를 이 값과 실제 글의 글자/토큰 비율로 정한다 — 글자 수를
     #: 1글자=1토큰으로 보면 영어 대화는 쓸 수 있는 몫의 4분의 1만 쓴다(2026-10-23).
     max_tokens: int = 0
@@ -284,7 +301,15 @@ def _dialogue_messages(
                 written.append(t)
     if not user_text:
         return []
-    line = used_tools_line(turn) if cfg.used_tools_line else ""
+    # 이 턴의 도구 블록은 뺐다. 뺐다는 사실과 읽는 길을 남긴다(예전에는 도구 이름 줄만 남았고, 그 줄을 끄면
+    # 아무 표시도 없었다).
+    tools = used_tools_line(turn)
+    if tools and cfg.used_tools_line:
+        line = f"{tools[:-1]}; {_TOOLS_OMITTED}]"
+    elif tools:
+        line = f"[tool {_TOOLS_OMITTED}]"
+    else:
+        line = ""
     answer = _clip_text("\n\n".join(written), message_chars)
     if line:
         answer = f"{answer}\n{line}" if answer else line
@@ -433,6 +458,33 @@ def _sanitize_pairs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ── 창 조립 ────────────────────────────────────────────────────────────────
 
 
+def _without_reread_hints(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The window's markers rewritten for a turn that cannot call ConversationHistory."""
+
+    def fix(text: str) -> str:
+        for old, new in _UNREADABLE_HINTS:
+            text = text.replace(old, new)
+        return text
+
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            out.append({**m, "content": fix(content)})
+        elif isinstance(content, list):
+            blocks = []
+            for b in content:
+                if isinstance(b, dict) and isinstance(b.get("text"), str):
+                    b = {**b, "text": fix(b["text"])}
+                elif isinstance(b, dict) and isinstance(b.get("content"), str):
+                    b = {**b, "content": fix(b["content"])}
+                blocks.append(b)
+            out.append({**m, "content": blocks})
+        else:
+            out.append(m)
+    return out
+
+
 def build_window(
     turns: Sequence[Any], cfg: Optional[WindowConfig] = None, *, more_before: bool = False
 ) -> Tuple[List[Dict[str, Any]], WindowReport]:
@@ -570,6 +622,8 @@ def build_window(
             break
         msgs = _assemble()
     msgs = _carry_dropped_attachments(msgs, turns, kept=[*dialogue, *full], more_before=more_before)
+    if not cfg.history_readable:
+        msgs = _without_reread_hints(msgs)
     report.turns = len(full) + len(dialogue)
     report.full = len(full)
     report.dialogue = len(dialogue)

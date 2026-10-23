@@ -100,6 +100,7 @@ class ToolResultReadTool(Tool):
                 envelope.get("tool_name") or "tool",
                 bool(envelope.get("is_error")),
                 input,
+                context,
             )
 
         # 2) The state: a result shortened later in this turn to make room keeps its original there.
@@ -112,6 +113,7 @@ class ToolResultReadTool(Tool):
                 _tool_name_of(state, result_id),
                 bool(kept.get("is_error")),
                 input,
+                context,
             )
 
         return ToolResult(
@@ -126,7 +128,12 @@ class ToolResultReadTool(Tool):
 
     @staticmethod
     def _page(
-        body: str, result_id: str, tool_name: str, is_error: bool, input: Dict[str, Any]
+        body: str,
+        result_id: str,
+        tool_name: str,
+        is_error: bool,
+        input: Dict[str, Any],
+        context: Any = None,
     ) -> ToolResult:
         total = len(body)
         try:
@@ -142,10 +149,22 @@ class ToolResultReadTool(Tool):
                 content=f"[{tool_name} result {result_id}: {total} chars; offset {offset} is past the end]"
             )
         end = min(total, offset + limit)
-        part = body[offset:end]
-        tail = f"next offset={end}" if end < total else "end of the result"
-        header = f"[{tool_name} result {result_id}: chars {offset}-{end} of {total}; {tail}]"
-        return ToolResult(content=f"{header}\n{part}", is_error=is_error)
+
+        def _render(stop: int) -> str:
+            tail = f"next offset={stop}" if stop < total else "end of the result"
+            header = f"[{tool_name} result {result_id}: chars {offset}-{stop} of {total}; {tail}]"
+            return f"{header}\n{body[offset:stop]}"
+
+        page = _render(end)
+        if context is not None and not input.get("limit"):
+            # A page the window fit would clip says "next offset" past text the model never got, and
+            # the model skipped the omitted middle (2026-10-23 review). Size the page to fit instead.
+            from xgen_agent_runtime.stages.s10_tool.persistence import exceeds_window_cap
+
+            while end - offset > 1_000 and exceeds_window_cap(page, context):
+                end = offset + int((end - offset) * 0.7)
+                page = _render(end)
+        return ToolResult(content=page, is_error=is_error)
 
 
 def _tool_name_of(state: Any, tool_use_id: str) -> str:

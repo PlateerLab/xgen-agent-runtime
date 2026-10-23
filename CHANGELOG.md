@@ -4,6 +4,42 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.101.0] - 2026-10-23
+
+### Fixed: 2026-10-23 전체 흐름 검토 (창, assignment 메모리, 정보 유실)
+
+**창(최대 길이)**
+- 넘침 오류에서 배운 창이 다음 턴에 쓰인다. 예전에는 클라이언트 이름(vllm 은 `custom`, Azure 는 `azure_foundry` 와
+  `/openai/v1` 주소)으로 적고 노드 이름으로 찾아 한 번도 맞지 않았다. 호스트가 해석한 이름을 `state.metadata` 에 두고
+  Stage 6 이 그 이름으로 적는다. 이름 별칭도 모은다.
+- Azure: 카탈로그 행(`azure_foundry`)을 읽는다. 배포 이름이 모델 이름이 아니면 카탈로그의 실제 모델 이름(`model`)으로 표를 찾는다.
+- 카탈로그 창 값: 숫자 글("131072")을 받고 `true` 를 받지 않는다(예전에는 글이면 버리고 `true` 는 창 1).
+- 넘침 문구: vLLM 0.20 serving 의 입력 토큰 수("prompt contains at least N input tokens"), vLLM V1 엔진
+  ("The decoder prompt (length N) is longer than the maximum model length of M", 인코더 문구는 창이 아니라 제외),
+  llama.cpp("exceeds the available context size", `n_ctx`·`n_prompt_tokens`).
+- 답 몫: 예산이 클라이언트가 실제로 보내는 출력 상한을 비워 둔다(생각이 max_tokens 를 키운다: Anthropic 예산·adaptive,
+  OpenAI·Azure 추론 몫). `llm_client.thinking.output_tokens_sent`, `core.compaction.answer_room_of`.
+- max_tokens 가 창의 절반을 넘으면 맞을 만큼 낮춘다(8k vLLM 모델 + 기본 8192 는 모든 요청이 거절됐다).
+
+**assignment 메모리**
+- `memory_write(filename=…)` 는 저장된 이름으로 쓴다(느슨한 이름으로 찾아 사본을 만들던 것). 주지 않은 분류·태그·중요도는
+  그대로 두고, `assignment` 노트는 고쳐 써도 `assignment` 로 남는다(`done` 은 더해진다). 지침도 "`done` 을 더하라" 로.
+- 태그 정리: `#assignment`, 따옴표, JSON 배열 글.
+- `memory_read` 는 호스트가 `visible_conversations(ids)` 를 주면 읽는 사람의 대화만 `written_in` 에 보인다(공유 에이전트).
+- 파일 저장소가 `written_in`(목록 안의 사전)을 잃지 않는다(한 줄 JSON).
+- 고정 사실 잘림 표식의 글자 수가 실제로 보인 글자 수다. 문서의 은퇴 버전(`RETIRED_IN`).
+
+**정보 유실 방지**
+- 창에 맞춰 자른 도구 결과는 기록(단기 기억·ConversationHistory·요약)에 원본으로 남는다. 요청만 자른 것을 받는다.
+- 잘린 Read(·ToolBatch 의 Read, 잘린 참조 칸에 붙은 파일)는 "파일을 읽었다" 로 치지 않는다. Edit 한 번도 그렇다(이미 읽은 파일만 이어 간다).
+- 실행한 뒤의 점검 실패(결과 필터, 외부 결과 권한, 다이제스트)는 "Access denied" 가 아니라 "결과를 보이지 않는다(실행은 됐다)".
+- 입력을 줄인 턴의 실패: 안내를 `[ERROR]` 앞이 아니라 뒤에 붙인다.
+- SSH 시간 초과는 그때까지의 출력을 돌려준다. Grep 은 큰 파일 하나 안에서도 시간 상한에 멈추고 어디서 멈췄는지 말한다.
+- 표식은 부를 수 있는 도구만 가리킨다(ToolResultRead·ConversationHistory, id 가 빈 결과). 먼 턴에서 뺀 도구 블록과
+  이전 대화 문자열·참조 자료·질문을 줄인 자리에 읽는 길(또는 할 일)을 적는다. 메모리 노드의 이전 대화 문자열은 창이 모자랄
+  때만 줄인다(예전에는 늘 창의 25%). ToolResultRead 쪽은 창에 맞는 크기로 준다. "중단됐다" 고 단정하던 꼬리 표식을 고쳤다.
+- 상태를 다시 쓰는 호스트에서 이번 턴의 글 목록이 끝없이 커지던 것.
+
 ## [4.100.0] - 2026-10-23
 
 ### Changed: assignment 노트는 필요할 때 찾는다 (매 턴 싣지 않는다)

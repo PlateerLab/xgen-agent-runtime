@@ -136,9 +136,14 @@ class TestWriteGuardLedger:
         (env.root / "e.txt").write_text("old")
         env.run(ReadTool(), {"file_path": "e.txt"})
         env.run(EditTool(), {"file_path": "e.txt", "old_string": "old", "new_string": "mid"})
-        env.shared.clear()  # Read 기록을 지워도 Edit 기록만으로 통과해야 한다
-        env.run(EditTool(), {"file_path": "e.txt", "old_string": "mid", "new_string": "mid2"})
         assert not env.run(WriteTool(), {"file_path": "e.txt", "content": "new"}).is_error
+
+    def test_an_edit_alone_does_not_count_as_reading_the_file(self, env):
+        """고친 자리를 안다고 파일 전체를 본 것은 아니다(2026-10-23 점검: 예전에는 Edit 한 번이면 Write 가 통과했다)."""
+        (env.root / "e.txt").write_text("old\nrest the model never saw\n")
+        env.run(EditTool(), {"file_path": "e.txt", "old_string": "old", "new_string": "mid"})
+        r = env.run(WriteTool(), {"file_path": "e.txt", "content": "new"})
+        assert r.is_error and "have not read it" in r.content
 
     def test_relative_read_covers_an_absolute_write(self, env):
         """예전엔 러너에서만 거절됐다 (러너 Read 가 모델 표기 하나만 적었다)."""

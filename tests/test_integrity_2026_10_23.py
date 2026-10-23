@@ -516,7 +516,7 @@ def test_input_fit_marks_left_out_history_and_reference_material():
     first = fit.history[0]["content"]
     assert first.startswith("[Earlier in this conversation:") and "left out here" in first
     assert history[len(history) - len(fit.history)]["content"].startswith("질문"), "the record is untouched"
-    assert fit.rag_block == RAG_DROPPED_NOTE or "생략" in fit.rag_block
+    assert fit.rag_block == RAG_DROPPED_NOTE or "omitted here to fit" in fit.rag_block
 
 
 # ── 고정 사실은 잘려도 잘렸다고, 빠져도 빠졌다고 말한다 ─────────────────────

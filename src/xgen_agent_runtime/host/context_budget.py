@@ -182,8 +182,11 @@ def memory_reserved_tokens(window: int, configured_chars: int) -> int:
     return max(0, tokens)
 
 
-def fit_history_context_tokens(context: str, tokens: int, provider: str, model: str) -> str:
-    """이전 대화 문자열을 ``tokens`` 안으로(머리글과 가장 최근 대화가 남게 가운데를 줄인다)."""
+def fit_history_context_tokens(
+    context: str, tokens: int, provider: str, model: str, readable: bool = True
+) -> str:
+    """이전 대화 문자열을 ``tokens`` 안으로(머리글과 가장 최근 대화가 남게 가운데를 줄인다). 줄인 자리는 표시하고,
+    ConversationHistory 를 부를 수 있으면 읽는 길을 적는다."""
     if not context:
         return context
     try:
@@ -195,7 +198,11 @@ def fit_history_context_tokens(context: str, tokens: int, provider: str, model: 
             provider=provider,
             model=model,
             front_ratio=0.2,
-            omit_notice="\n\n[... 더 오래된 대화 생략 ...]\n\n",
+            omit_notice=(
+                "\n\n[... older conversation omitted here to fit the context window"
+                + ("; ConversationHistory shows it word for word" if readable else "")
+                + " ...]\n\n"
+            ),
         )
         return fitted
     except Exception:  # noqa: BLE001 (fail-open)
@@ -235,13 +242,23 @@ def _next_history_start(history: List[Any], start: int, keep_last: int = 2) -> i
 
 
 #: The reference block when none of it fit.
+#: 가운데를 줄인 자리의 표식. 무엇이 빠졌고 어떻게 하면 되는지 말한다(예전 "중간 내용 생략됨" 은 읽는 길이 없었다).
+RAG_CUT_NOTICE = (
+    "\n\n[... part of the reference material is omitted here to fit the model's context window; "
+    "search again with a narrower query if the answer needs it ...]\n\n"
+)
+TEXT_CUT_NOTICE = (
+    "\n\n[... the middle of this message is omitted here to fit the model's context window; "
+    "ask the user for that part if the answer depends on it ...]\n\n"
+)
+
 RAG_DROPPED_NOTE = (
     "[Reference material was retrieved for this request but left out: it did not fit the model's "
     "context window. Say so if the answer needs it.]"
 )
 
 
-def _note_dropped_history(kept: List[Any], dropped: int) -> List[Any]:
+def _note_dropped_history(kept: List[Any], dropped: int, readable: bool = True) -> List[Any]:
     """CLI history with its oldest ``dropped`` messages left out: the first kept message says so.
 
     Before, the oldest messages simply vanished from the folded history and the model took the rest
@@ -249,9 +266,14 @@ def _note_dropped_history(kept: List[Any], dropped: int) -> List[Any]:
     """
     if not kept or not isinstance(kept[0], dict):
         return kept
+    reread = (
+        "Read them with ConversationHistory before relying on them."
+        if readable
+        else "They cannot be read here: do not rely on what you think they said."
+    )
     note = (
         f"[Earlier in this conversation: {dropped} older message(s) are left out here to fit the "
-        "model's context window. Read them with ConversationHistory before relying on them.]"
+        f"model's context window. {reread}]"
     )
     first = kept[0]
     content = first.get("content")
@@ -288,6 +310,7 @@ def fit_input_to_budget(
     history_compressible: bool = True,
     history_context: str = "",
     extra_overhead_text: str = "",
+    history_readable: bool = True,
 ) -> BudgetFit:
     """이번 턴의 입력측을 유효 예산 안으로 맞춘다.
 
@@ -373,7 +396,7 @@ def fit_input_to_budget(
                 hist_t -= sum(per[start:nxt])
                 start = nxt
             if start:
-                result.history = _note_dropped_history(msgs[start:], start)
+                result.history = _note_dropped_history(msgs[start:], start, history_readable)
                 result.clamped = True
             hist_need = hist_t
 
@@ -406,9 +429,20 @@ def fit_input_to_budget(
             room = budget - overhead - text_t - rag_t
             if ctx_t > room:
                 new_ctx = (
-                    fit_history_context_tokens(history_context, room, provider, model)
+                    fit_history_context_tokens(
+                        history_context, room, provider, model, history_readable
+                    )
                     if room >= _MIN_HISTORY_CONTEXT_TOKENS
-                    else ""
+                    # 통째로 뺐다는 사실은 남긴다(예전에는 아무 표시 없이 사라졌다).
+                    else (
+                        "[The earlier conversation was left out here to fit the context window"
+                        + (
+                            "; ConversationHistory shows it word for word"
+                            if history_readable
+                            else ""
+                        )
+                        + ".]"
+                    )
                 )
                 result.history_context = new_ctx
                 result.clamped = True
@@ -424,6 +458,7 @@ def fit_input_to_budget(
                 rag_budget,
                 provider=provider,
                 model=model,
+                omit_notice=RAG_CUT_NOTICE,
             )
             if cut:
                 if not new_rag.strip():
@@ -452,6 +487,7 @@ def fit_input_to_budget(
                 max(1024, available_for_text),
                 provider=provider,
                 model=model,
+                omit_notice=TEXT_CUT_NOTICE,
             )
             if cut:
                 result.text = new_text
