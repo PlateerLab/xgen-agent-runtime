@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.100.0] - 2026-10-23
+
+### Changed: assignment 노트는 필요할 때 찾는다 (매 턴 싣지 않는다)
+
+4.99.0 은 열린 assignment 노트를 매 턴 프롬프트에 실었다. 맥락은 이어지는 대화를 위해 있다. 진행 중인 대화는 단기 기억 창에
+원문으로 이미 있어서, 그 지시를 노트로 또 실으면 같은 지시가 두 번 들어간다. 먼저 써 둔 노트는 방금 한 말보다 뒤처질 수도
+있다. 다른 대화의 열린 일까지 상관없는 턴마다 따라 들어가고, 그 위에 "따르라" 는 말이 붙었다. 그래서 걷어낸다.
+
+목표 장면은 나중에 사용자가 "예전에 했던 그 편집에서 하나 고치고 싶어" 라고 할 때, 메모리로 그 일을 찾아 이어 가는 것이다.
+
+- **찾기**: assignment 노트는 다른 노트와 같이 그 턴의 기억 검색에 오르고, 모델이 `memory_search`·`memory_list(tag="assignment")` 로도 찾는다.
+- **어디서 했는지**: `memory_write` 가 노트를 쓸 때마다 그 대화를 frontmatter `written_in` 에 적는다(모델이 아니라 메모리가). 고쳐 쓰면
+  앞의 대화와 다른 frontmatter 는 둔다. `memory_read` 가 `written_in` 을 보여 준다.
+- **원문까지**: `ConversationHistory(conversation=<id>)` 는 그 사용자의 다른 대화를 원문으로 읽는다. 열 수 있는지는 호스트가 정한다
+  (provider 의 `session_stm(id)`, 동기·async 모두, 없거나 None 이면 열 수 없다고 말한다).
+- 메모리 지침: assignment 노트에 사용자의 말·조건과 함께 한 일(파일·자리·결과)을 남기라고 한다. 사용자가 예전 일을 가리키면
+  행동하기 전에 메모리에서 찾고, 노트를 읽고, 필요하면 그 노트를 쓴 대화를 읽으라고 한다. "매 턴 보인다" 는 문장은 뺐다.
+- 걷어낸 것: 매 턴 assignment 절(`AssignmentsBlock`), 리트리버의 assignment 층·몫, 이벤트 `memory.assignments_loaded`(은퇴, 카탈로그 v21).
+
 ## [4.99.0] - 2026-10-23
 
 ### Changed: 사용자의 지시는 메모리에, `assignment` 태그 노트로 (4.98.0 의 TASK 층을 걷어냈다)

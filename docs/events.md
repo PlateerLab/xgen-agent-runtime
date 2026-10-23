@@ -4,7 +4,7 @@
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
 > Generated from `xgen_agent_runtime.events.catalog` on 2026-10-23.
-> Catalogue version: **20** · events: **147**
+> Catalogue version: **21** · events: **147**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -461,6 +461,8 @@ Enum member: `EventTypes.CONTEXT_TASK_BOARD`
 ### `memory.assignments_loaded`
 
 Enum member: `EventTypes.MEMORY_ASSIGNMENTS_LOADED`
+
+**Retired (4.71.0) — no longer emitted.**
 
 | Field | Description |
 |---|---|

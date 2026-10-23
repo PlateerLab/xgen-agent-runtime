@@ -78,7 +78,6 @@ def _build_system_builder(
     and injects it into the system prompt so the LLM can see retrieved memory.
     """
     from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
-        AssignmentsBlock,
         ComposablePromptBuilder,
         DateTimeBlock,
         PersonaBlock,
@@ -99,7 +98,6 @@ def _build_system_builder(
         blocks.append(DateTimeBlock())
 
     if include_memory:
-        blocks.append(AssignmentsBlock())
         blocks.append(RetrievedMemoryBlock())
 
     return ComposablePromptBuilder(blocks=blocks)

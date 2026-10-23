@@ -13,6 +13,7 @@ ProviderDrivenStrategy 의 STM 기록)과 별개로, 에이전트가 스스로 �
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -130,7 +131,9 @@ def build_memory_tools(provider: Any) -> List[Any]:
         v = (value or default).strip().lower()
         return Importance(v if v in _IMPORTANCE_VALUES else default)
 
-    async def _write(tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
+    async def _write(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
+        from xgen_agent_runtime.memory.assignments import stamp_written_in
+
         title = str(tool_input.get("title") or "").strip()
         content = str(tool_input.get("content") or "").strip()
         if not title or not content:
@@ -140,11 +143,13 @@ def build_memory_tools(provider: Any) -> List[Any]:
         # 사본을 하나 더 만드는 곳도 있었다. 고쳐 쓸 노트는 파일명으로 가리킨다.
         filename = str(tool_input.get("filename") or "").strip()
         existed = False
+        previous = None
         if filename:
             try:
-                existed = await provider.notes().read(filename) is not None
+                previous = await provider.notes().read(filename)
             except Exception:  # noqa: BLE001
-                existed = False
+                previous = None
+            existed = previous is not None
             if not existed:
                 return ToolResult(
                     content=_err(
@@ -153,6 +158,16 @@ def build_memory_tools(provider: Any) -> List[Any]:
                     ),
                     is_error=True,
                 )
+        # 이 노트를 쓴 대화를 메모리가 적는다(모델이 아니라). 나중에 "예전에 했던 그 일" 을 찾으면 그 대화의
+        # 원문까지 따라간다(ConversationHistory(conversation=...)). 고쳐 쓰면 앞의 대화와 다른 frontmatter 는 둔다.
+        conversation = str(
+            getattr(ctx, "session_id", "")
+            or getattr(getattr(ctx, "state_view", None), "session_id", "")
+            or ""
+        )
+        frontmatter = stamp_written_in(
+            dict(getattr(previous, "frontmatter", None) or {}), conversation
+        )
         draft = NoteDraft(
             title=title,
             body=content,
@@ -160,6 +175,7 @@ def build_memory_tools(provider: Any) -> List[Any]:
             tags=_split_tags(tool_input.get("tags")),
             importance=_importance(str(tool_input.get("importance") or "medium")),
             filename=filename,
+            frontmatter=frontmatter,
         )
         meta = await provider.notes().write(draft)
         return ToolResult(
@@ -213,6 +229,8 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 content=json.dumps(miss, ensure_ascii=False, indent=2, default=str),
                 is_error=True,
             )
+        from xgen_agent_runtime.memory.assignments import written_in
+
         return ToolResult(
             content=_ok(
                 {
@@ -220,6 +238,9 @@ def build_memory_tools(provider: Any) -> List[Any]:
                     "title": note.title,
                     "category": note.category,
                     "tags": list(note.tags or []),
+                    # The conversations this note was written in (stamped by memory). Read one word
+                    # for word with ConversationHistory(conversation=...).
+                    "written_in": written_in(getattr(note, "frontmatter", None)),
                     "importance": note.importance.value
                     if hasattr(note.importance, "value")
                     else str(note.importance),
@@ -412,12 +433,14 @@ def build_memory_tools(provider: Any) -> List[Any]:
         build_tool(
             name="ConversationHistory",
             description=(
-                "Read THIS conversation's own record, word for word: earlier turns that are no longer in "
-                "your context (only the most recent turns are), what tools returned then, and the full "
-                "conversation summary. view='turns' lists the turns; view='turn' with turn=<n> shows one "
-                "in full (user words, your answers, tool calls and results; long turns come in pages); "
-                "view='search' with query finds where something was said; view='summary' returns the "
-                "whole summary. Use it before relying on what you remember of earlier turns."
+                "Read a conversation's own record, word for word: this conversation's earlier turns that "
+                "are no longer in your context (only the most recent turns are), or another conversation "
+                "of this user's (conversation=<id>, e.g. from a memory note's written_in), what tools "
+                "returned then, and the conversation summary. view='turns' lists the turns; view='turn' "
+                "with turn=<n> shows one in full (user words, your answers, tool calls and results; long "
+                "turns come in pages); view='search' with query finds where something was said; "
+                "view='summary' returns the whole summary. Use it before relying on what you remember "
+                "of earlier turns."
             ),
             input_schema=_schema(
                 {
@@ -425,6 +448,10 @@ def build_memory_tools(provider: Any) -> List[Any]:
                         "type": "string",
                         "enum": ["turns", "turn", "search", "summary"],
                         "description": "What to read (default 'turns').",
+                    },
+                    "conversation": {
+                        "type": "string",
+                        "description": "Another conversation's id (default: this conversation).",
                     },
                     "turn": {
                         "type": "integer",
@@ -558,7 +585,30 @@ async def conversation_history(provider: Any, tool_input: Dict[str, Any], state:
     from xgen_agent_runtime.tools.base import ToolResult
 
     view = str(tool_input.get("view") or "turns").strip().lower()
-    stm = provider.stm()
+    # 다른 대화(예: assignment 노트의 written_in). 그 사람의 대화인지는 호스트가 판단한다(session_stm 이 None 이면
+    # 열 수 없다). 그 대화는 끝까지 기록돼 있으므로 이번 턴의 미기록 메시지는 붙이지 않는다.
+    conversation = str(tool_input.get("conversation") or "").strip()
+    current = str(getattr(state, "session_id", "") or "")
+    other = bool(conversation) and conversation != current
+    if other:
+        opener = getattr(provider, "session_stm", None)
+        try:
+            stm = opener(conversation) if callable(opener) else None
+            if inspect.isawaitable(stm):  # a host that checks ownership with a query
+                stm = await stm
+        except Exception:  # noqa: BLE001
+            stm = None
+        if stm is None:
+            return ToolResult(
+                content=(
+                    f"Conversation {conversation!r} cannot be read here: it is not one of this user's "
+                    "conversations with this agent, or this host does not keep other conversations. "
+                    "Work from the memory note instead."
+                ),
+                is_error=True,
+            )
+    else:
+        stm = provider.stm()
     if view == "summary":
         reader = getattr(stm, "read_summary", None)
         summary = (await reader()) if reader is not None else None
@@ -568,7 +618,7 @@ async def conversation_history(provider: Any, tool_input: Dict[str, Any], state:
             )
         return ToolResult(content=f"[conversation summary, {len(summary)} chars]\n{summary}")
 
-    rows = list(await stm.recent(_HISTORY_SCAN_ROWS)) + _unrecorded_rows(state)
+    rows = list(await stm.recent(_HISTORY_SCAN_ROWS)) + ([] if other else _unrecorded_rows(state))
     turns = group_logical_turns(rows, 1_000_000)
     total = len(turns)
     clipped_history = len(rows) >= _HISTORY_SCAN_ROWS

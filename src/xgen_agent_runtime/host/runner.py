@@ -776,7 +776,6 @@ def build_pipeline(
                 ComposablePromptBuilder,
                 CustomBlock,
                 DateTimeBlock,
-                AssignmentsBlock,
                 PinnedFactsBlock,
                 RetrievedMemoryBlock,
                 TurnNotesBlock,
@@ -806,7 +805,6 @@ def build_pipeline(
                     blocks=[
                         CustomBlock("base", system),
                         PinnedFactsBlock(),
-                        AssignmentsBlock(),
                         DateTimeBlock(),
                         RetrievedMemoryBlock(),
                         TurnNotesBlock(),

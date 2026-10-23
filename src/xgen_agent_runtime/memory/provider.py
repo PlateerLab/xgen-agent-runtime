@@ -1210,8 +1210,6 @@ _DEFAULT_LAYER_BUDGET_RATIO: Dict[str, float] = {
     # tenth of the budget cut it mid-sentence (with a marker since 2026-10-23); it gets a quarter.
     "session_summary": 0.25,
     "pinned": 0.30,
-    # Open assignment notes (memory.assignments): the user's instructions, loaded every turn.
-    "assignments": 0.40,
     "vault_map": 0.05,
     "ltm_main": 0.20,
     "vector": 0.40,
