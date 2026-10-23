@@ -148,15 +148,6 @@ def _is_current_session_record(hit: Any, session_id: str) -> bool:
     return False
 
 
-def _is_note(hit: Any, filename: str) -> bool:
-    """검색 히트가 이 노트(파일명)인가."""
-    if not filename:
-        return False
-    meta = getattr(hit, "metadata", None) or {}
-    fn = str(meta.get("filename") or getattr(hit, "key", "") or "")
-    return fn.rsplit("/", 1)[-1] == filename
-
-
 def _is_current_session_name(filename: str, session_id: str) -> bool:
     """파일명이 이 세션의 대화 아카이브인가 (``<safe sid>__user…``)."""
     sid = str(session_id or "").strip()
@@ -236,10 +227,6 @@ class MemoryAwareRetriever(MemoryRetriever):
         )
         # 이 세션이 남긴 기록(대화 아카이브·실행 카드)은 창/이력과 중복이다 — 검색 층에서 뺀다.
         self._current_session_id = str(getattr(state, "session_id", "") or "")
-        # 이 대화의 현재 TASK 는 TASK 판(memory.tasks)이 매 턴 통째로 싣는다 — 그 노트를 검색 층에 다시
-        # 올리면 같은 내용이 두 번 실린다.
-        current_task = str((getattr(state, "shared", None) or {}).get("memory.task_current") or "")
-        self._current_task_note = f"task-{current_task}.md" if current_task else ""
 
         def _record(layer: str, before: int) -> None:
             breakdown[layer] = sum(1 for c in chunks if (c.metadata or {}).get("layer") == layer)
@@ -283,6 +270,11 @@ class MemoryAwareRetriever(MemoryRetriever):
             chunks, total, budget, hooks, prefetched=pf.get("pinned", _UNFETCHED)
         )
         _record("pinned", before)
+
+        # ── L1.6: assignments (the user's instructions, every turn) ──
+        before = total
+        total = await self._load_assignments(chunks, total, budget, hooks)
+        _record("assignments", before)
 
         # ── L1.7: vault map (lightweight directory hint) ────────────
         if hooks.slim_mode or hooks.always_render_vault_map:
@@ -717,7 +709,11 @@ class MemoryAwareRetriever(MemoryRetriever):
             return total
         if len(body) > room:
             logger.debug("memory_aware: pinned facts truncated %d → %d chars", len(body), room)
-            body = body[: max(0, room - 12)].rstrip() + "\n…(truncated)"
+            marker = (
+                f"\n…[pinned facts cut here: {room:,} of {len(body):,} chars shown; "
+                f'memory_list(category="{hooks.pin_category}") and memory_read show them all]'
+            )
+            body = body[: max(0, room - len(marker))].rstrip() + marker
         chunks.append(
             MemoryChunk(
                 key="pinned_facts",
@@ -732,6 +728,73 @@ class MemoryAwareRetriever(MemoryRetriever):
             )
         )
         return total + len(body)
+
+    # ── L1.6 ────────────────────────────────────────────────────────
+
+    async def _load_assignments(
+        self,
+        chunks: List[MemoryChunk],
+        total: int,
+        budget: int,
+        hooks: MemoryHooks,
+    ) -> int:
+        """Open notes tagged ``assignment`` (memory.assignments), whatever this turn's message says.
+
+        Search is keyed on the latest message, and "continue" or "fix that" finds nothing: the
+        user's instructions would come back only when the words happened to match.
+        """
+        from xgen_agent_runtime.memory.assignments import (
+            ASSIGNMENT_TAG,
+            MAX_NOTES_READ,
+            is_open_assignment,
+            render_assignments,
+        )
+
+        self._assignment_files = set()
+        cap = min(_layer_cap(hooks, "assignments"), max(0, budget - total))
+        if cap <= 0:
+            return total
+        try:
+            notes = self._provider.notes()
+            metas = [m for m in await notes.list(tag=ASSIGNMENT_TAG) if is_open_assignment(m.tags)]
+        except Exception:  # noqa: BLE001 (search still runs)
+            logger.debug("memory_aware: assignment notes could not be listed", exc_info=True)
+            return total
+        if not metas:
+            return total
+        metas.sort(key=lambda m: str(m.updated_at or m.created_at or ""), reverse=True)
+        items = []
+        for meta in metas[:MAX_NOTES_READ]:
+            try:
+                note = await notes.read(meta.ref.filename)
+            except Exception:  # noqa: BLE001
+                note = None
+            body = getattr(note, "body", "") if note is not None else ""
+            items.append(
+                (meta.ref.filename, meta.title or "", body or "(the note could not be read)")
+            )
+        for meta in metas[MAX_NOTES_READ:]:
+            items.append((meta.ref.filename, meta.title or "", ""))  # listed by name below
+        text = render_assignments([i for i in items if i[2]], cap)
+        unread = [i[0] for i in items if not i[2]]
+        if unread:
+            text += (
+                f"\n\n[{len(unread)} more open assignment note(s) not shown: {', '.join(unread[:20])}"
+                f"{' …' if len(unread) > 20 else ''}. Read them with memory_read.]"
+            )
+        if not text.strip():
+            return total
+        self._assignment_files = {m.ref.filename for m in metas}
+        chunks.append(
+            MemoryChunk(
+                key="assignments",
+                content=text,
+                source="assignments",
+                relevance_score=2.0,
+                metadata={"layer": "assignments", "open": len(metas), "char_count": len(text)},
+            )
+        )
+        return total + len(text)
 
     # ── L1.7 ────────────────────────────────────────────────────────
 
@@ -840,11 +903,9 @@ class MemoryAwareRetriever(MemoryRetriever):
                 return total
         if not hits:
             return total
-        already = {_dedup_key(c) for c in chunks}
+        already = {_dedup_key(c) for c in chunks} | set(getattr(self, "_assignment_files", set()))
         for h in hits:
             if _is_current_session_record(h, getattr(self, "_current_session_id", "")):
-                continue
-            if _is_note(h, getattr(self, "_current_task_note", "")):
                 continue
             if (getattr(h, "metadata", None) or {}).get("category") == _COMPACTIONS_CATEGORY:
                 continue  # 프리페치 없이 불린 경로도 같은 규칙(위 _drop_excluded)
@@ -929,11 +990,9 @@ class MemoryAwareRetriever(MemoryRetriever):
 
         results.sort(key=lambda c: c.relevance_score, reverse=True)
 
-        already = {_dedup_key(c) for c in chunks}
+        already = {_dedup_key(c) for c in chunks} | set(getattr(self, "_assignment_files", set()))
         for r in results:
             if _is_current_session_record(r, getattr(self, "_current_session_id", "")):
-                continue
-            if _is_note(r, getattr(self, "_current_task_note", "")):
                 continue
             text = r.content or ""
             if not text:
@@ -984,7 +1043,7 @@ class MemoryAwareRetriever(MemoryRetriever):
                 continue
             adj.setdefault(str(src), []).append(str(tgt))
 
-        already = {c.key for c in chunks}
+        already = {c.key for c in chunks} | set(getattr(self, "_assignment_files", set()))
         # Collect the unique unread backlink targets (audit M5): the
         # pre-2.51 code read them one-by-one with a serial ``await`` per
         # target, re-introducing exactly the round-trip latency the B1
@@ -1103,7 +1162,7 @@ class MemoryAwareRetriever(MemoryRetriever):
         if not hits:
             return total
         hits.sort(key=lambda h: h.relevance_score, reverse=True)
-        already = {_dedup_key(c) for c in chunks}
+        already = {_dedup_key(c) for c in chunks} | set(getattr(self, "_assignment_files", set()))
         for h in hits:
             text = h.content or ""
             if not text or _dedup_key(h) in already:

@@ -315,44 +315,6 @@ def _summary_text(state: PipelineState) -> str:
     return ""
 
 
-async def _keep_checkpoint_on_task(
-    state: Any, provider: Any, *, trigger: str, replaced: int
-) -> None:
-    """A compaction's summary goes onto this conversation's current task (memory.tasks).
-
-    The checkpoint's sections (requests, work done, decisions, problems, open items, current state)
-    are the task's own state. Kept on the task, a compaction tidies the task's record instead of
-    being the moment the work's details were lost. Best-effort: the checkpoint itself is in context.
-    """
-    try:
-        from xgen_agent_runtime.memory.tasks import CURRENT_KEY, TaskEvent, provider_tasks
-
-        store = provider_tasks(provider)
-        if store is None:
-            return
-        session_id = str(getattr(state, "session_id", "") or "")
-        task = await store.current(session_id)
-        if task is None:
-            task_id = str((getattr(state, "shared", None) or {}).get(CURRENT_KEY) or "")
-            task = await store.get(task_id) if task_id else None
-        if task is None:
-            return
-        summary = _summary_text(state)
-        if not summary.strip():
-            return
-        await store.append_event(
-            TaskEvent(
-                task_id=task.id,
-                kind="checkpoint",
-                session_id=session_id,
-                summary=f"context compacted ({trigger}, {replaced} messages summarized)",
-                data={"summary": summary},
-            )
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug("could not keep the checkpoint on the task", exc_info=True)
-
-
 def _prune(state: PipelineState, *, aggressive: bool, trigger: str) -> Dict[str, int]:
     """Deterministic pre-pass. In-place, count/order-preserving, pair-safe.
 
@@ -662,9 +624,6 @@ async def run_compaction(
                 {"compactor": _compactor_name(compactor), "error": str(exc)},
             )
             logger.debug("record_compaction failed: %s", exc)
-
-    if replaced > 0 and provider is not None:
-        await _keep_checkpoint_on_task(state, provider, trigger=trigger, replaced=replaced)
 
     return {
         "ok": True,

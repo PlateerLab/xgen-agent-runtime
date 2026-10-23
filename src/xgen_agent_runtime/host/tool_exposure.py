@@ -108,9 +108,6 @@ TURN_ONE_TOOLS = frozenset(
         # 3-b. 이 대화의 원문(창 밖의 지난 턴·그때의 도구 결과). 창은 최근 몇 턴만 재생하므로, 이게 없으면
         #      모델은 지난 일을 기억으로 재구성하다 틀린다(2026-10-23 감사).
         "ConversationHistory",
-        # 3-c. 여러 단계·여러 턴 일(TASK). 매 턴 보이는 TASK 판과 짝이다: 열고·고치고·바꾸고·닫는다.
-        "Task",
-        "TaskRecall",
         # 4. 영구 작업 — JobSchedule/JobList/JobCancel 은 이 문 뒤에.
         "JobGuide",
         # 4-b. 앱(사용자가 여는 웹 앱) — AppCreate/Publish/Status/List/Delete

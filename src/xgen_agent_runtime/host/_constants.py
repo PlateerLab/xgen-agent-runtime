@@ -92,6 +92,12 @@ acknowledging it. Prefer updating existing notes over duplicating them, and
 write notes in the user's language. Your earlier turns in this conversation are
 in the message history: treat them as history, not as facts to re-verify, and
 act on the current request.
+When the user gives you a piece of work or an instruction to keep, or tells you
+something matters to them, keep it in memory as a note tagged `assignment`, in
+the user's own words with the conditions they set and what you delivered. Keep
+that note current as the work changes (memory_write with its filename rewrites
+it), and tag it `done` when the work is finished or called off. Open assignment
+notes are shown to you on every turn.
 """
 
 

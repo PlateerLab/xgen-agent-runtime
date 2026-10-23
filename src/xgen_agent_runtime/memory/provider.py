@@ -1162,10 +1162,6 @@ class MemoryProvider(Protocol):
     def global_(self) -> Optional[GlobalHandle]: ...
     def index(self) -> IndexHandle: ...
 
-    # Optional, outside this protocol so existing providers stay valid: ``tasks()`` returns a
-    # :class:`xgen_agent_runtime.memory.tasks.TaskStore` (the TASK layer) or None. Read it with
-    # :func:`xgen_agent_runtime.memory.tasks.provider_tasks`.
-
     # Cross-layer
     async def retrieve(self, query: RetrievalQuery) -> RetrievalResult: ...
     async def record_turn(self, turn: Turn) -> None: ...
@@ -1214,6 +1210,8 @@ _DEFAULT_LAYER_BUDGET_RATIO: Dict[str, float] = {
     # tenth of the budget cut it mid-sentence (with a marker since 2026-10-23); it gets a quarter.
     "session_summary": 0.25,
     "pinned": 0.30,
+    # Open assignment notes (memory.assignments): the user's instructions, loaded every turn.
+    "assignments": 0.40,
     "vault_map": 0.05,
     "ltm_main": 0.20,
     "vector": 0.40,
