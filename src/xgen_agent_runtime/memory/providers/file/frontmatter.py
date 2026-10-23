@@ -17,7 +17,8 @@ Supported frontmatter grammar:
     ---
 
 Nested mappings are NOT supported. Multiline values are NOT supported.
-Lists nest exactly one level (flat list of scalars).
+Lists nest exactly one level (flat list of scalars). Mappings and lists of mappings are written
+as one line of JSON (YAML flow syntax).
 
 The parser is robust: a malformed line becomes a (key, raw string) entry
 rather than aborting the whole file. This matches Geny's tolerant behaviour.
@@ -25,6 +26,7 @@ rather than aborting the whole file. This matches Geny's tolerant behaviour.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Tuple
 
@@ -121,6 +123,13 @@ def dump(meta: Dict[str, Any]) -> str:
 def _parse_value(raw: str) -> Any:
     if not raw:
         return ""
+    # A mapping or a list of mappings, written as one line of JSON by _format_value (JSON is YAML flow
+    # syntax, so other readers still parse it).
+    if raw.startswith("{") or raw.startswith("[{"):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            pass
     # Quoted string — strip quotes, keep inner content verbatim
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
         return raw[1:-1]
@@ -198,6 +207,12 @@ def _format_value(value: Any) -> str:
         return ""
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, dict) or (
+        isinstance(value, (list, tuple)) and any(isinstance(v, (dict, list, tuple)) for v in value)
+    ):
+        # Nested values (memory's written_in: [{conversation, at}]) were written with str() and read
+        # back as text, so they were lost on the next load. One line of JSON round-trips.
+        return json.dumps(value, ensure_ascii=False, default=str)
     if isinstance(value, (list, tuple)):
         return "[" + ", ".join(_format_scalar(v) for v in value) + "]"
     return _format_scalar(value)

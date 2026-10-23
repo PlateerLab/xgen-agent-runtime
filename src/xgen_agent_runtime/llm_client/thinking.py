@@ -522,6 +522,31 @@ def anthropic_request(spec: ThinkingSpec, level: str, max_tokens: int) -> Dict[s
     }
 
 
+def output_tokens_sent(provider: str, model: str, level: Optional[str], max_tokens: int) -> int:
+    """The output cap the client will actually send for ``max_tokens`` (thinking raises it).
+
+    Anthropic and Bedrock put the thinking budget on top of ``max_tokens`` (:func:`anthropic_request`,
+    only when a level is chosen); OpenAI and Azure add a reasoning reserve even at the model's default
+    level (:func:`openai_output_budget`). Providers count the prompt plus this cap against the window
+    (Anthropic strictly), so the window budget has to keep this much free, not the node's ``max_tokens``:
+    Sonnet 4.5 at "high" sent 24,576 while 10,240 was kept, and a full request was refused.
+    """
+    base = int(max_tokens or 0)
+    raw = str(provider or "").strip().lower()
+    prov = _PROVIDER_ALIASES.get(raw, raw)
+    try:
+        spec = thinking_spec(prov, model)
+        if prov in ("anthropic", "bedrock"):
+            if not level:
+                return base
+            return max(base, int(anthropic_request(spec, level, base).get("max_tokens") or base))
+        if prov in ("openai", "azure"):
+            return max(base, int(openai_output_budget(spec, level, base)))
+    except Exception:  # noqa: BLE001 (an estimate for the budget, never a gate)
+        return base
+    return base
+
+
 def openai_effort(level: str) -> str:
     """``reasoning_effort`` 값 — 끄기는 ``none``."""
     return "none" if level == "off" else level

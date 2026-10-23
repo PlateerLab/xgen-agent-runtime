@@ -434,6 +434,11 @@ class ToolStage(Stage[Any, Any]):
         results = await self.dispatch_calls(tool_calls, state)
 
         state.add_message("user", results)
+        # A result clipped to the window is recorded as the tool returned it (core.originals).
+        from xgen_agent_runtime.core.originals import keep_clipped_originals
+
+        if state.messages:
+            keep_clipped_originals(state, state.messages[-1])
         state.tool_results = results
         # Cumulative tool-call counter (audit R2): state.tool_results is
         # REPLACED each round, so ToolCallBudget can't count across rounds

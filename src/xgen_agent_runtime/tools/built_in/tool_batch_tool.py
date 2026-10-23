@@ -74,6 +74,36 @@ def _text_of(result: ToolResult) -> str:
         return str(content)
 
 
+def _forget_reads(
+    state: Any,
+    *,
+    tc_for_apply: Dict[str, Any],
+    context: ToolContext,
+    seen_before: set,
+    ranges_before: Dict[str, Any],
+) -> None:
+    """Put the file-read ledgers back as they were before this batch: the model did not get all of the
+    text these reads returned (an item was cut, or the batch is clipped to the window), so they do not
+    count as having read the files. Otherwise a Write could replace a file whose middle it never saw."""
+    from xgen_agent_runtime.tools.built_in._file_witness import RANGES_KEY, WITNESSED_KEY, _book
+
+    state_apply = getattr(context, "state_apply", None)
+    if state_apply is None:
+        return
+    book = [p for p in _book(state) if p in seen_before]
+    try:
+        state_apply(
+            {WITNESSED_KEY: book, RANGES_KEY: dict(ranges_before)},
+            str(tc_for_apply.get("tool_name") or "ToolBatch"),
+        )
+    except Exception:  # pragma: no cover - defensive
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "ToolBatch: could not restore the read ledger", exc_info=True
+        )
+
+
 def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -204,6 +234,12 @@ class ToolBatchTool(Tool):
         state = getattr(context, "state_view", None)
         shared = getattr(state, "shared", None)
         shared = shared if isinstance(shared, dict) else None
+        # File reads in this batch go on the read ledger as they finish. If the model then gets only part
+        # of their text (an item cut, or the batch clipped to the window), they must come off again.
+        from xgen_agent_runtime.tools.built_in._file_witness import _book, _ranges_book
+
+        seen_before = set(_book(state))
+        ranges_before = _ranges_book(state)
         emit = getattr(state, "add_event", None)
         emit = emit if callable(emit) else None
         if shared is not None:
@@ -281,9 +317,12 @@ class ToolBatchTool(Tool):
         per_item = PER_ITEM_CHARS
         rows: List[Dict[str, Any]] = []
         ok = 0
+        item_cut = False
         for i, (tc, res) in enumerate(zip(calls, results)):
             is_error = bool(res.get("is_error"))
-            text = _clip(str(res.get("content") or "").strip(), per_item)
+            raw_text = str(res.get("content") or "").strip()
+            item_cut = item_cut or len(raw_text) > per_item
+            text = _clip(raw_text, per_item)
             row: Dict[str, Any] = {"i": i, "input": tc["tool_input"], "ok": not is_error}
             row["error" if is_error else "result"] = text
             ok += 0 if is_error else 1
@@ -296,5 +335,17 @@ class ToolBatchTool(Tool):
             "parallel": limit if safe else 1,
             "results": rows,
         }
+        rendered = json.dumps(body, ensure_ascii=False)
+        if state is not None:
+            from xgen_agent_runtime.stages.s10_tool.persistence import exceeds_window_cap
+
+            if item_cut or exceeds_window_cap(rendered, context):
+                _forget_reads(
+                    state,
+                    tc_for_apply=calls[0] if calls else {},
+                    context=context,
+                    seen_before=seen_before,
+                    ranges_before=ranges_before,
+                )
         # 전부 실패면 오류로 올린다 — 반복 실패 차단이 이 도구 단위로도 걸리게.
-        return ToolResult(content=json.dumps(body, ensure_ascii=False), is_error=(ok == 0))
+        return ToolResult(content=rendered, is_error=(ok == 0))

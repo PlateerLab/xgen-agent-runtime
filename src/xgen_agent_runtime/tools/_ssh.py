@@ -51,6 +51,17 @@ class SSHUnavailableError(RuntimeError):
     """Raised when the optional ``asyncssh`` dependency is not installed."""
 
 
+class SSHCommandTimeout(asyncio.TimeoutError):
+    """The command ran past its time limit. Carries what it printed until then (asyncssh's own timeout
+    keeps it; ``asyncio.wait_for`` threw it away, so a long build's output vanished with the timeout)."""
+
+    def __init__(self, timeout: float, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(f"command exceeded {timeout:.0f}s")
+        self.timeout = timeout
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 class SSHConfigError(ValueError):
     """Raised when a server record is malformed (missing host/creds, bad key)."""
 
@@ -277,9 +288,20 @@ async def ssh_exec(
         remote, run_input = _remote_command(
             command, cwd=cwd, sudo=sudo, password=server.get("password")
         )
-        result = await asyncio.wait_for(
-            conn.run(remote, input=run_input, check=False), timeout=timeout
-        )
+        asyncssh = _require_asyncssh()
+        try:
+            # asyncssh's own timeout stops the command and keeps what it printed (TimeoutError carries
+            # stdout/stderr). The outer wait_for only guards a run that does not return at all.
+            result = await asyncio.wait_for(
+                conn.run(remote, input=run_input, check=False, timeout=timeout),
+                timeout=timeout + 10.0,
+            )
+        except asyncssh.TimeoutError as exc:
+            raise SSHCommandTimeout(
+                timeout,
+                str(getattr(exc, "stdout", "") or ""),
+                str(getattr(exc, "stderr", "") or ""),
+            ) from exc
         rc = result.exit_status
         # exit_status is None on signal termination; map to 137-style non-zero.
         if rc is None:
@@ -375,6 +397,7 @@ def _friendly_error(exc: Exception) -> str:
 
 
 __all__ = [
+    "SSHCommandTimeout",
     "SSHUnavailableError",
     "SSHConfigError",
     "MAX_JUMP_DEPTH",

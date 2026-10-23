@@ -660,14 +660,30 @@ class APIStage(Stage[Any, APIResponse]):
             # believed the bigger window again and overflowed the same way.
             state.context_window_budget = limit
             try:
-                from xgen_agent_runtime.host.token_budget import learn_context_window
-
-                learn_context_window(
-                    getattr(client, "provider", ""),
-                    model or getattr(state, "model", ""),
-                    getattr(client, "_base_url", None),
-                    limit,
+                from xgen_agent_runtime.host.token_budget import (
+                    WINDOW_IDENTITY_KEY,
+                    learn_context_window,
                 )
+
+                # Remember it under the names the host resolves the window with (its provider, base URL
+                # and model): the client's own names differ (vllm runs on the "custom" client, Azure's
+                # client rewrites the URL to /openai/v1), and a window learned under them was never found
+                # on the next turn (2026-10-23 review).
+                identity = state.metadata.get(WINDOW_IDENTITY_KEY)
+                if isinstance(identity, dict):
+                    learn_context_window(
+                        identity.get("provider"),
+                        identity.get("model"),
+                        identity.get("base_url"),
+                        limit,
+                    )
+                else:
+                    learn_context_window(
+                        getattr(client, "provider", ""),
+                        model or getattr(state, "model", ""),
+                        getattr(client, "_base_url", None),
+                        limit,
+                    )
             except Exception:  # noqa: BLE001 (a hint for later turns, never a gate)
                 pass
         state.add_event(

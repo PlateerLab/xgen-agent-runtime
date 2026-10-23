@@ -243,6 +243,7 @@ def grep_files(req):
     page_end = offset + GREP_PAGE_MATCHES
     binary_skipped = unreadable = 0
     scanned = 0
+    stopped_inside = None  # (file, line) where the time limit stopped a file mid-way
     for fpath in targets:
         if time.monotonic() - started > GREP_TIME_BUDGET_S:
             notes.append(
@@ -261,6 +262,11 @@ def grep_files(req):
         try:
             with open(fpath, encoding="utf-8", errors="ignore") as f:
                 for n, raw in enumerate(f):
+                    # One huge file used to run past the runner's own limit, and the whole search failed
+                    # with nothing to show. Stop inside the file and say where.
+                    if n and n % 5000 == 0 and time.monotonic() - started > GREP_TIME_BUDGET_S:
+                        stopped_inside = (fpath, n)
+                        break
                     line = raw.rstrip("\n").rstrip("\r")
                     matched = regex.search(line) is not None
                     if matched:
@@ -297,6 +303,13 @@ def grep_files(req):
         if hits:
             file_counts.append((str(fpath), hits))
             total += hits
+        if stopped_inside is not None:
+            notes.append(
+                "stopped at the time limit at line %d of %s (file %d of %d by path); the counts cover "
+                "only what was searched; narrow 'path' or 'glob' to search the rest"
+                % (stopped_inside[1], stopped_inside[0], scanned, len(targets))
+            )
+            break
 
     nfiles = len(file_counts)
     if binary_skipped:

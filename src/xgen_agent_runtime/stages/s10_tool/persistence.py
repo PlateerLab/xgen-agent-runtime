@@ -184,7 +184,20 @@ def _view_tokens(text: str) -> int:
     return int(raw * DEFAULT_PROVIDER_FACTOR * SAFETY_MULTIPLIER)
 
 
-def _clip_marker(total_chars: int, saved_at: str, read_id: str = "") -> str:
+def _offers(context: ToolContext, name: str) -> bool:
+    """Whether the model can call ``name`` in this run (the live registry, deferred tools included).
+    Unknown registry: assume it can (the marker only names the tool)."""
+    registry = getattr(context, "tool_registry", None)
+    if registry is None:
+        return True
+    try:
+        names = registry.list_names()
+    except Exception:  # noqa: BLE001
+        return True
+    return name in set(names or ())
+
+
+def _clip_marker(total_chars: int, saved_at: str, read_id: str = "", history: bool = False) -> str:
     if read_id:
         where = (
             f'Read any part of the full result with ToolResultRead(id="{read_id}", offset=<char '
@@ -194,6 +207,12 @@ def _clip_marker(total_chars: int, saved_at: str, read_id: str = "") -> str:
             where += f" (it is also saved at: {saved_at})"
     elif saved_at:
         where = f"The full result is saved at: {saved_at}"
+    elif history:
+        # The conversation record keeps the result as the tool returned it (core.originals).
+        where = (
+            "The full result is kept in this conversation's record: ConversationHistory "
+            "(view='search') finds words from the omitted part"
+        )
     else:
         where = "Re-run with a narrower query (a line range, a filter) if you need the omitted part"
     return (
@@ -291,14 +310,43 @@ def _fit_to_window(
     if result.persist_full and _reachable(result.persist_full, context):
         saved_at = result.persist_full
     read_id = ""
+    unseen_note = ""
+
+    def _drop_file_read_records() -> str:
+        # A file read the model got only part of does not count as reading the file: the guard let a
+        # Write replace the whole file with its middle unseen (2026-10-23 review). The records are
+        # applied after this (executors), so leaving them out keeps the ledger as it was.
+        nonlocal result
+        from xgen_agent_runtime.tools.built_in._file_witness import RANGES_KEY, WITNESSED_KEY
+
+        mutations = dict(result.state_mutations or {})
+        if WITNESSED_KEY not in mutations and RANGES_KEY not in mutations:
+            return ""
+        mutations.pop(WITNESSED_KEY, None)
+        mutations.pop(RANGES_KEY, None)
+        result = replace(result, state_mutations=mutations)
+        return (
+            "[This read does not count as reading the file: a Write that replaces it is refused until "
+            "you have seen all of it. Read it in parts (offset/limit) that fit, or Edit the part you know.]"
+        )
 
     def _keep_original() -> None:
         # Only when a clip is about to happen: keep the full body and name it for ToolResultRead.
-        nonlocal read_id, result
+        nonlocal read_id, result, unseen_note
+        from xgen_agent_runtime.core.originals import note_clipped_result
+
+        # Memory records the result as the tool returned it, not the clip (keep_clipped_originals).
+        note_clipped_result(
+            getattr(context, "state_view", None),
+            tool_use_id,
+            result.to_api_format(tool_use_id).get("content"),
+        )
         path = _persist_full(result, tool_use_id=tool_use_id, tool_name=tool_name, context=context)
-        if path:
+        if path and tool_use_id and _offers(context, "ToolResultRead"):
             read_id = tool_use_id
+        if path:
             result = replace(result, persist_full=path)
+        unseen_note = _drop_file_read_records()
 
     if result.display_text is None and isinstance(result.content, list):
         texts = [b for b in result.content if isinstance(b, dict) and b.get("type") == "text"]
@@ -309,7 +357,11 @@ def _fit_to_window(
         clipped = _clip_to_tokens(joined, cap)
         kept = [b for b in result.content if not (isinstance(b, dict) and b.get("type") == "text")]
         _LOG.info("tool %s result text over window cap %d; clipping (images kept)", tool_name, cap)
-        marker = _clip_marker(len(joined), saved_at, read_id)
+        marker = _clip_marker(
+            len(joined), saved_at, read_id, _offers(context, "ConversationHistory")
+        )
+        if unseen_note:
+            marker = f"{marker}\n{unseen_note}"
         return replace(result, content=[{"type": "text", "text": f"{marker}\n{clipped}"}] + kept)
 
     view = (
@@ -324,8 +376,17 @@ def _fit_to_window(
         "tool %s result over window cap %d; clipping to %d chars", tool_name, cap, len(clipped)
     )
     lines = [header] if header else []
-    lines += [_clip_marker(len(view), saved_at, read_id), clipped]
+    lines += [_clip_marker(len(view), saved_at, read_id, _offers(context, "ConversationHistory"))]
+    if unseen_note:
+        lines.append(unseen_note)
+    lines.append(clipped)
     return replace(result, display_text="\n".join(lines))
+
+
+def exceeds_window_cap(text: str, context: ToolContext) -> bool:
+    """Whether :func:`_fit_to_window` will clip a result whose text is ``text`` in this run."""
+    cap = _window_cap_tokens(context)
+    return cap is not None and _view_tokens(str(text or "")) > cap
 
 
 def maybe_persist_large_result(

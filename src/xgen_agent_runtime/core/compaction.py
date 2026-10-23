@@ -230,6 +230,19 @@ def window_of(state: Any) -> int:
     return _int(getattr(state, "context_window_budget", 0)) or 200_000
 
 
+#: ``state.metadata`` key: the output cap the client actually sends this turn (thinking raises it above
+#: ``max_tokens``; :func:`llm_client.thinking.output_tokens_sent`). Set by the host.
+ANSWER_ROOM_KEY = "answer_room_tokens"
+
+
+def answer_room_of(state: Any) -> int:
+    """Output tokens this turn's requests ask for: ``max_tokens``, or more when thinking raises it."""
+    base = _int(getattr(state, "max_tokens", 0))
+    meta = getattr(state, "metadata", None)
+    sent = _int(meta.get(ANSWER_ROOM_KEY)) if isinstance(meta, dict) else 0
+    return max(base, sent)
+
+
 def output_reserve(window: int, max_tokens: int) -> int:
     """Room kept free for the answer: ``max(4096, max_tokens + 2048)``, at most half the window.
 
@@ -251,7 +264,7 @@ def output_reserve(window: int, max_tokens: int) -> int:
 def input_budget_of(state: Any) -> int:
     """Tokens the next request may use: the window minus :func:`output_reserve`."""
     window = window_of(state)
-    return max(1, window - output_reserve(window, _int(getattr(state, "max_tokens", 0))))
+    return max(1, window - output_reserve(window, answer_room_of(state)))
 
 
 def fixed_tokens(state: Any) -> int:

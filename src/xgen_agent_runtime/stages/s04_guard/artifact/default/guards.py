@@ -78,13 +78,11 @@ class TokenBudgetGuard(Guard):
         return {"min_remaining_tokens": self._min_remaining}
 
     def check(self, state: PipelineState) -> GuardResult:
-        from xgen_agent_runtime.core.compaction import output_reserve, window_of
+        from xgen_agent_runtime.core.compaction import answer_room_of, output_reserve, window_of
 
         projected = estimate_prompt_tokens(state)
         window = window_of(state)
-        need = self._min_remaining or output_reserve(
-            window, int(getattr(state, "max_tokens", 0) or 0)
-        )
+        need = self._min_remaining or output_reserve(window, answer_room_of(state))
         remaining = window - projected
         if remaining < need:
             return GuardResult(

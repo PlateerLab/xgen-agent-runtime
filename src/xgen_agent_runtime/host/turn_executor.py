@@ -984,6 +984,20 @@ class AgentTurnExecutor:
                 else:
                     _fast_path_reason = "bash_unavailable"
 
+            _prefetched_witnessed: List[str] = []
+            # 이번 턴에 ConversationHistory 를 부를 수 있는가. 줄인 자리의 표식은 부를 수 있을 때만 그 도구를
+            # 가리킨다(도구가 닿지 않는 CLI 턴에도 가리키던 것, 2026-10-23 점검).
+            try:
+                _history_readable = bool(
+                    _tools_reach_model
+                    and registry is not None
+                    and "ConversationHistory" in set(registry.list_names() or ())
+                )
+            except Exception:  # noqa: BLE001
+                _history_readable = False
+            from xgen_agent_runtime.memory.short_term_window import HISTORY_READABLE_KEY
+
+            state.metadata[HISTORY_READABLE_KEY] = _history_readable
             # ── 요청에 이름이 나온 작업 폴더 파일 붙이기 (host/referenced_files.py) ──
             # 파일을 하나씩 Read 하는 왕복을 없앤다. RAG 블록과 같은 자리(사용자 턴)에 싣고,
             # 예산 맞추기가 함께 자를 수 있게 rag_block 에 합친다. 끝까지 실은 파일은
@@ -1015,6 +1029,7 @@ class AgentTurnExecutor:
                                 _book = list(state.shared.get(WITNESSED_KEY) or [])
                                 _book.extend(p for p in _pre.witnessed if p not in _book)
                                 state.shared[WITNESSED_KEY] = _book
+                                _prefetched_witnessed = list(_pre.witnessed)
                             logger.info(
                                 "agents/geny: 요청에 나온 파일 %d개 첨부, %d개 이름만",
                                 len(_pre.attached),
@@ -1031,7 +1046,6 @@ class AgentTurnExecutor:
             #   CLI 백엔드(claude_code·codex): 런타임 압축이 없고 이력은 첫 메시지 하나로 접혀
             #     CLI 의 자체 압축도 못 줄인다. 넘치면 가장 오래된 이력부터 덜어 낸다.
             from xgen_agent_runtime.host.context_budget import (
-                fit_history_context,
                 fit_input_to_budget,
                 memory_reserved_tokens,
                 resolve_window,
@@ -1047,13 +1061,40 @@ class AgentTurnExecutor:
                 base_url=base_url,
                 vllm_probe=_vllm_probe_with_key(host, api_key),
             )
+            from xgen_agent_runtime.core.compaction import ANSWER_ROOM_KEY
+            from xgen_agent_runtime.host.token_budget import WINDOW_IDENTITY_KEY
+            from xgen_agent_runtime.llm_client.thinking import output_tokens_sent
+
+            # 넘침 오류에서 배운 창을 이 이름들로 적게 한다(Stage 6). 클라이언트의 이름은 다르다(vllm →
+            # "custom", Azure 는 /openai/v1 주소): 그 이름으로 적은 창은 다음 턴 해석에서 찾지 못했다.
+            state.metadata[WINDOW_IDENTITY_KEY] = {
+                "provider": provider,
+                "model": model,
+                "base_url": base_url,
+            }
+            # 답 몫은 클라이언트가 실제로 보내는 출력 상한이다(생각이 max_tokens 를 키운다). 공급자는 입력과
+            # 이 상한의 합을 창과 견준다. 예약은 창의 절반에서 멈추므로, 상한이 그보다 크면 입력이 제 몫을
+            # 채우는 순간 거절된다(8k vLLM 모델 + 기본 8192 는 모든 요청이 거절됐다). 맞을 만큼 낮춘다.
+            _thinking = _thinking_param(kwargs.get("thinking"))
+            answer_room = output_tokens_sent(provider, model, _thinking, max_tokens_val)
+            if budget_window > 0 and answer_room > budget_window // 2:
+                lowered = max(256, max_tokens_val - (answer_room - budget_window // 2))
+                logger.warning(
+                    "agents/geny: max_tokens %d 은 창 %d 에 들어가지 않는다(보내는 출력 상한 %d): %d 로 낮춘다",
+                    max_tokens_val,
+                    budget_window,
+                    answer_room,
+                    lowered,
+                )
+                max_tokens_val = lowered
+                answer_room = output_tokens_sent(provider, model, _thinking, max_tokens_val)
+            state.metadata[ANSWER_ROOM_KEY] = answer_room
             # 메모리 노드가 (최근 메시지, 이전 대화 문자열) 로 보낸 둘째 칸: 최근 N개(기본 2개)보다
             # 앞선 대화다. 아래 맞춤 뒤에 API 백엔드는 시스템 프롬프트 끝에(옛 agent_xgen 과 같다), CLI
-            # 백엔드는 이번 턴 안내로 붙인다. 노드 기본값이 10만 자라 먼저 창의 일정 몫 안으로 줄이고,
-            # 입력 맞춤이 남는 자리에 맞춰 한 번 더 줄인다(이번 질문·RAG 보다 먼저, 가장 최근 쪽이 남는다).
+            # 백엔드는 이번 턴 안내로 붙인다. 줄이는 것은 아래 입력 맞춤뿐이다: 창이 모자랄 때 이번 질문·RAG
+            # 보다 먼저, 가장 최근 쪽이 남게. 예전에는 압박과 상관없이 늘 창의 25% 로 먼저 잘랐다(2026-10-23
+            # 점검: 원칙은 창이 모자랄 때만 줄인다).
             _history_ctx = history_context(kwargs.get("memory"))
-            if _history_ctx:
-                _history_ctx = fit_history_context(_history_ctx, budget_window, provider, model)
             _late_reserve = 0
             if memory_provider is not None:
                 # 내장 메모리 주입(Stage 2)은 fit 이후 system 에 붙는다. 그만큼 미리 비워 둔다.
@@ -1090,12 +1131,13 @@ class AgentTurnExecutor:
                         registry=registry if _tools_reach_model else None,
                         provider=provider,
                         model=model,
-                        max_tokens=max_tokens_val,
+                        max_tokens=answer_room,
                         window=budget_window,
                         reserved_tokens=_late_reserve,
                         history_compressible=not _is_cli,
                         history_context=_history_ctx,
                         extra_overhead_text=_extra_overhead,
+                        history_readable=_history_readable,
                     )
 
                 fit = _fit(text)
@@ -1111,6 +1153,16 @@ class AgentTurnExecutor:
                     logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
                 _history_ctx = fit.history_context
                 if fit.clamped:
+                    if _prefetched_witnessed and fit.rag_block != rag_block:
+                        # 붙인 파일이 든 참조 칸이 잘렸다: 그 파일들은 다 본 것이 아니다. "읽음" 장부에서 뺀다
+                        # (Write 가 본 적 없는 가운데까지 갈아 끼우지 않게, 2026-10-23 점검).
+                        from xgen_agent_runtime.tools.built_in._file_witness import WITNESSED_KEY
+
+                        state.shared[WITNESSED_KEY] = [
+                            p
+                            for p in (state.shared.get(WITNESSED_KEY) or [])
+                            if p not in _prefetched_witnessed
+                        ]
                     # 사용자에게 알리는 것은 사용자 입력(text·rag)이 잘렸을 때뿐이다.
                     text, rag_block, clamped = fit.text, fit.rag_block, fit.input_clamped
                     if fit.history is not None:
@@ -1413,7 +1465,12 @@ class AgentTurnExecutor:
                 # 워크플로 실행(비스트리밍) 결과는 잘린 입력으로 만든 답을 아무 말 없이 돌려줬다.
                 from xgen_agent_runtime.host.context_budget import CLAMP_NOTICE
 
-                answer = CLAMP_NOTICE + answer
+                if answer.lstrip().startswith(("[ERROR]", "[SUSPENDED]", "[BLOCKED]")):
+                    # 실패·멈춤 표식은 맨 앞에 있어야 호스트가 알아본다. 안내를 앞에 붙이면 실패가 정상 답으로
+                    # 나갔다(xgen-workflow 는 맨 앞의 [ERROR] 만 본다, 2026-10-23 점검). 안내는 뒤에 붙인다.
+                    answer = f"{answer}\n\n{CLAMP_NOTICE.strip()}"
+                else:
+                    answer = CLAMP_NOTICE + answer
             return answer
         finally:
             _teardown()

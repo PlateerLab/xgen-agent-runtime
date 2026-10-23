@@ -241,8 +241,34 @@ class SshRunTool(_SSHToolBase):
             return _err("SSH_UNAVAILABLE", str(exc))
         except SSHConfigError as exc:
             return _err("BAD_SERVER", f"Server '{name}': {exc}")
-        except asyncio.TimeoutError:
-            return _err("TIMEOUT", f"Command on '{name}' exceeded {timeout:.0f}s.")
+        except asyncio.TimeoutError as exc:
+            # Keep what the command printed before the limit (a long build's log is the evidence of
+            # where it got to). Without it the model saw only "exceeded" and ran it again blind.
+            partial_out = str(getattr(exc, "stdout", "") or "")
+            partial_err = str(getattr(exc, "stderr", "") or "")
+            if not (partial_out or partial_err):
+                return _err("TIMEOUT", f"Command on '{name}' exceeded {timeout:.0f}s.")
+            out_s, out_trunc = _truncate(partial_out)
+            err_s, err_trunc = _truncate(partial_err)
+            body = out_s
+            if err_s:
+                body += ("\n" if body else "") + "stderr:\n" + err_s
+            return ToolResult(
+                content={
+                    "server": name,
+                    "exit_code": None,
+                    "timed_out": True,
+                    "stdout": out_s,
+                    "stderr": err_s,
+                    "truncated": bool(out_trunc or err_trunc),
+                },
+                is_error=True,
+                display_text=(
+                    f"[{name}] TIMEOUT: the command exceeded {timeout:.0f}s and was stopped. "
+                    f"Output until then:\n{body}"
+                ),
+                metadata={"exit_code": None, "server": name, "timed_out": True},
+            )
         except Exception as exc:  # noqa: BLE001 — auth/network → structured error
             return _err("SSH_ERROR", f"{type(exc).__name__}: {exc}")
 

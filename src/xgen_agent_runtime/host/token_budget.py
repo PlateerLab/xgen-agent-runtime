@@ -143,7 +143,43 @@ _CATALOG_WINDOW_TTL_SEC = 300
 _catalog_caps_cache: Dict[Tuple[str, str], Tuple[float, Optional[Dict[str, Any]]]] = {}
 
 # agent provider 표기 → llm_model_catalog.provider 정규화 (catalog_reader 와 동일 규칙)
-_PROVIDER_TO_CATALOG_ID = {"gemini": "google"}
+# Azure: 노드는 "azure" 로 부르고 카탈로그 행은 "azure_foundry" 로 쌓인다. 예전에는 이 이름이 달라 관리자가
+# 카탈로그에 적은 창을 한 번도 읽지 못했다(2026-10-23 점검).
+_PROVIDER_TO_CATALOG_ID = {
+    "gemini": "google",
+    "azure": "azure_foundry",
+    "azure_openai": "azure_foundry",
+}
+
+#: 같은 공급자의 다른 이름. 노드·카탈로그·클라이언트가 서로 다르게 부른다: 런타임은 vllm 노드를 "custom"
+#: 클라이언트로 만들고, Azure 클라이언트는 "azure_foundry", CLI 클라이언트는 "*_cli" 다. 넘침에서 배운 창은
+#: 클라이언트 이름으로 적히고 해석은 노드 이름으로 찾으므로, 같은 이름으로 모으지 않으면 다음 턴에 쓰이지 않았다.
+_PROVIDER_ALIASES = {
+    "custom": "vllm",
+    "azure_foundry": "azure",
+    "azure_openai": "azure",
+    "claude_code_cli": "claude_code",
+    "codex_cli": "codex",
+    "gemini": "google",
+}
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    """창 값 하나를 양의 정수로. 숫자 글("131072", "131,072")도 받고 bool 은 받지 않는다.
+
+    카탈로그 값은 관리 화면에서 글로 들어오기도 한다(xgen-core 의 vLLM 등록 코드가 같은 경우를 다룬다).
+    예전에는 글이면 조용히 버려 표·기본값으로 갔고, ``True`` 는 int 라서 창 1 이 됐다.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value) if value > 0 else None
+    if isinstance(value, str):
+        text = value.strip().replace(",", "").replace("_", "")
+        if text.isdigit():
+            number = int(text)
+            return number if number > 0 else None
+    return None
 
 
 def _catalog_capabilities(
@@ -189,9 +225,8 @@ def _catalog_capabilities(
 
 def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optional[int]:
     """`llm_model_catalog.capabilities.max_context` (없으면 None)."""
-    max_context = (_catalog_capabilities(provider, model) or {}).get("max_context")
-    if isinstance(max_context, (int, float)) and max_context > 0:
-        win = int(max_context)
+    win = _positive_int((_catalog_capabilities(provider, model) or {}).get("max_context"))
+    if win:
         logger.info(
             "[TOKEN_BUDGET] 카탈로그 max_context: %s/%s → %s tokens", provider, model, f"{win:,}"
         )
@@ -203,6 +238,10 @@ def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optio
 #: 예전에는 그 턴에만 썼다(state.context_window_budget). 다음 턴은 다시 큰 창을 믿고 같은 넘침과 압축을
 #: 되풀이했다(2026-10-23 점검). 배포가 창을 늘렸을 수 있으므로 영원히 믿지 않는다.
 _LEARNED_WINDOWS: Dict[Tuple[str, str, str], Tuple[int, float]] = {}
+
+#: ``state.metadata`` key: the (provider, base_url, model) the host resolved this turn's window with.
+#: Stage 6 learns an overflow's window under the same names, so the next turn's resolution finds it.
+WINDOW_IDENTITY_KEY = "context_window_identity"
 _LEARNED_LOCK = threading.Lock()
 LEARNED_WINDOW_TTL_S = 6 * 3600.0
 
@@ -210,8 +249,9 @@ LEARNED_WINDOW_TTL_S = 6 * 3600.0
 def _window_key(
     provider: Optional[str], model: Optional[str], base_url: Optional[str]
 ) -> Tuple[str, str, str]:
+    prov = (provider or "").lower().strip()
     return (
-        (provider or "").lower().strip(),
+        _PROVIDER_ALIASES.get(prov, prov),
         (base_url or "").strip().rstrip("/").lower(),
         (model or "").strip(),
     )
@@ -309,6 +349,9 @@ def _resolve_context_window(
         return catalog_win
 
     name = (model or "").lower().strip()
+    # 카탈로그 행이 아는 실제 모델 이름(Azure 는 배포 이름이 모델 이름이 아니다: 'chat' → gpt-4o). 표는 그
+    # 이름으로도 찾는다. 예전에는 배포 이름만 봐서 표에 없으면 늘 provider 기본값(128k)이었다.
+    underlying = str((_catalog_capabilities(prov, model) or {}).get("model") or "").lower().strip()
     if prov == "claude_code":
         # CLI 가 쓰는 창은 모델 이름이 아니라 CLI 와 요금제가 정한다(1M 은 [1m] 별칭으로 고를 때). 정식 ID 를
         # 넘겨도 표의 API 창을 쓰지 않는다. 런타임은 이 값으로 첫 메시지에 접는 지난 대화만 맞춘다.
@@ -322,15 +365,22 @@ def _resolve_context_window(
         # 이름 앞이나 구분자(. / :) 뒤에서 시작하는 접두만: 'apac.anthropic.claude-…',
         # 'meta.llama3-1-70b-…', 'Qwen/…'. 그냥 포함으로 보면 'o1' 같은 짧은 접두가 엉뚱한 이름 속에서
         # 걸린다. 가장 긴 접두가 이긴다.
-        segments = [name] + [name[i + 1 :] for i, ch in enumerate(name) if ch in "./:"]
-        best_len, best_win = -1, None
-        for prefix, win in _MODEL_CONTEXT_WINDOW:
-            if len(prefix) > best_len and any(_prefix_matches(seg, prefix) for seg in segments):
-                best_len, best_win = len(prefix), win
-        if best_win is not None:
-            return best_win
+        for candidate in (name, underlying):
+            if not candidate:
+                continue
+            segments = [candidate] + [
+                candidate[i + 1 :] for i, ch in enumerate(candidate) if ch in "./:"
+            ]
+            best_len, best_win = -1, None
+            for prefix, win in _MODEL_CONTEXT_WINDOW:
+                if len(prefix) > best_len and any(_prefix_matches(seg, prefix) for seg in segments):
+                    best_len, best_win = len(prefix), win
+            if best_win is not None:
+                return best_win
 
-    return _PROVIDER_DEFAULT_WINDOW.get(prov, DEFAULT_CONTEXT_WINDOW)
+    if prov in _PROVIDER_DEFAULT_WINDOW:
+        return _PROVIDER_DEFAULT_WINDOW[prov]
+    return _PROVIDER_DEFAULT_WINDOW.get(_PROVIDER_ALIASES.get(prov, prov), DEFAULT_CONTEXT_WINDOW)
 
 
 def _prefix_matches(name: str, prefix: str) -> bool:

@@ -437,6 +437,9 @@ class ContextStage(Stage[Any, Any]):
         cfg = WindowConfig.from_hooks(self._window_hooks())
         if not cfg.enabled:
             return
+        from xgen_agent_runtime.memory.short_term_window import HISTORY_READABLE_KEY
+
+        cfg.history_readable = bool(state.metadata.get(HISTORY_READABLE_KEY, True))
         # 창의 크기는 **모델의 창**이 정한다(20%, 토큰). 예전에는 4만 자·5턴 고정이라 1M 모델도 최근
         # 5턴만 보고, 결과는 상시 1,200자로 잘렸다 — 정확성을 깎는 고정 숫자였다(2026-10-23). 작은
         # 모델(vLLM 32k)에서는 20% 가 그대로 상한이라 압축 문턱을 매 턴 넘지 않는다. 호스트가 글자 상한을

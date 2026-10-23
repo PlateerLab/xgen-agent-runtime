@@ -78,7 +78,8 @@ class TestShape:
         assert dialogue[0]["content"].endswith("\n\nrequest 2")
         # 그 턴에 쓴 글 전부(중간 글 포함) + 도구 한 줄
         assert dialogue[1]["content"] == (
-            "working 2.0\n\nworking 2.1\n\nanswer 2\n[used tools: ForgeTool (1 failed), Bash]"
+            "working 2.0\n\nworking 2.1\n\nanswer 2\n[used tools: ForgeTool (1 failed), Bash; "
+            "calls and results not shown here; ConversationHistory shows them]"
         )
         # 가까운 2턴: 순서·블록·id 그대로
         full = msgs[6:]
@@ -121,8 +122,11 @@ class TestUsedToolsLine:
         assert used_tools_line(turn) == ""
 
     def test_line_can_be_turned_off(self):
+        """도구 이름 줄을 꺼도 도구 블록을 뺐다는 사실과 읽는 길은 남는다(2026-10-23: 예전에는 아무 표시도 없었다)."""
         msgs, _ = build_window(_turns(4), WindowConfig(used_tools_line=False))
-        assert msgs[1]["content"] == "working 1.0\n\nanswer 1"
+        assert msgs[1]["content"] == (
+            "working 1.0\n\nanswer 1\n[tool calls and results not shown here; ConversationHistory shows them]"
+        )
 
 
 def _results(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

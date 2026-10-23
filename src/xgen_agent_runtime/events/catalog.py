@@ -1072,6 +1072,13 @@ RETIRED_EVENT_TYPES: FrozenSet[EventTypes] = frozenset(
     }
 )
 
+#: The release that stopped emitting a retired event, where it is not the 4.71.0 sweep (the generated
+#: docs said 4.71.0 for every retired event).
+RETIRED_IN: Dict[EventTypes, str] = {
+    EventTypes.CONTEXT_TASK_BOARD: "4.99.0",
+    EventTypes.MEMORY_ASSIGNMENTS_LOADED: "4.100.0",
+}
+
 
 def known_event_types() -> List[str]:
     """All catalogued wire strings, sorted — UI/validation accessor.
@@ -1087,6 +1094,7 @@ __all__ = [
     "EventTypes",
     "PAYLOADS",
     "RETIRED_EVENT_TYPES",
+    "RETIRED_IN",
     "known_event_types",
 ]
 

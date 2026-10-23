@@ -26,6 +26,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 __all__ = [
     "ORIGINALS_KEY",
+    "CLIPPED_RESULTS_KEY",
+    "note_clipped_result",
+    "keep_clipped_originals",
     "keep_original",
     "original_of",
     "originals_of",
@@ -77,6 +80,58 @@ def keep_original(state: Any, message: Any) -> None:
         for key in [k for k in ledger if k not in live]:
             ledger.pop(key, None)
     ledger[id(message)] = (message, copy.deepcopy(message))
+
+
+#: ``state.shared`` slot: ``{tool_use_id: content}``, what a tool returned before Stage 10 clipped it to
+#: the window (:mod:`xgen_agent_runtime.stages.s10_tool.persistence`), until its message is built.
+CLIPPED_RESULTS_KEY = "_window_clipped_results"
+
+
+def note_clipped_result(state: Any, tool_use_id: str, content: Any) -> None:
+    """Remember a tool result's content before Stage 10 clips what the model reads of it."""
+    shared = getattr(state, "shared", None)
+    if not isinstance(shared, dict) or not tool_use_id:
+        return
+    pending = shared.get(CLIPPED_RESULTS_KEY)
+    if not isinstance(pending, dict):
+        pending = {}
+        shared[CLIPPED_RESULTS_KEY] = pending
+    pending.setdefault(str(tool_use_id), content)
+
+
+def keep_clipped_originals(state: Any, message: Any) -> None:
+    """Record ``message`` (the tool results Stage 10 just added) with the results as the tools returned
+    them. The request keeps the clipped copy; memory, ConversationHistory and the summary read this one.
+
+    Before (2026-10-23 review) the clip was what short-term memory recorded: its full text lived only in
+    a file under the executor's storage, which another pod or a restart does not have, and a
+    ConversationHistory search for a phrase from the omitted middle answered that it was never said.
+    """
+    shared = getattr(state, "shared", None)
+    if not isinstance(shared, dict) or not isinstance(message, dict):
+        return
+    pending = shared.pop(CLIPPED_RESULTS_KEY, None)
+    content = message.get("content")
+    if not isinstance(pending, dict) or not pending or not isinstance(content, list):
+        return
+    hits = [
+        i
+        for i, block in enumerate(content)
+        if isinstance(block, dict)
+        and block.get("type") == "tool_result"
+        and str(block.get("tool_use_id") or "") in pending
+    ]
+    if not hits:
+        return
+    keep_original(state, message)
+    ledger = _ledger(state, create=False) or {}
+    entry = ledger.get(id(message))
+    if entry is None:
+        return
+    original = entry[1]
+    for i in hits:
+        block = original["content"][i]
+        block["content"] = pending[str(block.get("tool_use_id") or "")]
 
 
 def original_of(state: Any, message: Any) -> Any:

@@ -26,6 +26,7 @@ from xgen_agent_runtime.events.catalog import (  # noqa: E402  (path bootstrap a
     EVENT_CATALOG_VERSION,
     PAYLOADS,
     RETIRED_EVENT_TYPES,
+    RETIRED_IN,
     EventTypes,
 )
 
@@ -111,7 +112,7 @@ def render() -> str:
         out(f"Enum member: `EventTypes.{member.name}`")
         out("")
         if member in RETIRED_EVENT_TYPES:
-            out("**Retired (4.71.0) — no longer emitted.**")
+            out(f"**Retired ({RETIRED_IN.get(member, '4.71.0')}): no longer emitted.**")
             out("")
         if payload:
             out("| Field | Description |")
