@@ -498,3 +498,20 @@ def test_list_finds_a_closed_task_by_its_words_and_shared_notes_are_skipped():
         assert await provider.notes().read(f"task-{other.state_mutations[CURRENT_KEY]}.md") is None
 
     _run(go())
+
+
+def test_the_execution_card_names_the_task_its_turn_went_to():
+    from xgen_agent_runtime.host.execution_record import record_turn_execution
+
+    provider = EphemeralMemoryProvider()
+
+    async def go():
+        await record_turn_execution(
+            provider, input_text="표 만들어 줘", output_text="완료", success=True, duration_ms=10,
+            session_id="s1", tool_calls=2, task_id="T-ab12", task_title="3분기 보고서",
+        )
+        metas = await provider.notes().list(category="daily")
+        note = await provider.notes().read(metas[0].ref.filename)
+        assert "> **Task:** [T-ab12] 3분기 보고서" in note.body
+
+    _run(go())

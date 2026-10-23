@@ -1279,6 +1279,19 @@ def _record_execution(
         return
     spec = getattr(pipeline, "_memory_distill_spec", None)
     calls, failures, blocked = _tool_stats_from_events(state)
+    # TASK 먼저: 실행 카드가 이 턴이 기록된 TASK 를 적는다(Executions ↔ TASK 연결).
+    task = _record_task_turn(
+        provider,
+        loop,
+        state=state,
+        input_text=input_text,
+        output_text=output_text,
+        success=success,
+        cancelled=cancelled,
+        calls=calls,
+        failures=failures,
+        blocked=blocked,
+    )
     try:
         from xgen_agent_runtime.host.execution_record import record_turn_execution
 
@@ -1299,24 +1312,14 @@ def _record_execution(
                     tool_calls=calls,
                     tool_failures=failures,
                     blocked=blocked,
+                    task_id=getattr(task, "id", "") or "",
+                    task_title=getattr(task, "title", "") or "",
                 ),
                 timeout=10.0,
             )
         )
     except Exception:  # noqa: BLE001 — 기록은 best-effort
         logger.debug("geny_bridge: execution record failed (turn unaffected)", exc_info=True)
-    _record_task_turn(
-        provider,
-        loop,
-        state=state,
-        input_text=input_text,
-        output_text=output_text,
-        success=success,
-        cancelled=cancelled,
-        calls=calls,
-        failures=failures,
-        blocked=blocked,
-    )
 
 
 def _record_task_turn(
@@ -1331,8 +1334,8 @@ def _record_task_turn(
     calls: int,
     failures: int,
     blocked: int,
-) -> None:
-    """이 턴이 한 일을 이 대화의 현재 TASK 에 남긴다(memory.tasks, LLM 없음).
+) -> Any:
+    """이 턴이 한 일을 이 대화의 현재 TASK 에 남긴다(memory.tasks, LLM 없음). 기록한 TASK 를 돌려준다.
 
     모델이 TASK 를 열지 않았어도 여러 단계 일이 분명하면(끝나지 않은 계획 2단계 이상, 도구를 쓰다
     끝나지 못한 턴) 요청으로 TASK 를 연다(호스트가 열었다고 적는다). 실패는 로그만.
@@ -1347,7 +1350,7 @@ def _record_task_turn(
 
     store = provider_tasks(provider)
     if store is None:
-        return
+        return None
     try:
         from xgen_agent_runtime.host.execution_record import _as_text, classify_outcome
         from xgen_agent_runtime.host.task_tools import sync_task_note
@@ -1373,7 +1376,7 @@ def _record_task_turn(
         }
         wrote_todos = "TodoWrite" in used
 
-        async def _go() -> None:
+        async def _go() -> Any:
             task = await record_turn(
                 store,
                 session_id=str(getattr(state, "session_id", "") or ""),
@@ -1389,10 +1392,12 @@ def _record_task_turn(
             )
             if task is not None:
                 await sync_task_note(provider, store, task)
+            return task
 
-        loop.run_until_complete(asyncio.wait_for(_go(), timeout=10.0))
+        return loop.run_until_complete(asyncio.wait_for(_go(), timeout=10.0))
     except Exception:  # noqa: BLE001 — 기록은 best-effort
         logger.debug("geny_bridge: task record failed (turn unaffected)", exc_info=True)
+        return None
 
 
 #: 끝나지 못한 턴을 기억에 남길 때 그 턴 끝에 붙이는 표식 — 다음 턴의 단기 기억 창이 이 턴을 "끝나지

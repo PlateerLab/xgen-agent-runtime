@@ -32,6 +32,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - TASK 는 사람의 것이다. 노트가 에이전트 공용인 provider 는 `task_notes = False` 로 TASK 노트를 받지 않는다(다른 사람이
   기억 검색으로 남의 TASK 를 보지 않게). 그런 provider 에서는 판과 `Task(action="list", query=...)`(열린·닫힌 TASK 를 낱말로
   찾는다)로 찾는다.
+- 실행 기록(Executions)과 잇는다: 실행 카드에 그 턴이 기록된 TASK(`> **Task:** [id] 제목`, frontmatter `task_id`)를,
+  날짜 일지 줄에 `task <id>` 를 적는다.
 - 이벤트 `context.task_board`(카탈로그 v19).
 
 ## [4.97.0] - 2026-10-23
