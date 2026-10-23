@@ -503,7 +503,7 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "results_fitted": "int? — tool results shortened in proportion so a hard-pressure request fits",
         "current_attachments_stripped": "int? — images/documents of the request itself removed (the very last resort)",
         "trigger": "str? — cost (Stage 2 token threshold) | the compaction trigger it ran under",
-        "threshold_tokens": "int? — the prune_over_tokens threshold that fired (cost trigger)",
+        "threshold_tokens": "int? — the prune_over_tokens threshold that fired (cost trigger, host opt-in)",
         "tokens_before": "int? — projected prompt tokens before the pass (cost trigger)",
         "tokens_after": "int? — projected prompt tokens after the pass (cost trigger)",
     },

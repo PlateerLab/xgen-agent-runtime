@@ -23,7 +23,8 @@ class GlobTool(Tool):
     def description(self) -> str:
         return (
             "Find files in your sandbox matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts'). "
-            "Returns matching file paths sorted by modification time."
+            "Returns matching file paths sorted by modification time (most recent first). "
+            "Long lists come in pages: the result says which files it shows and the offset for the next page."
         )
 
     @property
@@ -38,6 +39,11 @@ class GlobTool(Tool):
                 "path": {
                     "type": "string",
                     "description": "Directory to search in. Defaults to working directory.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip this many files (for the next page of a long list). Default 0.",
+                    "minimum": 0,
                 },
             },
             "required": ["pattern"],
@@ -63,5 +69,12 @@ class GlobTool(Tool):
             base = fs.resolve(input.get("path", "") or ".")
         except (PermissionError, ValueError) as e:
             return ToolResult(content=str(e), is_error=True)
-        result = await fs.search({"op": "glob", "base": base, "pattern": pattern})
+        result = await fs.search(
+            {
+                "op": "glob",
+                "base": base,
+                "pattern": pattern,
+                "offset": int(input.get("offset") or 0),
+            }
+        )
         return ToolResult(content=result["text"], is_error=not result["ok"])

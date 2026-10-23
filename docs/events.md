@@ -3,7 +3,7 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-20.
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-23.
 > Catalogue version: **18** · events: **145**
 
 Every event name the engine emits, value == wire string. The enum
@@ -338,7 +338,7 @@ Enum member: `EventTypes.CONTEXT_PRUNED`
 | `results_fitted` | int? — tool results shortened in proportion so a hard-pressure request fits |
 | `current_attachments_stripped` | int? — images/documents of the request itself removed (the very last resort) |
 | `trigger` | str? — cost (Stage 2 token threshold) \| the compaction trigger it ran under |
-| `threshold_tokens` | int? — the prune_over_tokens threshold that fired (cost trigger) |
+| `threshold_tokens` | int? — the prune_over_tokens threshold that fired (cost trigger, host opt-in) |
 | `tokens_before` | int? — projected prompt tokens before the pass (cost trigger) |
 | `tokens_after` | int? — projected prompt tokens after the pass (cost trigger) |
 

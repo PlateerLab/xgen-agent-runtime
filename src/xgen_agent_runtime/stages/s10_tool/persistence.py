@@ -184,16 +184,62 @@ def _view_tokens(text: str) -> int:
     return int(raw * DEFAULT_PROVIDER_FACTOR * SAFETY_MULTIPLIER)
 
 
-def _clip_marker(total_chars: int, saved_at: str) -> str:
-    where = (
-        f"The full result is saved at: {saved_at}"
-        if saved_at
-        else "Re-run with a narrower query (a line range, a filter) if you need the omitted part"
-    )
+def _clip_marker(total_chars: int, saved_at: str, read_id: str = "") -> str:
+    if read_id:
+        where = (
+            f'Read any part of the full result with ToolResultRead(id="{read_id}", offset=<char '
+            "offset>) before relying on what is omitted"
+        )
+        if saved_at:
+            where += f" (it is also saved at: {saved_at})"
+    elif saved_at:
+        where = f"The full result is saved at: {saved_at}"
+    else:
+        where = "Re-run with a narrower query (a line range, a filter) if you need the omitted part"
     return (
         f"[tool result clipped to fit this model's context window: {total_chars} chars, the middle "
         f"is omitted. {where}.]"
     )
+
+
+def _safe_id(tool_use_id: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(tool_use_id or ""))
+
+
+def persisted_path(storage_path: str, tool_use_id: str) -> str:
+    """Where :func:`_persist_full` keeps a result's full body (``ToolResultRead`` reads it)."""
+    return os.path.join(storage_path, TOOL_RESULTS_DIRNAME, f"{_safe_id(tool_use_id)}.json")
+
+
+def _persist_full(
+    result: ToolResult, *, tool_use_id: str, tool_name: str, context: ToolContext
+) -> str:
+    """Write the full result to the host's tool-result store. Returns the path, or "" when there is
+    no store (or writing failed). Every clip keeps the original this way: the model gets a cut copy
+    and a way to read the rest (``ToolResultRead``), never only the cut (2026-10-23 audit)."""
+    if result.persist_full:
+        return str(result.persist_full)
+    storage_path = getattr(context, "storage_path", None)
+    if not storage_path or not tool_use_id:
+        return ""
+    try:
+        target_path = persisted_path(storage_path, tool_use_id)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        envelope: Dict[str, Any] = {
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "is_error": result.is_error,
+            "content": result.content,
+            "display_text": result.display_text,
+            "metadata": result.metadata,
+            "artifacts": result.artifacts,
+        }
+        with open(target_path, "w", encoding="utf-8") as fh:
+            json.dump(envelope, fh, ensure_ascii=False, default=str)
+        return target_path
+    except (OSError, TypeError, ValueError) as exc:
+        _LOG.warning("failed to persist tool result for %s (%s): %s", tool_name, tool_use_id, exc)
+        return ""
 
 
 def _clip_to_tokens(text: str, cap: int) -> str:
@@ -228,7 +274,9 @@ def _error_header(content: Any) -> str:
     return ""
 
 
-def _fit_to_window(result: ToolResult, *, tool_name: str, context: ToolContext) -> ToolResult:
+def _fit_to_window(
+    result: ToolResult, *, tool_name: str, context: ToolContext, tool_use_id: str = ""
+) -> ToolResult:
     """Clip what the model will read (``display_text`` when set, else the content) to a quarter of
     the input budget. The tool's own character cap ignores the model: 100k chars is 25k-100k tokens,
     so on a 32k-window model one result could overflow the request by itself.
@@ -242,16 +290,26 @@ def _fit_to_window(result: ToolResult, *, tool_name: str, context: ToolContext) 
     saved_at = ""
     if result.persist_full and _reachable(result.persist_full, context):
         saved_at = result.persist_full
+    read_id = ""
+
+    def _keep_original() -> None:
+        # Only when a clip is about to happen: keep the full body and name it for ToolResultRead.
+        nonlocal read_id, result
+        path = _persist_full(result, tool_use_id=tool_use_id, tool_name=tool_name, context=context)
+        if path:
+            read_id = tool_use_id
+            result = replace(result, persist_full=path)
 
     if result.display_text is None and isinstance(result.content, list):
         texts = [b for b in result.content if isinstance(b, dict) and b.get("type") == "text"]
         joined = "\n".join(str(b.get("text") or "") for b in texts)
         if not texts or _view_tokens(joined) <= cap:
             return result
+        _keep_original()
         clipped = _clip_to_tokens(joined, cap)
         kept = [b for b in result.content if not (isinstance(b, dict) and b.get("type") == "text")]
         _LOG.info("tool %s result text over window cap %d; clipping (images kept)", tool_name, cap)
-        marker = _clip_marker(len(joined), saved_at)
+        marker = _clip_marker(len(joined), saved_at, read_id)
         return replace(result, content=[{"type": "text", "text": f"{marker}\n{clipped}"}] + kept)
 
     view = (
@@ -260,12 +318,13 @@ def _fit_to_window(result: ToolResult, *, tool_name: str, context: ToolContext) 
     if _view_tokens(view) <= cap:
         return result
     header = _error_header(result.content) if result.display_text is None else ""
+    _keep_original()
     clipped = _clip_to_tokens(view, cap)
     _LOG.info(
         "tool %s result over window cap %d; clipping to %d chars", tool_name, cap, len(clipped)
     )
     lines = [header] if header else []
-    lines += [_clip_marker(len(view), saved_at), clipped]
+    lines += [_clip_marker(len(view), saved_at, read_id), clipped]
     return replace(result, display_text="\n".join(lines))
 
 
@@ -296,7 +355,7 @@ def maybe_persist_large_result(
             context=context,
         )
     try:
-        return _fit_to_window(out, tool_name=tool_name, context=context)
+        return _fit_to_window(out, tool_name=tool_name, context=context, tool_use_id=tool_use_id)
     except Exception:  # noqa: BLE001 (fail-open)
         _LOG.warning("tool %s: window fit failed; result left as is", tool_name, exc_info=True)
         return out
@@ -342,55 +401,45 @@ def _persist_over_tool_cap(
     if len(rendered) <= capabilities.max_result_chars:
         return result
 
-    storage_path = context.storage_path
-    if not storage_path:
-        # No sink configured — log once per call so ops can spot misconfig,
-        # but return the original result so correctness is preserved.
+    target_path = _persist_full(
+        result, tool_use_id=tool_use_id, tool_name=tool_name, context=context
+    )
+    if not target_path:
+        # No sink configured (or it failed) — log so ops can spot misconfig, and inline the full
+        # payload: correctness over size (the window fit below still bounds what the model reads).
         _LOG.warning(
-            "tool %s returned %d chars (> %d) but no storage_path; inlining the full payload",
+            "tool %s returned %d chars (> %d) but %s; inlining the full payload",
             tool_name,
             len(rendered),
             capabilities.max_result_chars,
+            "no storage_path"
+            if not getattr(context, "storage_path", None)
+            else "it could not be kept",
         )
         return result
-
-    try:
-        target_dir = os.path.join(storage_path, TOOL_RESULTS_DIRNAME)
-        os.makedirs(target_dir, exist_ok=True)
-        # Defensive: tool_use_ids from the API are safe; still sanitize.
-        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in tool_use_id)
-        target_path = os.path.join(target_dir, f"{safe_id}.json")
-
-        envelope: Dict[str, Any] = {
-            "tool_use_id": tool_use_id,
-            "tool_name": tool_name,
-            "is_error": result.is_error,
-            "content": result.content,
-            "metadata": result.metadata,
-            "artifacts": result.artifacts,
-        }
-        with open(target_path, "w", encoding="utf-8") as fh:
-            json.dump(envelope, fh, ensure_ascii=False, default=str, indent=2)
-    except OSError as exc:
-        _LOG.warning(
-            "failed to persist tool result for %s (%s): %s — inlining payload",
-            tool_name,
-            tool_use_id,
-            exc,
-        )
-        return result
-
-    summary: Optional[str] = result.display_text
-    if summary is None:
-        summary = _summarise(
-            rendered,
-            limit=capabilities.max_result_chars,
-            path=target_path,
-            reachable=_reachable(target_path, context),
-        )
-
-    return replace(
-        result,
-        display_text=summary,
-        persist_full=target_path,
+    if result.display_text is not None:
+        # The tool chose its own summary; the full body is kept for ToolResultRead.
+        return replace(result, persist_full=target_path)
+    if _window_cap_tokens(context) is not None:
+        # The model's window decides how much it reads (:func:`_fit_to_window`: head and tail plus
+        # the id to read the rest). The fixed cap used to cut every result over 100,000 chars to a
+        # 480-char preview, even on 1M-token models, and the exit code and STDERR at the end of a
+        # Bash result were the first thing lost (2026-10-23 audit).
+        return replace(result, persist_full=target_path)
+    # Window unknown: bound by the tool's cap, head and tail, with the id to read the rest.
+    limit = capabilities.max_result_chars
+    tail = limit // 4
+    head = max(0, limit - tail)
+    clipped = f"{rendered[:head]}\n…\n{rendered[-tail:] if tail else ''}"
+    saved_at = target_path if _reachable(target_path, context) else ""
+    where = (
+        f'Read any part of the full result with ToolResultRead(id="{tool_use_id}", offset=<char '
+        "offset>) before relying on what is omitted"
     )
+    if saved_at:
+        where += f" (it is also saved at: {saved_at})"
+    marker = (
+        f"[tool result clipped: {len(rendered)} chars, over this tool's {limit}-char limit; the "
+        f"middle is omitted. {where}.]"
+    )
+    return replace(result, display_text=f"{marker}\n{clipped}", persist_full=target_path)

@@ -40,8 +40,11 @@ TOOL_BATCH_NAME = "ToolBatch"
 MAX_ITEMS = 50
 DEFAULT_CONCURRENCY = 8
 MAX_CONCURRENCY = 16
-PER_ITEM_CHARS = 2_000
-TOTAL_CHARS = 40_000
+#: Per-item bound (characters): memory only. What the model reads is bounded by Stage 10 (the tool
+#: cap and the window fit keep the whole batch result and show its start and end with a
+#: ToolResultRead pointer). Each item used to be cut to 2,000 chars whatever the room, and a batch of
+#: Reads then counted as having read files the model saw 2,000 chars of (2026-10-23 audit).
+PER_ITEM_CHARS = 1_000_000
 
 
 def _text_of(result: ToolResult) -> str:
@@ -54,6 +57,15 @@ def _text_of(result: ToolResult) -> str:
         parts = [
             b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
         ]
+        images = sum(
+            1 for b in content if isinstance(b, dict) and b.get("type") in ("image", "image_url")
+        )
+        if images:
+            # A batch result is text: say what it could not carry instead of dropping it unseen.
+            parts.append(
+                f"[{images} image(s) from this call are not shown inside a batch; call the tool on "
+                "its own to see them]"
+            )
         if parts:
             return "\n".join(parts)
     try:
@@ -63,7 +75,11 @@ def _text_of(result: ToolResult) -> str:
 
 
 def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[:limit] + f"…(+{len(text) - limit} chars)"
+    if len(text) <= limit:
+        return text
+    return (
+        text[:limit] + f"…[+{len(text) - limit:,} chars of this item not kept; run it on its own]"
+    )
 
 
 class ToolBatchTool(Tool):
@@ -111,8 +127,9 @@ class ToolBatchTool(Tool):
         }
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
-        # 안쪽 도구의 성격을 알 수 없다 — 바깥은 보수적으로 직렬, 결과 상한은 이 도구가 관리.
-        return ToolCapabilities(concurrency_safe=False, read_only=False, max_result_chars=0)
+        # 안쪽 도구의 성격을 알 수 없다 — 바깥은 보수적으로 직렬. 결과 크기는 Stage 10 의 보통 규칙
+        # (원본 보관 + 처음과 끝 + ToolResultRead)이 맡는다.
+        return ToolCapabilities(concurrency_safe=False, read_only=False)
 
     def dispatched_calls(
         self, input: Dict[str, Any], registry: Any
@@ -261,7 +278,7 @@ class ToolBatchTool(Tool):
                     "tool.repeat_failure", {"tools": [{"name": n, "count": c} for n, c in flagged]}
                 )
 
-        per_item = max(200, min(PER_ITEM_CHARS, TOTAL_CHARS // len(results)))
+        per_item = PER_ITEM_CHARS
         rows: List[Dict[str, Any]] = []
         ok = 0
         for i, (tc, res) in enumerate(zip(calls, results)):

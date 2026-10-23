@@ -449,28 +449,13 @@ class _FilesystemNotesStore(NotesHandle):
             )
         )
 
-        # Per-note cap (2.64.4): one oversized note must never exhaust the
-        # whole budget. The old loop admitted the FIRST note whole even past
-        # max_chars — a 5.6k evergreen then starved every other pinned fact
-        # (and the downstream layer dropped the oversized result entirely).
-        per_note_cap = max(200, max_chars // 2)
+        # One renderer for every provider (memory.pinned): per-note cap, a cut note says where the
+        # rest is, and the notes left out are listed by name instead of vanishing.
+        from xgen_agent_runtime.memory.pinned import render_pinned
 
-        parts: List[str] = []
-        used = 0
-        for note in pool:
-            block = note.body.strip()
-            if not block:
-                continue
-            header = f"## {note.title}" if note.title else ""
-            piece = f"{header}\n{block}".strip() if header else block
-            if len(piece) > per_note_cap:
-                piece = piece[: per_note_cap - 12].rstrip() + "\n…(truncated)"
-            cost = len(piece) + (2 if parts else 0)  # blank-line separator
-            if used + cost > max_chars and parts:
-                break
-            parts.append(piece)
-            used += cost
-        return "\n\n".join(parts)
+        return render_pinned(
+            ((note.ref.filename, note.title or "", note.body or "") for note in pool), max_chars
+        )
 
     # ── snapshot / restore helpers ─────────────────────────────────
 

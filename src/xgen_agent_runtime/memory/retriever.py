@@ -39,6 +39,26 @@ from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
 
 logger = logging.getLogger(__name__)
 
+
+def _clip_marked(text: str, cap: int, what: str, how: str) -> str:
+    """``text`` within ``cap`` chars; when cut, say so and how to get the rest (never a silent cut).
+
+    Cuts at a line break near the limit so a section is not split mid-sentence. The marker counts
+    toward ``cap``.
+    """
+    text = str(text or "")
+    if len(text) <= cap:
+        return text
+    marker = f"\n…[{what} is cut here: {{shown}} of {len(text)} chars shown; {how}]"
+    room = max(0, cap - len(marker.format(shown=len(text))))
+    cut = text[:room]
+    nl = cut.rfind("\n")
+    if nl >= room * 0.9:
+        cut = cut[:nl]
+    cut = cut.rstrip()
+    return cut + marker.format(shown=len(cut))
+
+
 # Sentinel distinguishing "layer not prefetched — fetch inline" from
 # "prefetched and the fetch returned/failed to None".
 _UNFETCHED: Any = object()
@@ -544,9 +564,15 @@ class MemoryAwareRetriever(MemoryRetriever):
         if not summary:
             return total
         cap = _layer_cap(hooks, "session_summary") or budget
-        body = summary[:cap]
-        if total + len(body) > budget:
+        cap = min(cap, budget - total)
+        if cap < 200:
             return total
+        body = _clip_marked(
+            str(summary),
+            cap,
+            "this conversation's summary",
+            'read all of it with ConversationHistory(view="summary")',
+        )
         chunks.append(
             MemoryChunk(
                 key="session_summary",
@@ -719,9 +745,12 @@ class MemoryAwareRetriever(MemoryRetriever):
         if not rendered:
             return total
         cap = hooks.vault_map_max_chars or _layer_cap(hooks, "vault_map") or budget
-        body = rendered[:cap]
-        if total + len(body) > budget:
+        cap = min(cap, budget - total)
+        if cap < 100:
             return total
+        body = _clip_marked(
+            str(rendered), cap, "the memory map", "list notes with memory_categories"
+        )
         chunks.append(
             MemoryChunk(
                 key="vault_map",
@@ -756,9 +785,10 @@ class MemoryAwareRetriever(MemoryRetriever):
         if not body or not str(body).strip():
             return total
         cap = _layer_cap(hooks, "ltm_main") or budget
-        text = str(body)[:cap]
-        if total + len(text) > budget:
+        cap = min(cap, budget - total)
+        if cap < 200:
             return total
+        text = _clip_marked(str(body), cap, "MEMORY.md", "read all of it with memory_read")
         chunks.append(
             MemoryChunk(
                 key="MEMORY.md",
@@ -973,7 +1003,12 @@ class MemoryAwareRetriever(MemoryRetriever):
             # 위키링크를 타고 지식 층으로 다시 올라오면 같은 말이 두 자리에 놓인다.
             if _is_current_session_name(tgt, getattr(self, "_current_session_id", "")):
                 continue
-            body = (getattr(note, "body", "") or "")[:800]
+            body = _clip_marked(
+                getattr(note, "body", "") or "",
+                800,
+                "this linked note",
+                f"read all of it with memory_read({tgt!r})",
+            )
             if not body:
                 continue
             if total + len(body) > budget:

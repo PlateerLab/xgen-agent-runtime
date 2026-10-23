@@ -69,9 +69,21 @@ def _resolve_or_error(store: SSHServerStore, name: Optional[str]):
 
 
 def _truncate(text: str) -> tuple[str, bool]:
-    if len(text) > _MAX_OUTPUT:
-        return text[:_MAX_OUTPUT], True
-    return text, False
+    """The start and the end of ``text``, with a marker in the text itself where it was cut.
+
+    The cut used to keep only the start, and said so only in the ``truncated`` field of the result
+    object, which the model never reads (it reads ``display_text``): a long remote log lost its end
+    (the error) and looked complete (2026-10-23 audit)."""
+    if len(text) <= _MAX_OUTPUT:
+        return text, False
+    head = _MAX_OUTPUT * 3 // 4
+    tail = _MAX_OUTPUT - head
+    cut = len(text) - head - tail
+    return (
+        f"{text[:head]}\n\n[... {cut:,} chars cut here; the start and the end are shown. "
+        f"Redirect long output to a file on the server and read it in parts. ...]\n\n{text[-tail:]}",
+        True,
+    )
 
 
 def _guarded_local(context: Any, path: str):

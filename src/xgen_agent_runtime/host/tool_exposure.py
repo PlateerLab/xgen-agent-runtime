@@ -88,6 +88,9 @@ TURN_ONE_TOOLS = frozenset(
         "Edit",
         "Glob",
         "Grep",
+        # 1-b. 잘린 도구 결과의 원본 읽기 — 잘림 표시가 이 이름을 말한다. 문 뒤에 두면 잘린 결과를
+        #      전체로 믿거나 같은 도구를 다시 돌린다(2026-10-23 감사).
+        "ToolResultRead",
         # 2. 도구 발견 — 아래 계층 전부로 가는 문.
         *TURN_ONE_DISCOVERY,
         # 2-b. 목록 작업 — 같은 도구를 여러 입력으로 한 왕복에. 첫 턴에 보여야
@@ -102,6 +105,9 @@ TURN_ONE_TOOLS = frozenset(
         "memory_search",
         "memory_pin",
         "memory_categories",
+        # 3-b. 이 대화의 원문(창 밖의 지난 턴·그때의 도구 결과). 창은 최근 몇 턴만 재생하므로, 이게 없으면
+        #      모델은 지난 일을 기억으로 재구성하다 틀린다(2026-10-23 감사).
+        "ConversationHistory",
         # 4. 영구 작업 — JobSchedule/JobList/JobCancel 은 이 문 뒤에.
         "JobGuide",
         # 4-b. 앱(사용자가 여는 웹 앱) — AppCreate/Publish/Status/List/Delete

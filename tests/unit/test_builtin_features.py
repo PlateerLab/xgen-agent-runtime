@@ -53,6 +53,7 @@ class TestGetBuiltinTools:
             "Glob",
             "Grep",
             "NotebookEdit",
+            "ToolResultRead",
         }
 
     def test_features_web(self):
@@ -72,6 +73,7 @@ class TestGetBuiltinTools:
             "Glob",
             "Grep",
             "NotebookEdit",
+            "ToolResultRead",
             "WebFetch",
             "WebSearch",
         }
@@ -116,6 +118,7 @@ class TestGetBuiltinTools:
             "Glob",
             "Grep",
             "NotebookEdit",
+            "ToolResultRead",
         }
 
     def test_returned_values_are_tool_classes(self):

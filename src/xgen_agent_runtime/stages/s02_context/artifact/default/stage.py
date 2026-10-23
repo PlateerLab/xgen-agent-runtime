@@ -58,6 +58,9 @@ from xgen_agent_runtime.stages.s02_context.artifact.default.retrievers import (
 
 logger = logging.getLogger(__name__)
 
+#: 창이 허락하면 대화로 싣는 지난 턴 수의 상한(예산이 먼저 정한다).
+DIALOGUE_TURNS_WHEN_ROOM = 30
+
 
 #: ``state.shared`` counter of turns this state has run (advanced at each turn's first pass, not on a
 #: continuation slice): a background summary's failure is booked only in the turn that scheduled it.
@@ -299,11 +302,12 @@ class ContextStage(Stage[Any, Any]):
                     type="number",
                     label="Prune over tokens",
                     description=(
-                        "Run the deterministic prune (duplicate tool results, "
+                        "Also run the deterministic prune (duplicate tool results, "
                         "stale oversized outputs, stale images) whenever the "
-                        "projected prompt exceeds this many tokens — regardless "
-                        "of the context window. The window-based trigger alone "
-                        "never fires on large-window models. 0 disables it."
+                        "projected prompt exceeds this many tokens, regardless "
+                        "of the context window. Off (0) by default: it cuts "
+                        "results the model still has room for. The window-based "
+                        "prune runs either way when a request would not fit."
                     ),
                     default=DEFAULT_PRUNE_OVER_TOKENS,
                     min_value=0,
@@ -433,13 +437,33 @@ class ContextStage(Stage[Any, Any]):
         cfg = WindowConfig.from_hooks(self._window_hooks())
         if not cfg.enabled:
             return
-        # 창은 대화 기록의 일부일 뿐이다. 작은 모델(vLLM 32k)에서 4만 자 창은 그것만으로 80% 압축
-        # 문턱을 넘어, 매 턴 첫 호출 전에 같은 지난 턴을 다시 요약했다. 창을 모델 창의 20% 안으로 둔다.
+        # 창의 크기는 **모델의 창**이 정한다(20%, 토큰). 예전에는 4만 자·5턴 고정이라 1M 모델도 최근
+        # 5턴만 보고, 결과는 상시 1,200자로 잘렸다 — 정확성을 깎는 고정 숫자였다(2026-10-23). 작은
+        # 모델(vLLM 32k)에서는 20% 가 그대로 상한이라 압축 문턱을 매 턴 넘지 않는다. 호스트가 글자 상한을
+        # 따로 정했으면(window_max_chars) 그것도 지킨다.
         from xgen_agent_runtime.core.text_tokens import chars_for_tokens
-
-        cfg.max_chars = max(
-            1_000, min(cfg.max_chars, chars_for_tokens(int(window_of(state) * 0.2)))
+        from xgen_agent_runtime.memory.short_term_window import (
+            DEFAULT_DIALOGUE_TURNS,
+            DEFAULT_FULL_TURNS,
+            DEFAULT_MAX_CHARS,
+            full_turns_for_window,
         )
+
+        model_window = window_of(state)
+        budget_tokens = max(1_000, int(model_window * 0.2))
+        cfg.max_tokens = budget_tokens
+        if cfg.max_chars != DEFAULT_MAX_CHARS:
+            cfg.max_chars = max(1_000, min(cfg.max_chars, chars_for_tokens(budget_tokens) * 4))
+        else:
+            cfg.max_chars = (
+                chars_for_tokens(budget_tokens) * 4
+            )  # 토큰 예산이 정한다(아래 비율로 다시 잰다)
+        if cfg.full_turns == DEFAULT_FULL_TURNS:
+            cfg.full_turns = full_turns_for_window(model_window)
+        if cfg.dialogue_turns == DEFAULT_DIALOGUE_TURNS:
+            # 지난 턴은 **들어가는 만큼** 대화로 싣는다(예산이 넘치면 오래된 것부터 빠지고, 빠진 턴은
+            # 첫 메시지가 수와 읽는 길을 말한다).
+            cfg.dialogue_turns = DIALOGUE_TURNS_WHEN_ROOM
         try:
             window, report = await asyncio.wait_for(
                 load_window(source, cfg), timeout=self._retrieval_timeout_s or None
@@ -546,17 +570,18 @@ class ContextStage(Stage[Any, Any]):
         estimated_tokens = estimate_prompt_tokens(state)
         forced_request = state.shared.pop(SharedKeys.CONTEXT_COMPACTION_REQUEST, None)
 
-        # Cost trigger (4.35.0), ahead of the capacity trigger below. The
-        # deterministic prune is cheap (pure function) and lossless for the
-        # recent tail, so what gates it is not "are we about to overflow" but
-        # "are we paying to resend a stale dump on every call". Runs on every
-        # iteration past the threshold; it is idempotent — a trimmed result is
-        # already under trim_over_chars and a de-duplicated one under
-        # min_dup_chars, so a second pass finds nothing left to do.
+        # Cost trigger (4.35.0): a host opt-in since 4.97.0 (prune_over_tokens defaults to 0).
+        # It cut results the model still had room for, and memory recorded the cut as what the
+        # tool returned (2026-10-23 audit). When a host does opt in, the originals are kept for
+        # memory and ToolResultRead (core.originals).
         if self._compaction_enabled and self._prune_over_tokens:
             if estimated_tokens > self._prune_over_tokens:
                 try:
-                    metrics = prune_messages(state.messages or [])
+                    from xgen_agent_runtime.core.originals import keep_original
+
+                    metrics = prune_messages(
+                        state.messages or [], before_change=lambda m: keep_original(state, m)
+                    )
                 except Exception:  # noqa: BLE001 — relief, never a gate
                     logger.debug("cost-triggered prune failed", exc_info=True)
                 else:

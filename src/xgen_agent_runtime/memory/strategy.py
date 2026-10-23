@@ -100,6 +100,8 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
             take_pending_records,
         )
 
+        from xgen_agent_runtime.core.originals import forget_originals, original_of
+
         compacted = peek_pending_records(state, RECORDER_STM)
         new_msgs = compacted + list(state.messages[last_recorded:])
         if not new_msgs:
@@ -108,7 +110,8 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
         recorded = 0
         for msg in new_msgs:
             try:
-                turn = Turn.from_state_message(msg)
+                # The message as it really was, not the copy shortened to fit the window.
+                turn = Turn.from_state_message(original_of(state, msg))
             except Exception:  # noqa: BLE001
                 logger.debug("provider_driven: Turn.from_state_message failed", exc_info=True)
                 continue
@@ -121,6 +124,7 @@ class ProviderDrivenStrategy(MemoryUpdateStrategy):
 
         state.metadata[_RECORDED_KEY] = len(state.messages)
         state.metadata[_STAGE_RECORDED_KEY] = len(state.messages)
+        forget_originals(state, new_msgs)
         if compacted:
             take_pending_records(state, RECORDER_STM)
         if recorded:

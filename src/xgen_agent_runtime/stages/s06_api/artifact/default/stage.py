@@ -540,7 +540,7 @@ class APIStage(Stage[Any, APIResponse]):
                     if not (
                         e.category == ErrorCategory.TOKEN_LIMIT
                         and not extra_messages
-                        and await self._recover_overflow(state, e)
+                        and await self._recover_overflow(state, e, client=client, model=cfg.model)
                     ):
                         raise
                     response = await _invoke()
@@ -607,11 +607,23 @@ class APIStage(Stage[Any, APIResponse]):
         state.last_api_response = response
 
         assistant_content = self._build_assistant_content(response)
+        from xgen_agent_runtime.stages.s06_api.cli_trajectory import take as _take_trajectory
+
+        trajectory = _take_trajectory(state)
+        if trajectory is not None and trajectory.tools:
+            # The tools the CLI ran inside this call, with their results, where they happened.
+            # Stage 9/10 read last_api_response (text only), so nothing is dispatched again.
+            before, tail = trajectory.finish()
+            for message in before:
+                state.add_message(message["role"], message["content"])
+            assistant_content = trajectory.final_content(assistant_content, tail)
         state.add_message("assistant", assistant_content)
 
         return response
 
-    async def _recover_overflow(self, state: PipelineState, error: APIError) -> bool:
+    async def _recover_overflow(
+        self, state: PipelineState, error: APIError, *, client: Any = None, model: str = ""
+    ) -> bool:
         """Compact after a provider "prompt too long" rejection. True when a retry is worthwhile.
 
         Uses the Context stage's compactor (``state._context_compactor``: ``None`` when the host
@@ -644,8 +656,20 @@ class APIStage(Stage[Any, APIResponse]):
             # The window table or catalog was wrong for this deployment (a Bedrock region without
             # 1M, an Azure deployment of a smaller model). The provider's own number wins for the
             # rest of the turn: otherwise compaction aims at a window that does not exist and the
-            # retry fails the same way.
+            # retry fails the same way. Later turns use it too (host.token_budget): before, each turn
+            # believed the bigger window again and overflowed the same way.
             state.context_window_budget = limit
+            try:
+                from xgen_agent_runtime.host.token_budget import learn_context_window
+
+                learn_context_window(
+                    getattr(client, "provider", ""),
+                    model or getattr(state, "model", ""),
+                    getattr(client, "_base_url", None),
+                    limit,
+                )
+            except Exception:  # noqa: BLE001 (a hint for later turns, never a gate)
+                pass
         state.add_event(
             "context.overflow",
             {
@@ -1100,8 +1124,38 @@ class APIStage(Stage[Any, APIResponse]):
                 first_chunk_s=self._first_chunk_timeout_s(),
                 idle_s=_timeouts.idle_timeout_s(),
             )
+        # What the CLI does inside this call, in order, for the record (stages/s06_api/cli_trajectory).
+        # One per attempt: a retried stream starts again from scratch.
+        trajectory = None
+        if source == "cli":
+            from xgen_agent_runtime.stages.s06_api.cli_trajectory import (
+                CLI_TRAJECTORY_KEY,
+                CliTrajectory,
+            )
+
+            trajectory = CliTrajectory()
+            state.shared[CLI_TRAJECTORY_KEY] = trajectory
+        message_granularity = (
+            str(getattr(getattr(client, "capabilities", None), "streaming_granularity", "") or "")
+            == "message"
+        )
         async for chunk in stream:
             chunk_type = chunk.get("type")
+            if trajectory is not None:
+                if chunk_type == "text_delta" and chunk.get("text"):
+                    trajectory.text(chunk["text"], separate=message_granularity)
+                elif chunk_type == "tool_use":
+                    trajectory.tool_use(
+                        chunk.get("id"), chunk.get("name"), chunk.get("input") or {}
+                    )
+                elif chunk_type == "input_json_delta":
+                    trajectory.input_delta(chunk.get("delta", ""))
+                elif chunk_type == "content_block_stop":
+                    trajectory.block_stop()
+                elif chunk_type == "tool_result":
+                    trajectory.tool_result(
+                        chunk.get("tool_use_id"), chunk.get("content"), bool(chunk.get("is_error"))
+                    )
             if chunk_type in _CONTENT_CHUNKS and not state.shared.get("_api_ttft_emitted"):
                 state.shared["_api_ttft_emitted"] = True
                 state.add_event(

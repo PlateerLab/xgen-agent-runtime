@@ -170,7 +170,8 @@ class TestOversizedResultNeverPointsOutside:
         workdir = tmp_path / "workspace"
         workdir.mkdir()
         text = self._run(storage=str(storage), workdir=str(workdir))
-        assert "cannot open it" in text
+        # 원본은 경로가 아니라 id 로 읽는다(ToolResultRead) — 열 수 없는 뿌리는 말하지 않는다.
+        assert 'ToolResultRead(id="tu_1"' in text
         assert str(storage) not in text
 
     def test_a_reachable_location_is_named(self, tmp_path):
@@ -178,7 +179,7 @@ class TestOversizedResultNeverPointsOutside:
         workdir.mkdir()
         storage = workdir / "inner"
         text = self._run(storage=str(storage), workdir=str(workdir))
-        assert "Full body saved at:" in text
+        assert "also saved at:" in text
         assert str(storage) in text
 
 

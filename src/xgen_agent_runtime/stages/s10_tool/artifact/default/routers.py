@@ -489,7 +489,11 @@ class RegistryRouter(ToolRouter):
             await _fire_hook(
                 "on_error", tool.name, tool, None if strict_execution else failure, context
             )
-        except (ExecutionBoundaryError, asyncio.CancelledError):
+        except ExecutionBoundaryError as exc:
+            # The run's deadline stopped the call mid-way. It was allowed and started, so "access
+            # denied" (what the router used to report) would be false.
+            return make_error_result(ToolError.stopped_while_running(tool.name, str(exc)))
+        except asyncio.CancelledError:
             raise
         except Exception as exc:
             execution_failed = True
@@ -501,10 +505,24 @@ class RegistryRouter(ToolRouter):
             await _fire_hook(
                 "on_error", tool.name, tool, None if strict_execution else exc, context
             )
+        try:
+            return await self._after_execution(
+                tool, tool_input, context, result, caps, scope, budget, execution_failed
+            )
+        except ExecutionBoundaryError as exc:
+            # The tool already ran: its effects happened. Say so instead of "access denied", which
+            # told the model the call never happened and invited running it again.
+            return make_error_result(ToolError.result_withheld(tool.name, str(exc)))
+
+    async def _after_execution(
+        self, tool, tool_input, context, result, caps, scope, budget, execution_failed
+    ):
+        """Everything that happens to a result after the tool ran (checks, filters, accounting)."""
+        runner = getattr(context, "hook_runner", None)
         if scope is not None:
             scope.check()
         if not isinstance(result, ToolResult):
-            return make_error_result(ToolError.access_denied(tool.name, "tool_result_invalid"))
+            return make_error_result(ToolError.result_withheld(tool.name, "tool_result_invalid"))
         origin = tool_origin(tool) or ("network" if caps.network_egress else "builtin")
         external = bool(
             getattr(tool, "is_mcp", False)

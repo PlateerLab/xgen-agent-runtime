@@ -134,7 +134,7 @@ class TestBuiltInProvider:
     def test_features_narrow_selection(self):
         p = BuiltInToolProvider(features=["filesystem"])
         names = [t.name for t in p.list_tools()]
-        assert set(names) == {"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"}
+        assert set(names) == {"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "ToolResultRead"}
 
     def test_names_narrow_selection(self):
         p = BuiltInToolProvider(names=["Read", "Grep"])
@@ -270,7 +270,7 @@ class TestPipelineIntegration:
         names = {t.name for t in pipeline.tool_registry.list_all()}
         # BuiltInToolProvider(features=['filesystem']) → 6 tools, registered
         # deferred (provider channel) → ToolSearch auto-registers (2.42.0).
-        assert {"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "ToolSearch"} == names
+        assert {"Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "ToolResultRead", "ToolSearch"} == names
         # Pipeline exposes started providers for introspection
         assert len(pipeline.tool_providers) == 1
         assert pipeline.tool_providers[0].name == "builtin"

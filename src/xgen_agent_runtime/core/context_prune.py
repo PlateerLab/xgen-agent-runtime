@@ -11,7 +11,7 @@ is mechanical redundancy that a deterministic pass can reclaim first:
   every subsequent request forever (and survives summary compaction whenever
   the compactor keeps that message verbatim).
 * **Oversized stale outputs** — a 10k-char terminal dump from twenty turns ago
-  is almost never load-bearing; the head plus an explicit trim marker is.
+  is rarely load-bearing; its head and end plus a marker naming how to read it whole are.
 
 Invariants (why this is safe to run on any history):
 
@@ -26,46 +26,34 @@ Invariants (why this is safe to run on any history):
 
 Everything here is pure function + stdlib; no model, no network.
 
-When this runs (4.35.0 — the cost trigger)
-------------------------------------------
+When this runs (4.97.0: only when the window needs it)
+-----------------------------------------------------
 
-Until 4.35.0 this pass only ran *inside* compaction, and compaction only fires
-at 80% of the model's context window. Measured on dev over 28 days: the window
-is 200,000 (claude-sonnet-4-6) or 524,288 (qwen3.8-27b `max_model_len`), so the
-thresholds were 160k / 419k — while the largest prompt any real turn ever built
-was 135,487 tokens. **The prune therefore never ran once.**
+4.35.0 also ran this pass on an absolute token threshold (30,000 tokens), independent of the
+window, to stop paying for stale dumps resent on every call. That was a **cost** trigger: on a
+200K or 1M window it cut tool results the model still had room for, mid-turn, so the model
+worked from "600 chars … [trimmed]" of a result it had just received and could not read whole,
+and memory recorded the cut as what the tool returned (2026-10-23 audit). Accuracy comes first:
+the pass now runs only when the request would not fit the model's window (compaction at 80%, the
+guard before the call). ``prune_over_tokens`` stays as an explicit host opt-in and defaults to 0.
 
-That is a trigger bug, not a tuning one: the only trigger was *capacity* (don't
-overflow the window), and there was none for *cost* (don't pay to resend the
-same stale dump on every call). The bigger the window, the less it ever runs.
-
-So Stage 2 also runs this pass on an absolute token threshold
-(:data:`DEFAULT_PRUNE_OVER_TOKENS`), independent of the window. Evidence for the
-default, same 28 days (turns with usage records, bench excluded):
-
-* Turn input splits into prefix (per-call system+tools) and *history resent on
-  every call*. History is 22% of input at 2–5 calls, 45% at 6–15, and **71–72%
-  at 16+** — 66% overall. History grows ~2,000 tokens per call.
-* At a 30,000-token threshold, **no turn with 5 or fewer calls is touched at
-  all**, while 13 of the 14 turns with 8+ calls are. The number separates short
-  turns from long ones without encoding anything about what the turns *did*.
-
-The pass stays conservative by construction — only results older than the last
-``protect_last`` messages, only ones over ``trim_over_chars``, head kept plus an
-explicit marker — so a model that still needs the detail can re-read the source.
+Every change keeps the original first (``before_change`` →
+:func:`xgen_agent_runtime.core.originals.keep_original`): memory records what really happened,
+and each marker says how many chars were cut and how to read them (ToolResultRead).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List
+import re
+from typing import Any, Callable, Dict, List, Optional
 
 __all__ = ["DEFAULT_PRUNE_OVER_TOKENS", "AGGRESSIVE", "prune_messages", "PruneMetrics"]
 
-#: Stage 2 runs the prune when the projected prompt exceeds this many tokens,
-#: regardless of the context window. See the module docstring for the evidence.
-DEFAULT_PRUNE_OVER_TOKENS = 30_000
+#: Stage 2's cost trigger: prune when the projected prompt exceeds this many tokens regardless of
+#: the window. 0 = off (the default since 4.97.0; see the module docstring). A host may opt in.
+DEFAULT_PRUNE_OVER_TOKENS = 0
 #: Messages within this tail window are never modified.
 DEFAULT_PROTECT_LAST = 6
 #: Tool-result text shorter than this is never considered for dedup — tiny
@@ -91,9 +79,32 @@ AGGRESSIVE = {
     "input_trim_keep_chars": 200,
 }
 
-_DUP_NOTE = "[duplicate tool output — identical to a more recent result]"
-_IMAGE_NOTE = "[image removed during context compaction]"
-_DOCUMENT_NOTE = "[document removed during context compaction]"
+_DUP_NOTE = "[duplicate tool output: identical to a more recent result, which is shown in full]"
+_IMAGE_NOTE = "[image removed to fit the context window: you cannot see it any more; re-open its file if you need it]"
+_DOCUMENT_NOTE = "[document removed to fit the context window: you cannot read it here any more; re-open its file if you need it]"
+#: Every cut says what was cut and how to read it whole (2026-10-23). The original is kept
+#: (:mod:`xgen_agent_runtime.core.originals`), so memory records it and ToolResultRead serves it.
+_RESULT_TRIM_NOTE = (
+    "\n…[{n} chars of this result trimmed here to fit the context window; "
+    'ToolResultRead(id="{id}") shows all of it]…\n'
+)
+_INPUT_TRIM_NOTE = (
+    "\n…[{n} chars of this call's input trimmed here to fit the context window; "
+    "the call ran with the full input]"
+)
+
+#: Called with a message right before a reducer changes it in place (see ``core.originals``).
+BeforeChange = Optional[Callable[[Dict[str, Any]], None]]
+
+
+def _noop() -> None:
+    return None
+
+
+def _hook(before_change: BeforeChange, message: Dict[str, Any]) -> Callable[[], None]:
+    if before_change is None:
+        return _noop
+    return lambda: before_change(message)
 
 
 class PruneMetrics(Dict[str, int]):
@@ -140,7 +151,9 @@ def _content_size(block: Dict[str, Any]) -> int:
     return 0
 
 
-def _strip_images_in(blocks: List[Any], *, documents: bool = False) -> int:
+def _strip_images_in(
+    blocks: List[Any], *, documents: bool = False, on_change: Callable[[], None] = _noop
+) -> int:
     """Replace base64 image blocks (and, with ``documents``, PDF document blocks) with a small text
     marker, recursing into tool_result content lists. Returns the number removed."""
     removed = 0
@@ -154,17 +167,20 @@ def _strip_images_in(blocks: List[Any], *, documents: bool = False) -> int:
             and isinstance(b.get("source"), dict)
             and b["source"].get("type") == "base64"
         ):
+            on_change()
             blocks[i] = {
                 "type": "text",
                 "text": _IMAGE_NOTE if btype == "image" else _DOCUMENT_NOTE,
             }
             removed += 1
         elif btype == "tool_result" and isinstance(b.get("content"), list):
-            removed += _strip_images_in(b["content"], documents=documents)
+            removed += _strip_images_in(b["content"], documents=documents, on_change=on_change)
     return removed
 
 
-def _trim_tool_inputs(message: Dict[str, Any], over: int, keep: int) -> int:
+def _trim_tool_inputs(
+    message: Dict[str, Any], over: int, keep: int, on_change: Callable[[], None] = _noop
+) -> int:
     """Shorten long string values inside stale ``tool_use`` inputs. Keeps the input a valid
     object of the same keys (providers validate it), so pairing and schema shape survive.
     Returns chars removed."""
@@ -182,28 +198,69 @@ def _trim_tool_inputs(message: Dict[str, Any], over: int, keep: int) -> int:
         for key, value in params.items():
             if isinstance(value, str) and len(value) > over:
                 dropped = len(value) - keep
-                trimmed[key] = (
-                    value[:keep] + f"\n… [{dropped} chars trimmed during context compaction]"
-                )
+                trimmed[key] = value[:keep] + _INPUT_TRIM_NOTE.format(n=dropped)
                 saved += dropped
         if trimmed:
+            on_change()
             # A new dict, not an in-place edit: the same input object may still be held by the
             # tool-call record or a rollout recorder that must keep what was actually sent.
             block["input"] = {**params, **trimmed}
     return saved
 
 
-def _trim_result(block: Dict[str, Any], keep: int) -> int:
-    """Trim an oversized tool_result to its head + explicit marker. Returns
-    chars removed."""
+_RESULT_TRIM_RE = re.compile(
+    r"\n…\[(\d+) chars of this result trimmed here to fit the context window; "
+    r'ToolResultRead\(id="[^"]*"\) shows all of it\](?:…\n)?'
+)
+
+
+def _trim_result(block: Dict[str, Any], keep: int, on_change: Callable[[], None] = _noop) -> int:
+    """Trim an oversized tool_result to ``keep`` chars with an explicit marker naming how to read it
+    whole. A text result keeps its head and its end (exit codes and failure summaries are at the
+    end). A result trimmed before is trimmed again around its marker, and the marker counts every
+    char cut so far, not only this pass's. Returns chars removed by this pass."""
     content = block.get("content")
+    note_id = str(block.get("tool_use_id") or "")
     if isinstance(content, str):
-        dropped = len(content) - keep
+        before = None
+        found = _RESULT_TRIM_RE.search(content)
+        if found:
+            before = int(found.group(1))
+            head_text, tail_text = content[: found.start()], content[found.end() :]
+        else:
+            head_text, tail_text = content, ""
+        shown = len(head_text) + len(tail_text)
+        if shown <= keep:
+            return 0
+        head = keep * 2 // 3
+        tail = keep - head
+        if found:
+            # Take the new head from the old head and the new end from the old end.
+            new_head = head_text[: min(head, len(head_text))]
+            room = keep - len(new_head)
+            new_tail = tail_text[-room:] if room > 0 and tail_text else ""
+        else:
+            new_head = head_text[:head]
+            new_tail = head_text[-tail:] if tail else ""
+        removed = shown - len(new_head) - len(new_tail)
+        if removed <= 0:
+            return 0
+        on_change()
         block["content"] = (
-            content[:keep] + f"\n… [{dropped} chars trimmed during context compaction]"
+            new_head + _RESULT_TRIM_NOTE.format(n=removed + (before or 0), id=note_id) + new_tail
         )
-        return dropped
+        return removed
     if isinstance(content, list):
+        if _content_size(block) <= keep:
+            return 0
+        on_change()
+        before = 0
+        parts = _result_text_parts(block)
+        if parts:
+            found = _RESULT_TRIM_RE.search(parts[-1].get("text", ""))
+            if found and found.end() == len(parts[-1]["text"]):
+                before = int(found.group(1))
+                parts[-1]["text"] = parts[-1]["text"][: found.start()]
         dropped = 0
         budget = keep
         for sub in _result_text_parts(block):
@@ -217,7 +274,7 @@ def _trim_result(block: Dict[str, Any], keep: int) -> int:
                 budget = 0
             else:
                 budget -= len(text)
-        if dropped > 0:
+        if dropped > 0 or before:
             # Drop the text parts the trim emptied (providers reject empty text blocks), keeping
             # every non-text part and at least one text part for the marker.
             emptied = [p for p in _result_text_parts(block) if not p.get("text")]
@@ -227,7 +284,9 @@ def _trim_result(block: Dict[str, Any], keep: int) -> int:
                 block["content"] = [b for b in content if id(b) not in drop]
             parts = _result_text_parts(block)
             if parts:
-                parts[-1]["text"] += f"\n… [{dropped} chars trimmed during context compaction]"
+                parts[-1]["text"] += _RESULT_TRIM_NOTE.format(
+                    n=dropped + before, id=note_id
+                ).rstrip("\n…")
         return dropped
     return 0
 
@@ -238,6 +297,7 @@ def shrink_tool_results(
     *,
     min_keep: int = 300,
     strip_images: bool = False,
+    before_change: BeforeChange = None,
 ) -> Dict[str, int]:
     """Shorten every tool_result in *messages* to ``factor`` of its text, in place (head kept, with
     the usual marker); with ``strip_images`` also replace the images inside results with a marker.
@@ -248,13 +308,14 @@ def shrink_tool_results(
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
+        on_change = _hook(before_change, msg)
         for block in _iter_tool_results(msg):
             if strip_images and isinstance(block.get("content"), list):
-                images += _strip_images_in(block["content"])
+                images += _strip_images_in(block["content"], on_change=on_change)
             size = _content_size(block)
             keep = max(min_keep, int(size * max(0.0, factor)))
             if size > keep:
-                removed = _trim_result(block, keep)
+                removed = _trim_result(block, keep, on_change)
                 if removed > 0:
                     trimmed += 1
                     saved += removed
@@ -262,8 +323,10 @@ def shrink_tool_results(
 
 
 #: User-role messages the runtime itself adds (Stage 16's deliverable check, the turn input budget
-#: note): instructions to the model, never the person's request. Shared with the summary compactor.
-RUNTIME_NOTE_PREFIXES = ("[Deliverable check", "[Turn budget")
+#: note, the repeat stop): instructions to the model for this turn, never the person's request.
+#: Shared with the summary compactor, the logical-turn grouping and the memory digests, so a
+#: directive is never read back later as something the user said (2026-10-23).
+RUNTIME_NOTE_PREFIXES = ("[Deliverable check", "[Turn budget", "[Stopped:")
 #: Content blocks that are attachments rather than words.
 ATTACHMENT_TYPES = ("image", "document", "image_url", "input_image", "file")
 
@@ -285,6 +348,11 @@ def is_runtime_note(message: Any) -> bool:
     return isinstance(message, dict) and _message_text(message).lstrip().startswith(
         RUNTIME_NOTE_PREFIXES
     )
+
+
+def is_runtime_note_content(content: Any) -> bool:
+    """:func:`is_runtime_note` for a bare content value (an STM row's ``content``)."""
+    return _message_text({"content": content}).lstrip().startswith(RUNTIME_NOTE_PREFIXES)
 
 
 def _is_request_message(message: Any) -> bool:
@@ -321,7 +389,9 @@ def current_request_span(messages: List[Dict[str, Any]]) -> List[int]:
     return span
 
 
-def strip_current_attachments(messages: List[Dict[str, Any]], *, limit: int = 0) -> int:
+def strip_current_attachments(
+    messages: List[Dict[str, Any]], *, limit: int = 0, before_change: BeforeChange = None
+) -> int:
     """Remove images and documents of the request being answered, at most ``limit`` (0 = all). The
     very last resort under hard pressure; returns how many were removed."""
     removed = 0
@@ -336,6 +406,7 @@ def strip_current_attachments(messages: List[Dict[str, Any]], *, limit: int = 0)
                 continue
             if not (isinstance(b.get("source"), dict) and b["source"].get("type") == "base64"):
                 continue
+            _hook(before_change, messages[idx])()
             content[i] = {
                 "type": "text",
                 "text": _IMAGE_NOTE if b["type"] == "image" else _DOCUMENT_NOTE,
@@ -355,6 +426,7 @@ def prune_messages(
     input_trim_keep_chars: int = DEFAULT_INPUT_TRIM_KEEP_CHARS,
     strip_documents: bool = False,
     protect_current_request: bool = True,
+    before_change: BeforeChange = None,
 ) -> PruneMetrics:
     """Run the deterministic prune over *messages* in place.
 
@@ -369,6 +441,9 @@ def prune_messages(
     ``protect_current_request``: the images and documents of the request being answered
     (:func:`current_request_index`) are never stripped here, however many tool rounds followed it.
     ``core.compaction`` removes them only as the very last resort (:func:`strip_current_attachments`).
+
+    ``before_change(message)`` is called right before a message is first changed, so the caller can
+    keep its original (:func:`xgen_agent_runtime.core.originals.keep_original`).
     """
     metrics = PruneMetrics(deduped=0, images_stripped=0, trimmed=0, inputs_trimmed=0, chars_saved=0)
     if not messages:
@@ -391,6 +466,7 @@ def prune_messages(
                 continue
             if digest in seen and not protected:
                 old = _content_size(block)
+                _hook(before_change, msg)()
                 block["content"] = _DUP_NOTE
                 metrics["deduped"] += 1
                 metrics["chars_saved"] += max(0, old - len(_DUP_NOTE))
@@ -404,17 +480,22 @@ def prune_messages(
         if not isinstance(msg, dict):
             continue
         content = msg.get("content")
+        on_change = _hook(before_change, msg)
         if isinstance(content, list) and mi not in current:
-            metrics["images_stripped"] += _strip_images_in(content, documents=strip_documents)
+            metrics["images_stripped"] += _strip_images_in(
+                content, documents=strip_documents, on_change=on_change
+            )
         if msg.get("role") == "assistant":
-            saved_inputs = _trim_tool_inputs(msg, input_trim_over_chars, input_trim_keep_chars)
+            saved_inputs = _trim_tool_inputs(
+                msg, input_trim_over_chars, input_trim_keep_chars, on_change
+            )
             if saved_inputs > 0:
                 metrics["inputs_trimmed"] += 1
                 metrics["chars_saved"] += saved_inputs
         for block in _iter_tool_results(msg):
             size = _content_size(block)
             if size > trim_over_chars:
-                saved = _trim_result(block, trim_keep_chars)
+                saved = _trim_result(block, trim_keep_chars, on_change)
                 if saved > 0:
                     metrics["trimmed"] += 1
                     metrics["chars_saved"] += saved

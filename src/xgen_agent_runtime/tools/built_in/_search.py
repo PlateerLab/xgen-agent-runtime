@@ -27,12 +27,26 @@ import sys
 from pathlib import Path
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox"}
+#: Glob 이 한 번에 보여 주는 파일 수. 나머지는 offset 으로 이어 본다(개수는 늘 전부 센다).
 GLOB_MAX_RESULTS = 500
-GREP_MAX_FILES = 200
-GREP_MAX_MATCHES = 300
-GREP_MAX_FILE_SIZE = 2 * 1024 * 1024
-#: 러너 exec 의 stdout 상한(200KB)보다 작게 — 잘리면 JSON 이 깨진다.
-TEXT_CAP = 150_000
+#: Grep content 모드가 한 번에 보여 주는 매치 수. 나머지는 offset 으로 이어 본다 — 개수는 늘 전부 센다.
+GREP_PAGE_MATCHES = 300
+#: Grep files 모드가 한 번에 보여 주는 파일 수.
+GREP_PAGE_FILES = 1000
+#: 검색할 파일 수의 안전 상한. 넘으면 **넘었다고 말한다**(조용히 건너뛰지 않는다).
+GREP_SCAN_MAX_FILES = 200_000
+#: 검색 시간 상한(초). 러너 exec 제한(60초)보다 짧게 — 넘으면 어디까지 찾았는지 말하고 멈춘다.
+GREP_TIME_BUDGET_S = 40.0
+#: 바이너리 판정에 읽는 앞부분. NUL 이 있으면 글이 아니다.
+_BINARY_PROBE = 8192
+#: 한 줄을 보여 줄 때의 상한(문자). 넘으면 줄 끝에 남은 길이를 적는다(파일은 Read 로 본다).
+LINE_SHOW_MAX = 2000
+#: 출력 본문 상한 — JSON 으로 인코딩한 **UTF-8 바이트**. 러너 exec 의 stdout 상한(200KB)보다 작게:
+#: 예전 상한(150,000 '자')은 한국어면 450KB 라 JSON 이 잘려 "Search failed" 가 됐다. 안내 줄은 이 상한
+#: **밖에** 붙는다(예전에는 안내까지 잘려 몇 개를 못 봤는지 알 수 없었다).
+TEXT_CAP_BYTES = 150_000
+#: snapshot·read_texts 의 응답 상한(바이트, 같은 이유).
+TEXT_CAP = TEXT_CAP_BYTES
 
 
 def _inside(path, roots):
@@ -49,10 +63,89 @@ def _inside(path, roots):
     return False
 
 
-def _cap(text):
-    if len(text) <= TEXT_CAP:
-        return text
-    return text[:TEXT_CAP] + "\n\n... (output truncated)"
+def _json_bytes(text):
+    """``text`` 가 결과 JSON 안에서 차지하는 바이트(이스케이프 포함)."""
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8")) - 2
+
+
+def _fit_lines(lines, budget=TEXT_CAP_BYTES):
+    """앞에서부터 ``budget`` 바이트 안에 드는 줄 수(최소 1)."""
+    used = 0
+    for i, line in enumerate(lines):
+        used += _json_bytes(line) + 2  # 줄바꿈(\n 이스케이프)
+        if used > budget:
+            return max(1, i)
+    return len(lines)
+
+
+def _show_line(line):
+    if len(line) <= LINE_SHOW_MAX:
+        return line
+    return line[:LINE_SHOW_MAX] + " …[+%d chars on this line]" % (len(line) - LINE_SHOW_MAX)
+
+
+def _offset(req):
+    try:
+        return max(0, int(req.get("offset") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _expand_braces(pattern):
+    """``*.{ts,tsx}`` → ``['*.ts', '*.tsx']`` (중첩 없는 중괄호만). pathlib 은 중괄호를 몰라서 예전에는
+    "No matches" 였다 — 도구 설명이 예로 든 바로 그 패턴이다."""
+    m = re.search(r"\{([^{}]*)\}", pattern or "")
+    if not m:
+        return [pattern]
+    out = []
+    for alt in m.group(1).split(","):
+        out.extend(_expand_braces(pattern[: m.start()] + alt + pattern[m.end() :]))
+    return out
+
+
+def _glob_match(rel, name, patterns):
+    import fnmatch
+
+    for pat in patterns:
+        if "/" in pat:
+            if fnmatch.fnmatch(rel, pat) or (
+                pat.startswith("**/") and fnmatch.fnmatch(rel, pat[3:])
+            ):
+                return True
+        elif fnmatch.fnmatch(name, pat):
+            return True
+    return False
+
+
+def _walk_files(base, file_glob, roots):
+    """``base`` 아래 파일(경로순)과 건너뛴 폴더. SKIP_DIRS 는 들어가지 않되 **건너뛰었다고 적는다**."""
+    patterns = _expand_braces(file_glob) if file_glob else None
+    files, skipped_dirs = [], {}
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        keep = []
+        for d in sorted(dirnames):
+            if d in SKIP_DIRS:
+                skipped_dirs[d] = skipped_dirs.get(d, 0) + 1
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        for name in sorted(filenames):
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, base).replace(os.sep, "/")
+            if patterns and not _glob_match(rel, name, patterns):
+                continue
+            if not os.path.isfile(full) or not _inside(full, roots):
+                continue
+            files.append(Path(full))
+    return files, skipped_dirs
+
+
+def _is_binary(path):
+    try:
+        with open(path, "rb") as f:
+            return b"\0" in f.read(_BINARY_PROBE)
+    except OSError:
+        return False
 
 
 def glob_files(req):
@@ -61,103 +154,208 @@ def glob_files(req):
     roots = req.get("roots") or []
     if not base.is_dir():
         return {"ok": False, "text": "Directory not found: %s" % base}
+    files, seen = [], set()
     try:
-        matches = list(base.glob(pattern))
+        for pat in _expand_braces(pattern):
+            for m in base.glob(pat):
+                key = str(m)
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    if m.is_file() and _inside(m, roots):
+                        stat = m.stat()
+                        files.append((stat.st_mtime, str(m), stat.st_size))
+                except OSError:
+                    continue
     except Exception as e:  # 잘못된 패턴 등
         return {"ok": False, "text": "Glob error: %s" % e}
-    files = []
-    for m in matches:
-        try:
-            if m.is_file() and _inside(m, roots):
-                stat = m.stat()
-                files.append((stat.st_mtime, str(m), stat.st_size))
-        except OSError:
-            continue
     if not files:
         return {"ok": True, "text": "No files matching '%s' in %s" % (pattern, base)}
     files.sort(reverse=True)  # 최근 수정 순
-    shown = [p for _, p, _ in files[:GLOB_MAX_RESULTS]]
+    offset = _offset(req)
+    page = files[offset : offset + GLOB_MAX_RESULTS]
+    if not page:
+        return {
+            "ok": True,
+            "text": "No files at offset %d (%d files match '%s')" % (offset, len(files), pattern),
+        }
+    shown = [p for _, p, _ in page]
+    fit = _fit_lines(shown)
+    shown = shown[:fit]
     text = "\n".join(shown)
-    if len(files) > GLOB_MAX_RESULTS:
-        text += "\n\n... (showing %d of %d matches)" % (GLOB_MAX_RESULTS, len(files))
-    result = {"ok": True, "text": _cap(text)}
+    end = offset + len(shown)
+    if offset > 0 or end < len(files):
+        text += "\n\n... (files %d-%d of %d, most recently modified first%s)" % (
+            offset + 1,
+            end,
+            len(files),
+            "; call Glob again with offset=%d for the next page" % end if end < len(files) else "",
+        )
+    result = {"ok": True, "text": text}
     if req.get("include_metadata") is True:
-        result["files"] = [
-            {"path": p, "size_bytes": size} for _, p, size in files[:GLOB_MAX_RESULTS]
-        ]
+        result["files"] = [{"path": p, "size_bytes": size} for _, p, size in page[:fit]]
     return result
 
 
 def grep_files(req):
+    """정규식 검색. **모든 파일을 끝까지 세고**, 보여 주는 만큼만 보여 주며, 못 보여 준 것은 몇 개인지와
+    다음 쪽을 보는 방법(offset)을 적는다.
+
+    예전 결함(2026-10-23 감사, 재현): 앞 200개 파일만 찾고 2MiB 넘는 파일을 건너뛰면서 아무 말이 없었고,
+    content 모드에서 첫 파일의 매치가 300개를 넘으면 **"No matches"** 를 돌려줬다(count 모드는 400개).
+    모델은 "없다" 고 믿고 지우거나 고친다 — 결과를 사실과 반대로 만드는 결함이었다.
+    """
+    import time
+
     base = Path(req["base"])
     pattern = req["pattern"]
     mode = req.get("output_mode") or "files"
     ctx = int(req.get("context") or 0)
     file_glob = req.get("glob")
     roots = req.get("roots") or []
+    offset = _offset(req)
     try:
         regex = re.compile(pattern, re.IGNORECASE if req.get("case_insensitive") else 0)
     except re.error as e:
         return {"ok": False, "text": "Invalid regex: %s" % e}
 
+    skipped_dirs = {}
     if base.is_file():
         targets = [base]
     elif base.is_dir():
-        found = sorted(base.rglob(file_glob or "*"))
-        targets = []
-        for t in found:
-            try:
-                if not t.is_file():
-                    continue
-            except OSError:
-                continue
-            if set(t.relative_to(base).parts[:-1]) & SKIP_DIRS:
-                continue
-            if _inside(t, roots):
-                targets.append(t)
-        targets = targets[:GREP_MAX_FILES]
+        targets, skipped_dirs = _walk_files(base, file_glob, roots)
     else:
         return {"ok": False, "text": "Path not found: %s" % base}
 
-    match_files, match_lines, total = [], [], 0
+    notes = []
+    if len(targets) > GREP_SCAN_MAX_FILES:
+        notes.append(
+            "searched the first %d of %d files (by path); narrow 'path' or 'glob' to search the rest"
+            % (GREP_SCAN_MAX_FILES, len(targets))
+        )
+        targets = targets[:GREP_SCAN_MAX_FILES]
+
+    started = time.monotonic()
+    total = 0
+    file_counts = []  # (path, hits)
+    blocks = []  # content 모드에서 보여 줄 (줄, 매치 줄인가) — 구분선 포함
+    page_end = offset + GREP_PAGE_MATCHES
+    binary_skipped = unreadable = 0
+    scanned = 0
     for fpath in targets:
+        if time.monotonic() - started > GREP_TIME_BUDGET_S:
+            notes.append(
+                "stopped at the time limit after %d of %d files (by path); the counts cover only "
+                "those files — narrow 'path' or 'glob' to search the rest" % (scanned, len(targets))
+            )
+            break
+        scanned += 1
+        if _is_binary(fpath):
+            binary_skipped += 1
+            continue
+        hits = 0
+        before = []  # 앞 문맥(최근 ctx 줄)
+        after_left = 0
+        last_shown = -1
         try:
-            if fpath.stat().st_size > GREP_MAX_FILE_SIZE:
-                continue
-            text = fpath.read_text(encoding="utf-8", errors="ignore")
+            with open(fpath, encoding="utf-8", errors="ignore") as f:
+                for n, raw in enumerate(f):
+                    line = raw.rstrip("\n").rstrip("\r")
+                    matched = regex.search(line) is not None
+                    if matched:
+                        idx = total + hits  # 전체에서 이 매치의 순번(0부터)
+                        hits += 1
+                        if mode == "content" and offset <= idx < page_end:
+                            first = n - len(before)
+                            if blocks and last_shown >= 0 and first > last_shown + 1 and ctx > 0:
+                                blocks.append(("--", False))
+                            for k, prev in enumerate(before):
+                                ln = first + k
+                                if ln > last_shown:
+                                    blocks.append(
+                                        ("%s:%d:  %s" % (fpath, ln + 1, _show_line(prev)), False)
+                                    )
+                                    last_shown = ln
+                            blocks.append(("%s:%d:> %s" % (fpath, n + 1, _show_line(line)), True))
+                            last_shown = n
+                            after_left = ctx
+                            before = []
+                            continue
+                    elif after_left > 0 and n > last_shown:
+                        blocks.append(("%s:%d:  %s" % (fpath, n + 1, _show_line(line)), False))
+                        last_shown = n
+                        after_left -= 1
+                        continue
+                    if ctx > 0:
+                        before.append(line)
+                        if len(before) > ctx:
+                            before.pop(0)
         except OSError:
+            unreadable += 1
             continue
-        lines = text.splitlines()
-        hits = [(i, ln) for i, ln in enumerate(lines) if regex.search(ln)]
-        if not hits:
-            continue
-        match_files.append(str(fpath))
-        total += len(hits)
-        if mode == "content":
-            for n, _ in hits:
-                if total > GREP_MAX_MATCHES:
-                    break
-                for ci in range(max(0, n - ctx), min(len(lines), n + ctx + 1)):
-                    mark = ">" if ci == n else " "
-                    match_lines.append("%s:%d:%s %s" % (fpath, ci + 1, mark, lines[ci]))
-                if ctx > 0:
-                    match_lines.append("--")
+        if hits:
+            file_counts.append((str(fpath), hits))
+            total += hits
+
+    nfiles = len(file_counts)
+    if binary_skipped:
+        notes.append("%d binary file(s) not searched" % binary_skipped)
+    if unreadable:
+        notes.append("%d file(s) could not be read" % unreadable)
+    if skipped_dirs:
+        notes.append(
+            "not searched: %s (pass a path inside one to search there)"
+            % ", ".join("%s/ (%d)" % (d, c) for d, c in sorted(skipped_dirs.items()))
+        )
+
+    def _done(body_lines, page_note):
+        all_notes = ([page_note] if page_note else []) + notes
+        text = "\n".join(body_lines)
+        if all_notes:
+            text += ("\n\n" if text else "") + "\n".join("... (%s)" % n for n in all_notes)
+        return {"ok": True, "text": text}
 
     if mode == "count":
-        return {"ok": True, "text": "%d matches in %d files" % (total, len(match_files))}
+        lines = ["%d matches in %d files" % (total, nfiles)]
+        return _done(lines, "")
+    if total == 0:
+        return _done(["No matches for '%s'" % pattern], "")
     if mode == "files":
-        if not match_files:
-            return {"ok": True, "text": "No matches for '%s'" % pattern}
-        text = "\n".join(match_files)
-        if len(match_files) >= GREP_MAX_FILES:
-            text += "\n\n... (limited to %d files)" % GREP_MAX_FILES
-        return {"ok": True, "text": _cap(text)}
-    if not match_lines:
-        return {"ok": True, "text": "No matches for '%s'" % pattern}
-    text = "\n".join(match_lines[: GREP_MAX_MATCHES * 3])
-    if total > GREP_MAX_MATCHES:
-        text += "\n\n... (%d total matches, showing first %d)" % (total, GREP_MAX_MATCHES)
-    return {"ok": True, "text": _cap(text)}
+        page = [p for p, _ in file_counts[offset : offset + GREP_PAGE_FILES]]
+        if not page:
+            return _done([], "no files at offset %d (%d files match)" % (offset, nfiles))
+        page = page[: _fit_lines(page)]
+        end = offset + len(page)
+        note = ""
+        if offset > 0 or end < nfiles:
+            note = "files %d-%d of %d matching files (%d matches)%s" % (
+                offset + 1,
+                end,
+                nfiles,
+                total,
+                "; call Grep again with offset=%d for the next page" % end if end < nfiles else "",
+            )
+        return _done(page, note)
+    # content
+    if not blocks:
+        return _done(
+            [], "no matches at offset %d (%d matches in %d files)" % (offset, total, nfiles)
+        )
+    fit = _fit_lines([text for text, _ in blocks])
+    shown_lines = [text for text, _ in blocks[:fit]]
+    shown_matches = sum(1 for _, is_match in blocks[:fit] if is_match)
+    end = offset + shown_matches
+    note = ""
+    if offset > 0 or end < total:
+        note = "matches %d-%d of %d in %d files%s" % (
+            offset + 1,
+            end,
+            total,
+            nfiles,
+            "; call Grep again with offset=%d for the next page" % end if end < total else "",
+        )
+    return _done(shown_lines, note)
 
 
 def snapshot_files(req):

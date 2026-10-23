@@ -168,3 +168,46 @@ def test_오류로_끝난_턴도_남는다():
     turns = pipe._memory_provider.turns
     assert _roles(turns) == ["user:text", "assistant:text"]
     assert "ended with an error" in turns[-1].content
+
+
+def test_쓰던_중에_멈춘_답은_사용자가_본_그대로_남는다():
+    """그 호출의 답은 상태에 아직 없다. 예전에는 사용자가 읽은 답이 기록에 흔적도 없었다(2026-10-23)."""
+    pipe = _Pipeline([
+        _add({"role": "user", "content": QUESTION}, TOOL_USE, TOOL_RESULT),
+        ("api.request", {}),
+        ("text.delta", {"text": "## 보고서\n첫 문단"}),
+        ("text.delta", {"text": " 이어지는 글"}),
+    ])
+    state = PipelineState(session_id="s1")
+    _drain_until(pipe, state, "## 보고서\n첫 문단")
+    last = pipe._memory_provider.turns[-1]
+    assert last.role == "assistant" and last.content.startswith("## 보고서\n첫 문단")
+    assert "while this answer was being written" in last.content
+
+
+def test_상태에_들어간_답은_두_번_남기지_않는다():
+    pipe = _Pipeline([
+        _add({"role": "user", "content": QUESTION}),
+        ("api.request", {}),
+        ("text.delta", {"text": "ls 를 돌려 볼게요"}),
+        # 답이 상태에 들어갔고 도구가 도는 중에 멈췄다
+        _add({"role": "assistant", "content": [{"type": "text", "text": "ls 를 돌려 볼게요"}, TOOL_USE["content"][0]]}),
+        ("text.delta", {"text": "…"}),
+        ("text.delta", {"text": "x"}),
+    ])
+    state = PipelineState(session_id="s1")
+    _drain_until(pipe, state, "…")
+    texts = [str(t.content) for t in pipe._memory_provider.turns]
+    assert sum(t.count("ls 를 돌려 볼게요") for t in texts) == 1
+    assert "while this answer was being written" not in texts[-1]
+
+
+def test_오류로_끝난_턴은_사용자에게_보인_오류를_남긴다():
+    pipe = _Pipeline([
+        _add({"role": "user", "content": QUESTION}),
+        ("pipeline.error", {"error": "RateLimitError: 429"}),
+    ])
+    state = PipelineState(session_id="s1")
+    list(runner.stream_turn(pipe, QUESTION, state))
+    last = pipe._memory_provider.turns[-1]
+    assert "ended with an error" in last.content and "RateLimitError: 429" in last.content

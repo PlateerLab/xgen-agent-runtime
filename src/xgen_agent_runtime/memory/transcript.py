@@ -122,6 +122,19 @@ class LogicalTurn:
         self.messages = messages
 
 
+def opens_turn(role: str, content: Any) -> bool:
+    """이 메시지가 새 논리 턴을 여는가: 사용자의 말(도구 결과도, 런타임 지시도 아닌 user 메시지).
+
+    런타임이 user 자리에 넣는 지시(산출물 점검·턴 예산·반복 종료)는 그 턴 안의 일이다. 그것을 경계로
+    보면 창과 기록이 지시를 "사용자의 새 요청" 으로 보여 준다(2026-10-23 감사).
+    """
+    if role != "user" or _is_tool_result_only(content):
+        return False
+    from xgen_agent_runtime.core.context_prune import is_runtime_note_content
+
+    return not is_runtime_note_content(content)
+
+
 def group_logical_turns(turns: Sequence[Any], limit: int) -> List[LogicalTurn]:
     """시간순 turn 목록을 논리 턴으로 묶어 **마지막 ``limit`` 개**를 돌려준다.
 
@@ -134,7 +147,7 @@ def group_logical_turns(turns: Sequence[Any], limit: int) -> List[LogicalTurn]:
     for t in turns:
         role = str(getattr(t, "role", "") or "")
         content = getattr(t, "content", "")
-        starts_turn = role == "user" and not _is_tool_result_only(content)
+        starts_turn = opens_turn(role, content)
         if starts_turn or not groups:
             if not starts_turn and not groups:
                 continue  # 첫 사용자 지시 이전의 잔여분은 버린다

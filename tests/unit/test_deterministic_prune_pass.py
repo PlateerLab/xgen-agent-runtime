@@ -111,12 +111,35 @@ def test_oversized_stale_output_trimmed_with_marker():
     metrics = prune_messages(msgs, protect_last=2,
                              trim_over_chars=4000, trim_keep_chars=600)
     trimmed = msgs[1]["content"][0]["content"]
-    assert trimmed.startswith("x" * 600)
-    assert "chars trimmed during context compaction" in trimmed
-    assert metrics["trimmed"] == 1 and metrics["chars_saved"] > 19_000
+    assert trimmed.startswith("x" * 400) and trimmed.endswith("x" * 200)  # head and end kept
+    assert "19400 chars of this result trimmed here" in trimmed
+    assert 'ToolResultRead(id="h1")' in trimmed
+    assert metrics["trimmed"] == 1 and metrics["chars_saved"] == 19_400
     # recent copy would have been protected
     msgs2 = _tool_turn("h2", huge)
     assert prune_messages(msgs2, protect_last=6)["trimmed"] == 0
+
+
+def test_trimming_again_counts_every_char_cut_so_far():
+    body = "HEAD" + "x" * 20_000 + "Exit code: 1"
+    msgs = _tool_turn("h1", body) + [{"role": "user", "content": "패딩"}] * 4
+    prune_messages(msgs, protect_last=2, trim_over_chars=4000, trim_keep_chars=3000)
+    prune_messages(msgs, protect_last=2, trim_over_chars=1000, trim_keep_chars=600)
+    trimmed = msgs[1]["content"][0]["content"]
+    assert trimmed.startswith("HEAD") and trimmed.endswith("Exit code: 1")
+    assert f"{len(body) - 600} chars of this result trimmed here" in trimmed
+    assert trimmed.count("trimmed here") == 1
+
+
+def test_a_change_is_announced_before_it_happens():
+    """before_change 는 바뀌기 **전에** 불린다: 그때 복사한 것이 원본이다."""
+    import copy
+
+    huge = "y" * 20_000
+    msgs = _tool_turn("h1", huge) + [{"role": "user", "content": "패딩"}] * 4
+    seen = []
+    prune_messages(msgs, protect_last=2, before_change=lambda m: seen.append(copy.deepcopy(m)))
+    assert seen and seen[0]["content"][0]["content"] == huge
 
 
 # ── invariants ────────────────────────────────────────────────────────

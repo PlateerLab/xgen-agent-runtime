@@ -30,9 +30,33 @@ _TASK_CLIP = 200
 _RESULT_CLIP = 1500
 
 
-def _clip(text: str, limit: int) -> str:
-    text = (text or "").strip()
+def _clip(text: Any, limit: int) -> str:
+    """Shorten with an ellipsis (titles, one-line entries)."""
+    text = _as_text(text)
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _excerpt(text: Any, limit: int) -> str:
+    """Shorten a body and say it is an excerpt: a card is read later as the record of what was done."""
+    text = _as_text(text)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n…[excerpt: the first {limit:,} of {len(text):,} chars]"
+
+
+def _as_text(value: Any) -> str:
+    """A turn input can be a dict (text plus attachments): before, ``.strip()`` on it raised and the
+    card was silently not written (2026-10-23 audit)."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    try:
+        from xgen_agent_runtime.host.turn_input import TurnInput
+
+        return TurnInput.from_raw(value).text.strip()
+    except Exception:  # noqa: BLE001
+        return str(value).strip()
 
 
 async def _next_execution_number(provider: Any) -> int:
@@ -46,18 +70,26 @@ async def _next_execution_number(provider: Any) -> int:
         return 1
 
 
-OUTCOME_MARK = {"ok": "✅", "partial": "⚠️", "failed": "❌"}
+OUTCOME_MARK = {"ok": "✅", "partial": "⚠️", "failed": "❌", "stopped": "⏹"}
 
 
 def classify_outcome(
-    success: bool, *, tool_calls: int = 0, tool_failures: int = 0, blocked: int = 0
+    success: bool,
+    *,
+    tool_calls: int = 0,
+    tool_failures: int = 0,
+    blocked: int = 0,
+    cancelled: bool = False,
 ) -> str:
-    """``ok`` / ``partial`` / ``failed``.
+    """``ok`` / ``partial`` / ``failed`` / ``stopped``.
 
     ok      = 끝까지 돌았고 도구 실패·반복 차단이 없다
     partial = 끝까지 돌았지만 도구 실패나 반복 차단이 있었다 — "됐다" 고 적지 않는다
-    failed  = 오류·취소·미완료
+    failed  = 오류로 끝났다
+    stopped = 사용자가 멈췄다. 예전에는 실패(❌)로 적혀, 다음 대화가 "그 작업은 실패했다" 고 읽었다
     """
+    if cancelled:
+        return "stopped"
     if not success:
         return "failed"
     if int(tool_failures or 0) > 0 or int(blocked or 0) > 0:
@@ -99,14 +131,20 @@ def _build_card_body(
         lines.append(tools_line)
     if outcome == "partial":
         lines.append(
-            "> **Outcome:** partial — some tool calls failed; do not treat the task as done"
+            f"> **Outcome:** partial: finished, but {int(tool_failures)} tool call(s) failed"
+            + (f" and {int(blocked)} were blocked" if blocked else "")
+            + "; check the result before relying on it"
         )
+    elif outcome == "stopped":
+        lines.append("> **Outcome:** stopped: the user stopped it before it finished")
+    elif outcome == "failed":
+        lines.append("> **Outcome:** failed: it ended with an error before it finished")
     if provider_name or model:
         lines.append(f"> **Model:** {provider_name}/{model}".rstrip("/"))
     lines.append("")
-    if output_text.strip():
+    if _as_text(output_text):
         lines.append("**Result:**")
-        lines.append(_clip(output_text, _RESULT_CLIP))
+        lines.append(_excerpt(output_text, _RESULT_CLIP))
     if error:
         lines.append("")
         lines.append(f"**Error:** {_clip(error, 500)}")
@@ -148,11 +186,15 @@ async def record_turn_execution(
 
     # ── ① daily 결과 카드 (실행당 1장) ────────────────────────────
     outcome = classify_outcome(
-        success, tool_calls=tool_calls, tool_failures=tool_failures, blocked=blocked
+        success,
+        tool_calls=tool_calls,
+        tool_failures=tool_failures,
+        blocked=blocked,
+        cancelled=cancelled,
     )
     tags = [
         "execution",
-        {"ok": "success", "partial": "partial", "failed": "failure"}[outcome],
+        {"ok": "success", "partial": "partial", "failed": "failure", "stopped": "stopped"}[outcome],
         "auto",
     ]
     importance = Importance.MEDIUM if outcome == "ok" else Importance.HIGH

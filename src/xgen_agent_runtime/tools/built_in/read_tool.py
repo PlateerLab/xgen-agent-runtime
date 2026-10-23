@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 from typing import Any, Dict
 
 from xgen_agent_runtime.core.images import bound_image
-from xgen_agent_runtime.tools.built_in._file_witness import witnessed_mutation
+from xgen_agent_runtime.tools.built_in._file_witness import read_mutation
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_agent_runtime.tools.fs import tool_fs
 
@@ -204,5 +204,12 @@ class ReadTool(Tool):
             # 해석된 절대 경로 둘 다 — Write 가 어느 쪽으로 와도 알아본다. 예전엔 러너
             # 분기만 모델 표기 하나를 적어서, 상대 경로로 읽고 절대 경로로 쓰면 러너에서만
             # 거절됐다.
-            state_mutations=witnessed_mutation(context.state_view, file_path, resolved),
+            # 파일 전체를 본 읽기만 "읽었다" 로 친다(나눠 읽으면 다 덮었을 때) — _file_witness.read_mutation.
+            state_mutations=read_mutation(
+                context.state_view,
+                [file_path, resolved],
+                start=offset,
+                end=min(total, offset + limit),
+                total=total,
+            ),
         )

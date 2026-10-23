@@ -29,6 +29,10 @@ class ToolErrorCode(str, Enum):
     TOOL_CRASHED = "tool_crashed"
     TRANSPORT = "transport_error"
     ACCESS_DENIED = "access_denied"
+    #: The tool ran (its effects happened) but its result is not shown — the run's result or time
+    #: budget ran out, or the result policy could not process it. Not "access denied": the call was
+    #: allowed and executed (2026-10-23 audit).
+    RESULT_WITHHELD = "result_withheld"
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,35 @@ class ToolError:
             code=ToolErrorCode.ACCESS_DENIED,
             message=f"Access denied for '{tool_name}': {reason}",
             details={"tool_name": tool_name, "reason": reason},
+        )
+
+    @classmethod
+    def result_withheld(cls, tool_name: str, reason: str) -> "ToolError":
+        """The call executed, so its effects happened; only its result is not shown."""
+        why = {
+            "run_budget_exceeded": "this run has used up its tool-result size or time budget",
+            "result_policy_unavailable": "the data policy could not check this result",
+            "tool_result_invalid": "the result could not be serialized",
+        }.get(reason, reason)
+        return cls(
+            code=ToolErrorCode.RESULT_WITHHELD,
+            message=(
+                f"'{tool_name}' ran and its effects happened, but its result is not shown: {why}. "
+                "Do not run it again just to see the result."
+            ),
+            details={"tool_name": tool_name, "reason": reason, "executed": True},
+        )
+
+    @classmethod
+    def stopped_while_running(cls, tool_name: str, reason: str) -> "ToolError":
+        """The run's limit stopped the call mid-way: it may have partly run."""
+        return cls(
+            code=ToolErrorCode.TOOL_CRASHED,
+            message=(
+                f"'{tool_name}' was stopped while running ({reason}); it may have partly run. "
+                "Check its effect before running it again."
+            ),
+            details={"tool_name": tool_name, "reason": reason, "executed": "partial"},
         )
 
     @classmethod

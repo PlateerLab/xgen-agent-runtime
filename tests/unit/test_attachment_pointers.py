@@ -116,6 +116,7 @@ def test_turn_out_of_window_still_leaves_its_attachment_path():
     assert report.turns == 5
     first_user = next(m for m in msgs if m["role"] == "user")
     text = first_user["content"] if isinstance(first_user["content"], str) else str(first_user["content"])
-    assert "[Earlier in this conversation]" in text and ABS in text
+    assert "[Earlier in this conversation: 2 older turn(s) are not shown here." in text and ABS in text
+    assert "ConversationHistory" in text
     assert sum(str(m["content"]).count(ABS) for m in msgs) == 1
     assert "text of the pdf" not in str(msgs)

@@ -222,11 +222,19 @@ def skip_identical(
     if not entry or entry.get("n", 0) < SAME_RESULT_SKIP_AT - 1:
         return None
     name = str(tool_call.get("tool_name") or "")
+    last = str(entry.get("last", ""))
+    cut = int(entry.get("cut") or 0)
+    if cut:
+        # 앞부분만 다시 싣는다는 것을 말한다: 예전에는 4,000자에서 말없이 잘라 "같은 결과" 라고 했다.
+        last += (
+            f"\n…[이 반복 안내에는 앞 4,000자만 다시 실었다. 나머지 {cut:,}자는 앞선 결과"
+            f"({entry.get('id') or '이전 호출'})에 그대로 있다]"
+        )
     return {
         "type": "tool_result",
         "tool_use_id": tool_call.get("tool_use_id", ""),
         "content": (
-            f"{entry.get('last', '')}\n\n[같은 호출 {entry['n'] + 1}회째 — 실행하지 않음] "
+            f"{last}\n\n[같은 호출 {entry['n'] + 1}회째 — 실행하지 않음] "
             f"'{name}' 를 같은 입력으로 {entry['n']}번 불러 매번 위와 같은 결과를 받았다. "
             "다시 불러도 새 정보는 없다. 이 결과로 다음 단계를 진행하거나, 막혔다면 무엇이 "
             "막혔는지 사용자에게 알려라."
@@ -263,6 +271,8 @@ def observe_same(
             entry = same[key] = {"sig": sig, "n": 1, "last": ""}
         if isinstance(content, str):
             entry["last"] = content[:4000]
+            entry["cut"] = max(0, len(content) - 4000)
+            entry["id"] = str(result.get("tool_use_id") or "")
         n = entry["n"]
         if n >= SAME_RESULT_WARN_AT:
             name = str(tc.get("tool_name") or "")
