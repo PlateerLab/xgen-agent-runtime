@@ -79,6 +79,8 @@ _ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR")
 #: 결과/에러 문자열 상한 — 폭주하는 스크립트가 턴을 삼키지 않게.
 _STDOUT_CAP = 200_000
 _STDERR_CAP = 4_000
+#: The sandbox runner's own cut marker (xgen-workflow-sandbox ``bounded_stdout``).
+_SANDBOX_CUT_MARK = "[xgen: output cut here"
 
 #: 스크립트 1회 실행 시간 상한 (스펙이 더 크게 요구해도 여기서 자른다).
 _MAX_TIMEOUT_S = 600.0
@@ -342,13 +344,22 @@ class ForgedScriptTool:
         except Exception as exc:  # noqa: BLE001
             self._record(str(exc))
             return ToolResult(content=f"도구 '{spec.name}' 실행 실패: {exc}", is_error=True)
+        stdout = res.stdout.decode("utf-8", "replace")
+        cut = _SANDBOX_CUT_MARK in stdout
+        if len(stdout) > _STDOUT_CAP:
+            stdout = (
+                stdout[:_STDOUT_CAP]
+                + f"\n[output cut here: the first {_STDOUT_CAP:,} of {len(stdout):,} chars are shown]"
+            )
+            cut = True
         return self._interpret(
-            res.stdout.decode("utf-8", "replace")[:_STDOUT_CAP],
+            stdout,
             res.stderr.decode("utf-8", "replace")[-_STDERR_CAP:],
             int(res.rc),
+            cut=cut,
         )
 
-    def _interpret(self, stdout: str, stderr: str, rc: int) -> Any:
+    def _interpret(self, stdout: str, stderr: str, rc: int, *, cut: bool = False) -> Any:
         """실행 결과 → ToolResult. **로컬과 러너가 같은 해석을 쓴다.**
 
         갈라 두면 "이 백엔드에서만 다르게 실패하는 도구" 가 생기고, 그건
@@ -367,8 +378,19 @@ class ForgedScriptTool:
                 metadata={"exit_code": rc, "stderr": stderr},
             )
 
+        if cut and stdout.lstrip()[:1] in ("{", "["):
+            # 잘린 JSON 을 원문 텍스트로 "성공" 처리하면 에이전트는 반쪽 결과를 전부로 읽는다
+            # (2026-10-23 감사). 계약(JSON 결과)이 깨졌다고 분명히 말한다.
+            msg = (
+                f"도구 '{spec.name}' 의 출력이 상한을 넘어 잘렸습니다. 결과 JSON 이 불완전하므로 "
+                "이 결과로 판단하지 마세요. 도구가 결과를 줄여 돌려주게(필터·쪽 나누기) 고치거나, "
+                "큰 결과는 파일로 쓰고 경로를 돌려주게 하세요."
+            )
+            self._record(msg)
+            return ToolResult(content=f"{msg}\n--- 잘린 출력 ---\n{stdout}", is_error=True)
+
         # 계약: stdout 은 JSON. 아니면 원문 텍스트로 돌려준다 (스크립트가
-        # 사람이 읽는 출력을 내는 경우까지 죽이지 않는다).
+        # 사람이 읽는 출력을 내는 경우까지 죽이지 않는다). 잘렸으면 표식이 본문에 있다.
         content: Any = stdout.strip()
         try:
             parsed = json.loads(stdout) if stdout.strip() else {}

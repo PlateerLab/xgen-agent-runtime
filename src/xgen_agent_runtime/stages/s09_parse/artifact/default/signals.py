@@ -9,16 +9,24 @@ from xgen_agent_runtime.stages.s09_parse.interface import CompletionSignal, Comp
 
 
 class RegexDetector(CompletionSignalDetector):
-    """Regex-based signal detection — matches [SIGNAL: detail] patterns."""
+    """Regex-based signal detection — the ``[SIGNAL: detail]`` token that **ends** a response.
 
-    # Patterns matching Geny's existing protocol
+    The prompt protocol (``memory/presets.py``) tells the model to *end* its response with
+    ``[TASK_COMPLETE]``, ``[CONTINUE: next action]`` or ``[BLOCKED: reason]``. Only that
+    trailing token, in exact upper case, is a signal.
+
+    Before 2026-10-23 any ``[signal…]`` anywhere in the text matched, case-insensitively: a
+    correct answer containing ``[Error codes](…)``, ``[Errors]`` or ``[Blocked users]`` was
+    marked failed or blocked, and the non-streaming host replaced the answer with an error.
+    ``[ERROR]`` is not part of the protocol at all, so model text never fails a turn — real
+    failures (exceptions, provider errors) do.
+    """
+
+    # The token must be the last thing in the response (trailing whitespace allowed).
     PATTERNS = {
-        CompletionSignal.CONTINUE: re.compile(r"\[CONTINUE(?::?\s*(.+?))?\]", re.IGNORECASE),
-        CompletionSignal.COMPLETE: re.compile(
-            r"\[(?:TASK_)?COMPLETE(?::?\s*(.+?))?\]", re.IGNORECASE
-        ),
-        CompletionSignal.BLOCKED: re.compile(r"\[BLOCKED(?::?\s*(.+?))?\]", re.IGNORECASE),
-        CompletionSignal.ERROR: re.compile(r"\[ERROR(?::?\s*(.+?))?\]", re.IGNORECASE),
+        CompletionSignal.CONTINUE: re.compile(r"\[CONTINUE(?::[ \t]*([^\]\n]*))?\]\s*\Z"),
+        CompletionSignal.COMPLETE: re.compile(r"\[(?:TASK_)?COMPLETE(?::[ \t]*([^\]\n]*))?\]\s*\Z"),
+        CompletionSignal.BLOCKED: re.compile(r"\[BLOCKED(?::[ \t]*([^\]\n]*))?\]\s*\Z"),
     }
 
     @property
@@ -27,13 +35,14 @@ class RegexDetector(CompletionSignalDetector):
 
     @property
     def description(self) -> str:
-        return "Regex-based [SIGNAL: detail] pattern matching"
+        return "Trailing [SIGNAL: detail] token (exact upper case) at the end of the response"
 
     def detect(self, text: str) -> Tuple[CompletionSignal, Optional[str]]:
+        tail = (text or "")[-1000:]
         for signal, pattern in self.PATTERNS.items():
-            match = pattern.search(text)
+            match = pattern.search(tail)
             if match:
-                detail = match.group(1) if match.lastindex else None
+                detail = (match.group(1) or "").strip() or None
                 return signal, detail
         return CompletionSignal.NONE, None
 
@@ -55,13 +64,17 @@ class StructuredDetector(CompletionSignalDetector):
         try:
             data = json.loads(text)
             if isinstance(data, dict):
-                signal_str = data.get("signal", data.get("status", ""))
+                # Only an explicit ``signal`` key. A ``status`` field is ordinary data in a
+                # structured answer ({"status": "error", ...} describing a record) — reading it
+                # as a signal turned such answers into failed turns.
+                signal_str = data.get("signal")
                 detail = data.get("detail", data.get("reason", None))
-                try:
-                    signal = CompletionSignal(signal_str.lower())
-                    return signal, detail
-                except ValueError:
-                    pass
+                if isinstance(signal_str, str) and signal_str.lower() != "error":
+                    try:
+                        signal = CompletionSignal(signal_str.lower())
+                        return signal, detail
+                    except ValueError:
+                        pass
         except (json.JSONDecodeError, TypeError):
             pass
 

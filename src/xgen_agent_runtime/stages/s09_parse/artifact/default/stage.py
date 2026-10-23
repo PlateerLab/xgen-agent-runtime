@@ -93,6 +93,12 @@ class ParseStage(Stage[Any, ParsedResponse]):
             api_response = input  # trust the pipeline
 
         parsed = self._parser.parse(api_response)
+        if parsed.text:
+            from xgen_agent_runtime.core.shared_keys import SharedKeys
+
+            texts = state.shared.setdefault(SharedKeys.TURN_ASSISTANT_TEXTS, [])
+            if isinstance(texts, list):
+                texts.append(parsed.text)
 
         # Detect completion signals — **이 응답의** 신호다. 지난 반복의 신호가 남아 있으면
         # 모델이 로그를 인용하며 "[ERROR] …" 라고 한 번 쓴 것이 다음 반복까지 따라와

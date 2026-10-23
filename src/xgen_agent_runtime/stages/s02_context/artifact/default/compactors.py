@@ -154,14 +154,39 @@ class SummaryCompactor(HistoryCompactor):
 CHECKPOINT_MARKER = "[Context checkpoint]"
 _CHECKPOINT_INTRO = (
     f"{CHECKPOINT_MARKER} The conversation before this point no longer fit the context window, so it "
-    "was compacted. Below is a summary of it, written so you can continue the work without the "
-    "earlier messages."
+    "was compacted. Below is a summary of it."
+)
+#: A summary loses detail, and the checkpoint says so (2026-10-23): it used to say the agent could
+#: continue "without the earlier messages", so a number or path the summary dropped was simply gone,
+#: or remembered wrong.
+_CHECKPOINT_LOSSY_READ = (
+    "A summary loses detail: before you rely on the exact words of an earlier message, a tool "
+    "result, a number or a path that is not quoted here, read it with ConversationHistory (this "
+    "conversation's full record, this turn included)."
+)
+_CHECKPOINT_LOSSY_GONE = (
+    "A summary loses detail, and the earlier messages cannot be read again here: say so rather than "
+    "guess when something you need is not in it."
 )
 #: The assistant turn that keeps roles alternating after the checkpoint (only when the next kept
-#: message is a user message).
-CHECKPOINT_ACK = "Understood. I have the checkpoint summary and will continue from it."
-#: Acks written by runtimes before 4.89.0: recognised so a later compaction folds them in too.
-_LEGACY_ACKS = ("Understood, I have the context from our previous conversation.",)
+#: message is a user message). The runtime writes it, not the model, and it reads that way.
+CHECKPOINT_ACK = "[Context checkpoint received; continuing from it.]"
+#: Acks written by earlier runtimes: recognised so a later compaction folds them in too.
+_LEGACY_ACKS = (
+    "Understood, I have the context from our previous conversation.",
+    "Understood. I have the checkpoint summary and will continue from it.",
+)
+
+
+def _offers_tool(state: PipelineState, name: str) -> bool:
+    for tool in getattr(state, "tools", None) or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        if tool.get("name") == name or fn.get("name") == name:
+            return True
+    return False
+
 
 #: ``state.shared`` slot carrying verbatim earlier user messages across compactions.
 PINNED_USERS_KEY = "_compaction_pinned_users"
@@ -388,6 +413,8 @@ class CompactionPlan:
     current_request: str = ""
     #: Images and documents of that request, carried into the checkpoint as they are.
     attachments: List[Dict[str, Any]] = field(default_factory=list)
+    #: Earlier user messages that did not fit the verbatim budget (only in the summary now).
+    omitted_users: int = 0
 
 
 class LLMSummaryCompactor(SummaryCompactor):
@@ -568,9 +595,14 @@ class LLMSummaryCompactor(SummaryCompactor):
         for text in reversed(candidates):  # newest first
             cost = estimate_text_scaled(state, text)
             if used + cost > pinned_budget:
+                room = pinned_budget - used
+                if room >= 200:
+                    # The newest message that does not fit whole is kept in part, marked as such.
+                    pinned.insert(0, _clip_tokens(state, text, room))
                 break
             pinned.insert(0, text)
             used += cost
+        omitted_users = len(candidates) - len(pinned)
 
         return CompactionPlan(
             cut=cut,
@@ -578,6 +610,7 @@ class LLMSummaryCompactor(SummaryCompactor):
             pinned=pinned,
             current_request=current,
             attachments=attachments,
+            omitted_users=omitted_users,
         )
 
     # ── transcript ───────────────────────────────────────────────────
@@ -794,12 +827,21 @@ class LLMSummaryCompactor(SummaryCompactor):
         else:
             source = "model"
 
-        sections = [_CHECKPOINT_INTRO, summary]
-        if outline.pinned:
-            sections.append(
-                "Earlier user messages, verbatim (oldest first):\n"
-                + "\n".join(f"- {text}" for text in outline.pinned)
-            )
+        readable = _offers_tool(state, "ConversationHistory")
+        sections = [
+            f"{_CHECKPOINT_INTRO} {_CHECKPOINT_LOSSY_READ if readable else _CHECKPOINT_LOSSY_GONE}",
+            summary,
+        ]
+        if outline.pinned or outline.omitted_users:
+            lines = [f"- {text}" for text in outline.pinned]
+            if outline.omitted_users:
+                where = "; read them with ConversationHistory" if readable else ""
+                lines.insert(
+                    0,
+                    f"({outline.omitted_users} earlier user message(s) did not fit here and are only "
+                    f"in the summary{where}.)",
+                )
+            sections.append("Earlier user messages, verbatim (oldest first):\n" + "\n".join(lines))
         if outline.current_request:
             sections.append("The request being worked on, verbatim:\n" + outline.current_request)
         text = "\n\n".join(sections)

@@ -514,7 +514,7 @@ class FactExtraction:
             if not rendered:
                 continue
             fresh.append(t)
-            if (getattr(t, "role", "") or "") == "user":
+            if rendered.startswith("[user] "):  # runtime directives render as [runtime]
                 has_user = True
             if iso and iso > latest_iso:
                 latest_iso = iso

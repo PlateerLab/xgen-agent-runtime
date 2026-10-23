@@ -29,6 +29,7 @@ from xgen_agent_runtime.core.shared_keys import SharedKeys
 #: 과제의 약 10%. Read 뒤 Write 도 거절돼 모델은 Bash 로 우회했다). 단위 테스트가 장부를 손으로
 #: 반영해서 못 잡았다 — 이제 테스트는 실제 반영 함수를 거친다.
 WITNESSED_KEY = SharedKeys.FILE_WITNESSED
+RANGES_KEY = SharedKeys.FILE_READ_RANGES
 # 4.51.0 shipped this unnamespaced spelling. Read it during the transition so
 # an in-flight session does not forget what it inspected, but never write it
 # again: Stage 10 correctly rejects unknown namespaces.
@@ -66,10 +67,76 @@ def is_witnessed(state_view: Any, path: str) -> bool:
     return path in _book(state_view)
 
 
-def refusal(path: str) -> str:
+#: Partly read files kept in the range ledger at most.
+MAX_PARTIAL = 200
+
+
+def _ranges_book(state_view: Any) -> Dict[str, Any]:
+    shared = getattr(state_view, "shared", None)
+    book = shared.get(RANGES_KEY) if isinstance(shared, dict) else None
+    return dict(book) if isinstance(book, dict) else {}
+
+
+def _merge(ranges: List[List[int]]) -> List[List[int]]:
+    out: List[List[int]] = []
+    for a, b in sorted([int(r[0]), int(r[1])] for r in ranges if len(r) == 2):
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def read_mutation(
+    state_view: Any, paths: List[str], *, start: int, end: int, total: int
+) -> Dict[str, Any]:
+    """What a Read of lines ``[start, end)`` of a ``total``-line file adds to the ledgers.
+
+    The file counts as read (Write may replace it) only once the reads cover all of it. A preview
+    of the first 2,000 lines used to count, so a Write could replace a 5,000-line file whose last
+    3,000 lines the agent had never seen (2026-10-23 audit). Reading it in parts counts once the
+    parts cover it.
+    """
+    wanted = [p for p in paths if p]
+    key = wanted[-1] if wanted else ""
+    book = _ranges_book(state_view)
+    entry = book.get(key) if isinstance(book.get(key), dict) else None
+    ranges = (
+        list(entry.get("ranges") or []) if entry and int(entry.get("total") or -1) == total else []
+    )
+    ranges = _merge(ranges + [[max(0, start), min(total, end)]])
+    covered = total <= 0 or (len(ranges) == 1 and ranges[0][0] <= 0 and ranges[0][1] >= total)
+    if covered:
+        for p in wanted:
+            book.pop(p, None)
+        out = witnessed_mutation(state_view, *wanted)
+        if book != _ranges_book(state_view):
+            out[RANGES_KEY] = book
+        return out
+    book[key] = {"total": total, "ranges": ranges}
+    if len(book) > MAX_PARTIAL:
+        for old in list(book)[: len(book) - MAX_PARTIAL]:
+            book.pop(old, None)
+    return {RANGES_KEY: book}
+
+
+def read_ranges(state_view: Any, path: str) -> Dict[str, Any]:
+    entry = _ranges_book(state_view).get(path)
+    return entry if isinstance(entry, dict) else {}
+
+
+def refusal(path: str, partial: Dict[str, Any] = None) -> str:
     """거절할 때 모델에게 주는 말 — 다음 한 수가 분명해야 한다."""
+    if partial and partial.get("ranges"):
+        seen = ", ".join(f"{a + 1}-{b}" for a, b in partial["ranges"])
+        return (
+            f"{path} already exists and you have read only lines {seen} of its "
+            f"{partial.get('total')}. Nothing was written: a Write replaces the whole file, "
+            f"including the lines you have not seen. Read the rest first, or use Edit to change "
+            f"the part you know."
+        )
     return (
         f"{path} already exists and you have not read it in this session. Nothing was "
-        f"written — a blind Write would discard whatever is in it. Read it first, then use "
+        f"written: a blind Write would discard whatever is in it. Read it first, then use "
         f"Edit to change part of it, or Write again to replace it knowingly."
     )

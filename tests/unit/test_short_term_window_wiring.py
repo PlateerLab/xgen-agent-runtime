@@ -70,7 +70,8 @@ class TestStage2Preload:
         window_len = len(st.messages) - 1
         assert window_len > 0
         assert st.metadata[_RECORDED_KEY] == window_len == st.metadata[WINDOW_LEN_KEY]
-        assert st.metadata[WINDOW_KEY]["turns"] == 5 and st.metadata[WINDOW_KEY]["full"] == 2
+        # 창 크기는 모델 창이 정한다(기본 200K: 가까운 4턴은 도구까지, 나머지는 대화로 들어가는 만큼)
+        assert st.metadata[WINDOW_KEY]["turns"] == 6 and st.metadata[WINDOW_KEY]["full"] == 4
         assert any(e["type"] == "context.short_term_window" for e in st.events)
         # 먼 턴은 대화만(문자열), 가까운 턴은 도구 블록
         assert isinstance(st.messages[0]["content"], str)

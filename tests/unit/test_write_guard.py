@@ -206,3 +206,36 @@ class TestWitnessThroughTheRealApplyPath:
         runner.run_turn(pipe, "go", PipelineState(session_id="t", model="m"))
         assert mine.read_text(encoding="utf-8") == "v2"
         assert existing.read_text(encoding="utf-8") == "updated"
+
+
+class TestPartialRead:
+    """앞 2,000줄만 본 5,000줄 파일을 통째로 덮어쓰지 않는다(2026-10-23 감사)."""
+
+    def _read(self, tmp_path, shared, **kw):
+        ctx = _ctx(tmp_path, shared)
+        res = _run(ReadTool(), {"file_path": "big.txt", **kw}, ctx)
+        apply_state_mutations(res, shared, tool_name="Read")
+        return ctx
+
+    def test_a_preview_is_not_a_read(self, tmp_path):
+        (tmp_path / "big.txt").write_text("".join(f"line {i}\n" for i in range(5000)))
+        shared: dict = {}
+        ctx = self._read(tmp_path, shared)  # 기본 2,000줄
+        res = _run(WriteTool(), {"file_path": "big.txt", "content": "new"}, ctx)
+        assert res.is_error and "read only lines 1-2000 of its 5000" in res.content
+        assert (tmp_path / "big.txt").read_text().startswith("line 0\n")
+
+    def test_reading_it_in_parts_counts_once_they_cover_it(self, tmp_path):
+        (tmp_path / "big.txt").write_text("".join(f"line {i}\n" for i in range(5000)))
+        shared: dict = {}
+        self._read(tmp_path, shared)
+        self._read(tmp_path, shared, offset=2000, limit=2000)
+        ctx = self._read(tmp_path, shared, offset=4000, limit=2000)
+        res = _run(WriteTool(), {"file_path": "big.txt", "content": "new"}, ctx)
+        assert not res.is_error and (tmp_path / "big.txt").read_text() == "new"
+
+    def test_a_small_file_read_whole_counts_at_once(self, tmp_path):
+        (tmp_path / "big.txt").write_text("a\nb\n")
+        shared: dict = {}
+        ctx = self._read(tmp_path, shared)
+        assert not _run(WriteTool(), {"file_path": "big.txt", "content": "c"}, ctx).is_error

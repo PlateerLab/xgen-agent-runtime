@@ -239,25 +239,35 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 chunks.extend(await vector.search(query, top_k=limit))
             except Exception:  # noqa: BLE001 — 시맨틱은 결과를 보강할 뿐
                 logger.debug("memory_search: vector search failed (keyword-only)", exc_info=True)
+        # 두 목록을 **순위**로 합친다(RRF). 예전에는 키워드 점수(상한 없음)와 코사인(1 이하)을 한 줄로
+        # 정렬해 의미 검색 결과가 늘 뒤로 밀렸다(2026-10-23 감사).
+        keyword_hits = list(chunks)
+        fused: Dict[str, Dict[str, Any]] = {}
+        by_source: Dict[str, List[Any]] = {}
+        for c in keyword_hits:
+            by_source.setdefault(str(getattr(c, "source", "") or "keyword"), []).append(c)
+        for hits in by_source.values():
+            for rank, c in enumerate(hits):
+                key = getattr(c, "key", "")
+                if not key:
+                    continue
+                entry = fused.setdefault(key, {"score": 0.0, "chunk": c})
+                entry["score"] += 1.0 / (60 + rank + 1)
         items = []
-        seen = set()
-        for c in chunks:
-            key = getattr(c, "key", "")
-            if key in seen:
-                continue
-            seen.add(key)
+        for key, entry in sorted(fused.items(), key=lambda kv: -kv[1]["score"])[:limit]:
+            c = entry["chunk"]
             content = (getattr(c, "content", "") or "").strip()
-            first_line = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
+            snippet = content[:400]
+            if len(content) > 400:
+                snippet += " …(excerpt; memory_read for the whole note)"
             items.append(
                 {
                     "filename": key,
-                    "snippet_first_line": first_line[:200],
-                    "score": round(float(getattr(c, "relevance_score", 0.0)), 4),
+                    "snippet": snippet,
+                    "score": round(entry["score"], 4),
                     "source": getattr(c, "source", ""),
                 }
             )
-        items.sort(key=lambda x: -x["score"])
-        items = items[:limit]
         return ToolResult(content=_ok({"query": query, "total": len(items), "results": items}))
 
     async def _categories(_tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
@@ -273,6 +283,11 @@ def build_memory_tools(provider: Any) -> List[Any]:
                     ],
                 }
             )
+        )
+
+    async def _history(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
+        return await conversation_history(
+            provider, tool_input, state=getattr(ctx, "state_view", None)
         )
 
     def _schema(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -372,6 +387,41 @@ def build_memory_tools(provider: Any) -> List[Any]:
             capabilities=read_caps,
         ),
         build_tool(
+            name="ConversationHistory",
+            description=(
+                "Read THIS conversation's own record, word for word: earlier turns that are no longer in "
+                "your context (only the most recent turns are), what tools returned then, and the full "
+                "conversation summary. view='turns' lists the turns; view='turn' with turn=<n> shows one "
+                "in full (user words, your answers, tool calls and results; long turns come in pages); "
+                "view='search' with query finds where something was said; view='summary' returns the "
+                "whole summary. Use it before relying on what you remember of earlier turns."
+            ),
+            input_schema=_schema(
+                {
+                    "view": {
+                        "type": "string",
+                        "enum": ["turns", "turn", "search", "summary"],
+                        "description": "What to read (default 'turns').",
+                    },
+                    "turn": {
+                        "type": "integer",
+                        "description": "Turn number for view='turn' (1 = oldest).",
+                    },
+                    "query": {"type": "string", "description": "Text to find for view='search'."},
+                    "offset": {
+                        "type": "integer",
+                        "description": "Character offset within a turn, or first turn number for view='turns'.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Characters per page (view='turn') or turns per page (view='turns').",
+                    },
+                }
+            ),
+            execute=_history,
+            capabilities=read_caps,
+        ),
+        build_tool(
             name="memory_categories",
             description="Vault overview — category map with counts. Use FIRST when you don't know where to look.",
             input_schema=_schema({}),
@@ -381,3 +431,225 @@ def build_memory_tools(provider: Any) -> List[Any]:
     ]
     # 종류 표지 — 호스트의 결과 필터가 이름이 아니라 종류로 판정한다(tools.base.tool_origin).
     return [with_origin(t, "memory") for t in tools]
+
+
+# ── ConversationHistory ────────────────────────────────────────────────────
+
+#: 대화 기록에서 읽어 오는 행 상한. 도구 결과가 많은 턴은 행이 많다.
+_HISTORY_SCAN_ROWS = 5000
+#: view='turn' 한 쪽의 기본 글자 수.
+_HISTORY_PAGE_CHARS = 40_000
+#: view='turns' 한 쪽의 기본 턴 수.
+_HISTORY_PAGE_TURNS = 30
+
+
+def _render_block(block: Dict[str, Any]) -> str:
+    kind = block.get("type")
+    if kind == "text":
+        return str(block.get("text") or "")
+    if kind == "tool_use":
+        args = json.dumps(block.get("input") or {}, ensure_ascii=False, default=str)
+        return f"[tool call {block.get('id') or ''}: {block.get('name') or ''}({args})]"
+    if kind == "tool_result":
+        content = block.get("content")
+        if isinstance(content, list):
+            content = "\n".join(
+                str(b.get("text") or "")
+                if isinstance(b, dict) and b.get("type") == "text"
+                else "[image]"
+                for b in content
+            )
+        flag = " (error)" if block.get("is_error") else ""
+        return f"[tool result {block.get('tool_use_id') or ''}{flag}]\n{content}"
+    if kind in ("image", "image_url"):
+        return "[image]"
+    if kind == "document":
+        return "[document]"
+    return ""
+
+
+def _render_turn(turn: Any) -> str:
+    from xgen_agent_runtime.memory.transcript import _blocks
+
+    parts: List[str] = []
+    for m in getattr(turn, "messages", []) or []:
+        role = str(getattr(m, "role", "") or "")
+        ts = getattr(m, "timestamp", None)
+        stamp = ts.isoformat(timespec="seconds") if hasattr(ts, "isoformat") else ""
+        body = "\n".join(
+            t for t in (_render_block(b) for b in _blocks(getattr(m, "content", ""))) if t
+        )
+        if body:
+            parts.append(f"### {role}{(' · ' + stamp) if stamp else ''}\n{body}")
+    return "\n\n".join(parts)
+
+
+def _first_line(text: str, n: int = 200) -> str:
+    line = next((ln.strip() for ln in str(text or "").splitlines() if ln.strip()), "")
+    return line if len(line) <= n else line[:n] + "…"
+
+
+def _unrecorded_rows(state: Any) -> List[Any]:
+    """This turn's messages that short-term memory has not recorded yet (it records at the turn's
+    end), as they really were: those a mid-turn compaction summarized away first, then the rest."""
+    if state is None:
+        return []
+    from types import SimpleNamespace
+
+    from xgen_agent_runtime.core.compaction import RECORDER_STM, peek_pending_records
+    from xgen_agent_runtime.core.originals import original_of
+    from xgen_agent_runtime.memory.strategy import _recorded_upto
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+        _is_ack,
+        _is_checkpoint,
+    )
+
+    try:
+        messages = list(getattr(state, "messages", None) or [])
+        fresh = peek_pending_records(state, RECORDER_STM) + messages[_recorded_upto(state) :]
+    except Exception:  # noqa: BLE001 (the record still answers without this turn)
+        return []
+    rows = []
+    for m in fresh:
+        if not isinstance(m, dict):
+            continue
+        # The runtime's checkpoint (and its ack) stands in for messages it summarized: those are
+        # listed themselves, from the pending records.
+        if _is_checkpoint(m) or _is_ack(m):
+            continue
+        m = original_of(state, m)
+        rows.append(
+            SimpleNamespace(role=str(m.get("role") or ""), content=m.get("content"), timestamp=None)
+        )
+    return rows
+
+
+async def conversation_history(provider: Any, tool_input: Dict[str, Any], state: Any = None) -> Any:
+    """This conversation's own record, from the short-term store (every message, tool results included).
+
+    The context replays only the most recent turns; older turns survive in the prompt as a short
+    summary at most. Without a way to read the record the model reconstructs earlier work from
+    memory and gets it wrong (2026-10-23 audit). Read-only.
+    """
+    from xgen_agent_runtime.memory.transcript import _blocks, group_logical_turns
+    from xgen_agent_runtime.tools.base import ToolResult
+
+    view = str(tool_input.get("view") or "turns").strip().lower()
+    stm = provider.stm()
+    if view == "summary":
+        reader = getattr(stm, "read_summary", None)
+        summary = (await reader()) if reader is not None else None
+        if not summary:
+            return ToolResult(
+                content="This conversation has no summary yet (it is written after turns end)."
+            )
+        return ToolResult(content=f"[conversation summary, {len(summary)} chars]\n{summary}")
+
+    rows = list(await stm.recent(_HISTORY_SCAN_ROWS)) + _unrecorded_rows(state)
+    turns = group_logical_turns(rows, 1_000_000)
+    total = len(turns)
+    clipped_history = len(rows) >= _HISTORY_SCAN_ROWS
+    older_note = (
+        f" (only the last {_HISTORY_SCAN_ROWS} records are read; earlier turns are not listed)"
+        if clipped_history
+        else ""
+    )
+    if total == 0:
+        return ToolResult(content="This conversation has no recorded turns yet.")
+
+    def _int(name: str, default: int) -> int:
+        try:
+            return int(tool_input.get(name) if tool_input.get(name) is not None else default)
+        except (TypeError, ValueError):
+            return default
+
+    if view == "turns":
+        count = max(1, _int("limit", _HISTORY_PAGE_TURNS))
+        start = _int("offset", max(1, total - count + 1))
+        start = min(max(1, start), total)
+        end = min(total, start + count - 1)
+        lines = [
+            f"[turns {start}-{end} of {total}{older_note}; read one with view='turn', turn=<n>]"
+        ]
+        for n in range(start, end + 1):
+            t = turns[n - 1]
+            msgs = getattr(t, "messages", []) or []
+            user = next(
+                (
+                    " ".join(
+                        b.get("text", "")
+                        for b in _blocks(getattr(m, "content", ""))
+                        if b.get("type") == "text"
+                    )
+                    for m in msgs
+                    if str(getattr(m, "role", "")) == "user"
+                ),
+                "",
+            )
+            answer = ""
+            tools = 0
+            for m in msgs:
+                for b in _blocks(getattr(m, "content", "")):
+                    if b.get("type") == "tool_use":
+                        tools += 1
+                if str(getattr(m, "role", "")) == "assistant":
+                    text = " ".join(
+                        b.get("text", "")
+                        for b in _blocks(getattr(m, "content", ""))
+                        if b.get("type") == "text"
+                    )
+                    if text.strip():
+                        answer = text
+            ts = getattr(msgs[0], "timestamp", None) if msgs else None
+            stamp = ts.isoformat(timespec="minutes") if hasattr(ts, "isoformat") else ""
+            lines.append(
+                f"{n}. {stamp} user: {_first_line(user)} | answer: {_first_line(answer)} | tool calls: {tools}"
+            )
+        return ToolResult(content="\n".join(lines))
+
+    if view == "turn":
+        n = _int("turn", total)
+        if not 1 <= n <= total:
+            return ToolResult(
+                content=f"No turn {n}: this conversation has {total} turns{older_note}.",
+                is_error=True,
+            )
+        body = _render_turn(turns[n - 1])
+        offset = max(0, _int("offset", 0))
+        limit = max(1, _int("limit", _HISTORY_PAGE_CHARS))
+        end = min(len(body), offset + limit)
+        tail = f"next offset={end}" if end < len(body) else "end of the turn"
+        header = f"[turn {n} of {total}: chars {offset}-{end} of {len(body)}; {tail}]"
+        return ToolResult(content=f"{header}\n{body[offset:end]}")
+
+    if view == "search":
+        query = str(tool_input.get("query") or "").strip()
+        if not query:
+            return ToolResult(content="query is required for view='search'", is_error=True)
+        needle = query.lower()
+        hits: List[str] = []
+        for n, t in enumerate(turns, start=1):
+            text = _render_turn(t)
+            low = text.lower()
+            at = low.find(needle)
+            if at < 0:
+                continue
+            count = low.count(needle)
+            lo = max(0, at - 150)
+            snippet = text[lo : at + len(query) + 250].replace("\n", " ")
+            hits.append(f"turn {n} ({count} match{'es' if count != 1 else ''}): …{snippet}…")
+        if not hits:
+            return ToolResult(
+                content=f"'{query}' does not appear in this conversation's record{older_note}."
+            )
+        shown = hits[:30]
+        more = (
+            f"\n... ({len(hits) - 30} more turns match; narrow the query)" if len(hits) > 30 else ""
+        )
+        return ToolResult(
+            content=f"[{len(hits)} turns mention '{query}'{older_note}]\n" + "\n".join(shown) + more
+        )
+
+    return ToolResult(
+        content=f"unknown view {view!r}; use turns, turn, search or summary", is_error=True
+    )

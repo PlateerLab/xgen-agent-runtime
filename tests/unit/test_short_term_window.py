@@ -1,4 +1,4 @@
-"""단기 기억 창 — 가까운 2턴은 도구까지, 먼 3턴은 대화만, 합쳐 5턴을 messages 로."""
+"""단기 기억 창 — 가까운 턴은 도구까지, 먼 턴은 대화만. 압박이 없으면 줄이지 않고, 줄이면 표시한다."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from xgen_agent_runtime.memory.short_term_window import (  # noqa: F401
     SCAN_MAX,
+    full_turns_for_window,
     SCAN_ROWS,
     WindowConfig,
     build_window,
@@ -71,8 +72,14 @@ class TestShape:
         dialogue = msgs[:6]
         assert [m["role"] for m in dialogue] == ["user", "assistant"] * 3
         assert all(isinstance(m["content"], str) for m in dialogue)
-        assert dialogue[0]["content"] == "request 2", "T-6 은 빠지고 T-5 부터"
-        assert dialogue[1]["content"] == "answer 2\n[used tools: ForgeTool (1 failed), Bash]"
+        # T-6 은 빠지고 T-5 부터. 빠졌다는 사실과 읽는 길을 첫 메시지가 말한다.
+        assert dialogue[0]["content"].startswith("[Earlier in this conversation: 1 older turn(s) are not shown")
+        assert "ConversationHistory" in dialogue[0]["content"]
+        assert dialogue[0]["content"].endswith("\n\nrequest 2")
+        # 그 턴에 쓴 글 전부(중간 글 포함) + 도구 한 줄
+        assert dialogue[1]["content"] == (
+            "working 2.0\n\nworking 2.1\n\nanswer 2\n[used tools: ForgeTool (1 failed), Bash]"
+        )
         # 가까운 2턴: 순서·블록·id 그대로
         full = msgs[6:]
         assert full[0]["content"] == "request 5"
@@ -115,15 +122,33 @@ class TestUsedToolsLine:
 
     def test_line_can_be_turned_off(self):
         msgs, _ = build_window(_turns(4), WindowConfig(used_tools_line=False))
-        assert msgs[1]["content"] == "answer 1"
+        assert msgs[1]["content"] == "working 1.0\n\nanswer 1"
+
+
+def _results(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [b for m in msgs if isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_result"]
 
 
 class TestResultTrimming:
-    def test_big_results_in_full_turns_keep_the_head_with_a_marker(self):
-        msgs, _ = build_window(_turns(1, big_result=10_000), WindowConfig(result_trim_over=4000, result_keep=1200))
-        res = [b for m in msgs if isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_result"][0]
-        assert res["content"].startswith("x" * 1200) and "chars trimmed" in res["content"]
-        assert len(res["content"]) < 1300
+    def test_big_results_are_verbatim_without_budget_pressure(self):
+        """예전에는 4,000자 넘는 결과를 예산과 상관없이 1,200자로 줄였다(2026-10-23 감사)."""
+        msgs, report = build_window(
+            _turns(1, big_result=10_000), WindowConfig(result_trim_over=4000, result_keep=1200)
+        )
+        assert _results(msgs)[0]["content"] == "x" * 10_000
+        assert not report.degraded
+
+    def test_under_pressure_big_results_keep_head_and_tail_with_a_marker(self):
+        turns = _turn(1, tools=1)
+        turns[2].content[0]["content"] = "HEAD " + "x" * 10_000 + " Exit code: 2"
+        msgs, report = build_window(
+            turns, WindowConfig(max_chars=3_000, result_trim_over=4000, result_keep=1200)
+        )
+        body = _results(msgs)[0]["content"]
+        assert report.degraded[0] == "trim_results_over=4000"
+        assert body.startswith("HEAD ") and body.endswith(" Exit code: 2"), "the end (exit code) is kept"
+        assert "chars trimmed here" in body and "ConversationHistory" in body
+        assert len(body) < 1400
 
     def test_small_results_are_verbatim(self):
         msgs, _ = build_window(_turns(1))
@@ -166,12 +191,15 @@ class TestBudgetDegradation:
     def test_order_results_inputs_demote_then_dialogue(self):
         cfg = WindowConfig(max_chars=2_500, result_trim_over=200, result_keep=1200)
         msgs, report = build_window(_turns(6, tools=2, big_result=3_000), cfg)
-        assert report.degraded and report.degraded[0].startswith("result_keep=")
+        # 압박이 오면 먼저 큰 결과만 줄인다(그 전에는 아무것도 줄이지 않는다)
+        assert report.degraded and report.degraded[0] == "trim_results_over=200"
         assert "demote_oldest_full" in report.degraded
         # 결과를 다 줄이기 전에는 턴을 강등하지 않는다
         first_demote = report.degraded.index("demote_oldest_full")
-        assert all(d.startswith("result_keep=") for d in report.degraded[:first_demote])
-        assert msgs[0]["content"].startswith("request")
+        assert all(
+            d.startswith(("trim_results_over=", "result_keep=")) for d in report.degraded[:first_demote]
+        )
+        assert msgs[0]["role"] == "user" and "\n\nrequest " in msgs[0]["content"]
         # T-1 은 끝까지 남는다
         assert any(m["content"] == "request 6" for m in msgs)
 
@@ -229,6 +257,60 @@ class TestBudgetDegradation:
         assert f"message_chars={400}" in report.degraded
         assert "drop_oldest_dialogue" in report.degraded
         assert "request 6" in _user_texts(msgs) and "request 1" not in _user_texts(msgs)
+        # 예산 때문에 빠진 턴도 빠졌다고 말한다
+        assert "older turn(s) are not shown" in _user_texts(msgs)[0]
+
+
+def _english_turn(n: int, words: int) -> List[Any]:
+    return [
+        _t("user", f"request {n}"),
+        _t("assistant", [{"type": "text", "text": " ".join(["the quick brown fox jumps"] * words)}]),
+    ]
+
+
+class TestWindowSize:
+    """창의 크기는 모델의 창이 정한다(2026-10-23). 고정 숫자(4만 자·5턴)는 1M 모델에도 최근 5턴만 줬다."""
+
+    def test_full_turns_follow_the_model_window(self):
+        assert full_turns_for_window(32_768) == 2
+        assert full_turns_for_window(200_000) == 4
+        assert full_turns_for_window(1_000_000) == 6
+
+    def test_a_token_budget_counts_tokens_not_characters(self):
+        # 영어 8턴 ≈ 9만 자. 1글자 = 1토큰으로 보면 3만 토큰 예산에 다 못 들어가지만, 실제로는 2만 토큰이 안 된다.
+        turns = [m for i in range(1, 9) for m in _english_turn(i, words=430)]
+        cfg = WindowConfig(full_turns=2, dialogue_turns=30, max_chars=10_000_000, max_tokens=30_000)
+        msgs, report = build_window(turns, cfg)
+        assert report.turns == 8 and not report.degraded
+        assert report.chars > 30_000
+
+    def test_a_small_token_budget_still_degrades_with_markers(self):
+        turns = [m for i in range(1, 9) for m in _english_turn(i, words=430)]
+        cfg = WindowConfig(full_turns=2, dialogue_turns=30, max_chars=10_000_000, max_tokens=3_000)
+        msgs, report = build_window(turns, cfg)
+        assert report.degraded and "request 8" in _user_texts(msgs)
+        assert report.turns < 8
+        assert "older turn(s) are not shown" in _user_texts(msgs)[0]
+
+    def test_a_host_char_cap_still_holds_under_a_token_budget(self):
+        turns = [m for i in range(1, 9) for m in _english_turn(i, words=430)]
+        cfg = WindowConfig(full_turns=2, dialogue_turns=30, max_chars=20_000, max_tokens=1_000_000)
+        _, report = build_window(turns, cfg)
+        assert report.chars <= 20_000 + 500
+
+    def test_a_cut_answer_keeps_its_ending(self):
+        """대화로 강등된 긴 답변을 줄여야 하면 끝("저장했습니다")도 남긴다."""
+        turns = [
+            _t("user", "write the report"),
+            _t("assistant", [{"type": "text", "text": "## Report\n" + "body " * 3_000}]),
+            _t("assistant", [{"type": "text", "text": "Saved to /workspace/report.md"}]),
+            *_turn(2),
+            *_turn(3),
+        ]
+        msgs, report = build_window(turns, WindowConfig(full_turns=1, max_chars=4_000))
+        answer = msgs[1]["content"]
+        assert answer.startswith("## Report") and "Saved to /workspace/report.md" in answer
+        assert "chars trimmed here" in answer
 
 
 class TestPairInvariant:

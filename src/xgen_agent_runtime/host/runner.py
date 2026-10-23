@@ -560,15 +560,13 @@ def build_pipeline(
     Stage 2 는 메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·
     요약·guard 회복까지 전부 스킵), guard 미등록.
 
-    ``prune_over_tokens`` — 결정적 prune 의 **비용 트리거** (4.35.0,
-    core/context_prune.py). 예상 프롬프트가 이 토큰 수를 넘으면 매 반복 앞에서
-    중복 도구 결과·오래된 거대 결과·stale 이미지를 정리한다(LLM 없음, 메시지
-    수·순서·tool_use_id 보존, 최근 6메시지는 손대지 않음). 윈도우와 무관하다 —
-    기존 용량 트리거(윈도우×0.8)는 윈도우가 크면 오지 않아서 dev 28일 동안 이
-    패스가 한 번도 돌지 않았다(최대 프롬프트 135k 대 문턱 160k/419k). 기본
-    30,000 은 dev 실사용에서 **5회 이하 턴을 하나도 건드리지 않으면서** 8회 이상
-    턴 14개 중 13개를 덮는 값이다. None/0 이면 끔. ``enable_compaction=False``
-    면 이것도 돌지 않는다(같은 스위치 아래).
+    ``prune_over_tokens`` — 결정적 prune 의 **비용 트리거** (core/context_prune.py). 예상
+    프롬프트가 이 토큰 수를 넘으면 창과 무관하게 지난 도구 결과·입력·이미지를 줄인다. **기본은 꺼짐
+    (0, 4.97.0)**: 4.35.0 의 기본 30,000 은 창이 넉넉한 모델에서도 방금 받은 결과를 600자로 잘라,
+    모델은 잘린 결과로 일하고 기억은 잘린 것을 "도구가 돌려준 것" 으로 남겼다(2026-10-23 감사).
+    줄임은 창이 모자랄 때만 한다(압축 80%·호출 직전 guard). 호스트가 명시해서 켜도 원본은 남는다
+    (core/originals.py: 기억과 ToolResultRead 가 원본을 본다). ``enable_compaction=False`` 면
+    이것도 돌지 않는다(같은 스위치 아래).
 
     ``repeat_stop_after`` — 반복 거부 종료(4.45.0, stages/s16_loop/repeat_stop.py).
     하네스가 이 턴에 실행을 거부한 호출(4.29.0 같은 호출·같은 결과 건너뛰기, 4.26.0
@@ -786,8 +784,9 @@ def build_pipeline(
             pipeline._memory_provider = memory_provider
             retrieval_hooks = provider_hooks(memory_provider)
             if context_window_budget and int(context_window_budget) > 0:
-                # 주입 상한(글자)을 창에 맞춘다. 기본 10,000자는 8k~32k 창에서 그것만으로 3분의 1을
-                # 넘는다. provider 의 hooks 는 그대로 두고 이 턴의 검색기만 줄인 판을 받는다.
+                # 주입 상한(글자)을 창에 맞춘다. 고정 10,000자는 8k~32k 창에서 그것만으로 3분의 1을
+                # 넘었고, 큰 창에서는 자리가 있어도 고정 사실·요약을 잘랐다. provider 의 hooks 는 그대로
+                # 두고 이 턴의 검색기만 창에 맞춘 판을 받는다.
                 import dataclasses
 
                 from xgen_agent_runtime.host.context_budget import memory_inject_cap_chars
@@ -797,7 +796,7 @@ def build_pipeline(
                 cap = memory_inject_cap_chars(
                     int(context_window_budget), base_hooks.max_inject_chars
                 )
-                if cap < base_hooks.max_inject_chars:
+                if cap != base_hooks.max_inject_chars:
                     retrieval_hooks = dataclasses.replace(base_hooks, max_inject_chars=cap)
             pipeline.attach_runtime(
                 memory_retriever=MemoryAwareRetriever(memory_provider, hooks=retrieval_hooks),
@@ -1285,6 +1284,7 @@ def _record_execution(
             asyncio.wait_for(
                 record_turn_execution(
                     provider,
+                    # 입력은 dict(글+첨부)일 수 있다: 카드는 사용자가 쓴 글을 적는다.
                     input_text=input_text,
                     output_text=output_text,
                     success=success,
@@ -1311,6 +1311,13 @@ UNFINISHED_TURN_NOTES = {
     "cancelled": "[The user stopped this turn before it finished. The steps above are what was done so far.]",
     "error": "[This turn ended with an error before it finished. The steps above are what was done so far.]",
 }
+#: The same, when the user had already seen part of an answer that was still being written: that
+#: part is kept as it appeared, and the note says it ends there (2026-10-23: the record had no
+#: trace of what the user read, so the next turn did not know what "that" referred to).
+UNFINISHED_ANSWER_NOTES = {
+    "cancelled": "[The user stopped this turn while this answer was being written: it ends here, unfinished. The steps above are what was done so far.]",
+    "error": "[This turn ended with an error while this answer was being written: it ends here, unfinished. The steps above are what was done so far.]",
+}
 
 
 def _record_unfinished_turn(
@@ -1320,8 +1327,13 @@ def _record_unfinished_turn(
     state: PipelineState,
     input_text: Any,
     reason: str,
+    partial_text: str = "",
+    error: str = "",
 ) -> int:
     """끝나지 못한 턴(중단·오류)의 대화를 단기 기억(STM)에 남긴다. 남긴 메시지 수를 돌려준다.
+
+    ``partial_text`` 는 사용자가 이미 본, 쓰던 중에 끊긴 답이다(그 호출의 답은 상태에 아직 없다). 본
+    그대로 남긴다. ``error`` 는 사용자에게 보인 오류 문구다.
 
     STM 기록은 Stage 18 이 맡는데, 그 단계는 파이프라인이 끝까지 가야 돈다. 사용자가 [정지] 를
     누른 턴은 그 전에 끊겨 **질문조차 남지 않았고**, 다음 턴은 "아까 그거" 가 무엇인지 몰랐다
@@ -1340,7 +1352,7 @@ def _record_unfinished_turn(
         from xgen_agent_runtime.host.turn_input import TurnInput
         from xgen_agent_runtime.memory.provider import Turn
         from xgen_agent_runtime.memory.short_term_window import WINDOW_LEN_KEY
-        from xgen_agent_runtime.memory.transcript import _is_tool_result_only
+        from xgen_agent_runtime.memory.transcript import opens_turn
         from xgen_agent_runtime.stages.s18_memory._dehydrate import dehydrate_message
         from xgen_agent_runtime.stages.s18_memory.artifact.default.stage import (
             _STATE_LAST_RECORDED,
@@ -1349,10 +1361,8 @@ def _record_unfinished_turn(
         )
 
         def _asks(msg: Any) -> bool:
-            return (
-                isinstance(msg, dict)
-                and str(msg.get("role") or "") == "user"
-                and not _is_tool_result_only(msg.get("content"))
+            return isinstance(msg, dict) and opens_turn(
+                str(msg.get("role") or ""), msg.get("content")
             )
 
         from xgen_agent_runtime.core.compaction import (
@@ -1374,18 +1384,29 @@ def _record_unfinished_turn(
             question = TurnInput.from_raw(input_text).text.strip()
             if question:
                 pending.insert(0, {"role": "user", "content": question})
-        if not pending:
+        partial = str(partial_text or "").strip()
+        if not pending and not partial:
             return 0  # 끝까지 기록됐다(Stage 18 이 돈 뒤에 끊겼다)
-        note = UNFINISHED_TURN_NOTES.get(reason, UNFINISHED_TURN_NOTES["error"])
-        pending.append({"role": "assistant", "content": note})
+        notes = UNFINISHED_ANSWER_NOTES if partial else UNFINISHED_TURN_NOTES
+        note = notes.get(reason, notes["error"])
+        if error and reason != "cancelled":
+            note = f"{note[:-1]} The error: {str(error)[:300]}]"
+        pending.append(
+            {"role": "assistant", "content": f"{partial}\n\n{note}" if partial else note}
+        )
+
+        from xgen_agent_runtime.core.originals import forget_originals, original_of
 
         async def _write() -> None:
             for msg in pending:
-                await provider.record_turn(Turn.from_state_message(dehydrate_message(msg)))
+                await provider.record_turn(
+                    Turn.from_state_message(dehydrate_message(original_of(state, msg)))
+                )
 
         loop.run_until_complete(asyncio.wait_for(_write(), timeout=10.0))
         state.metadata[_STATE_LAST_RECORDED] = len(messages)
         state.metadata[_STRATEGY_RECORDED] = len(messages)
+        forget_originals(state, pending)
         take_pending_records(state, RECORDER_STM)
         logger.info(
             "geny_bridge: unfinished turn kept in short-term memory (%s, %d messages)",
@@ -1634,6 +1655,17 @@ def stream_turn(
     # 무엇을 하는지 보인다. 호스트에 ``note_turn_phase`` 가 없으면(커넥터 등) 아무것도 하지 않는다.
     note_phase = _TurnPhaseNotifier.for_host(host)
     out_parts: List[str] = []
+    #: 마지막 API 호출이 시작된 뒤 사용자에게 내보낸 글과, 그때의 메시지 수. 그 뒤로 상태가 늘었으면 그 답은
+    #: 상태에 들어갔다. 늘지 않았는데 끊겼으면 이것이 사용자가 본, 상태에 없는 답이다(기억에 남긴다).
+    #: 내부 도구 루프는 호출마다가 아니라 루프 끝에 기록하므로 그동안은 계속 모은다.
+    call_parts: List[str] = []
+    call_mark: Tuple[int, int] = (0, 0)
+
+    def _messages_mark() -> Tuple[int, int]:
+        # 수와 마지막 메시지의 정체: 압축이 수를 줄여도 새 메시지가 붙으면 마지막이 바뀐다.
+        msgs = state.messages or []
+        return (len(msgs), id(msgs[-1]) if msgs else 0)
+
     turn_error = ""
     turn_completed = False
     task_status = RunStatus.RUNNING.value
@@ -1682,7 +1714,14 @@ def stream_turn(
                             last_message_chunk = normalized
                         slice_streamed_text = True
                         out_parts.append(chunk)
+                        call_parts.append(chunk)
                         yield chunk
+                elif event.type == "api.request":
+                    if _messages_mark() != call_mark:
+                        call_parts.clear()  # 앞 호출의 답은 상태에 들어갔다
+                    call_mark = _messages_mark()
+                elif event.type == "api.stream_restart":
+                    call_parts.clear()  # 재시도가 처음부터 다시 낸다
                 elif event.type == "pipeline.complete":
                     task_status = str(event.data.get("status") or RunStatus.COMPLETED.value)
                     slice_resumable = bool(event.data.get("resumable"))
@@ -1866,6 +1905,8 @@ def stream_turn(
                 state=state,
                 input_text=text,
                 reason="error" if turn_error else "cancelled",
+                partial_text="".join(call_parts) if _messages_mark() == call_mark else "",
+                error=turn_error,
             )
         if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
             recording = (
@@ -1938,6 +1979,9 @@ def run_turn(
             rollout_recorder, original_runtime = loop.run_until_complete(
                 _attach_rollout_recorder(pipeline, state, rollout_path)
             )
+        from xgen_agent_runtime.core.shared_keys import SharedKeys
+
+        _texts_before = len(state.shared.get(SharedKeys.TURN_ASSISTANT_TEXTS) or [])
         result = loop.run_until_complete(pipeline.run(text, state))
         continuation_count = 0
         max_continuations = max(0, int(max_continuation_slices))
@@ -1952,23 +1996,42 @@ def run_turn(
                     usage_sink.update(usage)
             except Exception:  # noqa: BLE001 — 집계는 턴 결과를 바꾸지 않는다
                 logger.debug("geny_bridge: usage aggregation failed", exc_info=True)
+        # Everything the model wrote this turn, like the streaming host shows it (all iterations
+        # and slices). The last response alone dropped earlier text: a report written before a
+        # final "saved it" step reached the caller as "saved it".
+        texts = [
+            str(t).strip()
+            for t in (state.shared.get(SharedKeys.TURN_ASSISTANT_TEXTS) or [])[_texts_before:]
+            if str(t or "").strip()
+        ]
+        written = "\n\n".join(texts) or str(result.text or "")
         if not result.success:
             status = str(getattr(result, "status", RunStatus.FAILED.value))
             if status == RunStatus.SUSPENDED.value:
                 reason = str(getattr(result, "termination_reason", "") or "slice_limit")
                 turn_error = f"suspended: {reason}"
+                if written and not output_schema:
+                    # The work done so far plus the same notice the streaming host appends.
+                    turn_output = written + SUSPEND_NOTICE
+                    return turn_output
                 return f"[SUSPENDED] {reason}"
             if status == RunStatus.BLOCKED.value:
                 reason = str(getattr(result, "termination_reason", "") or "blocked")
                 turn_error = f"blocked: {reason}"
+                if written and not output_schema:
+                    # The model's own explanation of what it needs (it ends with [BLOCKED: …]).
+                    turn_output = written
+                    return turn_output
                 return f"[BLOCKED] {reason}"
             turn_error = str(result.error or "unknown error")
+            if written and not output_schema:
+                return f"[ERROR] {result.error}\n\n[이 오류 전에 만든 응답]\n{written}"
             return f"[ERROR] {result.error}"
-        final = result.text or ""
         if output_schema:
-            final = settle_structured(final, output_schema)
+            # A structured answer is the last response (earlier text is the model thinking aloud).
+            final = settle_structured(result.text or "", output_schema)
         else:
-            final += _stop_notice(state)
+            final = written + _stop_notice(state)
         turn_output = final
         turn_success = True
         return final

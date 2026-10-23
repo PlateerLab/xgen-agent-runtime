@@ -325,9 +325,13 @@ def _prune(state: PipelineState, *, aggressive: bool, trigger: str) -> Dict[str,
     try:
         from xgen_agent_runtime.core.context_prune import AGGRESSIVE, prune_messages
 
+        from xgen_agent_runtime.core.originals import keep_original
+
         options: Dict[str, Any] = dict(AGGRESSIVE) if aggressive else {}
         options["strip_documents"] = aggressive
-        metrics = prune_messages(state.messages or [], **options)
+        metrics = prune_messages(
+            state.messages or [], before_change=lambda m: keep_original(state, m), **options
+        )
     except Exception:  # noqa: BLE001 (relief, never a gate)
         logger.debug("deterministic prune pass failed", exc_info=True)
         return {}
@@ -696,7 +700,11 @@ def _relieve_hard(state: PipelineState, trigger: str) -> None:
     if attached <= 0 or estimate - attached > limit:
         return
     removed = 0
-    while estimate > limit and strip_current_attachments(state.messages or [], limit=1):
+    from xgen_agent_runtime.core.originals import keep_original
+
+    while estimate > limit and strip_current_attachments(
+        state.messages or [], limit=1, before_change=lambda m: keep_original(state, m)
+    ):
         removed += 1
         state.shared.pop("_prompt_tokens_memo", None)
         estimate = estimate_prompt_tokens(state)
@@ -750,7 +758,12 @@ def _fit_tool_results(state: PipelineState, trigger: str, limit: int) -> int:
     if result_tokens <= 0 or result_tokens * 0.95 < estimate - limit:
         return 0
     totals = {"trimmed": 0, "chars_saved": 0, "images_stripped": 0}
-    metrics = shrink_tool_results(state.messages or [], 1.0, strip_images=True)
+    from xgen_agent_runtime.core.originals import keep_original
+
+    def _keep(message: Any) -> None:
+        keep_original(state, message)
+
+    metrics = shrink_tool_results(state.messages or [], 1.0, strip_images=True, before_change=_keep)
     for key in totals:
         totals[key] += metrics.get(key, 0)
     if metrics["images_stripped"]:
@@ -767,7 +780,7 @@ def _fit_tool_results(state: PipelineState, trigger: str, limit: int) -> int:
         keep = max(0.02, (result_tokens - (estimate_mid - limit)) / result_tokens * 0.9)
         if keep >= 1.0:
             break
-        metrics = shrink_tool_results(state.messages or [], keep)
+        metrics = shrink_tool_results(state.messages or [], keep, before_change=_keep)
         for key in totals:
             totals[key] += metrics.get(key, 0)
         state.shared.pop("_prompt_tokens_memo", None)

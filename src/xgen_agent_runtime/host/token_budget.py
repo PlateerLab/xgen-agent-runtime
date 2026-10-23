@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -198,6 +199,57 @@ def _catalog_max_context(provider: Optional[str], model: Optional[str]) -> Optio
     return None
 
 
+#: 공급자가 넘침 오류로 알려 준 실제 창: (provider, base_url, model) → (토큰, 배운 시각).
+#: 예전에는 그 턴에만 썼다(state.context_window_budget). 다음 턴은 다시 큰 창을 믿고 같은 넘침과 압축을
+#: 되풀이했다(2026-10-23 점검). 배포가 창을 늘렸을 수 있으므로 영원히 믿지 않는다.
+_LEARNED_WINDOWS: Dict[Tuple[str, str, str], Tuple[int, float]] = {}
+_LEARNED_LOCK = threading.Lock()
+LEARNED_WINDOW_TTL_S = 6 * 3600.0
+
+
+def _window_key(
+    provider: Optional[str], model: Optional[str], base_url: Optional[str]
+) -> Tuple[str, str, str]:
+    return (
+        (provider or "").lower().strip(),
+        (base_url or "").strip().rstrip("/").lower(),
+        (model or "").strip(),
+    )
+
+
+def learn_context_window(
+    provider: Optional[str], model: Optional[str], base_url: Optional[str], limit: int
+) -> None:
+    """공급자가 넘침 오류에 적은 창을 기억한다(더 작은 값만, :data:`LEARNED_WINDOW_TTL_S` 동안)."""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return
+    if limit <= 0:
+        return
+    key = _window_key(provider, model, base_url)
+    now = time.time()
+    with _LEARNED_LOCK:
+        old = _LEARNED_WINDOWS.get(key)
+        if old is None or now - old[1] > LEARNED_WINDOW_TTL_S or limit < old[0]:
+            _LEARNED_WINDOWS[key] = (limit, now)
+
+
+def learned_context_window(
+    provider: Optional[str], model: Optional[str], base_url: Optional[str]
+) -> int:
+    """기억해 둔 창(없거나 만료면 0)."""
+    key = _window_key(provider, model, base_url)
+    with _LEARNED_LOCK:
+        entry = _LEARNED_WINDOWS.get(key)
+        if entry is None:
+            return 0
+        if time.time() - entry[1] > LEARNED_WINDOW_TTL_S:
+            _LEARNED_WINDOWS.pop(key, None)
+            return 0
+        return entry[0]
+
+
 def resolve_context_window(
     provider: Optional[str],
     model: Optional[str],
@@ -213,7 +265,31 @@ def resolve_context_window(
         3) llm_model_catalog.capabilities.max_context — public 모델 관리 진실(DB)
         4) 모델 접두 매칭 테이블 (fallback)
         5) provider 기본값 > 전역 기본값
+
+    그 값이 공급자가 최근 넘침 오류로 알려 준 창보다 크면 공급자의 값이 이긴다(:func:`learn_context_window`):
+    그보다 큰 요청은 거절된다.
     """
+    window = _resolve_context_window(provider, model, override, base_url, vllm_probe)
+    learned = learned_context_window(provider, model, base_url)
+    if 0 < learned < window:
+        logger.info(
+            "[TOKEN_BUDGET] %s/%s: 공급자가 알려 준 창 %d 을 쓴다(해석값 %d)",
+            provider,
+            model,
+            learned,
+            window,
+        )
+        return learned
+    return window
+
+
+def _resolve_context_window(
+    provider: Optional[str],
+    model: Optional[str],
+    override: Optional[int],
+    base_url: Optional[str],
+    vllm_probe: Any,
+) -> int:
     if override and override > 0:
         return int(override)
 

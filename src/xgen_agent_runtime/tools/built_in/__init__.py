@@ -69,6 +69,7 @@ from xgen_agent_runtime.tools.built_in.edit_tool import EditTool
 from xgen_agent_runtime.tools.built_in.bash_tool import BashTool
 from xgen_agent_runtime.tools.built_in.glob_tool import GlobTool
 from xgen_agent_runtime.tools.built_in.grep_tool import GrepTool
+from xgen_agent_runtime.tools.built_in.tool_result_read_tool import ToolResultReadTool
 from xgen_agent_runtime.tools.built_in.web_fetch_tool import WebFetchTool
 from xgen_agent_runtime.tools.built_in.web_search_tool import WebSearchTool
 from xgen_agent_runtime.tools.built_in.todo_write_tool import TodoWriteTool
@@ -120,6 +121,7 @@ BUILT_IN_TOOL_CLASSES: Dict[str, Type[Tool]] = {
     "Bash": BashTool,
     "Glob": GlobTool,
     "Grep": GrepTool,
+    "ToolResultRead": ToolResultReadTool,
     "WebFetch": WebFetchTool,
     "WebSearch": WebSearchTool,
     "TodoWrite": TodoWriteTool,
@@ -198,7 +200,8 @@ SKILL_GATEWAYS: Dict[str, Tuple[str, ...]] = {
 
 
 BUILT_IN_TOOL_FEATURES: Dict[str, List[str]] = {
-    "filesystem": ["Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"],
+    # ToolResultRead: the full original of a result clipped to fit the window (2026-10-23).
+    "filesystem": ["Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "ToolResultRead"],
     "shell": ["Bash"],
     "web": ["WebFetch", "WebSearch"],
     # 문서 파일의 글 위주 요소 추출(doc2chunk) — 읽기만. 편집 도구는 없다.
@@ -316,6 +319,7 @@ __all__ = [
     "BashTool",
     "GlobTool",
     "GrepTool",
+    "ToolResultReadTool",
     "WebFetchTool",
     "WebSearchTool",
     "TodoWriteTool",

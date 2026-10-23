@@ -38,8 +38,9 @@ def test_fat_record_truncated_at_append():
     bounded = _bound_record_line(huge)
     assert len(bounded.encode("utf-8")) <= MAX_RECORD_BYTES + 1024
     rec = json.loads(bounded)
-    assert "truncated at record cap" in rec["content"]
+    assert "not kept in this record (record size cap)" in rec["content"]
     assert rec["content"].startswith("글" * 100)  # head preserved
+    assert rec["content"].endswith("글" * 100)  # and the end (2026-10-23)
 
 
 def test_normal_record_untouched():

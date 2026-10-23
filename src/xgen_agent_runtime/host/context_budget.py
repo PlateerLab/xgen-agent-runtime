@@ -136,7 +136,9 @@ def _compacted_history_floor(window: int) -> int:
 
 
 #: 내장 메모리 주입(Stage 2 → 시스템 프롬프트의 Relevant Knowledge)이 창에서 차지할 수 있는 몫.
-#: 주입 상한은 글자(기본 10,000자)라 8k~32k 창에서는 그것만으로 창의 3분의 1을 넘었다.
+#: 주입 상한은 글자(기본 10,000자)라 8k~32k 창에서는 그것만으로 창의 3분의 1을 넘었고, 반대로 200K·1M
+#: 창에서는 고정 1만 자가 천장이라 자리가 있어도 고정 사실·요약이 잘렸다(2026-10-23). 기본값이면 창의
+#: 이 몫으로 정한다(작은 창은 줄고 큰 창은 는다).
 MEMORY_INJECT_WINDOW_SHARE = 0.10
 #: 주입 예약의 상한(창 비율): 작은 창에서 예약이 입력 자리를 다 먹지 않게.
 _MEMORY_RESERVE_WINDOW_SHARE = 0.15
@@ -147,21 +149,29 @@ HISTORY_CONTEXT_WINDOW_SHARE = 0.25
 
 
 def memory_inject_cap_chars(window: int, configured: int) -> int:
-    """창에 맞춘 내장 메모리 주입 상한(글자). 창을 모르면 설정값 그대로."""
+    """창에 맞춘 내장 메모리 주입 상한(글자). 창을 모르면 설정값 그대로.
+
+    설정이 기본값(:class:`MemoryHooks` 의 10,000자)이면 창의 :data:`MEMORY_INJECT_WINDOW_SHARE` 로
+    정한다. 호스트가 따로 정했으면 그 값을 넘지 않는다.
+    """
     from xgen_agent_runtime.core.text_tokens import chars_for_tokens
+    from xgen_agent_runtime.memory.provider import DEFAULT_MAX_INJECT_CHARS
 
     configured = max(0, int(configured))
     if not window or window <= 0:
         return configured
-    return min(configured, chars_for_tokens(int(window * MEMORY_INJECT_WINDOW_SHARE)))
+    share = chars_for_tokens(int(window * MEMORY_INJECT_WINDOW_SHARE))
+    if configured == DEFAULT_MAX_INJECT_CHARS:
+        return share
+    return min(configured, share)
 
 
 def memory_reserved_tokens(window: int, configured_chars: int) -> int:
     """fit 이후 시스템 프롬프트에 붙을 내장 메모리 주입의 선예약분(토큰).
 
     주입 상한(:func:`memory_inject_cap_chars`)을 글자당 1토큰으로 보수적으로 환산하고 머리글 몫을
-    더한다. 예전에는 창과 무관하게 3,000토큰이었다. 큰 창에서는 실제 주입(최대 10,000자, 한국어면
-    거의 같은 수의 토큰)보다 작았고, 8k 창에서는 입력 자리의 절반이었다.
+    더한다. 예전에는 창과 무관하게 3,000토큰이었다. 큰 창에서는 실제 주입(한국어면 글자와 거의 같은
+    수의 토큰)보다 작았고, 8k 창에서는 입력 자리의 절반이었다.
     """
     from xgen_agent_runtime.core.text_tokens import CONSERVATIVE_CHARS_PER_TOKEN
 
@@ -222,6 +232,36 @@ def _next_history_start(history: List[Any], start: int, keep_last: int = 2) -> i
     ):
         nxt += 1
     return nxt
+
+
+#: The reference block when none of it fit.
+RAG_DROPPED_NOTE = (
+    "[Reference material was retrieved for this request but left out: it did not fit the model's "
+    "context window. Say so if the answer needs it.]"
+)
+
+
+def _note_dropped_history(kept: List[Any], dropped: int) -> List[Any]:
+    """CLI history with its oldest ``dropped`` messages left out: the first kept message says so.
+
+    Before, the oldest messages simply vanished from the folded history and the model took the rest
+    for the whole conversation (2026-10-23 audit). A new dict: the original stays as recorded.
+    """
+    if not kept or not isinstance(kept[0], dict):
+        return kept
+    note = (
+        f"[Earlier in this conversation: {dropped} older message(s) are left out here to fit the "
+        "model's context window. Read them with ConversationHistory before relying on them.]"
+    )
+    first = kept[0]
+    content = first.get("content")
+    if isinstance(content, str):
+        new_first = {**first, "content": f"{note}\n\n{content}"}
+    elif isinstance(content, list):
+        new_first = {**first, "content": [{"type": "text", "text": note}, *content]}
+    else:
+        return kept
+    return [new_first, *kept[1:]]
 
 
 def _tool_result_only(message: Any) -> bool:
@@ -333,7 +373,7 @@ def fit_input_to_budget(
                 hist_t -= sum(per[start:nxt])
                 start = nxt
             if start:
-                result.history = msgs[start:]
+                result.history = _note_dropped_history(msgs[start:], start)
                 result.clamped = True
             hist_need = hist_t
 
@@ -386,6 +426,9 @@ def fit_input_to_budget(
                 model=model,
             )
             if cut:
+                if not new_rag.strip():
+                    # 통째로 빠지면 모델은 참조 자료가 있었다는 것조차 모른다. 빠졌다고 적는다.
+                    new_rag = RAG_DROPPED_NOTE
                 result.rag_block = new_rag
                 result.clamped = True
                 result.input_clamped = True

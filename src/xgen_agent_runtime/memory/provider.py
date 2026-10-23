@@ -1201,9 +1201,14 @@ def provider_hooks(provider: Any) -> Optional["MemoryHooks"]:
 # layers run in order so an early layer hitting its cap leaves the
 # rest of the budget for downstream layers — no layer is forced to
 # fill its full ratio.
+#: ``MemoryHooks.max_inject_chars`` default. Hosts that know the window replace it with a share of it.
+DEFAULT_MAX_INJECT_CHARS = 10_000
+
 _DEFAULT_LAYER_BUDGET_RATIO: Dict[str, float] = {
     "recent_turns": 0.40,
-    "session_summary": 0.10,
+    # This conversation's own summary: what happened before the turns replayed as messages. A
+    # tenth of the budget cut it mid-sentence (with a marker since 2026-10-23); it gets a quarter.
+    "session_summary": 0.25,
     "pinned": 0.30,
     "vault_map": 0.05,
     "ltm_main": 0.20,
@@ -1334,8 +1339,10 @@ class MemoryHooks:
     enable_vector_search: bool = True
     # Per-layer max chunk count (vector / keyword / backlink).
     max_results: int = 5
-    # Total character budget for one retrieval call.
-    max_inject_chars: int = 10000
+    # Total character budget for one retrieval call. A host that knows the model's window scales the
+    # default with it (``host.context_budget.memory_inject_cap_chars``: 10% of the window); a value
+    # other than the default is a host's own ceiling.
+    max_inject_chars: int = DEFAULT_MAX_INJECT_CHARS
     # Cap on the query text actually sent to keyword/vector layers.
     search_chars: int = 500
 

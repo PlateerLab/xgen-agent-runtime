@@ -9,6 +9,15 @@ from xgen_agent_runtime.core.state import PipelineState
 from xgen_agent_runtime.stages.s03_system.interface import PromptBlock, PromptBuilder
 
 
+#: The line under ``# Relevant Knowledge``. Entries there are excerpts the store cut (a 400-char
+#: preview, a snippet around the first hit); without saying so the model treated a fragment as the
+#: whole note (2026-10-23 audit).
+RELEVANT_KNOWLEDGE_NOTE = (
+    "(Excerpts recalled from memory for this message; an entry may be cut. "
+    "Read the full note with memory_read before relying on its details.)"
+)
+
+
 class StaticPromptBuilder(PromptBuilder):
     """Returns a fixed system prompt."""
 
@@ -256,7 +265,7 @@ class RetrievedMemoryBlock(PromptBlock):
     def render(self, state: PipelineState) -> str:
         memory_ctx = state.metadata.get("memory_context", "")
         if isinstance(memory_ctx, str) and memory_ctx.strip():
-            return f"# Relevant Knowledge\n{memory_ctx}"
+            return f"# Relevant Knowledge\n{RELEVANT_KNOWLEDGE_NOTE}\n{memory_ctx}"
         return ""
 
 
@@ -296,7 +305,7 @@ class MemoryContextBlock(PromptBlock):
             parts.append(f"# Pinned Facts\n{pinned}")
         memory_ctx = state.metadata.get("memory_context", "")
         if isinstance(memory_ctx, str) and memory_ctx.strip():
-            parts.append(f"# Relevant Knowledge\n{memory_ctx}")
+            parts.append(f"# Relevant Knowledge\n{RELEVANT_KNOWLEDGE_NOTE}\n{memory_ctx}")
         if not parts:
             return ""
         return "\n\n".join(parts)

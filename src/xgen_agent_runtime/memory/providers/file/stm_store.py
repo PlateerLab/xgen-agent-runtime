@@ -46,26 +46,72 @@ MAX_RECORD_BYTES = 64 * 1024
 _CAP_CHECK_EVERY = 200
 
 
-def _bound_record_line(line: str) -> str:
-    """Truncate an oversized serialized record to MAX_RECORD_BYTES.
+def _cut_middle(text: str, keep: int) -> str:
+    if len(text) <= keep:
+        return text
+    head = keep * 3 // 4
+    tail = keep - head
+    return (
+        f"{text[:head]}\n…[{len(text) - head - tail:,} chars not kept in this record "
+        f"(record size cap)]…\n{text[-tail:]}"
+    )
 
-    The cut happens on the record's ``content`` field (the only place
-    multi-hundred-KB payloads ride), preserving valid JSON and stamping an
-    explicit marker so downstream readers know bytes were dropped."""
+
+def _longest_strings(value: Any, out: list, path: tuple = ()) -> None:
+    if isinstance(value, str):
+        out.append((len(value), path))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _longest_strings(v, out, path + (k,))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _longest_strings(v, out, path + (i,))
+
+
+def _set_path(root: Any, path: tuple, value: Any) -> None:
+    for step in path[:-1]:
+        root = root[step]
+    root[path[-1]] = value
+
+
+def _get_path(root: Any, path: tuple) -> Any:
+    for step in path:
+        root = root[step]
+    return root
+
+
+def _bound_record_line(line: str) -> str:
+    """Bound an oversized serialized record to MAX_RECORD_BYTES, still valid JSON.
+
+    The longest strings inside ``content`` (a text, a tool result, a tool input) are cut in the
+    middle with a marker until the record fits. A record whose content was a block list used to be
+    hard-cut mid-JSON: the line no longer parsed and the reader skipped it, so the whole message
+    vanished from memory without a trace (2026-10-23 audit)."""
     if len(line.encode("utf-8", "ignore")) <= MAX_RECORD_BYTES:
         return line
     try:
         rec = json.loads(line)
-        content = rec.get("content")
-        if isinstance(content, str) and len(content) > 4096:
-            overshoot = len(line.encode("utf-8", "ignore")) - MAX_RECORD_BYTES
-            keep = max(4096, len(content) - overshoot - 256)
-            dropped = len(content) - keep
-            rec["content"] = content[:keep] + f"\n… [{dropped} chars truncated at record cap]"
-            return json.dumps(rec, ensure_ascii=False)
-    except Exception:  # noqa: BLE001 — malformed record: hard-cut the line
-        pass
-    return line[: MAX_RECORD_BYTES // 2]
+    except Exception:  # noqa: BLE001 — not JSON to begin with: nothing to keep valid
+        return line[: MAX_RECORD_BYTES // 2]
+    for _ in range(20):
+        size = len(json.dumps(rec, ensure_ascii=False).encode("utf-8", "ignore"))
+        if size <= MAX_RECORD_BYTES:
+            break
+        found: list = []
+        _longest_strings(rec.get("content"), found)
+        if not found:
+            break
+        length, path = max(found)
+        if length <= 4096:
+            break
+        overshoot = size - MAX_RECORD_BYTES
+        # Bytes can be up to 3x chars (Korean): cut by the overshoot measured in chars of this text.
+        keep = max(4096, length - overshoot - 512)
+        if path:
+            _set_path(rec["content"], path, _cut_middle(_get_path(rec["content"], path), keep))
+        else:
+            rec["content"] = _cut_middle(rec["content"], keep)
+    return json.dumps(rec, ensure_ascii=False)
 
 
 class _JSONLSTMStore:

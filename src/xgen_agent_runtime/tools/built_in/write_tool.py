@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from xgen_agent_runtime.tools.built_in._file_witness import (
     is_witnessed,
+    read_ranges,
     refusal,
     witnessed_mutation,
 )
@@ -75,7 +76,8 @@ class WriteTool(Tool):
             except Exception:  # noqa: BLE001 — 확인 실패로 쓰기를 막지 않는다(예전 러너 동작)
                 existing = b""
             if existing:
-                return ToolResult(content=refusal(resolved), is_error=True)
+                partial = read_ranges(view, resolved) or read_ranges(view, file_path)
+                return ToolResult(content=refusal(resolved, partial), is_error=True)
 
         try:
             n = await fs.write_bytes(file_path, content.encode("utf-8"))

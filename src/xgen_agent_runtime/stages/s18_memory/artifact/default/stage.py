@@ -240,12 +240,16 @@ class MemoryStage(Stage[Any, Any]):
             take_pending_records,
         )
 
+        from xgen_agent_runtime.core.originals import forget_originals, original_of
+
         compacted = peek_pending_records(state, RECORDER_STM)
         new_msgs = compacted + list(state.messages[last_idx:])
         for msg in new_msgs:
             # STM also stores dehydrated copies — base64 payloads stay only
             # in the live ``state.messages`` for the current pipeline run.
-            turn = Turn.from_state_message(dehydrate_message(msg))
+            # What is recorded is the message as it really was: a reducer that shortened it to fit
+            # the window kept the original (core.originals).
+            turn = Turn.from_state_message(dehydrate_message(original_of(state, msg)))
             await provider.record_turn(turn)
             state.add_event(
                 MemoryEvent.TURN_RECORDED.value,
@@ -254,6 +258,7 @@ class MemoryStage(Stage[Any, Any]):
         if new_msgs:
             state.metadata[_STATE_LAST_RECORDED] = len(state.messages)
             state.metadata[_STRATEGY_RECORDED] = len(state.messages)
+            forget_originals(state, new_msgs)
             if compacted:
                 take_pending_records(state, RECORDER_STM)
 

@@ -281,7 +281,91 @@ def _detached_process_reason(command: str) -> Optional[str]:
 
 
 _MAX_TIMEOUT_MS = 600_000  # 10 minutes
-_MAX_OUTPUT = 100_000  # characters
+#: Output kept per stream (characters). Not what the model sees: Stage 10 stores a result over the
+#: tool's cap whole and shows its start and end with a ToolResultRead pointer. This only bounds
+#: memory. It used to be 100,000 with the start kept and the end dropped, so the exit summary and
+#: the failing test at the end of a long run were gone for good (2026-10-23 audit).
+_MAX_OUTPUT = 4_000_000
+#: Bytes captured per stream from a local process before only the rolling end is kept.
+_CAPTURE_HEAD_BYTES = 3 * 1024 * 1024
+_CAPTURE_TAIL_BYTES = 1024 * 1024
+
+
+def _keep_ends(text: str, limit: int, what: str) -> str:
+    """``text`` within ``limit`` chars: its start and its end, with a marker saying what was cut."""
+    if len(text) <= limit:
+        return text
+    head = limit * 3 // 4
+    tail = limit - head
+    cut = len(text) - head - tail
+    return (
+        f"{text[:head]}\n\n[... {cut:,} chars of {what} cut here; the start and the end are shown. "
+        f"Redirect long output to a file and read it in parts. ...]\n\n{text[-tail:]}"
+    )
+
+
+class _Capture:
+    """One stream of a local process: the first bytes, a rolling end, and the total."""
+
+    def __init__(self) -> None:
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.total = 0
+
+    def add(self, chunk: bytes) -> None:
+        self.total += len(chunk)
+        room = _CAPTURE_HEAD_BYTES - len(self.head)
+        if room > 0:
+            self.head.extend(chunk[:room])
+            chunk = chunk[room:]
+        if chunk:
+            self.tail.extend(chunk)
+            if len(self.tail) > _CAPTURE_TAIL_BYTES:
+                del self.tail[: len(self.tail) - _CAPTURE_TAIL_BYTES]
+
+    def text(self, what: str) -> str:
+        head = bytes(self.head).decode("utf-8", errors="replace")
+        if not self.tail:
+            return head
+        tail = bytes(self.tail).decode("utf-8", errors="replace")
+        cut = self.total - len(self.head) - len(self.tail)
+        if cut <= 0:
+            return head + tail
+        return (
+            f"{head}\n\n[... {cut:,} bytes of {what} cut here; the start and the end are shown. "
+            f"Redirect long output to a file and read it in parts. ...]\n\n{tail}"
+        )
+
+
+async def _pump(stream: Any, capture: _Capture) -> None:
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            return
+        capture.add(chunk)
+
+
+async def _run_keeping_output(proc: Any, timeout_s: float) -> Tuple[_Capture, _Capture, bool]:
+    """Wait for ``proc`` while reading both streams. On timeout the output so far is kept
+    (``communicate()`` threw it away: a command that hung after printing its error showed only
+    "timed out"). Returns (stdout, stderr, timed_out); the caller kills the process on timeout."""
+    out, err = _Capture(), _Capture()
+    readers = [
+        asyncio.ensure_future(_pump(proc.stdout, out)),
+        asyncio.ensure_future(_pump(proc.stderr, err)),
+    ]
+    try:
+        await asyncio.wait_for(asyncio.gather(proc.wait(), *readers), timeout=timeout_s)
+        return out, err, False
+    except asyncio.TimeoutError:
+        return out, err, True
+    finally:
+        for reader in readers:
+            if not reader.done():
+                reader.cancel()
+
 
 # ── 셸 명령 분류 (BashTool.capabilities) ───────────────────────────────────────
 # 실패-닫힘: 모든 구간이 아는 읽기 프로그램이고 쓰기 흔적이 없을 때만 읽기 전용이다.
@@ -1003,12 +1087,8 @@ async def _finish_result(
     stderr_total_bytes: int | None = None,
 ) -> ToolResult:
     """Shape command output and enforce an optional artifact contract."""
-    if len(stdout) > _MAX_OUTPUT:
-        suffix = f", {stdout_total_bytes} bytes total" if stdout_total_bytes is not None else ""
-        stdout = stdout[:_MAX_OUTPUT] + f"\n\n... (truncated{suffix})"
-    if len(stderr) > _MAX_OUTPUT:
-        suffix = f", {stderr_total_bytes} bytes total" if stderr_total_bytes is not None else ""
-        stderr = stderr[:_MAX_OUTPUT] + f"\n\n... (truncated{suffix})"
+    stdout = _keep_ends(stdout, _MAX_OUTPUT, "output")
+    stderr = _keep_ends(stderr, _MAX_OUTPUT, "stderr")
     parts = []
     if stdout:
         parts.append(stdout)
@@ -1238,32 +1318,33 @@ class BashTool(Tool):
             return ToolResult(content=f"Failed to start process: {e}", is_error=True)
 
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=timeout_s,
-            )
-        except asyncio.TimeoutError:
-            await _kill_process_tree(proc)
-            return ToolResult(
-                content=f"Command timed out after {timeout_ms}ms",
-                is_error=True,
-            )
+            out, err, timed_out = await _run_keeping_output(proc, timeout_s)
         except asyncio.CancelledError:
             # 턴이 멈췄다(사용자 [정지]). 명령이 만든 프로세스를 남겨 두지 않는다.
             await _kill_process_tree(proc)
             raise
+        if timed_out:
+            await _kill_process_tree(proc)
+            printed = "\n".join(
+                p
+                for p in (out.text("output"), f"STDERR:\n{err.text('stderr')}" if err.total else "")
+                if p
+            )
+            note = f"[Command timed out after {timeout_ms}ms and was stopped. " + (
+                "The output above is what it printed until then.]"
+                if printed
+                else "It printed nothing.]"
+            )
+            return ToolResult(content=f"{printed}\n\n{note}" if printed else note, is_error=True)
 
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
         exit_code = proc.returncode or 0
-
         return await _finish_result(
-            stdout=stdout,
-            stderr=stderr,
+            stdout=out.text("output"),
+            stderr=err.text("stderr"),
             exit_code=exit_code,
             sandboxed=False,
             input=input,
             context=context,
-            stdout_total_bytes=len(stdout_bytes),
-            stderr_total_bytes=len(stderr_bytes),
+            stdout_total_bytes=out.total,
+            stderr_total_bytes=err.total,
         )

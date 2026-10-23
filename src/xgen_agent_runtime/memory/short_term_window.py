@@ -8,23 +8,28 @@
 보니까…" 를 다시 쓴다(2026-09-21 관측: 같은 서술이 24단계 내내 반복). 레퍼런스(OpenAI Agents
 Sessions·Hermes·Claude Code·LangChain trim_messages)는 모두 이력을 messages 로 재생한다.
 
-## 정책 (5턴 보장)
+## 정책 (창 크기에 맞춘다, 2026-10-23)
 
 논리 턴 = 사용자의 새 지시부터 다음 지시 직전까지 (:func:`group_logical_turns`).
 
-* **T-1, T-2 — 가까운 2턴은 도구까지 그대로.** 사용자 텍스트 · assistant 텍스트 · ``tool_use`` ·
-  ``tool_result`` 블록을 순서·id 그대로. 큰 결과만 앞머리를 남기고 절단 표식(내용만 줄인다,
-  블록은 남긴다 — Claude Context Editing 이 결과만 지우고 호출은 두는 것과 같다).
-* **T-3 ~ T-5 — 먼 3턴은 대화만.** 사용자 텍스트 + assistant **최종 답변** 텍스트. 도구 블록은
-  ``tool_use``/``tool_result`` **양쪽 다** 뺀다(쌍을 가르지 않는다). 답변 끝에 한 줄
-  ``[used tools: ForgeTool ×4 (3 failed), Bash ×2]`` — 두 턴 전에 무엇을 했는지 모르면 같은
-  조회를 또 한다.
-* **예산이 모자라면 깎는 순서** (4.94.0): ① 가까운 턴의 tool_result 를 더 짧게 ② 가까운 턴의
-  tool_use 입력(긴 명령·파일 내용)을 더 짧게 ③ T-2 의 도구 블록 제거(대화만) ④ 먼 대화 턴의 발화를
-  더 짧게 ⑤ 가장 먼 대화 턴부터 제거 ⑥ T-1 은 마지막까지 남긴다(결과를 최소로 줄여서라도).
+* **가까운 턴은 도구까지 그대로.** 사용자 텍스트 · assistant 텍스트 · ``tool_use`` · ``tool_result``
+  블록을 순서·id 그대로. 몇 턴을 싣는지는 모델 창으로 정한다(:func:`full_turns_for_window`: 작은 창
+  2, 128K 이상 4, 400K 이상 6).
+* **먼 턴은 대화만.** 사용자 텍스트 + 그 턴에 assistant 가 쓴 글 **전부**(마지막 메시지만이 아니다:
+  앞서 쓴 보고서 본문이 표시 없이 사라졌다). 도구 블록은 ``tool_use``/``tool_result`` **양쪽 다**
+  뺀다(쌍을 가르지 않는다). 답변 끝에 한 줄 ``[used tools: ForgeTool ×4 (3 failed), Bash ×2]``.
+* **예산은 창의 몫(토큰)이다.** 고정 글자 수(예전 4만 자)가 아니라 모델 창의 일정 비율을 실제
+  글자/토큰 비율로 옮긴다. **압박이 없으면 아무것도 줄이지 않는다** — 예전에는 4,000자 넘는 결과를
+  예산과 상관없이 늘 1,200자로 줄였다.
+* **예산이 모자라면 깎는 순서**: ① 큰 tool_result 를 앞머리만 ② 결과를 더 짧게 ③ tool_use 입력
+  (긴 명령·파일 내용)을 더 짧게 ④ 가장 먼 가까운 턴의 도구 블록 제거(대화만) ⑤ 먼 대화 턴의 발화를
+  더 짧게 ⑥ 가장 먼 대화 턴부터 제거 ⑦ T-1 은 마지막까지 남긴다(결과를 최소로 줄여서라도).
   먼 대화 턴은 예산의 1/4 까지는 지킨다. 도구를 많이 쓴 T-1 은 그것만으로 예산을 넘기도 하는데
   (2026-10-20 dev: 도구 49번 턴이 결과를 줄인 뒤에도 11.8만 자), 그때 몇백 자짜리 지난 질문과 답을
   버려도 예산은 맞지 않고 "두 턴 전에 무엇을 했나" 만 사라진다.
+* **줄인 것은 표시하고 읽는 길을 준다.** 줄인 자리마다 몇 자를 줄였는지와 ``ConversationHistory``
+  로 원문을 읽으라는 표식을 남긴다. 창 밖으로 밀려난 턴이 있으면 첫 사용자 메시지 앞에 그 사실과
+  읽는 길을 적는다 — 예전에는 아무 말 없이 빠져, 모델이 대화가 거기서 시작한 줄 알았다.
 * **쌍 불변**: 결과 없는 ``tool_use`` 에는 합성 결과를 붙이고(Hermes stub), 앞머리의 고아
   ``tool_result`` 는 버린다 — :mod:`xgen_agent_runtime.core.message_repair` 재사용.
 * 지난 턴의 ``thinking`` 블록은 재생하지 않는다(서명이 있는 블록은 다른 요청에서 거부될 수 있다).
@@ -45,7 +50,7 @@ Sessions·Hermes·Claude Code·LangChain trim_messages)는 모두 이력을 mess
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from xgen_agent_runtime.core.file_blocks import file_pointers
@@ -58,6 +63,7 @@ from xgen_agent_runtime.memory.transcript import (
     _blocks,
     _is_tool_result_only,
     group_logical_turns,
+    opens_turn,
 )
 
 #: state.metadata 표식 — 창이 이 턴의 messages 앞에 들어갔다. {"turns","full","dialogue","chars"}.
@@ -67,15 +73,15 @@ WINDOW_LEN_KEY = "memory.short_term_window_len"
 
 DEFAULT_FULL_TURNS = 2
 DEFAULT_DIALOGUE_TURNS = 3
-#: 창 전체 상한(문자). 200K 모델의 Hermes tail(≈20K 토큰)의 절반쯤 — 이 창은 "최근 5턴" 이지
-#: "맞는 만큼 전부" 가 아니다.
+#: 창 전체 상한(문자). 모델 창을 모를 때만 쓰는 값이다 — Stage 2 는 창의 몫(토큰)으로 정한다
+#: (``WindowConfig.max_tokens``).
 DEFAULT_MAX_CHARS = 40_000
-#: 가까운 턴의 tool_result 본문이 이보다 길면 앞머리만 남긴다.
+#: 예산 압박이 오면 가까운 턴의 tool_result 중 이보다 긴 것부터 앞머리만 남긴다.
 DEFAULT_RESULT_TRIM_OVER = 4_000
 DEFAULT_RESULT_KEEP = 1_200
 #: 예산 압박 때 결과를 이보다 짧게는 줄이지 않는다.
 MIN_RESULT_KEEP = 300
-#: 먼 턴의 발화 상한(사용자·답변 각각).
+#: 예산 압박 때 먼 턴의 발화(사용자·답변 각각)를 처음 줄이는 길이. 압박이 없으면 그대로다.
 DEFAULT_DIALOGUE_MESSAGE_CHARS = 4_000
 MIN_DIALOGUE_MESSAGE_CHARS = 400
 #: 예산 압박 때 가까운 턴의 tool_use 입력 문자열을 처음 줄이는 길이. 압박이 없으면 입력은 그대로다.
@@ -95,12 +101,22 @@ SCAN_MAX = 1_600
 #: 때만 상한까지 한 번 더 간다.
 SCAN_FIRST = 96
 
-_TRIM_NOTE = "…[+{n} chars trimmed from an earlier turn]"
+_TRIM_NOTE = "\n…[{n} chars trimmed here from an earlier turn; ConversationHistory shows it word for word]…\n"
 _IMAGE_NOTE = "[image removed from an earlier turn]"
 #: 창이 user 메시지로 끝나면 이번 턴의 사용자 지시와 맞붙어 user 가 둘 연속이 된다. 끊긴 턴
 #: (도구 호출 중 중단)이 딱 그 모양을 만든다. 합성 tool_result 와 같은 계열의 표식 한 줄로
 #: 창을 닫아 역할이 교대하게 둔다 — 백엔드마다 연속 역할 허용치가 다르다.
 _INTERRUPTED_TAIL = "[The previous turn was interrupted before it finished.]"
+
+
+def full_turns_for_window(window_tokens: int) -> int:
+    """도구 결과까지 그대로 싣는 가까운 턴 수 — 창이 클수록 많이(작은 창은 예전과 같은 2)."""
+    w = int(window_tokens or 0)
+    if w >= 400_000:
+        return 6
+    if w >= 128_000:
+        return 4
+    return DEFAULT_FULL_TURNS
 
 
 @dataclass
@@ -113,6 +129,9 @@ class WindowConfig:
     dialogue_message_chars: int = DEFAULT_DIALOGUE_MESSAGE_CHARS
     input_keep: int = DEFAULT_INPUT_KEEP
     used_tools_line: bool = True
+    #: 예산(토큰). 0 이 아니면 ``max_chars`` 를 이 값과 실제 글의 글자/토큰 비율로 정한다 — 글자 수를
+    #: 1글자=1토큰으로 보면 영어 대화는 쓸 수 있는 몫의 4분의 1만 쓴다(2026-10-23).
+    max_tokens: int = 0
 
     @classmethod
     def from_hooks(cls, hooks: Any) -> "WindowConfig":
@@ -164,10 +183,17 @@ def _text_of(content: Any) -> str:
 
 
 def _clip_text(s: str, limit: int) -> str:
+    """``limit`` 자로 줄인다: 앞 2/3 와 끝 1/3 을 남기고 가운데에 표식. ``limit`` 이 0 이면 그대로.
+
+    끝을 남긴다 — 결과의 종료 코드·실패 요약, 답변의 "저장했습니다 / 결론" 이 끝에 있다. 앞머리만
+    남기면 그것이 표시와 함께라도 사라진다.
+    """
     s = str(s or "")
     if limit <= 0 or len(s) <= limit:
         return s
-    return s[:limit] + _TRIM_NOTE.format(n=len(s) - limit)
+    head = limit * 2 // 3
+    tail = limit - head
+    return s[:head] + _TRIM_NOTE.format(n=len(s) - head - tail) + (s[-tail:] if tail else "")
 
 
 def _msg_role(m: Any) -> str:
@@ -234,10 +260,9 @@ def used_tools_line(turn: LogicalTurn) -> str:
 def _dialogue_messages(
     turn: LogicalTurn, cfg: WindowConfig, *, message_chars: int
 ) -> List[Dict[str, Any]]:
-    """먼 턴: 사용자 텍스트 + 최종 답변 텍스트(+ used tools 한 줄). 도구 블록은 양쪽 다 뺀다."""
+    """먼 턴: 사용자 텍스트 + 그 턴에 쓴 답변 글 전부(+ used tools 한 줄). 도구 블록은 양쪽 다 뺀다."""
     user_text = ""
-    final_text = ""
-    last_nonempty = ""
+    written: List[str] = []
     for m in turn.messages:
         role = _msg_role(m)
         content = _msg_content(m)
@@ -254,13 +279,13 @@ def _dialogue_messages(
         elif role == "assistant":
             t = _text_of(content)
             if t:
-                last_nonempty = t
-            final_text = t  # 마지막 assistant 메시지의 텍스트가 최종 답변이다(비어 있을 수 있다)
+                # 그 턴에 쓴 글 **전부**. 마지막 메시지만 남기면 앞서 쓴 보고서 본문이 표시 없이 사라지고
+                # "저장했습니다" 만 남았다(2026-10-23 감사). 길면 아래 _clip_text 가 표시와 함께 줄인다.
+                written.append(t)
     if not user_text:
         return []
-    answer = final_text or last_nonempty
     line = used_tools_line(turn) if cfg.used_tools_line else ""
-    answer = _clip_text(answer, message_chars)
+    answer = _clip_text("\n\n".join(written), message_chars)
     if line:
         answer = f"{answer}\n{line}" if answer else line
     out: List[Dict[str, Any]] = [{"role": "user", "content": _clip_text(user_text, message_chars)}]
@@ -409,9 +434,12 @@ def _sanitize_pairs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def build_window(
-    turns: Sequence[Any], cfg: Optional[WindowConfig] = None
+    turns: Sequence[Any], cfg: Optional[WindowConfig] = None, *, more_before: bool = False
 ) -> Tuple[List[Dict[str, Any]], WindowReport]:
-    """시간순 STM turn 목록 → (messages, 보고). 현재 턴은 STM 에 아직 없으므로 들어오지 않는다."""
+    """시간순 STM turn 목록 → (messages, 보고). 현재 턴은 STM 에 아직 없으므로 들어오지 않는다.
+
+    ``more_before`` 는 ``turns`` 보다 앞선 기록이 더 있다는 뜻이다(읽은 행이 상한에 닿았다).
+    """
     cfg = cfg or WindowConfig()
     report = WindowReport()
     if not cfg.enabled:
@@ -424,13 +452,16 @@ def build_window(
     dialogue = groups[: len(groups) - n_full]
 
     result_keep = cfg.result_keep
-    #: 줄일 결과의 문턱. 압박이 없으면 큰 결과(cfg.result_trim_over 초과)만 줄인다. 압박이 오면
-    #: result_keep 보다 긴 결과는 모두 줄인다. 문턱을 그대로 두면 4,000자 이하 결과는 아무리 많아도
-    #: 그대로 남는다(2026-10-20 dev: 결과를 300자로 줄였다는 창이 11만 자였다).
-    trim_over = cfg.result_trim_over
+    #: 줄일 결과의 문턱. **압박이 없으면 줄이지 않는다** — 예전에는 4,000자 넘는 결과를 예산과 상관없이
+    #: 늘 1,200자로 줄여, 창이 넉넉한 모델도 바로 앞 턴의 결과를 잘린 채 받았다(2026-10-23 감사). 압박이
+    #: 오면 먼저 큰 결과(cfg.result_trim_over 초과)를 줄이고, 그래도 넘치면 result_keep 보다 긴 결과를
+    #: 모두 줄인다(2026-10-20 dev: 결과를 300자로 줄였다는 창이 11만 자였다).
+    _NO_TRIM = 1 << 62
+    trim_over = _NO_TRIM
     #: 0 = 입력은 줄이지 않는다. 결과를 다 줄이고도 넘칠 때 cfg.input_keep 부터 반씩.
     input_keep = 0
-    message_chars = cfg.dialogue_message_chars
+    #: 0 = 먼 턴의 발화는 줄이지 않는다. 압박이 와서 먼 턴이 제 몫을 넘을 때 cfg 값부터 반씩.
+    message_chars = 0
 
     def _trimmable(keep: int) -> bool:
         """더 깎을 tool_result 가 남았는가. 없으면 result_keep 을 줄여도 크기가 안 준다."""
@@ -490,11 +521,29 @@ def build_window(
         return _size(_dialogue_part()) > allowed
 
     msgs = _assemble()
+    if cfg.max_tokens > 0:
+        # 토큰 예산을 이 창의 실제 글자/토큰 비율로 글자 예산에 옮긴다(한 번 재고 강등은 글자로 한다).
+        # 공급자를 모르므로 가장 큰 보정(과대추정 쪽)으로 센다 — 모자라면 넘치고, 넘치면 조금 덜 실을 뿐이다.
+        from xgen_agent_runtime.core.text_tokens import (
+            DEFAULT_PROVIDER_FACTOR,
+            SAFETY_MULTIPLIER,
+            estimate_tokens_cached,
+        )
+
+        blob = json.dumps(msgs, ensure_ascii=False, default=str)
+        tokens = estimate_tokens_cached(blob) * DEFAULT_PROVIDER_FACTOR * SAFETY_MULTIPLIER
+        ratio = max(1.0, len(blob) / max(1.0, tokens)) if blob else 1.0
+        cfg = replace(cfg, max_chars=min(cfg.max_chars, max(1_000, int(cfg.max_tokens * ratio))))
+        reserve = int(cfg.max_chars * DIALOGUE_RESERVE_RATIO)
     # 예산 강등. 순서가 계약이다(모듈 docstring).
     guard = 0
     while _size(msgs) > cfg.max_chars and guard < 60:
         guard += 1
-        if result_keep > MIN_RESULT_KEEP and _trimmable(result_keep):
+        if trim_over == _NO_TRIM and _trimmable(cfg.result_trim_over):
+            # 압박이 왔다 — 먼저 큰 결과만 줄인다(예전의 상시 규칙).
+            trim_over = cfg.result_trim_over
+            report.degraded.append(f"trim_results_over={trim_over}")
+        elif result_keep > MIN_RESULT_KEEP and _trimmable(result_keep):
             result_keep = max(MIN_RESULT_KEEP, result_keep // 2)
             trim_over = result_keep
             report.degraded.append(f"result_keep={result_keep}")
@@ -506,8 +555,12 @@ def build_window(
             full = full[1:]
             dialogue = [*dialogue, demoted]
             report.degraded.append("demote_oldest_full")
-        elif message_chars > MIN_DIALOGUE_MESSAGE_CHARS and _dialogue_over():
-            message_chars = max(MIN_DIALOGUE_MESSAGE_CHARS, message_chars // 2)
+        elif message_chars != MIN_DIALOGUE_MESSAGE_CHARS and _dialogue_over():
+            message_chars = (
+                max(MIN_DIALOGUE_MESSAGE_CHARS, message_chars // 2)
+                if message_chars
+                else cfg.dialogue_message_chars
+            )
             report.degraded.append(f"message_chars={message_chars}")
         elif _dialogue_over():
             dialogue = dialogue[1:]
@@ -516,7 +569,7 @@ def build_window(
             # 남은 초과는 T-1 몫이다. 대화 턴을 더 버려도 맞지 않는다. T-1 은 버리지 않는다.
             break
         msgs = _assemble()
-    msgs = _carry_dropped_attachments(msgs, turns, kept=[*dialogue, *full])
+    msgs = _carry_dropped_attachments(msgs, turns, kept=[*dialogue, *full], more_before=more_before)
     report.turns = len(full) + len(dialogue)
     report.full = len(full)
     report.dialogue = len(dialogue)
@@ -538,7 +591,11 @@ def _turn_pointers(turn: LogicalTurn) -> List[str]:
 
 
 def _carry_dropped_attachments(
-    msgs: List[Dict[str, Any]], turns: Sequence[Any], *, kept: Sequence[LogicalTurn]
+    msgs: List[Dict[str, Any]],
+    turns: Sequence[Any],
+    *,
+    kept: Sequence[LogicalTurn],
+    more_before: bool = False,
 ) -> List[Dict[str, Any]]:
     """창에 못 들어간 턴의 첨부 포인터를 창 첫 사용자 메시지 앞에 붙인다.
 
@@ -551,16 +608,28 @@ def _carry_dropped_attachments(
     # 논리 턴은 STM 행 객체를 그대로 묶는다 — 창에 남은 턴은 첫 행의 정체로 가린다.
     kept_rows = {id(m) for t in kept for m in t.messages}
     carried: List[str] = []
+    older = 0
     for turn in group_logical_turns(turns, len(turns) or 1):
         if turn.messages and id(turn.messages[0]) in kept_rows:
             continue
+        older += 1
         for line in _turn_pointers(turn):
             if line not in carried:
                 carried.append(line)
     carried = carried[-MAX_CARRIED_ATTACHMENTS:]
-    if not carried:
+    if not carried and not older and not more_before:
         return msgs
-    note = "[Earlier in this conversation]\n" + "\n".join(carried)
+    # 창 밖의 턴이 **있다는 사실과 읽는 길**을 말한다. 예전에는 아무 말 없이 빠져, 모델은 대화가 여기서
+    # 시작한 줄 알거나 지난 일을 기억으로 재구성했다(2026-10-23 감사).
+    if older or more_before:
+        count = f"{older}{'+' if more_before else ''}" if older else "some"
+        header = (
+            f"[Earlier in this conversation: {count} older turn(s) are not shown here. Read them word "
+            "for word with ConversationHistory before relying on what was said or done then.]"
+        )
+    else:
+        header = "[Earlier in this conversation]"
+    note = header + ("\n" + "\n".join(carried) if carried else "")
     for i, m in enumerate(msgs):
         if m.get("role") != "user":
             continue
@@ -579,8 +648,7 @@ def _turn_starts(rows: Sequence[Any]) -> int:
     """논리 턴을 여는 행(도구 결과가 아닌 user)의 수."""
     count = 0
     for row in rows:
-        role = str(getattr(row, "role", "") or "")
-        if role == "user" and not _is_tool_result_only(getattr(row, "content", "")):
+        if opens_turn(str(getattr(row, "role", "") or ""), getattr(row, "content", "")):
             count += 1
     return count
 
@@ -603,21 +671,26 @@ async def load_window(
     needed = cfg.full_turns + cfg.dialogue_turns
     try:
         stm = stm_fn()
+        asked = SCAN_FIRST
         rows = list(await stm.recent(n=SCAN_FIRST) or [])
         # 행이 요청보다 적으면 STM 전체를 읽은 것이고, 턴 시작이 needed 보다 많으면 가장
         # 오래된 턴까지 온전히 덮었다. 둘 다 아니면 상한까지 한 번 더.
         if len(rows) >= SCAN_FIRST and _turn_starts(rows) <= needed:
+            asked = SCAN_ROWS
             rows = list(await stm.recent(n=SCAN_ROWS) or [])
         # 400행 안에 가까운 턴의 시작 행이 없다 = 긴 작업 턴이 범위를 다 차지했다. 그 턴의 사용자
         # 지시가 안 보이면 창에서 턴이 통째로 빠지므로 마지막 상한까지 한 번 더.
         if len(rows) >= SCAN_ROWS and _turn_starts(rows) < max(1, min(cfg.full_turns, needed)):
+            asked = SCAN_MAX
             rows = list(await stm.recent(n=SCAN_MAX) or [])
     except Exception:  # noqa: BLE001 — 창이 없어도 턴은 돈다
         return [], WindowReport()
-    return build_window(rows, cfg)
+    # 요청한 만큼 다 받았으면 그 앞에도 기록이 더 있을 수 있다.
+    return build_window(rows, cfg, more_before=len(rows) >= asked)
 
 
 __all__ = [
+    "full_turns_for_window",
     "WINDOW_KEY",
     "WINDOW_LEN_KEY",
     "WindowConfig",

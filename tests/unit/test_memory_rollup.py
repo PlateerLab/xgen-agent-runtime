@@ -88,11 +88,21 @@ def test_instruction_has_structure_and_preserve():
 
 
 class _Notes:
-    def __init__(self, pinned=""):
+    def __init__(self, pinned="", evergreen=None, read_fails=False):
         self._pinned = pinned
+        # 따로 주지 않으면 evergreen 노트 본문은 pinned 와 같다고 본다(예전 시험의 뜻).
+        self._evergreen = pinned if evergreen is None else evergreen
+        self._read_fails = read_fails
         self.written = None
     async def load_pinned(self, *, category="critical", max_chars=3000):
         return self._pinned
+    async def read(self, filename):
+        from types import SimpleNamespace
+        if self._read_fails:
+            raise RuntimeError("db down")
+        if filename == "__evergreen__.md" and self._evergreen:
+            return SimpleNamespace(body=self._evergreen)
+        return None
     async def write(self, draft):
         self.written = draft
         return draft
@@ -166,4 +176,31 @@ async def test_daily_noop_without_digest():
     notes = _Notes()
     r = MemoryRollup(_ProviderWithNotes(stm, notes), summarize=_summarizer({}))
     assert await r.rollup_daily(day="2026-06-22") is None
+    assert notes.written is None
+
+
+@pytest.mark.asyncio
+async def test_evergreen_merges_the_evergreen_note_not_the_whole_critical_category():
+    """The merge input is the evergreen note itself. ``load_pinned`` over ``critical`` also holds the
+    fact ledger and pinned notes (and on the xgen-db store returned "" once the ledger outgrew the cap),
+    so the evergreen was rebuilt from a partial or empty view and overwritten (2026-10-23)."""
+    stm = _STM([], summary="## Summary\nrecent work")
+    notes = _Notes(pinned="", evergreen="## Identity\nGeny, a VTuber")
+    captured = {}
+
+    async def s(instr):
+        captured["instr"] = instr
+        return "## Identity\nGeny, a VTuber"
+
+    r = MemoryRollup(_ProviderWithNotes(stm, notes), summarize=s)
+    assert await r.rollup_evergreen()
+    assert "Geny, a VTuber" in captured["instr"]
+
+
+@pytest.mark.asyncio
+async def test_evergreen_is_left_untouched_when_it_cannot_be_read():
+    stm = _STM([], summary="## Summary\nrecent work")
+    notes = _Notes(pinned="x", read_fails=True)
+    r = MemoryRollup(_ProviderWithNotes(stm, notes), summarize=_summarizer({}))
+    assert await r.rollup_evergreen() is None
     assert notes.written is None

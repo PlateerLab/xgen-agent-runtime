@@ -80,6 +80,11 @@ def _append_note(state: PipelineState, note: str) -> bool:
     if last.get("role") == "user" and isinstance(content, list):
         for block in reversed(content):
             if isinstance(block, dict) and block.get("type") == "tool_result":
+                # The note is for this turn's next request, not part of what the tool returned:
+                # memory records the result as it came back (core.originals).
+                from xgen_agent_runtime.core.originals import keep_original
+
+                keep_original(state, last)
                 inner = block.get("content")
                 if isinstance(inner, str) or inner is None:
                     block["content"] = f"{inner or ''}\n\n{note}"

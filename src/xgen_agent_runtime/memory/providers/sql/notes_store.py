@@ -309,26 +309,20 @@ class _SQLNotesStore(NotesHandle):
         )
         notes = [await self._row_to_note(r) for r in rows]
         # importance enum values are strings; sort by boost via Python.
+        from xgen_agent_runtime.memory.pinned import LEDGER_FILENAME, render_pinned
+
+        # The fact ledger first, then importance, then recency; one renderer for every provider
+        # (memory.pinned): nothing is cut or left out without saying so.
         notes.sort(
             key=lambda n: (
+                0 if n.ref.filename == LEDGER_FILENAME else 1,
                 -n.importance.boost,
                 -(n.updated_at.timestamp() if n.updated_at else 0.0),
             )
         )
-        parts: List[str] = []
-        used = 0
-        for note in notes:
-            block = note.body.strip()
-            if not block:
-                continue
-            header = f"## {note.title}" if note.title else ""
-            piece = f"{header}\n{block}".strip() if header else block
-            cost = len(piece) + (2 if parts else 0)
-            if used + cost > max_chars and parts:
-                break
-            parts.append(piece)
-            used += cost
-        return "\n\n".join(parts)
+        return render_pinned(
+            ((n.ref.filename, n.title or "", n.body or "") for n in notes), max_chars
+        )
 
     # ── snapshot helpers ────────────────────────────────────────────
 

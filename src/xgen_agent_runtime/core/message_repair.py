@@ -12,7 +12,7 @@ can independently orphan the OTHER side, slicing a kept window that
 begins with a ``tool_result`` whose ``tool_use`` was dropped.
 
 Both repairs are pure list surgery — no message content is invented
-beyond a synthetic "[interrupted]" result — and are backend-agnostic
+beyond a synthetic "[no result recorded …]" result — and are backend-agnostic
 (the invariant they enforce is shared by every tool-using provider).
 """
 
@@ -23,7 +23,13 @@ import re
 from typing import Any, Callable, Dict, List, Sequence
 
 
-_INTERRUPTED_RESULT_CONTENT = "[interrupted — the previous turn ended before this tool finished]"
+#: The result put where a tool call has none. It says only what is known: no result was recorded.
+#: It used to say the tool "did not finish", which is false when a stop landed after the tool ran but
+#: before its result was saved, and invited running a side-effecting tool twice (2026-10-23 audit).
+_INTERRUPTED_RESULT_CONTENT = (
+    "[no result recorded: the turn ended before this tool's result was saved. "
+    "The tool may or may not have run; check its effect before running it again.]"
+)
 
 
 def _tool_use_ids(msg: Dict[str, Any]) -> List[str]:

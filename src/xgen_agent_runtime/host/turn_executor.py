@@ -82,6 +82,29 @@ def _budget_pair(value: Any) -> Optional[Tuple[int, int]]:
     return (soft, hard) if soft > 0 and hard > soft else None
 
 
+def _vllm_probe_with_key(host: Any, api_key: Any) -> Any:
+    """The host's vLLM window probe, given this model's API key when the host accepts one.
+
+    A vLLM server started with ``--api-key`` answers ``/v1/models`` with 401 without it; the probe
+    then failed every turn and the window fell back to 32,768 whatever the server was configured
+    for (2026-10-23 check). Hosts written before this take ``(base_url, model)`` only.
+    """
+    probe = getattr(host, "fetch_vllm_max_model_len", None)
+    if probe is None:
+        return None
+    key = str(api_key or "")
+
+    def _probe(base_url: str, model: Any) -> Any:
+        if key:
+            try:
+                return probe(base_url, model, api_key=key)
+            except TypeError:
+                pass
+        return probe(base_url, model)
+
+    return _probe
+
+
 def _prune_threshold(value: Any) -> Optional[int]:
     """노드 파라미터 → 비용 트리거 임계(토큰). None/음수/해석 불가는 런타임 기본,
     0 은 '끔' 을 뜻하므로 그대로 넘긴다."""
@@ -1022,7 +1045,7 @@ class AgentTurnExecutor:
                 model,
                 int(kwargs.get("context_window") or 0),
                 base_url=base_url,
-                vllm_probe=host.fetch_vllm_max_model_len,
+                vllm_probe=_vllm_probe_with_key(host, api_key),
             )
             # 메모리 노드가 (최근 메시지, 이전 대화 문자열) 로 보낸 둘째 칸: 최근 N개(기본 2개)보다
             # 앞선 대화다. 아래 맞춤 뒤에 API 백엔드는 시스템 프롬프트 끝에(옛 agent_xgen 과 같다), CLI
@@ -1259,7 +1282,7 @@ class AgentTurnExecutor:
                     and _prune_threshold(kwargs["repeat_stop_after"]) is not None
                     else {}
                 ),
-                # 노드가 주면 그대로, 없으면 런타임 기본(30,000). 0 이면 비용 트리거 끔.
+                # 노드가 주면 그대로, 없으면 런타임 기본(0 = 끔, 4.97.0). 노드가 명시할 때만 비용 트리거가 돈다.
                 **(
                     {"prune_over_tokens": _prune_threshold(kwargs["prune_over_tokens"])}
                     if "prune_over_tokens" in kwargs
@@ -1372,7 +1395,7 @@ class AgentTurnExecutor:
                 return _with_notice(turn_iter)
             return turn_iter
         try:
-            return run_turn(
+            answer = run_turn(
                 pipeline,
                 pipeline_input,
                 state,
@@ -1385,5 +1408,12 @@ class AgentTurnExecutor:
                 ),
                 on_loop=_tool_surface.bind_loop if _tool_surface is not None else None,
             )
+            if clamped and schema is None and isinstance(answer, str):
+                # 스트리밍과 같다: 입력이 잘렸으면 사용자에게 알린다. 예전에는 스트리밍만 알려,
+                # 워크플로 실행(비스트리밍) 결과는 잘린 입력으로 만든 답을 아무 말 없이 돌려줬다.
+                from xgen_agent_runtime.host.context_budget import CLAMP_NOTICE
+
+                answer = CLAMP_NOTICE + answer
+            return answer
         finally:
             _teardown()

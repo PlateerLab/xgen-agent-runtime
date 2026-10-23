@@ -168,6 +168,12 @@ def _flatten_turn(turn: object) -> Optional[str]:
     if not text:
         return None
     role = getattr(turn, "role", "user") or "user"
+    if role == "user":
+        from xgen_agent_runtime.core.context_prune import is_runtime_note_content
+
+        if is_runtime_note_content(text):
+            # An instruction the runtime gave the agent in that turn, not the user's words.
+            role = "runtime"
     return f"[{role}] {text}"
 
 
@@ -404,12 +410,17 @@ class MemoryRollup:
         except Exception:  # noqa: BLE001
             return None
 
+        # The evergreen note itself, read by name. It used to come from ``load_pinned`` over the
+        # whole ``critical`` category, under a char cap: the fact ledger and pinned notes filled
+        # (or, on the xgen-db store, emptied) that view, so the merge ran from a partial or empty
+        # "current" and the write below replaced the durable evergreen with a rebuild from one
+        # digest. If the note cannot be read, leave it untouched rather than rewrite it blind.
         try:
-            current = await notes.load_pinned(
-                category=EVERGREEN_CATEGORY, max_chars=self._evergreen_max_chars
-            )
+            existing = await notes.read(EVERGREEN_FILENAME)
         except Exception:  # noqa: BLE001
-            current = ""
+            logger.warning("rollup: evergreen read failed; keeping it untouched", exc_info=True)
+            return None
+        current = str(getattr(existing, "body", "") or "") if existing is not None else ""
         try:
             recent = (await self._provider.stm().read_summary()) or ""
         except Exception:  # noqa: BLE001

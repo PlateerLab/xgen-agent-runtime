@@ -1,11 +1,9 @@
-"""결정적 prune 의 비용 트리거 (Stage 2, 4.35.0).
+"""결정적 prune 의 비용 트리거 (Stage 2): 4.35.0 에 기본으로 켰고 4.97.0 에 기본으로 껐다.
 
-근거 (dev 28일, 벤치 제외): 긴 턴 입력의 66% 가 매 호출 다시 실리는 이력이고
-(16회+ 턴은 71~72%), 그걸 줄이는 코드(core/context_prune.py)는 이미 있었다.
-그런데 compaction 경로 안에서만 불렸고 compaction 은 윈도우×0.8 에서만 도는데,
-윈도우가 200k(claude)·524k(qwen) 라 문턱이 160k·419k — 실제 최대 프롬프트는
-135,487. **28일 동안 한 번도 실행되지 않았다.** 용량 트리거만 있고 비용
-트리거가 없던 것이다. 그래서 윈도우와 무관한 절대 임계를 둔다.
+4.35.0 은 창과 무관한 절대 임계(3만 토큰)에서 지난 도구 결과를 600자로 잘랐다. 창이 200K·1M 인
+모델도 방금 받은 결과를 잘린 채 받았고, 그 잘린 것이 기억에 "도구가 돌려준 것" 으로 남았다
+(2026-10-23 감사). 정확성이 먼저다: 줄임은 창이 모자랄 때만(압축 80%·호출 직전 guard). 비용 트리거는
+호스트가 명시해서 켤 때만 돈다. 켜도 원본은 남는다(기억과 ToolResultRead 가 원본을 본다).
 """
 
 from __future__ import annotations
@@ -40,7 +38,12 @@ def _state(n_calls: int, *, content=None) -> PipelineState:
     return state
 
 
+#: 호스트가 비용 트리거를 켤 때 쓰던 값(4.35.0 의 기본).
+OPT_IN = 30_000
+
+
 def _stage(**kw) -> ContextStage:
+    kw.setdefault("prune_over_tokens", OPT_IN)
     return ContextStage(stateless=False, **kw)
 
 
@@ -52,11 +55,24 @@ def _pruned_events(state: PipelineState) -> list:
 
 
 @pytest.mark.asyncio
-async def test_prune_runs_on_cost_even_though_capacity_never_triggers():
-    """실측 재현: 윈도우 200k 의 80%(160k)에 한참 못 미치는 턴이 이력만 키운다."""
+async def test_by_default_nothing_is_cut_while_the_window_has_room():
+    """창(200K)의 80% 에 한참 못 미치는 턴: 기본값으로는 아무것도 줄이지 않는다."""
     state = _state(14)
     before = estimate_prompt_tokens(state)
-    assert DEFAULT_PRUNE_OVER_TOKENS < before < state.context_window_budget * 0.8
+    assert OPT_IN < before < state.context_window_budget * 0.8
+    snapshot = [str(m) for m in state.messages]
+
+    await ContextStage(stateless=False).execute(None, state)
+
+    assert DEFAULT_PRUNE_OVER_TOKENS == 0
+    assert [str(m) for m in state.messages] == snapshot
+    assert not _pruned_events(state)
+
+
+@pytest.mark.asyncio
+async def test_an_opted_in_cost_trigger_still_runs():
+    state = _state(14)
+    before = estimate_prompt_tokens(state)
 
     await _stage().execute(None, state)
 
@@ -65,17 +81,36 @@ async def test_prune_runs_on_cost_even_though_capacity_never_triggers():
     ev = _pruned_events(state)
     assert len(ev) == 1 and ev[0]["data"]["trigger"] == "cost"
     assert ev[0]["data"]["trimmed"] > 0
-    assert ev[0]["data"]["tokens_after"] < ev[0]["data"]["tokens_before"]
-    assert ev[0]["data"]["threshold_tokens"] == DEFAULT_PRUNE_OVER_TOKENS
-    # 압축(LLM)은 돌지 않았다 — 이건 순수 함수 경로다.
+    assert ev[0]["data"]["threshold_tokens"] == OPT_IN
     assert not [e for e in state.events if e["type"] == "context.compacted"]
 
 
 @pytest.mark.asyncio
+async def test_an_opted_in_cut_keeps_the_original_for_memory_and_tool_result_read():
+    """잘린 것은 요청 사본뿐이다. 기억은 원본을 기록하고, ToolResultRead 는 원본을 읽는다."""
+    from xgen_agent_runtime.core.originals import original_of
+    from xgen_agent_runtime.tools.base import ToolContext
+    from xgen_agent_runtime.tools.built_in.tool_result_read_tool import ToolResultReadTool
+
+    state = _state(14)
+    first = state.messages[2]  # t0 의 결과
+    full = first["content"][0]["content"]
+
+    await _stage().execute(None, state)
+
+    shown = first["content"][0]["content"]
+    assert len(shown) < len(full) and 'ToolResultRead(id="t0")' in shown
+    assert original_of(state, first)["content"][0]["content"] == full
+
+    read = await ToolResultReadTool().execute({"id": "t0", "limit": 100_000}, ToolContext(state_view=state))
+    assert not read.is_error and full in read.content
+    assert read.content.startswith(f"[Bash result t0: chars 0-{len(full)} of {len(full)}; end of the result]")
+
+
+@pytest.mark.asyncio
 async def test_short_turn_under_the_threshold_is_untouched():
-    """기본값 30,000 은 dev 28일에서 5회 이하 턴을 하나도 건드리지 않았다."""
     state = _state(2)
-    assert estimate_prompt_tokens(state) < DEFAULT_PRUNE_OVER_TOKENS
+    assert estimate_prompt_tokens(state) < OPT_IN
     snapshot = [str(m) for m in state.messages]
 
     await _stage().execute(None, state)
@@ -149,7 +184,7 @@ async def test_small_results_are_never_touched_however_many():
     state = _state(60, content="ok")
     state.system = "x" * 200_000  # 임계는 시스템 프롬프트로 넘긴다
     state.shared.pop("_prompt_tokens_memo", None)
-    assert estimate_prompt_tokens(state) > DEFAULT_PRUNE_OVER_TOKENS
+    assert estimate_prompt_tokens(state) > OPT_IN
 
     await _stage().execute(None, state)
 
@@ -160,8 +195,9 @@ async def test_small_results_are_never_touched_however_many():
 
 
 def test_config_roundtrip():
+    assert ContextStage(stateless=False).get_config()["prune_over_tokens"] == DEFAULT_PRUNE_OVER_TOKENS == 0
     stage = _stage()
-    assert stage.get_config()["prune_over_tokens"] == DEFAULT_PRUNE_OVER_TOKENS
+    assert stage.get_config()["prune_over_tokens"] == OPT_IN
     stage.update_config({"prune_over_tokens": 12_345})
     assert stage.get_config()["prune_over_tokens"] == 12_345
     stage.update_config({"prune_over_tokens": "nope"})  # 잘못된 값은 무시

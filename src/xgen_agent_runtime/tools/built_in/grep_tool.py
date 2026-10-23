@@ -23,7 +23,10 @@ class GrepTool(Tool):
     def description(self) -> str:
         return (
             "Search file contents in your sandbox with regex. Supports filtering by glob pattern. "
-            "Output modes: 'content' (matching lines), 'files' (file paths only), 'count' (match counts)."
+            "Output modes: 'content' (matching lines), 'files' (file paths only), 'count' (match counts). "
+            "Every file under the path is searched and every match is counted; long results come in pages "
+            "(the result says which matches it shows, the total, and the offset for the next page). "
+            "Folders such as .git and node_modules are skipped unless the path points inside them."
         )
 
     @property
@@ -57,6 +60,13 @@ class GrepTool(Tool):
                 "case_insensitive": {
                     "type": "boolean",
                     "description": "Case-insensitive search. Default: false.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": (
+                        "Skip this many matches ('content') or files ('files') to see the next page. Default 0."
+                    ),
+                    "minimum": 0,
                 },
             },
             "required": ["pattern"],
@@ -97,6 +107,7 @@ class GrepTool(Tool):
                 "output_mode": input.get("output_mode", "files"),
                 "context": input.get("context", 0),
                 "case_insensitive": bool(input.get("case_insensitive", False)),
+                "offset": int(input.get("offset") or 0),
             }
         )
         return ToolResult(content=result["text"], is_error=not result["ok"])

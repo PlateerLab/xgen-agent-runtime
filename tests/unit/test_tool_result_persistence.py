@@ -87,7 +87,9 @@ class TestImageBlocksNotCountedAsText:
         assert out is not result
         assert out.persist_full
         assert "AAAA" not in out.display_text
-        assert "[tool result truncated:" in out.display_text
+        # 잘렸다고 말하고, 원본을 읽는 길(id)을 준다 — 480자 미리보기만 주던 것은 2026-10-23 에 걷었다.
+        assert "[tool result clipped:" in out.display_text
+        assert 'ToolResultRead(id="t_img_big"' in out.display_text
 
     def test_list_without_image_measured_as_before(self, tmp_path):
         content = [{"type": "text", "text": "z" * 900}]
@@ -126,10 +128,13 @@ class TestLargePayloadPersisted:
         assert envelope["tool_name"] == "grep"
         assert envelope["content"] == big
         assert envelope["metadata"] == {"rows": 1000}
-        # Display text is compact and mentions the path
+        # Display text says it was clipped, how big the whole is, and how to read the rest
         assert out.display_text is not None
         assert str(expected) in out.display_text
         assert "5000 chars" in out.display_text
+        assert 'ToolResultRead(id="t_large"' in out.display_text
+        # head and tail are both kept (the end of a Bash result holds the exit code and STDERR)
+        assert out.display_text.rstrip().endswith("x")
 
     def test_oversized_dict_rendered_then_persisted(self, tmp_path):
         payload = {"rows": [{"i": i} for i in range(2000)]}  # >> 100 chars rendered
@@ -330,7 +335,7 @@ class TestExecutorIntegration:
         )
         assert len(results) == 1
         content = results[0]["content"]
-        assert "truncated" in content
+        assert "clipped" in content and 'ToolResultRead(id="u1"' in content
         assert str(tmp_path / TOOL_RESULTS_DIRNAME / "u1.json") in content
         assert (tmp_path / TOOL_RESULTS_DIRNAME / "u1.json").is_file()
 
@@ -353,7 +358,7 @@ class TestExecutorIntegration:
         assert len(results) == 2
         for r, tuid in zip(results, ["p1", "p2"]):
             assert (tmp_path / TOOL_RESULTS_DIRNAME / f"{tuid}.json").is_file()
-            assert "truncated" in r["content"]
+            assert "clipped" in r["content"]
 
     @pytest.mark.asyncio
     async def test_partition_persists_large_payload(self, tmp_path):

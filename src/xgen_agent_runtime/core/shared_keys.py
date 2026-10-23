@@ -49,6 +49,8 @@ class SharedKeys:
     re-checking the matrix for identical inputs in the same turn."""
 
     FILE_WITNESSED: Final = "executor.file_witnessed"
+    #: Line ranges read of files not yet read whole: {path: {"total": n, "ranges": [[a, b], ...]}}.
+    FILE_READ_RANGES: Final = "executor.file_read_ranges"
     """Paths whose contents the agent has observed in this session.
 
     File tools use this ledger to refuse blind overwrites of existing
@@ -94,6 +96,13 @@ class SharedKeys:
 
     MEMORY_NEEDS_REFLECTION: Final = "memory.needs_reflection"
     """Boolean flag for deferred reflection — legacy Geny path."""
+
+    TURN_ASSISTANT_TEXTS: Final = "executor.turn_assistant_texts"
+    """Every assistant response text of the run, in order (list of strings; Stage 9 appends).
+
+    The non-streaming host returns all of them, like the streaming host shows all of them.
+    Before 2026-10-23 it returned only the last response: a report written before a final
+    "saved it" step reached the caller as "saved it"."""
 
     TURN_NOTES: Final = "executor.turn_notes"
     """Host-written notes about THIS turn's situation (list of strings).
