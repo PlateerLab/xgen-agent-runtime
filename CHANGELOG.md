@@ -18,7 +18,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - **어디서 했는지**: `memory_write` 가 노트를 쓸 때마다 그 대화를 frontmatter `written_in` 에 적는다(모델이 아니라 메모리가). 고쳐 쓰면
   앞의 대화와 다른 frontmatter 는 둔다. `memory_read` 가 `written_in` 을 보여 준다.
 - **원문까지**: `ConversationHistory(conversation=<id>)` 는 그 사용자의 다른 대화를 원문으로 읽는다. 열 수 있는지는 호스트가 정한다
-  (provider 의 `session_stm(id)`, 없거나 None 이면 열 수 없다고 말한다).
+  (provider 의 `session_stm(id)`, 동기·async 모두, 없거나 None 이면 열 수 없다고 말한다).
 - 메모리 지침: assignment 노트에 사용자의 말·조건과 함께 한 일(파일·자리·결과)을 남기라고 한다. 사용자가 예전 일을 가리키면
   행동하기 전에 메모리에서 찾고, 노트를 읽고, 필요하면 그 노트를 쓴 대화를 읽으라고 한다. "매 턴 보인다" 는 문장은 뺐다.
 - 걷어낸 것: 매 턴 assignment 절(`AssignmentsBlock`), 리트리버의 assignment 층·몫, 이벤트 `memory.assignments_loaded`(은퇴, 카탈로그 v21).

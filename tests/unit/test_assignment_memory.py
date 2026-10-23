@@ -189,3 +189,25 @@ def test_end_to_end_the_edit_from_another_conversation_is_found_and_read():
     assert note in joined, "memory_search found the assignment"
     assert '"conversation": "A"' in joined, "memory_read says where it was written"
     assert "report.md 의 표를 부서별 3개로 편집해 줘. 부가세는 빼고." in joined, "the original words are read back"
+
+
+def test_a_host_may_check_ownership_asynchronously():
+    from xgen_agent_runtime.host.memory_tools import conversation_history
+    from xgen_agent_runtime.memory.provider import Turn
+
+    other = EphemeralMemoryProvider()
+
+    async def go():
+        await other.stm().append(Turn(role="user", content="원래 지시"))
+        here = EphemeralMemoryProvider()
+
+        async def _open(sid):
+            return other.stm() if sid == "conv-A" else None
+
+        here.session_stm = _open
+        ok = await conversation_history(here, {"conversation": "conv-A", "view": "turn", "turn": 1}, state=None)
+        assert "원래 지시" in ok.content
+        denied = await conversation_history(here, {"conversation": "conv-X"}, state=None)
+        assert denied.is_error
+
+    asyncio.run(go())

@@ -13,6 +13,7 @@ ProviderDrivenStrategy 의 STM 기록)과 별개로, 에이전트가 스스로 �
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -593,6 +594,8 @@ async def conversation_history(provider: Any, tool_input: Dict[str, Any], state:
         opener = getattr(provider, "session_stm", None)
         try:
             stm = opener(conversation) if callable(opener) else None
+            if inspect.isawaitable(stm):  # a host that checks ownership with a query
+                stm = await stm
         except Exception:  # noqa: BLE001
             stm = None
         if stm is None:
