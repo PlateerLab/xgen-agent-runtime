@@ -36,7 +36,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
 __all__ = [
+    "BOARD_GUIDE",
     "BOARD_KEY",
+    "BOARD_READ_ONLY",
     "CURRENT_KEY",
     "OPEN_STATUSES",
     "STATUSES",
@@ -429,13 +431,19 @@ def render_card(
     return text
 
 
-_BOARD_GUIDE = (
+#: Added under the board (Stage 3) when the Task tool is offered this turn.
+BOARD_GUIDE = (
     "A task is work that takes more than one step or turn. If this message continues the current "
     'task, keep working on it and keep it up to date with Task(action="update") as you go (plan '
     'progress, decisions, files, next step). If it starts new multi-step work, Task(action="open"). '
     'If it returns to another open task, Task(action="switch", task_id=...). When the goal is met, '
     'Task(action="close"). A one-step question needs no task. TaskRecall(task_id=...) shows a '
     "task's whole record, including turns that are no longer in your context."
+)
+#: ...and when it is not (a backend that does not get the memory tools): no instructions to call it.
+BOARD_READ_ONLY = (
+    "These tasks are kept by the host from your turns (each turn that works on the current task is "
+    "added to it); you cannot change them from here."
 )
 
 
@@ -478,7 +486,6 @@ def render_board(
         if more:
             rows.append(f'(+{more} more open task(s): Task(action="list"))')
         parts.append("## Other open tasks\n" + "\n".join(rows))
-    parts.append(_BOARD_GUIDE)
     return "\n\n".join(parts)
 
 

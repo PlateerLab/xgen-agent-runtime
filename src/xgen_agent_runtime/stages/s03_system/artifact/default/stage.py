@@ -279,6 +279,17 @@ class SystemStage(Stage[Any, Any]):
         return deferred_catalog_text(self._tool_registry)
 
     async def execute(self, input: Any, state: PipelineState) -> Any:
+        # Blocks that speak about a tool must know whether it is offered on THIS call, and the
+        # tool list below is filled after the blocks render (the first call would see none).
+        if self._tool_registry is not None:
+            try:
+                state.shared["_offered_tools"] = [
+                    t.name
+                    for t in self._tool_registry.list_all()
+                    if self._tool_registry.is_exposed(t.name)
+                ]
+            except Exception:  # noqa: BLE001 (a hint for prompt blocks, never a gate)
+                state.shared.pop("_offered_tools", None)
         # Build system prompt (stable prefix + volatile tail separation)
         system, volatile_text = self._assemble_system(state)
 

@@ -377,10 +377,22 @@ class TaskBoardBlock(PromptBlock):
         return True
 
     def render(self, state: PipelineState) -> str:
-        from xgen_agent_runtime.memory.tasks import BOARD_KEY
+        from xgen_agent_runtime.memory.tasks import BOARD_GUIDE, BOARD_KEY, BOARD_READ_ONLY
 
         board = state.shared.get(BOARD_KEY)
-        return str(board).strip() if isinstance(board, str) else ""
+        if not isinstance(board, str) or not board.strip():
+            return ""
+        # How to use it only when the Task tool is there: a backend without the memory tools must
+        # not be told to call one.
+        names = state.shared.get("_offered_tools")
+        if not isinstance(names, list):
+            names = [
+                t.get("name") or (t.get("function") or {}).get("name")
+                for t in (getattr(state, "tools", None) or [])
+                if isinstance(t, dict)
+            ]
+        offered = "Task" in names
+        return f"{board.strip()}\n\n{BOARD_GUIDE if offered else BOARD_READ_ONLY}"
 
 
 class CustomBlock(PromptBlock):

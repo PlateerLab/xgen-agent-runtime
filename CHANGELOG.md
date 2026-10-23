@@ -27,6 +27,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   다른 대화는 provider 의 `session_stm(session_id)` 로 읽는다. TASK 마다 `tasks/task-<id>.md` 노트를 만들어 기억 검색에도 오른다.
 - TASK 노트는 기록에서 다시 쓰는 화면용이라고 첫 줄에 적는다(노트를 고쳐도 TASK 는 바뀌지 않는다). 이 대화의 현재 TASK
   노트는 판이 이미 실으므로 기억 검색에서 뺀다.
+- 판의 사용 안내(Task 를 부르라는 말)는 그 호출에 Task 도구가 있을 때만 붙는다. 메모리 도구가 없는 백엔드에는 "호스트가
+  기록한다" 만 적는다. Stage 3 은 블록을 그리기 전에 이번 호출에 나가는 도구 이름을 알린다(`_offered_tools`).
 - 이벤트 `context.task_board`(카탈로그 v19).
 
 ## [4.97.0] - 2026-10-23

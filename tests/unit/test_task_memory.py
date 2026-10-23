@@ -333,7 +333,16 @@ def test_stage2_puts_the_board_in_every_turn_and_searches_with_the_task():
     from xgen_agent_runtime.stages.s03_system.artifact.default.builders import TaskBoardBlock
 
     block = TaskBoardBlock()
-    assert block.volatile and "결제 리팩터" in block.render(state)
+    rendered = block.render(state)
+    assert block.volatile and "결제 리팩터" in rendered
+    # Task 도구가 없는 턴(CLI 메모리 도구 미광고)에는 부르라고 하지 않는다
+    assert "Task(action=" not in rendered and "you cannot change them from here" in rendered
+    state.tools = [{"name": "Task", "description": "", "input_schema": {}}]
+    assert 'Task(action="update")' in block.render(state)
+    # 첫 호출: Stage 3 가 블록을 그린 뒤에 state.tools 를 채운다 — 레지스트리에서 본 이름이 먼저다
+    state.tools = []
+    state.shared["_offered_tools"] = ["Task", "TaskRecall"]
+    assert 'Task(action="update")' in block.render(state)
 
 
 def test_task_recall_reads_history_and_a_turn_from_another_conversation():
@@ -391,3 +400,81 @@ def test_the_task_note_says_it_is_rewritten_from_the_record():
 
     _, _, body = task_note(Task(id="T-9", title="x"))
     assert body.startswith("> Written from the record of task T-9") and "edits here do not stick" in body
+
+
+# ── 끝에서 끝까지: 실제 파이프라인(build_pipeline + run_turn), 대화 둘, 턴 셋 ─────────
+
+
+def test_end_to_end_tasks_carry_across_turns_and_conversations():
+    from xgen_agent_runtime.host import runner
+    from xgen_agent_runtime.host.memory_tools import build_memory_tools
+    from xgen_agent_runtime.llm_client import BaseClient, ClientCapabilities
+    from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+    from xgen_agent_runtime.core.state import TokenUsage
+    from xgen_agent_runtime.tools import ToolRegistry
+
+    provider = EphemeralMemoryProvider()
+    seen: List[str] = []
+
+    def _resp(*blocks) -> APIResponse:
+        stop = "tool_use" if any(b.type == "tool_use" for b in blocks) else "end_turn"
+        return APIResponse(content=list(blocks), stop_reason=stop, usage=TokenUsage(input_tokens=1, output_tokens=1), model="m")
+
+    def _use(i: str, **inp) -> ContentBlock:
+        return ContentBlock(type="tool_use", tool_use_id=i, tool_name="Task", tool_input=inp)
+
+    def _text(t: str) -> ContentBlock:
+        return ContentBlock(type="text", text=t)
+
+    class _Scripted(BaseClient):
+        provider = "fake"
+        capabilities = ClientCapabilities(supports_tools=True)
+
+        def __init__(self, script):
+            super().__init__(api_key="k")
+            self._script = list(script)
+
+        async def _send(self, request, *, purpose: str = ""):
+            seen.append(repr(request))
+            return self._script.pop(0) if self._script else _resp(_text("(끝)"))
+
+    def _turn(session: str, text: str, script) -> str:
+        registry = ToolRegistry()
+        for tool in build_memory_tools(provider):
+            registry.register(tool)
+        pipe = runner.build_pipeline(
+            name="t", provider="openai", model="m", api_key="k", llm_client=_Scripted(script),
+            stream=False, enable_compaction=False, memory_provider=provider, registry=registry,
+        )
+        return runner.run_turn(pipe, text, PipelineState(session_id=session, model="m"))
+
+    # 1) 대화 A: 일을 연다
+    _turn("A", "3분기 보고서 써 줘", [
+        _resp(_text("TASK 로 엽니다."), _use("u1", action="open", title="3분기 보고서", goal="매출 보고서",
+                                            plan=[{"text": "데이터"}, {"text": "표"}, {"text": "글"}])),
+        _resp(_text("시작했습니다.")),
+    ])
+    task = asyncio.run(provider.tasks().current("A"))
+    assert task is not None and task.title == "3분기 보고서"
+
+    # 2) 대화 A: "계속" — 판이 요청에 실린다(검색과 무관)
+    seen.clear()
+    _turn("A", "계속", [
+        _resp(_use("u2", action="update", step={"n": 1, "status": "done"}, next_step="표 만들기")),
+        _resp(_text("데이터 단계 끝.")),
+    ])
+    assert "Current task in this conversation" in seen[0] and "3분기 보고서" in seen[0]
+    assert "1. [done] 데이터" in seen[1], "the update reaches the very next call"
+
+    # 3) 대화 B: 다른 대화에서 이어 간다
+    seen.clear()
+    _turn("B", "지난번 보고서 어디까지 했지?", [
+        _resp(_use("u3", action="switch", task_id=task.id)),
+        _resp(_text("데이터까지 했고 다음은 표입니다.")),
+    ])
+    assert "No task is current in this conversation." in seen[0] and "3분기 보고서" in seen[0]
+    assert "Current task in this conversation" in seen[1]
+    after = asyncio.run(provider.tasks().get(task.id))
+    assert after.focus_session == "B" and after.plan[0]["status"] == "done"
+    kinds = [e.kind for e in asyncio.run(provider.tasks().events(task.id, limit=50))]
+    assert kinds.count("turn") == 3, kinds  # 세 턴 모두 Task 를 만졌다
