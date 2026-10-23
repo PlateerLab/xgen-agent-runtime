@@ -12,11 +12,6 @@ from xgen_agent_runtime.stages.s03_system.interface import PromptBlock, PromptBu
 #: The line under ``# Relevant Knowledge``. Entries there are excerpts the store cut (a 400-char
 #: preview, a snippet around the first hit); without saying so the model treated a fragment as the
 #: whole note (2026-10-23 audit).
-#: Under the Assignments section: what these notes are and how to treat them.
-ASSIGNMENTS_NOTE = (
-    "(Notes tagged `assignment` in your memory: what the user asked for and what they said matters, "
-    "kept in their words. Follow them; where they conflict, the latest instruction wins.)"
-)
 RELEVANT_KNOWLEDGE_NOTE = (
     "(Excerpts recalled from memory for this message; an entry may be cut. "
     "Read the full note with memory_read before relying on its details.)"
@@ -248,28 +243,6 @@ class PinnedFactsBlock(PromptBlock):
         pinned = state.metadata.get("memory_pinned", "")
         if isinstance(pinned, str) and pinned.strip():
             return f"# Pinned Facts\n{pinned}"
-        return ""
-
-
-class AssignmentsBlock(PromptBlock):
-    """The user's open assignments (``state.metadata["memory_assignments"]``): notes tagged
-    ``assignment`` that memory loads on every turn (memory.assignments, 4.99.0).
-
-    Volatile: the agent rewrites these notes as the work changes, so they change between turns.
-    """
-
-    @property
-    def name(self) -> str:
-        return "memory_assignments"
-
-    @property
-    def volatile(self) -> bool:
-        return True
-
-    def render(self, state: PipelineState) -> str:
-        body = state.metadata.get("memory_assignments", "")
-        if isinstance(body, str) and body.strip():
-            return f"# Assignments\n{ASSIGNMENTS_NOTE}\n{body}"
         return ""
 
 

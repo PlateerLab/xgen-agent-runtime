@@ -70,7 +70,9 @@ from typing import Any, Dict, FrozenSet, List
 #: v19: + ``context.task_board`` (4.98.0 TASK memory: the board loaded at the start of each turn).
 #: v20: ``context.task_board`` retired (4.99.0: the TASK layer was replaced by assignment notes in
 #: memory); + ``memory.assignments_loaded``.
-EVENT_CATALOG_VERSION = 20
+#: v21: ``memory.assignments_loaded`` retired (4.100.0: assignment notes are recalled on demand,
+#: not put in every turn).
+EVENT_CATALOG_VERSION = 21
 
 
 class EventTypes(str, Enum):
@@ -147,7 +149,7 @@ class EventTypes(str, Enum):
     CONTEXT_SHORT_TERM_WINDOW = "context.short_term_window"
     #: TASK 판(4.98.0). 4.99.0 에 걷어냈다(RETIRED_EVENT_TYPES).
     CONTEXT_TASK_BOARD = "context.task_board"
-    #: 열린 assignment 노트(사용자의 지시, 메모리)를 이번 턴 프롬프트에 실었다(4.99.0).
+    #: 열린 assignment 노트를 매 턴 실었다(4.99.0). 4.100.0 에 걷어냈다(필요할 때 찾는다).
     MEMORY_ASSIGNMENTS_LOADED = "memory.assignments_loaded"
     MEMORY_COMPACTION_SUMMARIZED = "memory.compaction.summarized"
     MEMORY_COMPACTION_LLM_FAILED = "memory.compaction.llm_failed"
@@ -1065,6 +1067,8 @@ RETIRED_EVENT_TYPES: FrozenSet[EventTypes] = frozenset(
         EventTypes.TASK_REGISTRY_POLICY_ERROR,
         # 4.99.0: the TASK board went with the TASK layer (assignments live in memory notes).
         EventTypes.CONTEXT_TASK_BOARD,
+        # 4.100.0: assignment notes are recalled on demand, not loaded into every turn.
+        EventTypes.MEMORY_ASSIGNMENTS_LOADED,
     }
 )
 

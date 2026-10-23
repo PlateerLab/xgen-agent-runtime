@@ -508,7 +508,6 @@ class ContextStage(Stage[Any, Any]):
         if state.iteration == 0 and not state._is_continuation_slice:
             state.metadata.pop("memory_context", None)
             state.metadata.pop("memory_pinned", None)
-            state.metadata.pop("memory_assignments", None)
             state.shared[_TURN_SEQ_KEY] = int(state.shared.get(_TURN_SEQ_KEY) or 0) + 1
 
         # TTFT program (finding B2): retrieval results are only injected
@@ -544,13 +543,7 @@ class ContextStage(Stage[Any, Any]):
                 for c in chunks
                 if c.source == "pinned" or (c.metadata or {}).get("layer") == "pinned"
             ]
-            # The user's open assignments (memory.assignments) have their own section.
-            assignment_chunks = [
-                c for c in chunks if (c.metadata or {}).get("layer") == "assignments"
-            ]
-            other_chunks = [
-                c for c in chunks if c not in pinned_chunks and c not in assignment_chunks
-            ]
+            other_chunks = [c for c in chunks if c not in pinned_chunks]
 
             if state.messages and state.iteration == 0 and not state._is_continuation_slice:
                 if pinned_chunks:
@@ -558,19 +551,6 @@ class ContextStage(Stage[Any, Any]):
                     # join with blank lines instead of the bullet
                     # form used for search results.
                     state.metadata["memory_pinned"] = "\n\n".join(c.content for c in pinned_chunks)
-                if assignment_chunks:
-                    state.metadata["memory_assignments"] = "\n\n".join(
-                        c.content for c in assignment_chunks
-                    )
-                    meta = assignment_chunks[0].metadata or {}
-                    state.add_event(
-                        "memory.assignments_loaded",
-                        {
-                            "open": int(meta.get("open") or 0),
-                            "shown": state.metadata["memory_assignments"].count("(note: "),
-                            "chars": len(state.metadata["memory_assignments"]),
-                        },
-                    )
                 if other_chunks:
                     memory_text = "\n".join(
                         f"- [{c.source}] {c.key}: {c.content}" for c in other_chunks
