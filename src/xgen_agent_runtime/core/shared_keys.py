@@ -126,6 +126,19 @@ class SharedKeys:
     The host sets it for the device folder tools when this conversation
     has no folder connected (``host.local_folders``)."""
 
+    FOLDED_TOOL_RESULTS: Final = "executor.folded_tool_results"
+    """Tool results whose bulky fields a newer result of the same thing replaced.
+
+    ``{"names": [...], "key": [...], "fields": [...], "note": str}``. Stage 6
+    replaces ``fields`` of an older JSON result with ``note`` in the request
+    copy when a newer result of the same tools has the same ``key`` values
+    (``core.message_repair.fold_superseded_results``). History itself is
+    untouched.
+
+    The host sets it for the device browser tools: a newer snapshot of the
+    same tab and address replaces an older one whose element refs have
+    already expired (``host.device_tools.browser_snapshot_fold_spec``)."""
+
     # ── Geny (host plugin) -------------------------------------------
 
     GENY_CREATURE_STATE: Final = "geny.creature_state"
