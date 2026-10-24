@@ -182,6 +182,10 @@ class CodexCLIClient(BaseClient):
         self._mcp_config = mcp_config
         self._extra_args = tuple(extra_args)
         self._timeout_s = timeout_s
+        #: How long the turn's tools have been idle (seconds, 0 while one runs): set by the host for a
+        #: turn whose tools run through a bridge. ``timeout_s`` is an idle limit (no output and no tool
+        #: activity), so a CLI that waits on a long tool is not stopped (:class:`CLIProcessRunner`).
+        self._activity_probe: Optional[Callable[[], float]] = None
         self._extra_env: Dict[str, str] = dict(env_extras) if env_extras else {}
         self._strict_wire = strict_wire
         self._runner_factory = runner_factory
@@ -205,6 +209,10 @@ class CodexCLIClient(BaseClient):
             extras["OPENAI_API_KEY"] = self._api_key
         return extras
 
+    def set_activity_probe(self, probe: Optional[Callable[[], float]]) -> None:
+        """Tell the client how long the turn's tools have been idle (see ``_activity_probe``)."""
+        self._activity_probe = probe
+
     def _make_runner(self, *, timeout_s: Optional[float] = None) -> CLIProcessRunner:
         effective_timeout = self._timeout_s if timeout_s is None else timeout_s
         if self._runner_factory is not None:
@@ -222,6 +230,7 @@ class CodexCLIClient(BaseClient):
         return CLIProcessRunner(
             binary=self._binary,
             cwd=self._workspace_dir,
+            idle_probe=self._activity_probe,
             env_extras=self._env_extras(),
             timeout_s=effective_timeout,
         )

@@ -927,6 +927,13 @@ class AgentTurnExecutor:
                     "codex",
                     kwargs,
                 )
+            if _tool_surface is not None and callable(
+                getattr(llm_client, "set_activity_probe", None)
+            ):
+                # The CLI prints nothing while a bridged tool runs: its time limit is idle time, and the
+                # surface says when the tools were last busy. A working turn is no longer stopped at
+                # the limit; a silent one with nothing running still is (2026-10-24 review).
+                llm_client.set_activity_probe(_tool_surface.idle_seconds)
 
             # ── 작은 워크스페이스 fast path (관리자/노드 opt-in) ──────────
             # 전체 입력을 확실히 실을 수 있을 때만 탐색 왕복을 없앤다. 과제명·확장자·
