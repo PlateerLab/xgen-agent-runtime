@@ -25,6 +25,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,8 +59,25 @@ class TurnToolSurface:
         #: CLI 는 자기 도구 사건을 스트림으로 알린다 — 여기서 파이프라인 사건으로 또 내면 화면에 두 번
         #: 뜬다. 진단용으로만 붙잡아 둔다(최근 것 몇 개).
         self.events: List[Tuple[str, Dict[str, Any]]] = []
+        #: 도구 활동. CLI 는 브릿지 도구가 도는 동안 아무것도 출력하지 않으므로, CLI 의 "조용함" 만으로는
+        #: 멈춘 것과 일하는 것을 가를 수 없다. 이 표면이 그 사실을 안다(:meth:`idle_seconds`).
+        self._calls_in_flight = 0
+        self._last_activity = time.monotonic()
+        self._activity_lock = threading.Lock()
 
     # ── 수명 ─────────────────────────────────────────────────────────
+
+    def idle_seconds(self) -> float:
+        """마지막 도구 활동 뒤 흐른 시간(초). 도구가 도는 중이면 0."""
+        with self._activity_lock:
+            if self._calls_in_flight > 0:
+                return 0.0
+            return max(0.0, time.monotonic() - self._last_activity)
+
+    def _activity(self, delta: int) -> None:
+        with self._activity_lock:
+            self._calls_in_flight = max(0, self._calls_in_flight + delta)
+            self._last_activity = time.monotonic()
 
     def bind_loop(self, loop: Optional[asyncio.AbstractEventLoop]) -> None:
         """턴 루프를 알린다(러너가 루프를 만들 때 부르고, 닫기 전에 None 으로 부른다)."""
@@ -164,10 +183,14 @@ class TurnToolSurface:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if running is loop:
-            return await self._dispatch(name, arguments)
-        future = asyncio.run_coroutine_threadsafe(self._dispatch(name, arguments), loop)
-        return await asyncio.wrap_future(future)
+        self._activity(+1)
+        try:
+            if running is loop:
+                return await self._dispatch(name, arguments)
+            future = asyncio.run_coroutine_threadsafe(self._dispatch(name, arguments), loop)
+            return await asyncio.wrap_future(future)
+        finally:
+            self._activity(-1)
 
 
 def to_mcp_result(result: Dict[str, Any]) -> Dict[str, Any]:
