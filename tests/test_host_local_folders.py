@@ -234,3 +234,15 @@ def test_wrong_machine_note_names_the_copy_tool() -> None:
 
     tools = device_file_tools(["mcp_local_ReadFile", "mcp_local_CopyToWorkspace", "Read"])
     assert tools == "mcp_local_ReadFile / mcp_local_CopyToWorkspace"
+
+
+def test_device_browser_tools_ask_stage_six_to_fold_superseded_snapshots(capture) -> None:
+    _run(_DeviceHost(), capture, client_surface="connector")
+    spec = _state(capture).shared[SharedKeys.FOLDED_TOOL_RESULTS]
+    assert spec["names"] == ["mcp_local_BrowserNavigate"]
+    assert spec["key"] == ["page_id", "url"]
+
+
+def test_no_browser_tool_no_fold(capture) -> None:
+    _run(_DeviceHost(catalog=["mcp_local_ReadFile"]), capture, client_surface="connector")
+    assert SharedKeys.FOLDED_TOOL_RESULTS not in _state(capture).shared

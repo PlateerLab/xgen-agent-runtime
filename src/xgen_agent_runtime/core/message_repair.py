@@ -357,3 +357,108 @@ def retire_tool_calls_by_name(
         is_retired=lambda name: _BRIDGE_PREFIX.sub("", str(name or "")) in names,
         reason=reason,
     )
+
+
+# ── Folding results that a newer result replaced ──────────────────────
+
+
+def _field(obj: Any, path: str) -> Any:
+    node = obj
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+def _with_field(obj: Dict[str, Any], path: str, value: Any) -> Dict[str, Any]:
+    """Copy of ``obj`` with the dotted ``path`` set; the dicts on the way are copied, not mutated."""
+    head, _, rest = path.partition(".")
+    if not rest:
+        return {**obj, head: value}
+    child = obj.get(head)
+    return {**obj, head: _with_field(child, rest, value)} if isinstance(child, dict) else obj
+
+
+def fold_superseded_results(
+    messages: Sequence[Dict[str, Any]], spec: Any
+) -> List[Dict[str, Any]]:
+    """Fold the bulky fields of tool results that a newer result of the same thing replaced.
+
+    ``spec`` is ``{"names": [...], "key": [...], "fields": [...], "note": str}``.
+    A result of one of ``names`` (with or without a CLI bridge server prefix)
+    whose text is one JSON object says what it shows by its ``key`` fields
+    (for a browser tab: ``page_id`` and ``url``). From newest to oldest, the
+    newest result per key that carries any of ``fields`` (dotted paths such
+    as ``result.snapshot``) keeps them; in each older result with the same
+    key those fields become ``note``. The call, the rest of the result and
+    every other message stay as they are, so pairing and order are unchanged.
+
+    Returns a COPY — history itself is untouched. A malformed spec, an error
+    result, a result that is not one JSON object or one without every key
+    field is left as it is.
+    """
+    if not isinstance(spec, dict):
+        return list(messages)
+    names = {str(n) for n in (spec.get("names") or []) if n}
+    key = [str(k) for k in (spec.get("key") or []) if k]
+    fields = [str(f) for f in (spec.get("fields") or []) if f]
+    if not names or not key or not fields:
+        return list(messages)
+    note = str(spec.get("note") or "[folded: a newer result of the same thing follows]")
+
+    tool_of: Dict[Any, str] = {}
+    for msg in messages:
+        content = msg.get("content")
+        if msg.get("role") != "assistant" or not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                tool_of[block.get("id")] = _BRIDGE_PREFIX.sub("", str(block.get("name") or ""))
+
+    seen: set[str] = set()
+    out: List[Dict[str, Any]] = list(messages)
+    for index in range(len(out) - 1, -1, -1):
+        content = out[index].get("content")
+        if not isinstance(content, list):
+            continue
+        blocks = list(content)
+        changed = False
+        for position in range(len(blocks) - 1, -1, -1):
+            block = blocks[position]
+            if (
+                not isinstance(block, dict)
+                or block.get("type") != "tool_result"
+                or block.get("is_error")
+                or tool_of.get(block.get("tool_use_id")) not in names
+            ):
+                continue
+            raw = block.get("content")
+            single = isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict)
+            text = raw[0].get("text") if single and raw[0].get("type") == "text" else raw
+            if not isinstance(text, str):
+                continue
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            ident = [_field(payload, k) for k in key]
+            if any(part is None or part == "" for part in ident):
+                continue
+            present = [f for f in fields if _field(payload, f) not in (None, "", note)]
+            if not present:
+                continue
+            marker = json.dumps(ident, ensure_ascii=False, default=str)
+            if marker not in seen:
+                seen.add(marker)  # 이 key 의 가장 새 결과 — 그대로 둔다
+                continue
+            for path in present:
+                payload = _with_field(payload, path, note)
+            folded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            blocks[position] = {**block, "content": [{**raw[0], "text": folded}] if single else folded}
+            changed = True
+        if changed:
+            out[index] = {**out[index], "content": blocks}
+    return out

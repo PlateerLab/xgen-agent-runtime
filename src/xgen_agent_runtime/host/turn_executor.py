@@ -27,6 +27,7 @@ from xgen_agent_runtime.host._constants import (  # noqa: E402
 )
 from xgen_agent_runtime.host import local_folders as _local_folders
 from xgen_agent_runtime.host import user_pc as _user_pc
+from xgen_agent_runtime.host.device_tools import browser_snapshot_fold_spec
 from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
 from xgen_agent_runtime.host.turn_input import TurnInput
 from xgen_agent_runtime.tools.built_in.read_tool import MODEL_VISION_KEY
@@ -486,6 +487,9 @@ class AgentTurnExecutor:
                     if _pc is not None
                     else _local_folders.retired_calls_spec()
                 )
+            _snapshot_fold = browser_snapshot_fold_spec(_device_tool_names)
+            if _snapshot_fold:
+                state.shared[SharedKeys.FOLDED_TOOL_RESULTS] = _snapshot_fold
             if _pc is not None:
                 _folder_facts = _user_pc.shared_folder_facts(_pc.folders)
             else:

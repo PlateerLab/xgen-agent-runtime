@@ -24,6 +24,7 @@ from xgen_agent_runtime.core.compaction import note_api_call
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
 from xgen_agent_runtime.core.token_estimate import record_prompt_usage
 from xgen_agent_runtime.core.message_repair import (
+    fold_superseded_results,
     normalize_messages_for_request,
     retire_tool_calls_by_name,
 )
@@ -842,6 +843,11 @@ class APIStage(Stage[Any, APIResponse]):
             messages = self._inject_turn_context(messages, turn_context)
         if extra_messages:
             messages.extend(extra_messages)
+        folded = state.shared.get(SharedKeys.FOLDED_TOOL_RESULTS)
+        if folded:
+            # 같은 것을 더 새로 보여 준 결과가 뒤에 있으면 앞 결과의 큰 필드는 접는다 — 기록은 그대로, 요청 사본만.
+            # 이번 루프의 결과(extra_messages)까지 본다.
+            messages = fold_superseded_results(messages, folded)
         messages = normalize_messages_for_request(messages)
         kwargs: Dict[str, Any] = {
             "model_config": cfg,
