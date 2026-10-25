@@ -25,7 +25,11 @@ import re
 from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
-from xgen_agent_runtime.host.local_folders import FOLDER_TOOLS_BY_SERVER, device_tool_name, model_tool_name
+from xgen_agent_runtime.host.local_folders import (
+    FOLDER_TOOLS_BY_SERVER,
+    device_tool_name,
+    model_tool_name,
+)
 from xgen_agent_runtime.tools import Tool, ToolResult, build_tool
 from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 

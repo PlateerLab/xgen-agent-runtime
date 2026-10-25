@@ -380,9 +380,7 @@ def _with_field(obj: Dict[str, Any], path: str, value: Any) -> Dict[str, Any]:
     return {**obj, head: _with_field(child, rest, value)} if isinstance(child, dict) else obj
 
 
-def fold_superseded_results(
-    messages: Sequence[Dict[str, Any]], spec: Any
-) -> List[Dict[str, Any]]:
+def fold_superseded_results(messages: Sequence[Dict[str, Any]], spec: Any) -> List[Dict[str, Any]]:
     """Fold the bulky fields of tool results that a newer result of the same thing replaced.
 
     ``spec`` is ``{"names": [...], "key": [...], "fields": [...], "note": str}``.
@@ -434,8 +432,12 @@ def fold_superseded_results(
             ):
                 continue
             raw = block.get("content")
-            single = isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict)
-            text = raw[0].get("text") if single and raw[0].get("type") == "text" else raw
+            first = (
+                raw[0]
+                if isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict)
+                else None
+            )
+            text = first.get("text") if first is not None and first.get("type") == "text" else raw
             if not isinstance(text, str):
                 continue
             try:
@@ -457,7 +459,10 @@ def fold_superseded_results(
             for path in present:
                 payload = _with_field(payload, path, note)
             folded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-            blocks[position] = {**block, "content": [{**raw[0], "text": folded}] if single else folded}
+            blocks[position] = {
+                **block,
+                "content": [{**first, "text": folded}] if first is not None else folded,
+            }
             changed = True
         if changed:
             out[index] = {**out[index], "content": blocks}
