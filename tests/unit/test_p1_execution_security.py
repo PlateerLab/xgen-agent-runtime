@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from xgen_agent_runtime.core.message_repair import EXTERNAL_RESULT_LABEL
 from xgen_agent_runtime.core.pipeline import Pipeline
 from xgen_agent_runtime.hooks import HookConfig, HookEvent, HookOutcome, HookRunner
 from xgen_agent_runtime.host.execution_scope import CancellationScope, ExecutionBoundaryError, RunBudget, bind_run_guard
@@ -198,6 +199,7 @@ async def test_external_data_cannot_inject_authority_and_gets_host_provenance():
     allowed = await router(tool).route("record", {}, context)
     assert not allowed.is_error and allowed.provenance["trust_level"] == "untrusted"
     assert allowed.content.startswith("External data (untrusted")
+    assert allowed.content.startswith(EXTERNAL_RESULT_LABEL)  # 접기가 떼어 읽는 그 머리말
 
 
 @pytest.mark.asyncio

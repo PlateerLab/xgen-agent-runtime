@@ -10,7 +10,7 @@ import json
 from copy import deepcopy
 from typing import Any, Dict, List
 
-from xgen_agent_runtime.core.message_repair import fold_superseded_results
+from xgen_agent_runtime.core.message_repair import EXTERNAL_RESULT_LABEL, fold_superseded_results
 from xgen_agent_runtime.host.device_tools import BROWSER_SNAPSHOT_FOLD_NOTE, browser_snapshot_fold_spec
 
 NAV = "mcp_local_BrowserNavigate"
@@ -127,3 +127,33 @@ def test_stage_six_folds_the_request_copy_including_this_loops_results() -> None
     assert state.messages == before
     assert _payload(kwargs["messages"], 2)["result"]["snapshot"] == BROWSER_SNAPSHOT_FOLD_NOTE
     assert _payload(kwargs["messages"], 4)["result"]["data"]["snapshot"] == "새 화면"
+
+
+def test_results_labeled_as_external_data_fold_and_keep_the_label() -> None:
+    # Stage 10 이 기기 도구 결과 앞에 머리말을 붙인다(10/25 dev 실측: 이것 때문에 하나도 접히지 않았다).
+    old, new = _page("- link \"메일\" [ref=e1]\n" * 50), _page("- link \"메일\" [ref=e9]", data=True)
+
+    def labeled(payload: Dict[str, Any]) -> str:
+        return EXTERNAL_RESULT_LABEL + json.dumps(payload, ensure_ascii=False)
+
+    messages = [_call("a", NAV), _result("a", labeled(old)), _call("b", SNAP), _result("b", labeled(new))]
+    out = fold_superseded_results(messages, SPEC)
+    folded = out[1]["content"][0]["content"]
+    assert folded.startswith(EXTERNAL_RESULT_LABEL)
+    assert json.loads(folded[len(EXTERNAL_RESULT_LABEL) :])["result"]["snapshot"] == BROWSER_SNAPSHOT_FOLD_NOTE
+    assert out[3] is messages[3]
+
+
+def test_a_label_carried_as_its_own_text_block_stays_in_front() -> None:
+    def labeled(call_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        content = [
+            {"type": "text", "text": EXTERNAL_RESULT_LABEL},
+            {"type": "text", "text": json.dumps(payload, ensure_ascii=False)},
+        ]
+        return {"role": "user", "content": [{"type": "tool_result", "tool_use_id": call_id, "content": content}]}
+
+    old, new = _page("- textbox \"상품명\" [ref=e1]\n" * 50), _page("- textbox \"상품명\" [ref=e7]")
+    out = fold_superseded_results([_call("a", NAV), labeled("a", old), _call("b", NAV), labeled("b", new)], SPEC)
+    label, body = out[1]["content"][0]["content"]
+    assert label == {"type": "text", "text": EXTERNAL_RESULT_LABEL}
+    assert json.loads(body["text"])["result"]["snapshot"] == BROWSER_SNAPSHOT_FOLD_NOTE
