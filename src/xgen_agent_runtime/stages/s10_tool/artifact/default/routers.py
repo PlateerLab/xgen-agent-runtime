@@ -459,7 +459,14 @@ class RegistryRouter(ToolRouter):
         timeout_s = float(getattr(caps, "timeout_s", 0.0) or 0.0)
         effective_scope = scope
         if effective_scope is None and budget is not None:
-            effective_scope = CancellationScope(deadline=budget.deadline)
+            expired = getattr(budget, "expired", None)
+            # Ask the budget each tick: an idle-mode budget's deadline moves with activity, and this
+            # very call is activity (a deadline read once here would cut a long tool that is working).
+            effective_scope = (
+                CancellationScope(cancel_check=expired)
+                if callable(expired)
+                else CancellationScope(deadline=budget.deadline)
+            )
         execution_failed = False
         try:
             if effective_scope is not None:

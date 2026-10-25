@@ -51,6 +51,7 @@ from typing import (
     Any,
     AsyncGenerator,
     AsyncIterator,
+    Callable,
     Iterable,
     Mapping,
     NamedTuple,
@@ -343,6 +344,13 @@ class CLIProcessRunner:
     #: the pipe buffer, which drain immediately. This grace is generous
     #: for that and short enough that a leaked FD costs seconds.
     exit_drain_grace_s: float = 5.0
+    #: ``timeout_s`` is an **idle** limit for :meth:`stream`: the CLI is stopped after that long with no
+    #: output and no tool activity. A tool the CLI runs through a host bridge prints nothing while it
+    #: works, so the host says how long its tools have been idle (0 while one is running). Before
+    #: (2026-10-24) the limit counted from the start: a turn that was working was killed at the hour.
+    idle_probe: Optional[Callable[[], float]] = None
+    #: Optional hard ceiling for one stream, from its start (0 = none).
+    max_wall_s: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.binary:
@@ -429,6 +437,8 @@ class CLIProcessRunner:
                 start_t=t0,
                 proc=proc,
                 drain_grace_s=self.exit_drain_grace_s,
+                idle_probe=self.idle_probe,
+                max_wall_s=self.max_wall_s,
             ):
                 yield line
             rc = await self._reap(proc)
@@ -575,8 +585,14 @@ async def _aiter_lines(
     start_t: float,
     proc: Optional[asyncio.subprocess.Process] = None,
     drain_grace_s: float = 5.0,
+    idle_probe: Optional[Callable[[], float]] = None,
+    max_wall_s: float = 0.0,
 ) -> AsyncIterator[bytes]:
     """Yield stdout lines until EOF — or until the child is gone and quiet.
+
+    ``timeout_s`` is an idle limit: it is measured from the last line, and while ``idle_probe`` says a
+    tool is running or ran recently (its idle seconds are below the limit) the stream keeps waiting.
+    ``max_wall_s`` (when set) is a hard ceiling from ``start_t``.
 
     Once the child has exited, EOF is no longer guaranteed to arrive at
     all: an inherited write end can keep the pipe open indefinitely. So
@@ -589,12 +605,25 @@ async def _aiter_lines(
         return
     read_task: Optional[asyncio.Task[bytes]] = None
     died_at: Optional[float] = None
+    last_line_t = start_t
     try:
         while True:
             now = time.monotonic()
-            remaining = timeout_s - (now - start_t)
+            if max_wall_s > 0 and now - start_t >= max_wall_s:
+                raise CLITimeout(f"stream exceeded its {max_wall_s:.0f}s ceiling")
+            quiet = now - last_line_t
+            if idle_probe is not None and quiet >= timeout_s:
+                try:
+                    quiet = min(quiet, float(idle_probe()))
+                except Exception:  # noqa: BLE001 (a broken probe must not keep a dead CLI alive)
+                    pass
+            remaining = timeout_s - quiet
             if remaining <= 0:
-                raise CLITimeout(f"stream timeout after {timeout_s:.1f}s")
+                raise CLITimeout(
+                    f"no output and no tool activity for {timeout_s:.1f}s"
+                    if idle_probe is not None
+                    else f"stream timeout: no output for {timeout_s:.1f}s"
+                )
 
             # One read task, carried across iterations: a readline that
             # loses the race must NOT be discarded, or the bytes it is
@@ -629,11 +658,8 @@ async def _aiter_lines(
             )
 
             if read_task not in done:
-                if died_at is not None or budget < remaining:
-                    # Either draining after exit, or just a poll tick with
-                    # budget left — go round again.
-                    continue
-                raise CLITimeout(f"stream readline timeout after {timeout_s:.1f}s")
+                # Draining after exit, or a poll tick: go round again (the idle check is at the top).
+                continue
 
             try:
                 line = read_task.result()
@@ -657,6 +683,7 @@ async def _aiter_lines(
                     read_task = None
             if not line:
                 return
+            last_line_t = time.monotonic()
             yield line
     finally:
         if read_task is not None and not read_task.done():

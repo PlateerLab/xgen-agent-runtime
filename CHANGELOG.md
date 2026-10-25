@@ -4,7 +4,7 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [4.103.0] - 2026-10-25
 
 ### Added: 같은 탭·같은 주소의 옛 브라우저 스냅샷을 요청 사본에서 접는다
 
@@ -19,6 +19,22 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - 호스트: 이번 턴에 기기 브라우저 도구(`mcp_<기기>_Browser*`, 문 제외)가 있으면 `host.device_tools.browser_snapshot_fold_spec`
   을 넣는다. key 는 `page_id`·`url` 이다 — 주소가 다르면 앞 페이지에서 읽은 것이 그 글에만 있을 수 있어 접지 않는다. 같은
   주소의 더 새 스냅샷이 있으면 앞 것은 ref 도 이미 만료됐다(스냅샷마다 generation 이 오른다).
+
+## [4.102.0] - 2026-10-24
+
+### Fixed: 일하는 턴은 시계로 끊기지 않는다 (아무 일도 없을 때만 끝난다)
+
+DEV 에서 긴 에이전트 턴(긴 빌드·연이은 도구 호출)이 일하는 중에 끊겼다. 시간 한도가 모두 **시작부터 센 고정값**이었다.
+
+- `RunBudget(max_idle_seconds=…)`: 유휴 모드. 아무 일도 없이(모델 호출·도구 호출이 없고 도는 것도 없이) 그만큼 지나야
+  끝난다. 도는 도구(`reserve`~`release`)와 도는 모델 호출(`begin_model_call`~`end_model_call`)은 활동이다.
+  `max_wall_seconds` 는 상한이 된다. 기본(유휴 모드 아님)은 예전과 같다. `expired()`, `idle_seconds()`, `touch()`.
+- `max_total_result_bytes`: 턴 전체 결과 바이트 상한을 결과 하나의 상한(`max_result_bytes`)과 따로 둔다.
+- Stage 6 이 모델 호출을 도는 동안 호스트에 알린다(`_host_model_activity`, `bind_run_guard` 가 건다).
+- 라우터의 임시 취소 범위는 마감을 한 번 읽지 않고 예산에 매번 묻는다(유휴 모드의 마감은 활동으로 밀린다).
+- CLI(claude_code·codex): `timeout_s` 가 **유휴 한도**가 됐다. 출력도 도구 활동도 없이 그만큼 지나야 멈춘다. 브릿지
+  도구가 도는 동안 CLI 는 아무것도 출력하지 않으므로 턴의 도구 표면이 활동을 알린다(`TurnToolSurface.idle_seconds`,
+  `set_activity_probe`). 예전에는 시작부터 1시간이면 일하는 중에도 끊었다.
 
 ## [4.101.0] - 2026-10-23
 

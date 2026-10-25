@@ -622,6 +622,22 @@ class APIStage(Stage[Any, APIResponse]):
 
         return response
 
+    async def _while_model_active(self, call: Any) -> Any:
+        """Run one provider call with the host told it is in flight (``_host_model_activity``).
+
+        A host that ends a run after a stretch of inactivity must not count a long answer, or a CLI
+        turn whose tools are running, as inactivity (2026-10-24: a working turn was cut at five minutes).
+        """
+        hooks = getattr(self, "_host_model_activity", None)
+        if not hooks:
+            return await call
+        begin, end = hooks
+        begin()
+        try:
+            return await call
+        finally:
+            end()
+
     async def _recover_overflow(
         self, state: PipelineState, error: APIError, *, client: Any = None, model: str = ""
     ) -> bool:
@@ -941,7 +957,9 @@ class APIStage(Stage[Any, APIResponse]):
             try:
                 limit = self._request_timeout_s()
                 try:
-                    return await asyncio.wait_for(client.create_message(**kwargs), timeout=limit)
+                    return await self._while_model_active(
+                        asyncio.wait_for(client.create_message(**kwargs), timeout=limit)
+                    )
                 except asyncio.TimeoutError:
                     raise APIError(
                         f"모델이 {limit:g}초 안에 답하지 않았습니다",
@@ -1006,7 +1024,9 @@ class APIStage(Stage[Any, APIResponse]):
             if boundary is not None:
                 boundary()
             try:
-                return await self._call_streaming(client, cfg, state, extra_messages=extra_messages)
+                return await self._while_model_active(
+                    self._call_streaming(client, cfg, state, extra_messages=extra_messages)
+                )
             except APIError as e:
                 last_error = e
                 if e.category == ErrorCategory.TIMEOUT:

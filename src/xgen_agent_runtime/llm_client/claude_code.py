@@ -329,6 +329,10 @@ class ClaudeCodeCLIClient(BaseClient):
         self._disallow_tools = tuple(disallow_tools)
         self._extra_args = tuple(extra_args)
         self._timeout_s = timeout_s
+        #: How long the turn's tools have been idle (seconds, 0 while one runs): set by the host for a
+        #: turn whose tools run through a bridge. ``timeout_s`` is an idle limit (no output and no tool
+        #: activity), so a CLI that waits on a long tool is not stopped (:class:`CLIProcessRunner`).
+        self._activity_probe: Optional[Callable[[], float]] = None
         self._extra_env: Dict[str, str] = dict(env_extras) if env_extras else {}
         self._strict_wire = strict_wire
         self._runner_factory = runner_factory
@@ -535,6 +539,10 @@ class ClaudeCodeCLIClient(BaseClient):
     def _truthy(value: Any) -> bool:
         return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
+    def set_activity_probe(self, probe: Optional[Callable[[], float]]) -> None:
+        """Tell the client how long the turn's tools have been idle (see ``_activity_probe``)."""
+        self._activity_probe = probe
+
     def _make_runner(
         self,
         *,
@@ -564,6 +572,7 @@ class ClaudeCodeCLIClient(BaseClient):
         return CLIProcessRunner(
             binary=self._binary,
             cwd=self._workspace_dir,
+            idle_probe=self._activity_probe,
             env_extras=env_extras,
             timeout_s=effective_timeout,
         )
