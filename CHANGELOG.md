@@ -4,6 +4,20 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.103.2] - 2026-10-26
+
+### Fixed: Chat Completions 가 생각만 하다 출력 상한에 닿으면 한 번 더 부른다
+
+OpenRouter `qwen/qwen3.8-flash`(max_tokens 4096, thinking auto)가 긴 화면 결과 뒤에 53초 동안 생각만 하다 상한에 닿아
+글도 도구 호출도 없이 끝났고, 루프는 그 빈 답으로 턴을 완료로 닫았다(dev 10/26, 상품 등록 화면에서 입력 없이 끝남).
+Anthropic(`_truncated_without_output`)·Responses(`_with_more_output_room`) 경로에는 있던 재시도가 Chat Completions
+경로(OpenAI·OpenRouter·vLLM 호환)에만 없었다.
+
+- `finish_reason` 이 `length` 이고 글이 없으면(상한에서 끊긴 도구 호출은 인자가 잘렸을 수 있어 출력으로 치지 않는다)
+  출력 상한(`max_tokens`·`max_completion_tokens`)을 두 배로(천장 32,000) 넓혀 한 번 더 부른다 — 스트리밍·비스트리밍 둘 다.
+  한 번에 천장까지 올리지 않는다: 작은 문맥의 자체 서빙 모델은 큰 상한을 거절하고, 생각이 긴 모델은 넓힌 만큼 더 생각한다.
+- 다시 부른 호출이 실패하면 원래(잘린) 응답을 그대로 쓴다. 글이 이미 나간 응답은 다시 부르지 않는다.
+
 ## [4.103.1] - 2026-10-25
 
 ### Fixed: 외부 데이터 머리말이 붙은 결과도 접는다

@@ -243,6 +243,33 @@ def _with_more_output_room(kwargs: Dict[str, Any], response: Any) -> Optional[Di
     return retry
 
 
+#: Chat Completions 를 상한을 넓혀 다시 부를 때의 천장 — Anthropic 스트림 재시도와 같다.
+_CHAT_RETRY_MAX_TOKENS = 32_000
+
+
+def _chat_truncated_without_output(finish_reason: Any, text: Any) -> bool:
+    """출력 상한(``finish_reason`` "length")으로 멈췄고 글이 없다 — 도구 호출이 있어도 그렇다. 상한에서 끊긴
+    도구 호출은 인자가 잘렸을 수 있어 출력으로 치지 않고, 다시 부르면 버린다(Anthropic 의
+    ``_truncated_without_output`` 과 같다). 다시 부른 쪽의 응답·usage 가 첫 응답을 대신하는 것도 Anthropic·
+    Responses 경로와 같다."""
+    return finish_reason == "length" and not str(text or "").strip()
+
+
+def _chat_with_more_room(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Chat Completions 인자의 출력 상한을 두 배로(천장 ``_CHAT_RETRY_MAX_TOKENS``). 넓힐 여지가 없으면 None.
+
+    한 번에 천장까지 올리지 않는다 — 작은 문맥의 자체 서빙 모델은 큰 상한을 거절하고, 생각이 길어지는
+    모델은 넓힌 만큼 더 오래 생각한다. 노드 기본값(4096·8192)이면 두 배로 대개 답에 닿는다.
+    """
+    key = "max_completion_tokens" if kwargs.get("max_completion_tokens") else "max_tokens"
+    current = int(kwargs.get(key) or 0)
+    if not current or current >= _CHAT_RETRY_MAX_TOKENS:
+        return None
+    retry = dict(kwargs)
+    retry[key] = min(current * 2, _CHAT_RETRY_MAX_TOKENS)
+    return retry
+
+
 class OpenAIClient(BaseClient):
     """OpenAI Chat Completions API client.
 
@@ -470,6 +497,34 @@ class OpenAIClient(BaseClient):
             kwargs,
             purpose=purpose or "chat.completions.create",
         )
+        choice = (_get_attr(raw, "choices", None) or [None])[0]
+        roomier = (
+            _chat_with_more_room(kwargs)
+            if _chat_truncated_without_output(
+                _get_attr(choice, "finish_reason", ""),
+                _get_attr(_get_attr(choice, "message", None), "content", ""),
+            )
+            else None
+        )
+        if roomier is not None:
+            try:
+                retried = await self._invoke_with_heal(
+                    client.chat.completions.create,
+                    roomier,
+                    purpose=purpose or "chat.completions.create",
+                )
+                logger.warning(
+                    "openai chat: output hit the token limit with nothing usable — retried once "
+                    "with %s (model=%r)",
+                    roomier.get("max_completion_tokens") or roomier.get("max_tokens"),
+                    request.model,
+                )
+                raw = retried
+            except Exception:  # noqa: BLE001 — 더 부른 호출이 실패하면 원래 응답
+                logger.warning(
+                    "openai chat: token-limit retry failed; keeping the truncated response",
+                    exc_info=True,
+                )
         return self._parse_response(raw)
 
     async def create_message_stream(
@@ -504,11 +559,84 @@ class OpenAIClient(BaseClient):
         # arrives as a final chunk with empty ``choices``.
         kwargs["stream_options"] = {"include_usage": True}
 
+        seen: Dict[str, Any] = {}
+        async for event in self._stream_chat_once(client, kwargs, purpose, request.model, seen):
+            yield event
+        roomier = (
+            _chat_with_more_room(kwargs)
+            if _chat_truncated_without_output(seen["finish_reason"], seen["content"])
+            else None
+        )
+        if roomier is not None:
+            # 생각만 하다 상한에 닿아 글도 도구 호출도 없다 — 그대로 두면 루프가 빈 답으로 턴을 끝낸다.
+            logger.warning(
+                "openai chat: output hit the token limit with nothing usable — retrying once "
+                "with %s (model=%r)",
+                roomier.get("max_completion_tokens") or roomier.get("max_tokens"),
+                request.model,
+            )
+            retried: Dict[str, Any] = {}
+            try:
+                async for event in self._stream_chat_once(
+                    client, roomier, purpose, request.model, retried
+                ):
+                    yield event
+                seen = retried
+            except Exception:  # noqa: BLE001 — 더 부른 호출이 실패하면 원래 응답
+                logger.warning(
+                    "openai chat: token-limit retry failed; keeping the truncated response",
+                    exc_info=True,
+                )
+        accumulated_content = seen["content"]
+        accumulated_tool_calls: Dict[int, Dict[str, Any]] = seen["tool_calls"]
+        stream_extras: Dict[str, Any] = seen["extras"]
+        model = seen["model"]
+        finish_reason = seen["finish_reason"]
+        usage_data = seen["usage"]
+
+        blocks: List[ContentBlock] = list(self._stream_leading_blocks(stream_extras, model))
+        if accumulated_content:
+            blocks.append(
+                ContentBlock(
+                    type="text",
+                    text=accumulated_content,
+                    raw={"type": "text", "text": accumulated_content},
+                )
+            )
+        for tc in accumulated_tool_calls.values():
+            tool_input = self._parse_tool_arguments(tc["arguments"])
+            blocks.append(
+                ContentBlock(
+                    type="tool_use",
+                    tool_use_id=tc["id"],
+                    tool_name=tc["name"],
+                    tool_input=tool_input,
+                    raw={
+                        "type": "tool_use",
+                        "id": tc["id"],
+                        "name": tc["name"],
+                        "input": tool_input,
+                    },
+                )
+            )
+
+        response = APIResponse(
+            content=blocks,
+            stop_reason=normalize_stop_reason(finish_reason, "openai"),
+            usage=self._parse_usage(usage_data),
+            model=model,
+            raw=self._provenance(),
+        )
+        yield {"type": "message_complete", "response": response}
+
+    async def _stream_chat_once(
+        self, client: Any, kwargs: Dict[str, Any], purpose: str, model: str, seen: Dict[str, Any]
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """한 번의 Chat Completions 스트림. 이벤트를 흘리고, 모은 글·도구 호출·끝난 이유·사용량은 ``seen`` 에."""
         accumulated_content = ""
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
         # 하위 클래스가 스트림에서 따로 모으는 것(OpenRouter 의 reasoning_details 등).
         stream_extras: Dict[str, Any] = {}
-        model = request.model
         finish_reason = ""
         usage_data: Optional[Any] = None
 
@@ -566,40 +694,14 @@ class OpenAIClient(BaseClient):
         except Exception as e:
             raise self._classify_error(e) from e
 
-        blocks: List[ContentBlock] = list(self._stream_leading_blocks(stream_extras, model))
-        if accumulated_content:
-            blocks.append(
-                ContentBlock(
-                    type="text",
-                    text=accumulated_content,
-                    raw={"type": "text", "text": accumulated_content},
-                )
-            )
-        for tc in accumulated_tool_calls.values():
-            tool_input = self._parse_tool_arguments(tc["arguments"])
-            blocks.append(
-                ContentBlock(
-                    type="tool_use",
-                    tool_use_id=tc["id"],
-                    tool_name=tc["name"],
-                    tool_input=tool_input,
-                    raw={
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["name"],
-                        "input": tool_input,
-                    },
-                )
-            )
-
-        response = APIResponse(
-            content=blocks,
-            stop_reason=normalize_stop_reason(finish_reason, "openai"),
-            usage=self._parse_usage(usage_data),
+        seen.update(
+            content=accumulated_content,
+            tool_calls=accumulated_tool_calls,
+            extras=stream_extras,
             model=model,
-            raw=self._provenance(),
+            finish_reason=finish_reason,
+            usage=usage_data,
         )
-        yield {"type": "message_complete", "response": response}
 
     # ── 하위 클래스 자리(Chat Completions) ────────────────────────────────
     #
