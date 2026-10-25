@@ -248,8 +248,10 @@ _CHAT_RETRY_MAX_TOKENS = 32_000
 
 
 def _chat_truncated_without_output(finish_reason: Any, text: Any) -> bool:
-    """출력 상한(``finish_reason`` "length")으로 멈췄고 글이 없다. 상한에서 끊긴 도구 호출은 인자가
-    잘렸을 수 있어 출력으로 치지 않는다(Anthropic 의 ``_truncated_without_output`` 과 같다)."""
+    """출력 상한(``finish_reason`` "length")으로 멈췄고 글이 없다 — 도구 호출이 있어도 그렇다. 상한에서 끊긴
+    도구 호출은 인자가 잘렸을 수 있어 출력으로 치지 않고, 다시 부르면 버린다(Anthropic 의
+    ``_truncated_without_output`` 과 같다). 다시 부른 쪽의 응답·usage 가 첫 응답을 대신하는 것도 Anthropic·
+    Responses 경로와 같다."""
     return finish_reason == "length" and not str(text or "").strip()
 
 
