@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.103.0] - 2026-10-25
+
+### Added: 같은 탭·같은 주소의 옛 브라우저 스냅샷을 요청 사본에서 접는다
+
+기기 브라우저 도구는 화면 글(스냅샷)을 결과에 싣는다. DeX 는 페이지를 옮긴 BrowserNavigate·BrowserInteract 의 결과에도
+새 화면을 싣기 시작했다(BrowserSnapshot 을 따로 부르던 LLM 턴을 없애려고). 옛 스냅샷은 매 요청에 그대로 다시 보내져,
+네이버 메일 쓰기는 한 차례에 스냅샷이 여섯 번 쌓였고(10/20) BO 상품 등록 폼은 한 번에 14,440자다.
+
+- `core.message_repair.fold_superseded_results(messages, spec)`: 지정한 도구의 JSON 결과를 `key` 필드 값으로 묶어, 가장 새
+  결과만 큰 필드(`fields`)를 남기고 앞 결과의 그 필드는 `note` 한 줄로 바꾼다. 호출과 결과의 나머지는 그대로다. 오류 결과,
+  JSON 이 아닌 결과, key 가 빠진 결과는 두고, 큰 필드가 없는 결과는 더 새 것으로 치지 않는다.
+- `SharedKeys.FOLDED_TOOL_RESULTS`: Stage 6 이 요청 사본에 적용한다(기록은 그대로, 이번 루프의 결과까지).
+- 호스트: 이번 턴에 기기 브라우저 도구(`mcp_<기기>_Browser*`, 문 제외)가 있으면 `host.device_tools.browser_snapshot_fold_spec`
+  을 넣는다. key 는 `page_id`·`url` 이다 — 주소가 다르면 앞 페이지에서 읽은 것이 그 글에만 있을 수 있어 접지 않는다. 같은
+  주소의 더 새 스냅샷이 있으면 앞 것은 ref 도 이미 만료됐다(스냅샷마다 generation 이 오른다).
+
 ## [4.102.0] - 2026-10-24
 
 ### Fixed: 일하는 턴은 시계로 끊기지 않는다 (아무 일도 없을 때만 끝난다)

@@ -21,10 +21,15 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import replace
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
-from xgen_agent_runtime.host.local_folders import device_tool_name, model_tool_name
+from xgen_agent_runtime.host.local_folders import (
+    FOLDER_TOOLS_BY_SERVER,
+    device_tool_name,
+    model_tool_name,
+)
 from xgen_agent_runtime.tools import Tool, ToolResult, build_tool
 from xgen_agent_runtime.tools.base import ToolCapabilities, with_origin
 
@@ -225,9 +230,44 @@ def build_device_guide(*, name: str, description: str, text: str) -> Tool:
     )
 
 
+#: 기기 브라우저 도구(문 ``BrowserGuide`` 뒤의 ``mcp_<기기>_Browser*``)의 이름.
+_BROWSER_RESULT_TOOL = re.compile(
+    rf"^mcp_(?:{'|'.join(map(re.escape, FOLDER_TOOLS_BY_SERVER))})_Browser(?!Guide$)\w+$"
+)
+#: 기기 브라우저 도구의 결과는 JSON 하나다 — ``{page_id, url, generation, result}``. 화면 글(스냅샷)은
+#: BrowserSnapshot 이면 ``result.data.snapshot``, 페이지를 옮긴 BrowserNavigate·BrowserInteract 면 ``result.snapshot`` 이다.
+BROWSER_SNAPSHOT_FIELDS = ("result.snapshot", "result.data.snapshot")
+BROWSER_SNAPSHOT_FOLD_NOTE = (
+    "[folded: this tab showed the same address again later in the conversation. "
+    "Use that newer snapshot; the element refs of this one have expired.]"
+)
+
+
+def browser_snapshot_fold_spec(tool_names: Iterable[str]) -> Optional[Dict[str, Any]]:
+    """``SharedKeys.FOLDED_TOOL_RESULTS`` 값 — 같은 탭·같은 주소의 더 새 스냅샷이 뒤에 있으면 앞 스냅샷을 접는다.
+
+    스냅샷을 뜰 때마다 탭의 generation 이 올라 앞 스냅샷의 ref 는 이미 쓸 수 없다(``browser_stale_ref``). 같은 주소의
+    더 새 화면이 뒤에 있으니 앞 화면 글은 낡은 사본이다. 주소가 다르면 접지 않는다 — 앞 페이지에서 읽은 것이 그 글에만
+    있을 수 있다. 화면 글은 크다: 네이버 메일 쓰기는 한 차례에 스냅샷이 여섯 번 쌓였고(10/20), BO 상품 등록 폼은 한 번에
+    14,440자다(10/24). 이번 턴에 기기 브라우저 도구가 없으면 None.
+    """
+    names = sorted({str(n) for n in tool_names if _BROWSER_RESULT_TOOL.match(str(n or ""))})
+    if not names:
+        return None
+    return {
+        "names": names,
+        "key": ["page_id", "url"],
+        "fields": list(BROWSER_SNAPSHOT_FIELDS),
+        "note": BROWSER_SNAPSHOT_FOLD_NOTE,
+    }
+
+
 __all__ = [
+    "BROWSER_SNAPSHOT_FIELDS",
+    "BROWSER_SNAPSHOT_FOLD_NOTE",
     "DeviceCall",
     "WRONG_MACHINE",
+    "browser_snapshot_fold_spec",
     "build_device_guide",
     "build_device_tool",
     "capabilities_from_annotations",
