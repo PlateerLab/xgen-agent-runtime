@@ -10,7 +10,8 @@ xgen-doc2chunk 의 ``DocumentProcessor.extract_text`` 를 부른다(청크로 �
 
 - 본문 글, 페이지·슬라이드·시트 구분 표식(``[Page Number: N]`` · ``[Slide Number: N]`` · ``[Sheet: …]``)
 - 표는 글로 옮긴 모양(HTML ``<table>`` 이나 마크다운), 차트는 ``[chart]…[/chart]`` 글
-- 이미지는 ``[Image]`` 자리표시뿐(그림 내용은 없다, OCR 도 하지 않는다)
+- 이미지는 ``[Image]`` 자리표시. 호스트가 그림 읽기 함수(``ToolContext.extras["image_reader"]``)를 주면
+  그 자리에 그림에서 읽은 글과 설명이 들어간다(4.104.0, XGEN 은 파일 저장소 그림 처리와 같은 VLM · 같은 결과)
 - 문서 메타데이터(제목·작성자·날짜 등, 있으면)
 
 **원본의 전체 구조가 아니다** — 글꼴·서식·위치·레이아웃·병합 규칙·도형·주석 등은 담지 않는다.
@@ -24,11 +25,13 @@ xgen-doc2chunk 의 ``DocumentProcessor.extract_text`` 를 부른다(청크로 �
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 import re
 import tempfile
 import threading
 from pathlib import PurePosixPath
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 
@@ -38,6 +41,15 @@ MAX_LIMIT = 200_000
 
 #: doc2chunk 가 이미지 자리에 남기는 표식 — 경로는 이 호출의 임시 폴더라 호출이 끝나면 없다.
 _IMAGE_TAG = re.compile(r"\[Image:[^\]]*\]")
+#: 경로를 꺼내는 꼴(``_IMAGE_TAG`` 와 같은 표식).
+_IMAGE_PATH = re.compile(r"\[Image:([^\]]*)\]")
+
+#: 한 번에 읽는 그림 수(같은 그림은 하나로 센다). 넘은 그림은 ``[Image]`` 로 둔다.
+MAX_IMAGES = 30
+#: 그림 하나의 크기 상한. 넘으면 읽지 않는다.
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+#: 동시에 부르는 그림 읽기 수.
+_READ_CONCURRENCY = 4
 
 #: 문서 형식이 아닌데 이 도구로 오면 Read 가 낫다고 알려 줄 확장자.
 _PLAIN_TEXT = frozenset({"txt", "md", "markdown", "log"})
@@ -60,16 +72,86 @@ def _load_processor(image_directory: str) -> Any:
 
 def _extract(local_path: str, extension: str) -> str:
     """doc2chunk 추출 — 청크 없이 글만. 지원하지 않는 형식이면 ValueError."""
+    return _extract_with_images(local_path, extension, keep_images=False)[0]
+
+
+def _extract_with_images(
+    local_path: str, extension: str, keep_images: bool = True
+) -> Tuple[str, Dict[str, bytes]]:
+    """``_extract`` 와 같고, ``keep_images`` 면 그림 표식의 그림 바이트를 임시 폴더가 지워지기 전에 읽어
+    함께 돌려준다(``{표식 경로: 바이트}``, 서로 다른 그림 최대 ``MAX_IMAGES``)."""
     with _EXTRACT_LOCK, tempfile.TemporaryDirectory(prefix="xgen-parse-img-") as image_dir:
         processor = _load_processor(image_dir)
         if not processor.is_supported(extension):
             raise ValueError(f"unsupported file type: .{extension}")
-        return processor.extract_text(
+        text = processor.extract_text(
             local_path,
             file_extension=extension,
             extract_metadata=True,
             ocr_processing=False,
         )
+        images: Dict[str, bytes] = {}
+        if keep_images and text:
+            seen = set()
+            for path in _IMAGE_PATH.findall(text):
+                if path in images or len(seen) >= MAX_IMAGES:
+                    continue
+                try:
+                    if os.path.getsize(path) > MAX_IMAGE_BYTES:
+                        continue
+                    with open(path, "rb") as handle:
+                        data = handle.read()
+                except OSError:
+                    continue
+                digest = hashlib.sha256(data).hexdigest()
+                if digest in seen:
+                    images[path] = data
+                    continue
+                seen.add(digest)
+                images[path] = data
+        return text, images
+
+
+async def _read_images(
+    text: str, images: Dict[str, bytes], reader: Callable[..., Optional[str]]
+) -> str:
+    """그림 표식 자리에 그림 읽기 결과를 넣는다. 읽지 못한 그림은 ``[Image]`` 로 둔다.
+
+    같은 그림(같은 바이트)은 한 번만 읽는다. 그림 번호는 문서에 처음 나온 순서다.
+    """
+    order: List[str] = []
+    by_digest: Dict[str, str] = {}
+    path_digest: Dict[str, str] = {}
+    for path, data in images.items():
+        digest = hashlib.sha256(data).hexdigest()
+        path_digest[path] = digest
+        if digest not in by_digest:
+            by_digest[digest] = path
+            order.append(digest)
+    gate = asyncio.Semaphore(_READ_CONCURRENCY)
+    results: Dict[str, Optional[str]] = {}
+
+    async def one(digest: str) -> None:
+        path = by_digest[digest]
+        async with gate:
+            try:
+                results[digest] = await asyncio.to_thread(
+                    reader, images[path], PurePosixPath(path).name
+                )
+            except Exception:  # noqa: BLE001 - 그림 하나의 실패는 그 자리를 [Image] 로 둔다
+                results[digest] = None
+
+    await asyncio.gather(*(one(digest) for digest in order))
+    numbers = {digest: n for n, digest in enumerate(order, 1)}
+
+    def place(match: "re.Match[str]") -> str:
+        digest = path_digest.get(match.group(1))
+        found = results.get(digest) if digest else None
+        if not found:
+            return "[Image]"
+        return str(found).replace("[그림 1", f"[그림 {numbers[digest]}", 1)
+
+    return _IMAGE_PATH.sub(place, text)
 
 
 class ParseDocumentTool(Tool):
@@ -85,7 +167,8 @@ class ParseDocumentTool(Tool):
             "Extract the TEXT of a document file — PDF, Word (docx/doc), PowerPoint (pptx/ppt), "
             "Excel (xlsx/xls), HWP/HWPX, RTF, CSV/TSV, HTML and similar. Returns text-centric "
             "content only: the body text with page/slide/sheet markers, tables rendered as text "
-            "(HTML or markdown), chart data as text, [Image] placeholders and document metadata. "
+            "(HTML or markdown), chart data as text, [Image] placeholders (or, when the server can read "
+            "images, each image's text and description) and document metadata. "
             "It is NOT the full document structure: fonts, formatting, positions, layout, shapes "
             "and images are not returned, so the result cannot be used to rebuild or edit the file. "
             "Long results come in parts: pass offset to continue. For plain text or code files use Read."
@@ -142,9 +225,13 @@ class ParseDocumentTool(Tool):
             return ToolResult(
                 content=f"{name} has no file extension, so its format is unknown.", is_error=True
             )
+        reader = (context.extras or {}).get("image_reader") if context is not None else None
+        reader = reader if callable(reader) else None
         try:
             async with fs.materialize(raw) as local:
-                text = await asyncio.to_thread(_extract, str(local), extension)
+                text, images = await asyncio.to_thread(
+                    _extract_with_images, str(local), extension, reader is not None
+                )
         except FileNotFoundError:
             return ToolResult(content=f"File not found: {resolved}", is_error=True)
         except IsADirectoryError:
@@ -159,6 +246,8 @@ class ParseDocumentTool(Tool):
             return ToolResult(
                 content=f"Could not parse {name}: {type(exc).__name__}: {exc}", is_error=True
             )
+        if reader is not None and images:
+            text = await _read_images(text or "", images, reader)
         text = _IMAGE_TAG.sub("[Image]", text or "")
         return ToolResult(
             content=_page(name, text, offset, limit, extension),
