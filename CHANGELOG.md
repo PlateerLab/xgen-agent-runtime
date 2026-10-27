@@ -4,6 +4,18 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.104.0] - 2026-10-26
+
+### Added: ParseDocument 가 호스트의 그림 읽기 함수로 문서 속 그림을 글로 바꾼다
+
+ParseDocument 는 문서 속 그림을 `[Image]` 자리표시로만 남겨, 그림을 볼 수 없는 모델은 스캔 페이지 · 차트 · 도해의 내용을
+전혀 받지 못했다. 호스트가 `ToolContext.extras["image_reader"]` 로 그림 읽기 함수(`(바이트, 이름) -> 글 | None`)를 주면
+그림 자리에 그 결과를 넣는다. XGEN 은 파일 저장소 그림 처리와 같은 VLM · 같은 결과(그림 바이트마다 한 번 읽어 저장)를 준다.
+
+- 같은 그림(같은 바이트)은 한 번만 읽고, 그림 번호는 문서에 처음 나온 순서다. 한 번에 서로 다른 그림 최대 30장, 20 MiB 넘는 그림은 읽지 않는다.
+- 읽지 못한 그림과 함수가 없을 때는 예전처럼 `[Image]`. 임시 그림 경로는 결과에 남기지 않는다.
+- `_extract` 는 예전 그대로 글만 돌려준다(그림까지 받는 것은 `_extract_with_images`).
+
 ## [4.103.2] - 2026-10-26
 
 ### Fixed: Chat Completions 가 생각만 하다 출력 상한에 닿으면 한 번 더 부른다
