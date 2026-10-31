@@ -336,6 +336,15 @@ class PipelineState:
     # attach one. See ``Pipeline.attach_runtime(session_runtime=...)``.
     session_runtime: Optional[Any] = field(default=None, repr=False)
 
+    # ── Mid-turn steering (core/steer.py) ──
+    # The :class:`~xgen_agent_runtime.core.steer.SteerInbox` of the turn in
+    # flight, or ``None`` (no steering). The pipeline takes queued user
+    # messages at each loop boundary. Harness bookkeeping, so private: hosts
+    # pass the inbox to ``host.runner.stream_turn(steer_inbox=...)``, which
+    # attaches and detaches it per turn. Never persisted, not reset by
+    # ``begin_turn``.
+    _steer_inbox: Optional[Any] = field(default=None, repr=False)
+
     def begin_turn(self) -> None:
         """Reset every per-turn field for a new conversational turn.
 

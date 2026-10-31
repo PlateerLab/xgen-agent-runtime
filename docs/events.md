@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-23.
-> Catalogue version: **21** · events: **147**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-31.
+> Catalogue version: **22** · events: **148**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -268,6 +268,19 @@ Enum member: `EventTypes.LOOP_TURN_BUDGET`
 | `hard` | int — hard threshold |
 | `calls` | int — API calls this turn so far |
 | `iteration` | int |
+
+## `user.*`
+
+### `user.steer`
+
+Enum member: `EventTypes.USER_STEER`
+
+| Field | Description |
+|---|---|
+| `id` | str — message id (SteerMessage.id) |
+| `client_msg_id` | str \| None — the client's own id for the message, echoed back |
+| `text` | str — the user's words, verbatim (the model gets them framed by core.steer.STEER_FRAME) |
+| `iteration` | int — loop iteration the message joined after |
 
 ## Stage 1 — Input
 

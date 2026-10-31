@@ -3041,6 +3041,53 @@ class Pipeline:
 
     # ── Internal: Phase execution ──
 
+    def _take_steer(self, state: PipelineState, has_loop_stage: bool) -> None:
+        """Deliver queued mid-turn user messages (see ``core/steer.py``).
+
+        * ``continue`` — take what is queued; the inbox stays open.
+        * ``complete`` — take what is queued and keep looping; if nothing is
+          queued, close the inbox in the same locked step, so a message can't
+          arrive unseen between this check and the end of the turn.
+        * single-pass runs (``single_turn`` / no loop stage) can't loop again,
+          and a turn being stopped won't make another call: close and reject.
+        * ``suspend`` / ``error`` / ``escalate`` — leave the queue alone: a
+          continuation slice may still take it; otherwise the host closes the
+          inbox when the turn ends and the messages come back rejected.
+        """
+        inbox = state._steer_inbox
+        if inbox is None:
+            return
+        if state.single_turn or not has_loop_stage or inbox.stopping():
+            inbox.close()
+            return
+        decision = state.loop_decision
+        if decision == "continue":
+            messages = inbox.take()
+        elif decision == "complete":
+            messages = inbox.take_or_close()
+        else:
+            return
+        if not messages:
+            return
+        from xgen_agent_runtime.core.steer import append_steer, steer_text
+
+        append_steer(state.messages, steer_text(messages))
+        if decision == "complete":
+            state.loop_decision = "continue"
+            state.completion_signal = None
+            state.completion_detail = None
+        for msg in messages:
+            state.add_event(
+                "user.steer",
+                {
+                    "id": msg.id,
+                    "client_msg_id": msg.client_msg_id,
+                    "text": msg.text,
+                    "iteration": state.iteration,
+                },
+            )
+            inbox.resolve(msg, True)
+
     async def _run_phases(self, input: Any, state: PipelineState) -> None:
         """Execute all three pipeline phases (single source of truth).
 
@@ -3089,6 +3136,11 @@ class Pipeline:
             # single_turn: complete after one pass regardless of loop decision
             if state.single_turn and state.loop_decision == "continue":
                 state.loop_decision = "complete"
+
+            # Mid-turn steering: user messages that arrived during this pass
+            # join the conversation before the next model call — and a turn
+            # about to complete keeps going to answer them.
+            self._take_steer(state, has_loop_stage)
 
             # One full loop-body pass finished — fire the lifecycle
             # hook (2.2.0; previously documented-but-never-fired) with

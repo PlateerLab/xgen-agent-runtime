@@ -72,7 +72,9 @@ from typing import Any, Dict, FrozenSet, List
 #: memory); + ``memory.assignments_loaded``.
 #: v21: ``memory.assignments_loaded`` retired (4.100.0: assignment notes are recalled on demand,
 #: not put in every turn).
-EVENT_CATALOG_VERSION = 21
+#: v22: + ``user.steer`` (4.105.0 mid-turn steering: a message the user sent while the turn ran joined
+#: the conversation at a loop boundary — core/steer.py).
+EVENT_CATALOG_VERSION = 22
 
 
 class EventTypes(str, Enum):
@@ -118,6 +120,9 @@ class EventTypes(str, Enum):
     LOOP_REVIEW_END = "loop.review_end"
     LOOP_REPEAT_STOP = "loop.repeat_stop"
     LOOP_TURN_BUDGET = "loop.turn_budget"
+    #: Mid-turn steering (core/steer.py): a message the user sent while the
+    #: turn ran joined the conversation at a loop boundary.
+    USER_STEER = "user.steer"
 
     # ── Stage 1: Input ──
     INPUT_NORMALIZED = "input.normalized"
@@ -442,6 +447,12 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "refused": "int — tool calls the harness refused to run this turn (identical-result skips + repeated-failure blocks)",
         "calls": "int — model calls so far this turn",
         "iteration": "int",
+    },
+    EventTypes.USER_STEER: {
+        "id": "str — message id (SteerMessage.id)",
+        "client_msg_id": "str | None — the client's own id for the message, echoed back",
+        "text": "str — the user's words, verbatim (the model gets them framed by core.steer.STEER_FRAME)",
+        "iteration": "int — loop iteration the message joined after",
     },
     EventTypes.LOOP_TURN_BUDGET: {
         "phase": "str — 'soft' (wrap-up note added) | 'final' (report-now note added) | 'stop' (turn ended)",
