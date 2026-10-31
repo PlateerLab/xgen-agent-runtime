@@ -4,6 +4,27 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.106.0] - 2026-10-31
+
+### Added: AudioTranscribe 가 누가 말했는지 붙인다 (`speakers=true`)
+
+회의 녹음을 올려 회의록을 받으려면 "누가 말했는지" 가 있어야 하는데, 전사 결과는 글자뿐이었다. `AudioTranscribe` 에
+`speakers`(기본 false)·`num_speakers`(사용자가 인원을 말했을 때) 를 더했다. 모델이 여러 사람이 말하는 녹음일 때 고른다.
+
+- 호스트가 `extras["stt"]["diarization"]` 을 켰을 때만 화자를 나눈다(그 STT 서버가 화자 분리를 할 수 있다는 뜻).
+  꺼져 있으면 `speakers=true` 여도 그냥 받아쓰고 "화자 표시를 쓸 수 없다" 고 한 줄 붙인다 — 한 번 더 부르지 않게.
+  이 키는 provider 에 넘기지 않는다.
+- 결과는 같은 화자가 이어 말한 구간을 한 줄로 묶어 `[00:00–00:14] A: ...` 로 보여 준다. A, B 는 그 파일 안에서 처음
+  말한 순서다.
+- `openai_compatible` 은 `response_format=diarized_json`(OpenAI 형식, 30초 넘는 입력용 `chunking_strategy=auto`)
+  으로 보내고 `segments[].speaker` 를 읽는다. `num_speakers` 는 OpenAI 필드가 아니라 pyannote 를 쓰는 서버용 힌트라
+  모델이 줬을 때만 보낸다.
+- `STTSegment.speaker`(선택). provider 계약: 화자 표시를 하는 provider 는 `speakers`·`num_speakers` 키워드를 받는다.
+  도구는 요청됐을 때만 넘기므로 예전 provider 는 그대로 돈다. 못 받는 provider 면 `STT_NO_SPEAKERS`.
+- 사이드카에 `speakers`·`num_speakers` 를 적는다. 화자 요청은 화자 표시가 있는 캐시만 쓰고, 말한 인원이 다르면 다시
+  부른다. 화자 표시가 있는 캐시는 일반 요청도 채운다. 서버가 화자 표시 없이 돌려주면 화자 캐시로 적지 않는다.
+- `AudioInfo` 의 transcript 에 `speakers` 를 보여 준다.
+
 ## [4.105.0] - 2026-10-31
 
 ### Added: 도는 턴에 사용자 메시지를 넣는다 (mid-turn steering)

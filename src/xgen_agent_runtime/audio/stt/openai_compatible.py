@@ -71,6 +71,8 @@ class OpenAICompatibleSTT:
         mime_type: str,
         language: Optional[str] = None,
         timestamps: bool = False,
+        speakers: bool = False,
+        num_speakers: Optional[int] = None,
     ) -> STTResult:
         if not audio:
             raise STTError("audio payload is empty", category="invalid")
@@ -79,13 +81,24 @@ class OpenAICompatibleSTT:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        if speakers:
+            # OpenAI's speaker-labelled format: segments carry ``speaker``.
+            response_format = "diarized_json"
+        else:
+            response_format = "verbose_json" if timestamps else "json"
         data: Dict[str, Any] = {
             "model": self._model,
-            "response_format": "verbose_json" if timestamps else "json",
+            "response_format": response_format,
             "temperature": str(self._temperature),
         }
         if language:
             data["language"] = language
+        if speakers:
+            # OpenAI requires it for diarized output on inputs over 30 s.
+            data["chunking_strategy"] = "auto"
+            if num_speakers:
+                # Not an OpenAI field — servers that run pyannote use it as a hint.
+                data["num_speakers"] = str(int(num_speakers))
 
         ext = (mime_type.rsplit("/", 1)[-1] or "bin").split(";")[0]
         files = {"file": (f"audio.{ext}", audio, mime_type or "application/octet-stream")}
@@ -125,12 +138,14 @@ class OpenAICompatibleSTT:
             for seg in raw_segments:
                 if not isinstance(seg, dict):
                     continue  # null / string entries from lax servers
+                speaker = seg.get("speaker")
                 try:
                     segments.append(
                         STTSegment(
                             start=float(seg.get("start", 0.0)),
                             end=float(seg.get("end", 0.0)),
                             text=str(seg.get("text", "")).strip(),
+                            speaker=str(speaker) if speaker not in (None, "") else None,
                         )
                     )
                 except (TypeError, ValueError):
