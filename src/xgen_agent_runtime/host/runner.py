@@ -1603,6 +1603,7 @@ def stream_turn(
     max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
     usage_sink: Optional[Dict[str, Any]] = None,
     on_loop: Optional[Callable[[Any], None]] = None,
+    steer_inbox: Optional[Any] = None,
 ) -> Iterator[Union[str, Dict[str, Any]]]:
     """Drive ``run_stream`` from a sync generator.
 
@@ -1638,8 +1639,20 @@ def stream_turn(
     ``rollout_path`` — host가 명시한 경우에만 기존 ``session_runtime`` 슬롯에
     durable recorder를 겹쳐 붙인다. 생성·기록·종료는 이 private event loop에서
     모두 끝나며, public Pipeline 입력/출력 타입은 바뀌지 않는다.
+
+    ``steer_inbox`` — 선택. :class:`~xgen_agent_runtime.core.steer.SteerInbox`.
+    턴이 도는 동안 사용자가 보낸 메시지를 반복 경계에서 대화에 넣는다
+    (``core/steer.py``). 들어간 메시지마다 ``{"type": "agent_event", "data":
+    {"type": "user_steer", ...}}`` 를 낸다. 턴이 더 받을 수 없게 되면(끝남·실패·
+    정지) 닫고, 남은 메시지는 거절로 끝난다 — 호스트가 다음 턴으로 보낸다. 루프가
+    끝나며 거절한 것은 ``user_steer_rejected`` 로도 알린다(소비자가 닫아 끝난
+    턴은 yield 할 수 없으므로 ``SteerInbox.on_resolve`` 만 받는다).
     """
     loop = asyncio.new_event_loop()
+    if steer_inbox is not None:
+        state._steer_inbox = steer_inbox
+        if cancel_check is not None:
+            steer_inbox.stop_check = cancel_check
     # 턴 루프를 알린다 — CLI 백엔드의 도구 표면(host.tool_surface)이 브릿지 호출을 이 루프에서 돌린다.
     _notify_loop(on_loop, loop)
     agen: Any = None
@@ -1766,6 +1779,17 @@ def stream_turn(
                     }
                 elif event.type == "canvas_command":
                     yield {"type": "canvas_command", "data": event.data}
+                elif event.type == "user.steer" and steer_inbox is not None:
+                    yield {
+                        "type": "agent_event",
+                        "data": {
+                            "type": "user_steer",
+                            "id": event.data.get("id"),
+                            "client_msg_id": event.data.get("client_msg_id"),
+                            "text": event.data.get("text", ""),
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                    }
                 elif tool_events and event.type == "api.cli_tool_call":
                     name = event.data.get("name", "") or "cli_tool"
                     tool_use_id = event.data.get("id") or ""
@@ -1863,6 +1887,21 @@ def stream_turn(
                 yield notice
             turn_completed = True
             break
+        # 루프가 끝났다 — 더 받을 수 없다. 기억 기록 등 마무리를 기다리지 않고 바로
+        # 닫아, 그사이 온 메시지는 곧장 거절(다음 턴으로)된다. 거절도 같은 통로로 알린다 —
+        # 호스트가 콜백을 따로 엮지 않아도 스트림 하나로 "들어감/돌아옴" 을 다 안다.
+        if steer_inbox is not None:
+            for msg in steer_inbox.close():
+                yield {
+                    "type": "agent_event",
+                    "data": {
+                        "type": "user_steer_rejected",
+                        "id": msg.id,
+                        "client_msg_id": msg.client_msg_id,
+                        "text": msg.text,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                }
         # 파이프라인 종료 후 정확히 1회. 협조적 취소(break)로 나온 턴도 그때까지
         # 끝난 API 호출분을 낸다 — 백그라운드 태스크가 남아 있을 수 있어 partial 표시.
         usage = turn_usage(pipeline, state)
@@ -1873,6 +1912,10 @@ def stream_turn(
                 usage_sink.update(usage)
             yield {"type": "usage", "data": usage}
     finally:
+        if steer_inbox is not None:
+            # 취소·오류·소비자 close 로 나온 경우도 — 남은 메시지는 거절된다(멱등).
+            steer_inbox.close()
+            state._steer_inbox = None
         # 소비자가 .close() 로 닫아 usage 청크를 yield 하지 못한 경우에도 sink 는 채운다.
         if usage_sink is not None and not usage_sink:
             try:

@@ -4,6 +4,26 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.105.0] - 2026-10-31
+
+### Added: 도는 턴에 사용자 메시지를 넣는다 (mid-turn steering)
+
+에이전트가 일하는 동안 사용자가 덧붙인 말("테스트도 돌려 줘", "그 파일 말고 이쪽")을 넣을 길이 없었다 — 턴이 끝나기를
+기다리거나 [정지] 하고 다시 말해야 했다. 호스트가 턴마다 `core.steer.SteerInbox` 를 `stream_turn(steer_inbox=...)`
+(`AgentTurnExecutor.run(..., steer_inbox=...)`)으로 주면, 그 턴이 도는 동안 받은 메시지를 다음 반복 경계에서 대화에 넣는다.
+
+- 넣는 자리: 반복 한 바퀴(모델 호출 + 그 도구들)가 끝나고 "계속/완료" 가 정해진 직후. 도구 결과 뒤면 그 user 메시지에
+  text 블록으로 붙이고(연속 user 메시지를 거절하는 제공자가 있다 — 번역기가 도구 결과와 글을 제공자마다 바르게 나눈다),
+  답 뒤면 새 user 메시지다. 모델은 `STEER_FRAME` 한 줄 뒤에 사용자의 말을 그대로 받는다.
+- 막 끝내려던 턴(`complete`)에 메시지가 와 있으면 끝내지 않고 한 번 더 돈다. 없으면 **같은 잠금 안에서** 받은 편지함을
+  닫는다 — 마지막 확인과 턴의 끝 사이에 메시지가 끼어 아무도 받지 않는 틈이 없다.
+- 메시지마다 결말은 하나: 들어갔다(`user.steer` 사건 → 스트림 `agent_event` `user_steer`) 또는 돌려보냈다(턴이 끝남·
+  실패·정지·한 번만 도는 실행 → `user_steer_rejected`, `SteerInbox.on_resolve`). 호스트는 돌려받은 것을 다음 턴으로 보낸다.
+  정지 중인 턴은 받지 않는다(모델이 보지 못할 말을 "들어갔다" 고 하지 않는다).
+- 받은 편지함은 스레드 안전하다(호스트의 루프 · 턴의 루프). 넘기지 않으면 예전과 똑같다.
+- 사건 목록 v22: `user.steer`. `PipelineState._steer_inbox` 는 하네스 장부라 공개 필드가 아니다.
+- CLI 백엔드(Claude Code · Codex)는 한 번의 호출 안에서 자기 도구 루프를 돌므로, 그 호출이 끝난 뒤 다음 호출에 들어간다.
+
 ## [4.104.0] - 2026-10-26
 
 ### Added: ParseDocument 가 호스트의 그림 읽기 함수로 문서 속 그림을 글로 바꾼다

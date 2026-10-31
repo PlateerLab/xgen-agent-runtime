@@ -1444,6 +1444,8 @@ class AgentTurnExecutor:
                 ),
                 usage_sink=kwargs.get("usage_sink"),
                 on_loop=_tool_surface.bind_loop if _tool_surface is not None else None,
+                # 호스트가 준 턴 단위 받은 편지함(core/steer.py) — 도는 턴에 사용자 메시지를 넣는다.
+                steer_inbox=kwargs.get("steer_inbox"),
             )
             if clamped and schema is None:
                 # 입력이 잘렸음을 사용자에게 알린다 (agent_xgen 의 경고 관행과
