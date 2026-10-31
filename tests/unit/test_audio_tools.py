@@ -595,3 +595,190 @@ def test_provider_contract_hardening(monkeypatch):
             create_stt_client("junk-builder")
     finally:
         unregister_stt_provider("junk-builder")
+
+
+# ── speaker labels (diarization) ──────────────────────────────────────
+
+
+class FakeDiarSTT:
+    """Provider that can label speakers — records what it was asked."""
+
+    calls: list = []
+
+    def __init__(self, **_cfg):
+        pass
+
+    @property
+    def descriptor(self) -> str:
+        return "fake/diar-test"
+
+    async def transcribe(
+        self, audio, *, mime_type, language=None, timestamps=False, speakers=False, num_speakers=None
+    ):
+        FakeDiarSTT.calls.append({"speakers": speakers, "num_speakers": num_speakers})
+        if not speakers:
+            return STTResult(text="안건 세 가지 네 맞습니다", provider=self.descriptor)
+        return STTResult(
+            text="안건은 세 가지입니다. 첫째 일정. 네, 맞습니다.",
+            duration_seconds=9.0,
+            segments=[
+                STTSegment(0.0, 2.0, "안건은 세 가지입니다.", speaker="A"),
+                STTSegment(3.5, 5.0, "첫째 일정.", speaker="A"),
+                STTSegment(6.0, 7.0, "네, 맞습니다.", speaker="B"),
+            ],
+            provider=self.descriptor,
+        )
+
+
+@pytest.fixture
+def diar_provider():
+    FakeDiarSTT.calls = []
+    register_stt_provider("fake-diar", FakeDiarSTT, replace=True)
+    yield
+    unregister_stt_provider("fake-diar")
+
+
+def _diar_ctx(tmp_path, *, enabled=True, provider="fake-diar"):
+    ctx = _ctx(tmp_path, provider)
+    ctx.extras["stt"]["diarization"] = enabled
+    return ctx
+
+
+def test_speakers_label_turns_and_cache(tmp_path, diar_provider):
+    ctx = _diar_ctx(tmp_path)
+    name = _mk_audio(ctx, "meeting.mp3")
+    res = _run(AudioTranscribeTool(), {"file_path": name, "speakers": True, "num_speakers": 2}, ctx)
+    assert not res.is_error, res.content
+    assert FakeDiarSTT.calls == [{"speakers": True, "num_speakers": 2}]
+    assert "speakers=2 (A, B)" in res.content
+    # consecutive A segments become one line
+    assert "[00:00–00:05] A: 안건은 세 가지입니다. 첫째 일정." in res.content
+    assert "[00:06–00:07] B: 네, 맞습니다." in res.content
+    sidecar = json.loads((tmp_path / "workspace" / f"{name}.transcript.json").read_text())
+    assert sidecar["speakers"] is True and sidecar["timestamps"] is True
+    assert sidecar["num_speakers"] == 2
+    assert [s["speaker"] for s in sidecar["segments"]] == ["A", "A", "B"]
+
+    again = _run(AudioTranscribeTool(), {"file_path": name, "speakers": True, "num_speakers": 2}, ctx)
+    plain = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
+    assert "cached=yes" in again.content and "cached=yes" in plain.content
+    assert "B: 네, 맞습니다." in plain.content  # a labelled cache keeps its labels
+    assert len(FakeDiarSTT.calls) == 1
+
+
+def test_speakers_request_misses_plain_cache_and_other_count(tmp_path, diar_provider):
+    ctx = _diar_ctx(tmp_path)
+    name = _mk_audio(ctx, "meeting.wav")
+    _run(AudioTranscribeTool(), {"file_path": name}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name, "speakers": True}, ctx)
+    _run(AudioTranscribeTool(), {"file_path": name, "speakers": True}, ctx)  # cached
+    _run(AudioTranscribeTool(), {"file_path": name, "speakers": True, "num_speakers": 3}, ctx)
+    assert FakeDiarSTT.calls == [
+        {"speakers": False, "num_speakers": None},
+        {"speakers": True, "num_speakers": None},
+        {"speakers": True, "num_speakers": 3},
+    ]
+
+
+def test_speakers_without_host_diarization_still_transcribes(tmp_path, diar_provider):
+    ctx = _diar_ctx(tmp_path, enabled=False)
+    name = _mk_audio(ctx, "meeting.wav")
+    res = _run(AudioTranscribeTool(), {"file_path": name, "speakers": True}, ctx)
+    assert not res.is_error
+    assert FakeDiarSTT.calls == [{"speakers": False, "num_speakers": None}]
+    assert "speaker labels are not available" in res.content
+    assert "안건 세 가지" in res.content
+
+
+def test_speakers_with_provider_that_cannot_label(tmp_path):
+    ctx = _diar_ctx(tmp_path, provider="fake-test")  # FakeSTT has no speakers kwarg
+    name = _mk_audio(ctx)
+    res = _run(AudioTranscribeTool(), {"file_path": name, "speakers": True}, ctx)
+    assert res.is_error and res.content["error"]["code"] == "STT_NO_SPEAKERS"
+    plain = _run(AudioTranscribeTool(), {"file_path": name}, ctx)
+    assert not plain.is_error and FakeSTT.calls == 1
+
+
+def test_server_without_labels_is_not_cached_as_labelled(tmp_path):
+    class NoLabels(FakeDiarSTT):
+        async def transcribe(self, audio, *, mime_type, language=None, timestamps=False, **kw):
+            FakeDiarSTT.calls.append(kw)
+            return STTResult(text="그냥 글자", provider="fake/no-labels")
+
+    FakeDiarSTT.calls = []
+    register_stt_provider("fake-nolabels", NoLabels, replace=True)
+    try:
+        ctx = _diar_ctx(tmp_path, provider="fake-nolabels")
+        name = _mk_audio(ctx)
+        res = _run(AudioTranscribeTool(), {"file_path": name, "speakers": True}, ctx)
+        assert "returned no speaker labels" in res.content
+        sidecar = json.loads((tmp_path / "workspace" / f"{name}.transcript.json").read_text())
+        assert sidecar["speakers"] is False
+        _run(AudioTranscribeTool(), {"file_path": name, "speakers": True}, ctx)
+        assert len(FakeDiarSTT.calls) == 2  # not a cache hit
+    finally:
+        unregister_stt_provider("fake-nolabels")
+
+
+def test_host_diarization_flag_is_not_forwarded_to_provider():
+    provider = audio_tools._build_provider(
+        {"provider": "openai_compatible", "api_url": "http://stt", "model": "m", "diarization": True}
+    )
+    assert provider.descriptor == "openai_compatible/m"
+
+
+def test_num_speakers_bounds():
+    assert audio_tools._num_speakers(3) == 3
+    assert audio_tools._num_speakers("2") == 2
+    for bad in (0, 33, True, "x", None, -1):
+        assert audio_tools._num_speakers(bad) is None
+
+
+def test_openai_compatible_diarized_wire(monkeypatch):
+    import httpx
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "text": "a b",
+                "duration": 4.0,
+                "segments": [
+                    {"start": 0, "end": 1.5, "text": " a ", "speaker": "A", "type": "transcript.text.segment"},
+                    {"start": 2, "end": 4, "text": "b", "speaker": "B"},
+                ],
+            }
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, *, data, files, headers):
+            captured.update(data=data)
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    client = create_stt_client("openai_compatible", api_url="http://stt", model="m")
+    res = asyncio.run(
+        client.transcribe(b"x", mime_type="audio/mpeg", speakers=True, num_speakers=2, timestamps=True)
+    )
+    assert captured["data"]["response_format"] == "diarized_json"
+    assert captured["data"]["chunking_strategy"] == "auto"
+    assert captured["data"]["num_speakers"] == "2"
+    assert [(s.speaker, s.text) for s in res.segments] == [("A", "a"), ("B", "b")]
+    assert res.segments[0].to_dict()["speaker"] == "A"
+
+    asyncio.run(client.transcribe(b"x", mime_type="audio/mpeg"))
+    assert captured["data"]["response_format"] == "json"
+    assert "chunking_strategy" not in captured["data"] and "num_speakers" not in captured["data"]
+    assert STTSegment(0, 1, "t").to_dict() == {"start": 0, "end": 1, "text": "t"}

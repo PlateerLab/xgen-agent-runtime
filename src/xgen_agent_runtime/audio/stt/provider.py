@@ -26,9 +26,14 @@ class STTSegment:
     start: float
     end: float
     text: str
+    #: Who spoke this span (``speakers=True`` results, e.g. "A", "B").
+    speaker: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {"start": self.start, "end": self.end, "text": self.text}
+        out: dict = {"start": self.start, "end": self.end, "text": self.text}
+        if self.speaker:
+            out["speaker"] = self.speaker
+        return out
 
 
 @dataclass
@@ -83,6 +88,11 @@ class STTProvider(Protocol):
       * raise :class:`STTError` (never a bare transport exception) so the
         tool layer can classify failures;
       * treat ``language=None`` as auto-detect.
+
+    Speaker labels are optional: a provider that can label speakers also
+    accepts ``speakers: bool`` and ``num_speakers: Optional[int]`` keyword
+    arguments and sets :attr:`STTSegment.speaker`. Callers pass them only
+    when labels are requested, so providers without them keep working.
     """
 
     async def transcribe(

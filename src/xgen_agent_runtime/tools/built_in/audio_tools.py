@@ -18,8 +18,14 @@ Framework contract (what makes this more than a one-shot call):
     (host sets it only when a usable provider is configured). No dead
     tools: if you can see AudioTranscribe, it works.
 
+  * **Speaker labels** — ``speakers=true`` asks the provider to say who
+    spoke each part (meetings, interviews). Offered only when the host
+    sets ``extras["stt"]["diarization"]`` (its STT server can label
+    speakers); otherwise the call still transcribes and says labels were
+    not available. The sidecar records whether it holds labels.
+
 Tools:
-  * ``AudioTranscribe`` (core) — path → transcript text (+timestamps opt)
+  * ``AudioTranscribe`` (core) — path → transcript text (+timestamps / speakers opt)
   * ``AudioListFiles``  (deferred) — what audio exists / what's transcribed
   * ``AudioInfo``       (deferred) — size/format probe before committing
 """
@@ -58,6 +64,9 @@ AUDIO_EXTENSIONS = {
 
 _MAX_AUDIO_BYTES = 50 * 1024 * 1024  # P1 cap; long-audio chunking is a later phase
 _SIDECAR_SUFFIX = ".transcript.json"
+#: host config keys the tool reads itself — never forwarded to the provider
+_HOST_ONLY_KEYS = ("provider", "language", "diarization")
+_MAX_NUM_SPEAKERS = 32
 
 #: category → what the agent should tell the user / do next
 _CATEGORY_HINTS = {
@@ -96,8 +105,18 @@ def _stt_config(context: Any) -> Optional[Dict[str, Any]]:
 
 
 def _build_provider(cfg: Dict[str, Any]):
-    kwargs = {k: v for k, v in cfg.items() if k not in ("provider", "language") and v is not None}
+    kwargs = {k: v for k, v in cfg.items() if k not in _HOST_ONLY_KEYS and v is not None}
     return create_stt_client(cfg.get("provider") or "openai_compatible", **kwargs)
+
+
+def _num_speakers(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if 1 <= n <= _MAX_NUM_SPEAKERS else None
 
 
 def _resolve_audio_path(context: Any, path: str):
@@ -157,7 +176,11 @@ def _sanitize_sidecar(raw: Any) -> Optional[dict]:
         "source_file": str(raw.get("source_file") or ""),
         "provider": str(raw.get("provider") or "?"),
         "timestamps": bool(raw.get("timestamps", False)),
+        "speakers": bool(raw.get("speakers", False)),
     }
+    num = _num_speakers(raw.get("num_speakers"))
+    if num is not None:
+        out["num_speakers"] = num
     lang = raw.get("language")
     if isinstance(lang, str) and lang:
         out["language"] = lang
@@ -171,15 +194,17 @@ def _sanitize_sidecar(raw: Any) -> Optional[dict]:
             if not isinstance(seg, dict):
                 continue
             try:
-                clean.append(
-                    {
-                        "start": float(seg.get("start", 0.0)),
-                        "end": float(seg.get("end", 0.0)),
-                        "text": str(seg.get("text", "")),
-                    }
-                )
+                item = {
+                    "start": float(seg.get("start", 0.0)),
+                    "end": float(seg.get("end", 0.0)),
+                    "text": str(seg.get("text", "")),
+                }
             except (TypeError, ValueError):
                 continue
+            speaker = seg.get("speaker")
+            if isinstance(speaker, str) and speaker:
+                item["speaker"] = speaker
+            clean.append(item)
         out["segments"] = clean
     created = raw.get("created_at")
     if isinstance(created, str):
@@ -221,6 +246,8 @@ def _write_sidecar(
     result: STTResult,
     *,
     timestamps: bool,
+    speakers: bool = False,
+    num_speakers: Optional[int] = None,
 ) -> dict:
     data = result.to_dict()
     data["source_sha256"] = source_sha
@@ -230,6 +257,12 @@ def _write_sidecar(
     # segments (or silent audio) must still cache-satisfy later
     # timestamps requests instead of re-billing STT forever.
     data["timestamps"] = bool(timestamps)
+    # Same idea for speaker labels: a labelled sidecar satisfies later
+    # speakers requests; the hint it was made with is kept so a different
+    # stated speaker count re-runs.
+    data["speakers"] = bool(speakers)
+    if speakers and num_speakers:
+        data["num_speakers"] = num_speakers
     data["created_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     sc = _sidecar_path(audio)
     # unique tmp: concurrent writers must never share a staging inode
@@ -242,6 +275,31 @@ def _write_sidecar(
     return data
 
 
+def _clock(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
+def _speaker_turns(segments: List[dict]) -> List[dict]:
+    """Consecutive segments of one speaker → one turn (fewer lines to read)."""
+    turns: List[dict] = []
+    for seg in segments:
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        speaker = seg.get("speaker") or "?"
+        if turns and turns[-1]["speaker"] == speaker:
+            turns[-1]["end"] = seg["end"]
+            turns[-1]["text"] += " " + text
+        else:
+            turns.append(
+                {"speaker": speaker, "start": seg["start"], "end": seg["end"], "text": text}
+            )
+    return turns
+
+
 def _format_transcript(data: dict, *, cached: bool, include_segments: bool) -> str:
     lines: List[str] = []
     meta = []
@@ -249,13 +307,27 @@ def _format_transcript(data: dict, *, cached: bool, include_segments: bool) -> s
         meta.append(f"language={data['language']}")
     if isinstance(data.get("duration_seconds"), (int, float)):
         meta.append(f"duration={float(data['duration_seconds']):.1f}s")
+    labelled = data.get("speakers") and any(s.get("speaker") for s in data.get("segments") or [])
+    turns = _speaker_turns(data["segments"]) if labelled else []
+    if labelled:
+        names = sorted({t["speaker"] for t in turns}, key=lambda n: (len(n), n))
+        meta.append(f"speakers={len(names)} ({', '.join(names)})")
     meta.append(f"provider={data.get('provider', '?')}")
     meta.append("cached=yes" if cached else "cached=no")
     fname = str(data.get("source_file", "?")).replace("\n", " ").replace("]", ")")
     lines.append(f"[transcript: {fname} · {' · '.join(meta)}]")
     text = (data.get("text") or "").strip()
-    lines.append(text if text else "(no speech detected)")
-    if include_segments and data.get("segments"):
+    if labelled:
+        # Labels name speakers by first appearance within THIS file only.
+        for turn in turns:
+            lines.append(
+                f"[{_clock(turn['start'])}–{_clock(turn['end'])}] {turn['speaker']}: {turn['text']}"
+            )
+        if not turns:
+            lines.append("(no speech detected)")
+    else:
+        lines.append(text if text else "(no speech detected)")
+    if include_segments and data.get("segments") and not labelled:
         lines.append("")
         lines.append("[segments]")
         for seg in data["segments"]:
@@ -292,7 +364,9 @@ class AudioTranscribeTool(_AudioToolBase):
             "text with the configured STT model. Results are cached next to "
             "the file as <name>.transcript.json and reused until the audio "
             "changes; set force=true to re-transcribe. timestamps=true adds "
-            "timed segments. Max 50MB."
+            "timed segments. speakers=true labels who spoke each part "
+            "(A, B, ...) for meetings or interviews with several people — "
+            "slower; only some servers support it. Max 50MB."
         )
 
     @property
@@ -316,6 +390,22 @@ class AudioTranscribeTool(_AudioToolBase):
                     "type": "boolean",
                     "description": "Ignore the cached transcript and call the STT model again.",
                 },
+                "speakers": {
+                    "type": "boolean",
+                    "description": (
+                        "Label who spoke each part (speaker diarization). Use for "
+                        "recordings with several people, e.g. meeting minutes. Default false."
+                    ),
+                },
+                "num_speakers": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _MAX_NUM_SPEAKERS,
+                    "description": (
+                        "How many people speak, if the user said so. Improves speaker "
+                        "labels; only used with speakers=true."
+                    ),
+                },
             },
             "required": ["file_path"],
         }
@@ -336,6 +426,15 @@ class AudioTranscribeTool(_AudioToolBase):
         assert fs is not None and resolved is not None
 
         include_segments = bool(input.get("timestamps"))
+        speakers = bool(input.get("speakers"))
+        note = ""
+        if speakers and not cfg.get("diarization"):
+            speakers = False
+            note = (
+                "\n(speaker labels are not available on this server — "
+                "the transcript has no speaker labels)"
+            )
+        num_speakers = _num_speakers(input.get("num_speakers")) if speakers else None
 
         # Per-file serialization: two concurrent transcribes of the same
         # file must produce ONE paid STT call (the second becomes a cache
@@ -364,8 +463,11 @@ class AudioTranscribeTool(_AudioToolBase):
                     if not input.get("force"):
                         cached = await _load_sidecar_from_fs(fs, sidecar_ref, source_sha)
                         # Hit on the recorded timestamps FLAG, not segment count.
-                        if cached is not None and (
-                            not include_segments or cached.get("timestamps")
+                        if (
+                            cached is not None
+                            and (not include_segments or cached.get("timestamps"))
+                            and (not speakers or cached.get("speakers"))
+                            and (not num_speakers or cached.get("num_speakers") == num_speakers)
                         ):
                             return ToolResult(
                                 content=_format_transcript(
@@ -373,6 +475,7 @@ class AudioTranscribeTool(_AudioToolBase):
                                     cached=True,
                                     include_segments=include_segments,
                                 )
+                                + note
                             )
 
                     try:
@@ -383,18 +486,41 @@ class AudioTranscribeTool(_AudioToolBase):
                     mime = AUDIO_EXTENSIONS[Path(resolved).suffix.lower()]
                     language = input.get("language") or cfg.get("language") or None
 
+                    # Speaker arguments only when asked — providers that predate
+                    # them keep their old signature.
+                    speaker_args: Dict[str, Any] = {}
+                    if speakers:
+                        speaker_args["speakers"] = True
+                        if num_speakers:
+                            speaker_args["num_speakers"] = num_speakers
                     try:
                         result = await provider.transcribe(
                             audio_bytes,
                             mime_type=mime,
                             language=language,
                             timestamps=include_segments,
+                            **speaker_args,
                         )
+                    except TypeError as exc:
+                        if speaker_args and "speakers" in str(exc):
+                            return _err(
+                                "STT_NO_SPEAKERS",
+                                "The configured STT provider cannot label speakers — "
+                                "call again without speakers.",
+                            )
+                        return _err("STT_UNKNOWN", f"STT provider failed unexpectedly: {exc}")
                     except STTError as exc:
                         hint = _CATEGORY_HINTS.get(exc.category, _CATEGORY_HINTS["unknown"])
                         return _err(f"STT_{exc.category.upper()}", f"{exc} — {hint}")
                     except Exception as exc:  # noqa: BLE001
                         return _err("STT_UNKNOWN", f"STT provider failed unexpectedly: {exc}")
+
+                    labelled = speakers and any(s.speaker for s in result.segments or [])
+                    if speakers and not labelled:
+                        note += (
+                            "\n(the STT server returned no speaker labels — "
+                            "the transcript has no speaker labels)"
+                        )
 
                     # Write beside the materialized audio, then commit through
                     # the same file port. A cache failure must not discard a
@@ -405,7 +531,10 @@ class AudioTranscribeTool(_AudioToolBase):
                             target,
                             source_sha,
                             result,
-                            timestamps=include_segments,
+                            # labelled segments carry times too
+                            timestamps=include_segments or labelled,
+                            speakers=labelled,
+                            num_speakers=num_speakers,
                         )
                         await fs.commit(_sidecar_path(target), sidecar_ref)
                         warning = ""
@@ -414,6 +543,7 @@ class AudioTranscribeTool(_AudioToolBase):
                     except Exception as exc:  # noqa: BLE001
                         data = result.to_dict()
                         data["source_file"] = target.name
+                        data["speakers"] = labelled
                         warning = (
                             "\n(warning: transcript cache could not be saved: "
                             f"{type(exc).__name__})"
@@ -424,6 +554,7 @@ class AudioTranscribeTool(_AudioToolBase):
                             cached=False,
                             include_segments=include_segments,
                         )
+                        + note
                         + warning
                     )
             except (FileNotFoundError, IsADirectoryError):
@@ -605,6 +736,7 @@ class AudioInfoTool(_AudioToolBase):
                             "duration_seconds": data.get("duration_seconds"),
                             "provider": data.get("provider"),
                             "timestamps": data.get("timestamps", False),
+                            "speakers": data.get("speakers", False),
                             "chars": len(data["text"]),
                         }
                 else:
