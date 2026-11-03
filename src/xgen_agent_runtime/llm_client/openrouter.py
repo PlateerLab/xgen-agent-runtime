@@ -16,6 +16,11 @@ OpenAI Chat Completions 모양으로 부르게 해 주는 중계다 (https://ope
    있다(``choices`` 없음). 스트림에서는 ``error`` 를 실은 청크가 오고 SDK 가 ``openai.APIError``
    로 올린다. 둘 다 ``error.code``(HTTP 와 같은 숫자)로 분류해 사람이 읽을 문구를 남긴다.
 3. **비용** — 모든 응답의 ``usage.cost``(USD)를 :attr:`TokenUsage.cost_usd` 로 옮긴다.
+4. **업체 지정** — 같은 모델 이름을 여러 업체가 서빙한다(업체마다 정밀도 fp4·fp8·bf16, 가격, 속도가
+   다르다). 지정이 없으면 OpenRouter 가 요청마다 고른다. ``provider_routing`` 을 주면 요청 본문의
+   ``provider`` 객체로 **그대로** 싣는다(문서 "Provider Routing": ``only``·``order``·``ignore``·
+   ``allow_fallbacks``·``require_parameters``·``quantizations`` …). 키는 여기서 거르지 않는다 —
+   OpenRouter 가 검사하고, 새 키가 생겨도 이 파일을 고치지 않는다.
 
 모델 이름은 ``author/slug`` 다 (``anthropic/claude-sonnet-5.5``, ``qwen/qwen3.6-27b``).
 생각 강도는 ``reasoning`` 하나로 보낸다 — OpenRouter 가 그 모델의 방식으로 옮긴다
@@ -223,6 +228,7 @@ class OpenRouterClient(OpenAIClient):
         base_url: Optional[str] = None,
         default_headers: Optional[Dict[str, str]] = None,
         event_sink: Optional[Any] = None,
+        provider_routing: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(
             api_key=api_key,
@@ -230,6 +236,16 @@ class OpenRouterClient(OpenAIClient):
             default_headers=default_headers,
             event_sink=event_sink,
         )
+        #: 요청마다 ``provider`` 로 실을 업체 지정. 없으면 OpenRouter 가 고른다.
+        self.provider_routing: Optional[Dict[str, Any]] = None
+        if isinstance(provider_routing, dict):
+            self.provider_routing = dict(provider_routing) or None
+        elif provider_routing not in (None, ""):
+            logger.warning(
+                "openrouter: provider_routing must be an object like {'only': ['alibaba']} — "
+                "ignored %r",
+                provider_routing,
+            )
 
     async def warmup(self, *, timeout_s: float = 8.0) -> bool:
         """연결만 미리 연다 — ``/models`` 는 수백 개 모델(약 1MB)이라 키 정보(``/key``)를 묻는다."""
@@ -256,13 +272,22 @@ class OpenRouterClient(OpenAIClient):
             assistant_extras=lambda content: assistant_reasoning_fields(content, model),
         )
 
+    def _build_kwargs(self, request: APIRequest) -> Dict[str, Any]:
+        kwargs = super()._build_kwargs(request)
+        if self.provider_routing:
+            extra = dict(kwargs.get("extra_body") or {})
+            extra["provider"] = dict(self.provider_routing)
+            kwargs["extra_body"] = extra
+        return kwargs
+
     def _heal_request_kwargs(
         self, kwargs: Dict[str, Any], exc: BaseException
     ) -> Optional[Dict[str, Any]]:
         """OpenAI 의 고침에 하나를 더한다 — 이 모델이 받지 않는 생각 설정이면 빼고 다시 보낸다.
 
         예: 늘 생각하는 모델에 끄기(``enabled: false``), 받지 않는 강도. 고른 생각 값은 이 요청에서
-        쓰이지 않는다(모델 기본으로 돈다).
+        쓰이지 않는다(모델 기본으로 돈다). 업체 지정(``provider``)은 빼지 않는다 — 지정한 업체가
+        못 받는다고 다른 업체로 몰래 넘기면 지정한 의미가 없다.
         """
         healed = super()._heal_request_kwargs(kwargs, exc)
         if healed is not None:
@@ -333,6 +358,9 @@ class OpenRouterClient(OpenAIClient):
 
     def _classify_error(self, e: Exception) -> APIError:
         """스트림 도중의 ``error`` 청크(SDK 의 ``openai.APIError``)는 본문의 ``code`` 로 분류한다."""
+        return self._with_routing_hint(self._classify_error_body(e))
+
+    def _classify_error_body(self, e: Exception) -> APIError:
         try:
             import openai
         except ImportError:  # pragma: no cover — SDK 없는 환경
@@ -342,6 +370,16 @@ class OpenRouterClient(OpenAIClient):
             if isinstance(body, dict) and ("code" in body or "message" in body):
                 return error_from_body(body, fallback=str(e))
         return super()._classify_error(e)
+
+    def _with_routing_hint(self, err: APIError) -> APIError:
+        """업체를 지정한 요청이 404 면 지정 때문일 수 있다 — 무엇으로 묶였는지 말에 붙인다.
+
+        OpenRouter 는 지정한 업체가 그 모델·파라미터를 받지 못하면 404 "No endpoints found …" 로
+        답한다. 그 문장만으로는 관리자가 카탈로그의 지정을 떠올리기 어렵다.
+        """
+        if self.provider_routing and err.status_code == 404:
+            err.args = (f"{err} (provider_routing={self.provider_routing})", *err.args[1:])
+        return err
 
 
 __all__ = [

@@ -396,3 +396,92 @@ def test_heal_leaves_unrelated_errors() -> None:
     client = OpenRouterClient(api_key="sk-or")
     kwargs = {"model": MODEL, "messages": [], "extra_body": {"reasoning": {"effort": "high"}}}
     assert client._heal_request_kwargs(kwargs, Exception("No endpoints found for model")) is None
+
+
+# ── 업체 지정 (4.107.0) ──────────────────────────────────────────────
+
+PIN = {"only": ["alibaba"], "allow_fallbacks": False}
+
+
+def _request(**fields: Any) -> APIRequest:
+    return APIRequest(model="qwen/qwen3.8-27b", messages=[{"role": "user", "content": "q"}], max_tokens=64, **fields)
+
+
+def test_no_routing_sends_no_provider_object() -> None:
+    kwargs = OpenRouterClient(api_key="sk-or")._build_kwargs(_request())
+    assert "provider" not in (kwargs.get("extra_body") or {})
+
+
+def test_routing_lands_in_extra_body_as_is() -> None:
+    kwargs = OpenRouterClient(api_key="sk-or", provider_routing=PIN)._build_kwargs(_request())
+    assert kwargs["extra_body"]["provider"] == PIN
+
+
+def test_routing_sits_beside_reasoning() -> None:
+    kwargs = OpenRouterClient(api_key="sk-or", provider_routing=PIN)._build_kwargs(_request(thinking_level="high"))
+    assert kwargs["extra_body"] == {"reasoning": {"effort": "high"}, "provider": PIN}
+
+
+def test_routing_is_copied_not_shared() -> None:
+    pin = {"only": ["alibaba"]}
+    client = OpenRouterClient(api_key="sk-or", provider_routing=pin)
+    pin["only"].append("novita")
+    client._build_kwargs(_request())["extra_body"]["provider"]["sort"] = "price"
+    assert client._build_kwargs(_request())["extra_body"]["provider"] == {"only": ["alibaba", "novita"]}
+
+
+@pytest.mark.parametrize("bad", ["alibaba", ["alibaba"], 3])
+def test_non_object_routing_is_ignored(bad: Any) -> None:
+    client = OpenRouterClient(api_key="sk-or", provider_routing=bad)
+    assert client.provider_routing is None
+    assert "provider" not in (client._build_kwargs(_request()).get("extra_body") or {})
+
+
+def test_empty_routing_is_none() -> None:
+    assert OpenRouterClient(api_key="sk-or", provider_routing={}).provider_routing is None
+
+
+def test_build_client_passes_routing_through_credentials() -> None:
+    from xgen_agent_runtime.host.runner import build_client
+
+    client = build_client("openrouter", "sk-or", None, credentials={"provider_routing": PIN})
+    assert isinstance(client, OpenRouterClient)
+    assert client.provider_routing == PIN
+
+
+def test_heal_keeps_routing_when_dropping_reasoning() -> None:
+    client = OpenRouterClient(api_key="sk-or", provider_routing=PIN)
+    kwargs = {"model": MODEL, "messages": [], "extra_body": {"reasoning": {"enabled": False}, "provider": PIN}}
+    healed = client._heal_request_kwargs(kwargs, Exception("Reasoning is mandatory for this endpoint and cannot be disabled."))
+    assert healed is not None
+    assert healed["extra_body"] == {"provider": PIN}
+
+
+def test_pinned_404_names_the_routing() -> None:
+    client = OpenRouterClient(api_key="sk-or", provider_routing=PIN)
+    err = client._with_routing_hint(APIError("No endpoints found that can handle the requested parameters.", status_code=404))
+    assert "provider_routing=" in str(err)
+    assert "alibaba" in str(err)
+
+
+def test_unpinned_404_unchanged() -> None:
+    client = OpenRouterClient(api_key="sk-or")
+    err = client._with_routing_hint(APIError("No endpoints found for model", status_code=404))
+    assert str(err) == "No endpoints found for model"
+
+
+def test_stream_request_carries_routing() -> None:
+    import asyncio
+
+    captured: Dict[str, Any] = {}
+    client = _stream_client([], captured)
+    client.provider_routing = dict(PIN)
+
+    async def _run() -> None:
+        try:
+            await _drain(client)
+        except Exception:  # noqa: BLE001 — 빈 스트림의 마무리는 이 시험의 관심이 아니다
+            pass
+
+    asyncio.run(_run())
+    assert captured["extra_body"]["provider"] == PIN
