@@ -4,6 +4,25 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.107.0] - 2026-11-03
+
+### Added: OpenRouter 업체 지정 (`OpenRouterClient(provider_routing=...)`)
+
+OpenRouter 는 같은 모델 이름을 여러 업체가 서빙한다. 업체마다 정밀도(fp4·fp8·bf16)·가격·속도가 다르고, 지정이 없으면
+OpenRouter 가 요청마다 고른다. 그래서 같은 에이전트가 턴마다 다른 업체로 갔다. 실측(11-03, 도구 1개를 붙인 요청):
+`qwen/qwen3.8-27b` 를 지정 없이 보내면 AkashML 이 받았고, `{"only": ["alibaba"], "allow_fallbacks": false}` 를 실으면
+Alibaba 가 받았다(`deepseek/deepseek-v4.1-flash-1017` 도 같다).
+
+- `provider_routing` 을 주면 요청 본문의 `provider` 객체로 그대로 싣는다(`extra_body.provider`). 키는 거르지 않는다 —
+  OpenRouter 가 검사하고(`only`·`order`·`ignore`·`allow_fallbacks`·`require_parameters`·`quantizations` …), 새 키가 생겨도
+  런타임을 고치지 않는다. 생각 설정(`extra_body.reasoning`)과 나란히 간다.
+- 객체가 아니면(문자열·목록) 경고 로그를 남기고 무시한다. 빈 객체는 지정 없음이다.
+- 생각 설정을 거절당해 다시 보낼 때도 업체 지정은 빼지 않는다 — 지정한 업체가 못 받는다고 다른 업체로 넘기면 지정한
+  의미가 없다.
+- 지정한 요청이 404("No endpoints found …")면 오류 문구에 `provider_routing=...` 를 붙인다. 지정 때문일 수 있다.
+- 호스트는 `resolve_credentials("openrouter", ...)` 가 `{"provider_routing": {...}}` 를 돌려주면 된다 —
+  `build_client(credentials=...)` 가 생성자로 넘긴다(에이전트 턴·기억 증류·호스트가 만드는 다른 호출이 같은 길이다).
+
 ## [4.106.0] - 2026-10-31
 
 ### Added: AudioTranscribe 가 누가 말했는지 붙인다 (`speakers=true`)
