@@ -19,8 +19,11 @@ beyond a synthetic "[no result recorded …]" result — and are backend-agnosti
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Callable, Dict, List, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 #: The result put where a tool call has none. It says only what is known: no result was recorded.
@@ -93,6 +96,10 @@ def normalize_messages_for_request(
 
     * every assistant ``tool_use`` has a later ``tool_result``;
     * every ``tool_result`` refers to an earlier assistant ``tool_use``;
+    * a ``tool_use`` id appears once in the whole request, and so does its
+      ``tool_result`` — the Anthropic API rejects the request otherwise
+      (400 "tool_use ids must be unique"), and one repeated block in a
+      persisted history used to fail every later turn of that session;
     * repairs are request-only and never mutate the persisted history.
 
     Missing outputs are inserted immediately after their assistant call.  An
@@ -102,6 +109,8 @@ def normalize_messages_for_request(
     """
     normalized: List[Dict[str, Any]] = []
     seen_call_ids: set[str] = set()
+    answered_once: set[str] = set()
+    repeated_calls = 0
 
     # Remove outputs that cannot be paired with an earlier call.  Copy only a
     # message whose content changes; clean histories retain their nested
@@ -113,36 +122,53 @@ def normalize_messages_for_request(
             normalized.append(message)
             continue
 
-        current_call_ids = _tool_use_ids(message) if message.get("role") == "assistant" else []
-
         content = message.get("content")
         if not isinstance(content, list):
             normalized.append(message)
-            seen_call_ids.update(current_call_ids)
             continue
 
+        is_assistant = message.get("role") == "assistant"
+        current_call_ids: set[str] = set()
         filtered: List[Any] = []
-        removed_orphan = False
+        removed = False
         for block in content:
-            is_result = isinstance(block, dict) and block.get("type") == "tool_result"
-            if is_result:
+            kind = block.get("type") if isinstance(block, dict) else None
+            if kind == "tool_use" and is_assistant:
+                call_id = block.get("id")
+                if isinstance(call_id, str) and call_id:
+                    # A repeated call is the same call: keep the first, drop the copy.
+                    if call_id in seen_call_ids or call_id in current_call_ids:
+                        removed = True
+                        repeated_calls += 1
+                        continue
+                    current_call_ids.add(call_id)
+            elif kind == "tool_result":
                 result_id = block.get("tool_use_id")
                 if (
                     not isinstance(result_id, str)
                     or not result_id
                     or result_id not in seen_call_ids
+                    or result_id in answered_once
                 ):
-                    removed_orphan = True
+                    removed = True
                     continue
+                answered_once.add(result_id)
             filtered.append(block)
 
-        if not removed_orphan:
+        if not removed:
             normalized.append(message)
         elif filtered:
             normalized.append({**message, "content": filtered})
-        # A message made entirely of orphan results has no model-visible
-        # content left and is intentionally omitted.
+        # A message made entirely of orphan or repeated blocks has no
+        # model-visible content left and is intentionally omitted.
         seen_call_ids.update(current_call_ids)
+
+    if repeated_calls:
+        logger.warning(
+            "message_repair: dropped %d repeated tool_use block(s) from the request "
+            "(the same id appeared more than once in the history)",
+            repeated_calls,
+        )
 
     answered_ids: set[str] = set()
     for message in normalized:
