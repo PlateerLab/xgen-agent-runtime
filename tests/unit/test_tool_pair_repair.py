@@ -21,6 +21,84 @@ def _tool_result(tid: str):
     return {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}
 
 
+def _ids(messages, kind):
+    key = "id" if kind == "tool_use" else "tool_use_id"
+    return [
+        block[key]
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == kind
+    ]
+
+
+class TestRepeatedToolUseIds:
+    """The Anthropic API rejects a request whose history repeats a tool_use id
+    (400 "messages.3.content.2: tool_use ids must be unique", claude-sonnet-5-5,
+    2026-11-09). The persisted history is never touched; the request keeps one."""
+
+    def test_a_copy_inside_one_assistant_message_is_dropped(self):
+        call = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}
+        messages = [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "p", "signature": "s"}, call, dict(call)]},
+            _tool_result("t1"),
+        ]
+        before = deepcopy(messages)
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert messages == before, "기록은 그대로"
+        assert normalized[1]["content"] == [messages[1]["content"][0], call]
+        assert _ids(normalized, "tool_use") == ["t1"]
+        assert _ids(normalized, "tool_result") == ["t1"]
+
+    def test_a_repeated_exchange_keeps_the_first_and_drops_the_second(self):
+        messages = [
+            {"role": "user", "content": "q"},
+            _assistant_tool_use("t1"),
+            _tool_result("t1"),
+            _assistant_tool_use("t1"),
+            _tool_result("t1"),
+            {"role": "assistant", "content": "answer"},
+        ]
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert normalized == messages[:3] + [messages[5]]
+
+    def test_only_the_repeated_block_leaves_a_mixed_message(self):
+        messages = [
+            _assistant_tool_use("t1"),
+            _tool_result("t1"),
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "again and more"},
+                {"type": "tool_use", "id": "t1", "name": "x", "input": {}},
+                {"type": "tool_use", "id": "t2", "name": "x", "input": {}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "dup"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "ok"},
+            ]},
+        ]
+
+        normalized = normalize_messages_for_request(messages)
+
+        assert [b.get("id") or b.get("text") for b in normalized[2]["content"]] == ["again and more", "t2"]
+        assert normalized[3]["content"] == [{"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]
+        assert _ids(normalized, "tool_use") == ["t1", "t2"]
+        assert _ids(normalized, "tool_result") == ["t1", "t2"]
+
+    def test_repair_is_idempotent(self):
+        call = {"type": "tool_use", "id": "t1", "name": "x", "input": {}}
+        messages = [{"role": "assistant", "content": [call, dict(call)]}, _tool_result("t1"), _tool_result("t1")]
+
+        once = normalize_messages_for_request(messages)
+
+        assert normalize_messages_for_request(once) == once
+        assert _ids(once, "tool_use") == ["t1"] and _ids(once, "tool_result") == ["t1"]
+
+
 class TestNormalizeMessagesForRequest:
     def test_clean_history_is_equal_and_source_is_untouched(self):
         messages = [

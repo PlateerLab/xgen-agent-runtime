@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.107.1] - 2026-11-09
+
+### Fixed: 같은 `tool_use` id 가 두 번 실려 요청이 거절되던 것
+
+Agent-Geny 에서 `claude-sonnet-5-5` 를 쓰면 턴이 400 `messages.3.content.2: tool_use ids must be unique` 로 끝났다.
+응답에 같은 id 의 `tool_use` 블록이 둘 실리면 그 응답을 담은 다음 요청이 거절되고, 기록에 남은 한 쌍 때문에 그
+세션의 이후 턴도 모두 같은 400 을 맞는다. 두 곳에서 막는다.
+
+- **응답을 읽을 때** (`AnthropicClient`·`BedrockClient`·`AnthropicProvider` 의 `_parse_response`): 같은 id 는 한 번만
+  받는다. 처음 것의 입력이 비었고 나중 것에 입력이 있으면 나중 것의 입력을 쓴다. 도구도 한 번만 돈다. 이런 응답이
+  오면 모델 · stop_reason · 블록 종류를 경고 로그로 남긴다. SDK 의 스트림 조립(`accumulate_event`)은
+  `content_block_start` 마다 블록을 덧붙이므로(인덱스를 보지 않는다) 같은 블록의 시작이 두 번 오면 이 모양이 된다.
+- **요청을 보낼 때** (`normalize_messages_for_request`): 기록 전체에서 같은 id 의 `tool_use` 는 처음 것만, 같은 id 의
+  `tool_result` 도 처음 것만 싣는다. 비게 된 메시지는 뺀다. 저장된 기록은 건드리지 않는다. 이미 중복이 저장된
+  세션도 다음 턴부터 이어진다.
+
 ## [4.107.0] - 2026-11-03
 
 ### Added: OpenRouter 업체 지정 (`OpenRouterClient(provider_routing=...)`)

@@ -735,8 +735,29 @@ class AnthropicClient(BaseClient):
 
     def _parse_response(self, raw: Any) -> APIResponse:
         content_blocks: List[ContentBlock] = []
+        # 같은 tool_use id 는 한 번만 받는다. 두 번 실리면 도구가 두 번 돌고, 그 응답을 담은 다음
+        # 요청이 400 "tool_use ids must be unique" 로 거절된다(2026-11-09 claude-sonnet-5-5).
+        tool_use_at: Dict[str, int] = {}
 
         for block in raw.content:
+            if block.type == "tool_use" and block.id in tool_use_at:
+                kept = content_blocks[tool_use_at[block.id]]
+                # 비어 있는 쪽 대신 입력이 있는 쪽을 남긴다(스트림 조립이 블록을 한 번 더 붙이면
+                # 덧붙은 쪽은 입력이 비어 있다).
+                if not kept.tool_input and block.input:
+                    kept.tool_input = block.input
+                    kept.raw = {**(kept.raw or {}), "input": block.input}
+                logger.warning(
+                    "anthropic: response repeated tool_use id %s (model=%s, stop_reason=%s, blocks=%s)"
+                    " — kept one",
+                    block.id,
+                    getattr(raw, "model", ""),
+                    getattr(raw, "stop_reason", ""),
+                    [getattr(b, "type", "") for b in raw.content],
+                )
+                continue
+            if block.type == "tool_use":
+                tool_use_at[block.id] = len(content_blocks)
             if block.type == "text":
                 content_blocks.append(
                     ContentBlock(
