@@ -247,6 +247,48 @@ async def test_message_sent_during_a_tool_reaches_the_next_model_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_sent_while_the_turn_was_getting_ready_reaches_the_first_call() -> None:
+    """준비 중(샌드박스 · 작업 공간 · 기억 불러오기 — 파이프라인이 돌기 전)에 보낸 말은 첫 모델 호출에 실린다.
+
+    예전에는 반복 한 바퀴가 끝난 뒤에만 꺼내서, 에이전트가 그 말 없이 먼저 답했고 첫 답으로 턴이 끝나면
+    무시된 것처럼 보였다(2026-11-13 dev).
+    """
+    inbox = SteerInbox()
+    early = inbox.offer("답은 표로 정리해 줘")  # 턴이 아직 준비 중일 때
+    provider = _Recording([_text("| 표 | 답 |")])
+    pipe = _pipeline(provider)
+    state = PipelineState(session_id="s")
+    state._steer_inbox = inbox
+
+    result = await pipe.run("자료 찾아 줘", state)
+
+    assert provider.call_count == 1  # 한 번에 반영 — 늦게 받아 한 번 더 돌지 않는다
+    first = provider.seen[0]
+    assert any("답은 표로 정리해 줘" in t for t in _last_user_texts(first))
+    assert any("자료 찾아 줘" in t for t in _last_user_texts(first))
+    assert early.delivered is True and result.text == "| 표 | 답 |"
+    steer_events = [e for e in state.events if e["type"] == "user.steer"]
+    assert len(steer_events) == 1  # 한 번만 들어간다
+    assert inbox.open is False
+
+
+@pytest.mark.asyncio
+async def test_message_during_the_context_stages_reaches_that_same_call() -> None:
+    """모델 호출 직전 단계(기억 · 문맥)가 도는 사이에 온 말도 바로 그 호출에 실린다."""
+    inbox = SteerInbox()
+    provider = _Recording([_tool_use("work", {}), _text("done")])
+    pipe = _pipeline(provider, _SlowTool())
+    state = PipelineState(session_id="s")
+    state._steer_inbox = inbox
+    inbox.offer("테스트도 돌려")
+
+    await pipe.run("고쳐 줘", state)
+
+    assert any("테스트도 돌려" in t for t in _last_user_texts(provider.seen[0]))
+    assert not any("테스트도 돌려" in t for t in _last_user_texts(provider.seen[1]))  # 두 번 들어가지 않는다
+
+
+@pytest.mark.asyncio
 async def test_message_during_the_final_answer_keeps_the_turn_going() -> None:
     inbox = SteerInbox()
     provider = _Recording([_text("here is the answer"), _text("answer in Korean")])

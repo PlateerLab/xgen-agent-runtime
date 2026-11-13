@@ -831,6 +831,8 @@ class Pipeline:
     # instead of three (emit / memory / summarize / persist / yield).
     LOOP_START = 2
     LOOP_END = 16  # inclusive
+    #: The model-call stage. Queued mid-turn messages are taken right before it (``_take_steer_before_call``).
+    API_STAGE = 6
     FINALIZE_START = 17
     FINALIZE_END = 21  # inclusive
     EVENT_DATA_TRUNCATE = 500  # max chars for event data preview
@@ -3088,6 +3090,37 @@ class Pipeline:
             )
             inbox.resolve(msg, True)
 
+    def _take_steer_before_call(self, state: PipelineState) -> None:
+        """Deliver what is queued right before a model call.
+
+        The end-of-pass take (:meth:`_take_steer`) only runs after a model call and its tools, so a
+        message sent before the first call — while the host was still preparing the turn (loading the
+        sandbox, the workspace, packages, memory) — reached the model one full call late: the agent
+        answered without it first, and when that first answer ended the turn it looked ignored. Taking
+        here puts it in the call that is about to be made. The inbox stays open (``take``); closing is
+        still decided at the end of the pass.
+        """
+        inbox = state._steer_inbox
+        if inbox is None or state.single_turn or inbox.stopping():
+            return
+        messages = inbox.take()
+        if not messages:
+            return
+        from xgen_agent_runtime.core.steer import append_steer, steer_text
+
+        append_steer(state.messages, steer_text(messages))
+        for msg in messages:
+            state.add_event(
+                "user.steer",
+                {
+                    "id": msg.id,
+                    "client_msg_id": msg.client_msg_id,
+                    "text": msg.text,
+                    "iteration": state.iteration,
+                },
+            )
+            inbox.resolve(msg, True)
+
     async def _run_phases(self, input: Any, state: PipelineState) -> None:
         """Execute all three pipeline phases (single source of truth).
 
@@ -3127,6 +3160,10 @@ class Pipeline:
         has_loop_stage = self.LOOP_END in self._stages
         while True:
             for order in range(self.LOOP_START, self.LOOP_END + 1):
+                if order == self.API_STAGE:
+                    # A message the user sent while the turn was still getting ready (sandbox, workspace,
+                    # memory …) or while the context stages ran goes into THIS call, not the next one.
+                    self._take_steer_before_call(state)
                 current = await self._try_run_stage(order, current, state)
 
             # If no Loop stage is registered, auto-complete after one pass

@@ -4,6 +4,20 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.109.1] - 2026-11-13
+
+### Fixed: 준비 중에 보낸 추가 메시지가 한 바퀴 늦게 들어가던 것
+
+턴이 막 시작돼 호스트가 준비하는 동안(샌드박스 · 작업 공간 · 패키지 · 기억 불러오기) 사용자가 [지금 추가]로 보낸
+말은 받은 편지함에 들어가지만, 파이프라인은 그것을 **반복 한 바퀴(모델 호출 + 도구)가 끝난 뒤에만** 꺼냈다. 그래서
+첫 모델 호출은 그 말 없이 나갔고, 에이전트는 먼저 답한 뒤에야 그 말을 받았다 — 첫 답으로 턴이 끝나는 경우 사용자에게는
+무시된 것처럼 보였다(2026-11-13 dev).
+
+- 모델을 부르기 **직전마다**(API 단계 앞) 쌓인 메시지를 꺼내 대화에 넣는다(`Pipeline._take_steer_before_call`).
+  준비 중에 보낸 말은 첫 호출부터, 문맥 · 기억 단계가 도는 사이에 보낸 말도 바로 그 호출에 실린다.
+- 끝내려던 턴을 이어 가는 판단(``complete`` 에서 닫거나 한 번 더 돌기)은 그대로 바퀴 끝(`_take_steer`)에서 한다.
+- 한 메시지는 한 번만 들어가고 `user.steer` 사건도 한 번이다.
+
 ## [4.109.0] - 2026-11-13
 
 ### Added: 에이전트 만들기 문(`AgentBuilderGuide`)과 서브 에이전트 표시
