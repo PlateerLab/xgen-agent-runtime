@@ -4,6 +4,22 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.109.0] - 2026-11-13
+
+### Added: 에이전트 만들기 문(`AgentBuilderGuide`)과 서브 에이전트 표시
+
+Agent Geny 가 사용자 계정으로 **새 에이전트(워크플로)** 를 만들고 다듬는 스킬이 생긴다. 문과 식구는 호스트(xgen-workflow)가
+등록하고, 런타임은 계층(턴-1 에는 문만, 부르면 식구가 열림)과 표시를 맡는다.
+
+- 문 표(`tools/gates.py`): `AgentBuilderGuide` → `AgentCreate` · `AgentBuild` · `AgentTestRun` · `AgentList`. 턴-1 표면에
+  `AgentBuilderGuide` 하나를 더한다(26 → 27, 선 29 그대로). 식구는 문 뒤에 있다.
+- 경계는 문 설명이 말한다: 새 에이전트 · 워크플로 · 봇 = AgentBuilderGuide, 내 그래프 고치기 · 도구 만들기 = SelfExtendGuide,
+  사람이 여는 앱 = AppGuide, 나중에 · 주기적으로 = JobGuide. 옛 위임 도구 이름(`SubAgent*`, `Task*`)과 "Delegat" 는 쓰지 않는다.
+- 도구 표시: 문과 식구에 라벨을 붙이고, 서브 에이전트 호출 도구(`ask_agent_<이름>`, 연결된 에이전트마다 이름이 다르다)는
+  접두로 "서브 에이전트" 라벨을 받는다(`PREFIX_INDICATORS`).
+- 자기 진화 안내 문구: "only WorkflowSelf edits the XGEN graph" → "edits your own XGEN graph". 이제 다른 워크플로를 다듬는
+  도구(AgentBuild)가 있다.
+
 ## [4.108.0] - 2026-11-13
 
 ### Changed: 기억을 기록으로 — 종류 · 버전 · 출처가 있고, 턴마다 예산 안에서 고른다 (`memory/records`)

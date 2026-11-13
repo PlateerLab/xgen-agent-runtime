@@ -29,7 +29,7 @@ SELF_EVOLUTION_PROMPT_BLOCK = """
 You can PERMANENTLY extend your own capabilities by editing your own XGEN
 workflow graph — the WorkflowSelf tool carries the details. Do NOT confuse it
 with any harness-provided "Workflow"/orchestration tool: only WorkflowSelf
-edits the XGEN graph."""
+edits your own XGEN graph."""
 
 
 #: 실행 효율 원칙 — SDK 도구 루프가 있는 모든 턴에 붙는다.

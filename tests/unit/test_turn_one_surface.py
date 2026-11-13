@@ -24,6 +24,7 @@ def test_패밀리는_문_하나만_내놓는다():
         ("JobGuide", "JobSchedule"),
         ("BrowserGuide", "BrowserNavigate"),
         ("AppGuide", "AppCreate"),
+        ("AgentBuilderGuide", "AgentCreate"),
     ):
         assert is_turn_one(gate), gate
         assert not is_turn_one(member), member
@@ -164,6 +165,10 @@ def test_첫_턴_표면은_스물몇_개를_넘지_않는다():
     # 25번째 (2026-10-23): ConversationHistory — 이 대화의 원문 읽기. 창은 최근 몇 턴만 다시 싣고 그보다
     # 오래된 턴은 요약 조각뿐이라, 이게 문 뒤에 있으면 지난 일을 기억으로 재구성하다 틀린다.
     #
+    # 27번째 (2026-11-13): AgentBuilderGuide — 사용자 계정으로 새 에이전트(워크플로)를 만드는 문. 식구
+    # (AgentCreate/AgentBuild/AgentTestRun/AgentList)는 문 뒤에 있다. 문이 안 보이면 "에이전트 만들어 줘" 가
+    # 자기 그래프 고치기나 앱 만들기로 샌다. 선(29)은 그대로다.
+    #
     # 이 선을 다시 올리려면 **한 도구씩** 이유를 여기 적어야 한다. 이 주석이
     # 길어지는 것이 곧 표면이 넓어졌다는 신호다.
     assert len(TURN_ONE_TOOLS) <= 29, sorted(TURN_ONE_TOOLS)
@@ -233,3 +238,22 @@ def test_앱은_문이_첫_턴에_있다():
     assert is_turn_one("AppGuide")
     for member in ("AppCreate", "AppPublish", "AppStatus", "AppList", "AppDelete"):
         assert not is_turn_one(member), member
+
+
+def test_에이전트_만들기는_문_하나로_열린다():
+    from xgen_agent_runtime.tools.gates import family_of, gate_of
+
+    family = ["AgentCreate", "AgentBuild", "AgentTestRun", "AgentList"]
+    assert gate_of("AgentBuilderGuide") is not None
+    registered = ["AgentBuilderGuide", *family, "AppCreate", "WorkflowSelf", "JobSchedule"]
+    assert sorted(family_of("AgentBuilderGuide", registered)) == sorted(family)
+    for member in family:
+        assert not is_turn_one(member), member
+
+
+def test_서브_에이전트_호출은_접두로_표시된다():
+    from xgen_agent_runtime.host.tool_indicators import get_indicator
+
+    assert get_indicator("ask_agent_report_writer")["display_label"] == "서브 에이전트"
+    assert get_indicator("AgentCreate")["display_label"] == "에이전트 생성"
+    assert get_indicator("unknown_tool")["category"] == "generic"
