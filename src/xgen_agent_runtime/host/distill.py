@@ -37,6 +37,9 @@ DISTILL_STATE_FILENAME = "_distill_state.json"
 #: 스테이지별 LLM 타임아웃(s) — 행이 걸리면 in-flight 가드가 영구 잠기는 것 방지.
 FACTS_TIMEOUT_S = 90.0
 ROLLUP_TIMEOUT_S = 180.0
+#: 기록 pass(이관 · 추출 · 판정 · 정리) 전체 한도 — 각 단계가 배치 수로 묶여 있고, 배치마다 상태를
+#: 저장하므로 한도에 걸려도 끝난 배치는 남고 다음 pass 가 이어 간다.
+RECORDS_TIMEOUT_S = 900.0
 
 #: 워크플로우당 in-flight 증류 1개 (연타 coalesce).
 _inflight: set = set()
@@ -100,47 +103,93 @@ def _save_state(workflow_id: str, state: Dict[str, Any], host: Any) -> None:
 
 
 async def _distill_async(spec: DistillSpec, provider: Any, llm: Any) -> Dict[str, Any]:
-    """facts → rollup(L1) → daily(L2, 0콜) → evergreen(L3, 임계) 순서.
+    """facts(또는 기록) → rollup(L1) → daily(L2, 0콜) → evergreen(L3, 임계 · 원장 모드만) 순서.
 
     Geny compact_now 와 동일한 순서 — 방금 진술된 내구 사실이 내러티브 압축
     전에 원장에 먼저 박히도록 facts 가 선행한다.
     """
-    from xgen_agent_runtime.memory import FactExtraction, MemoryRollup
+    import asyncio as _asyncio
 
+    from xgen_agent_runtime.memory import FactExtraction, MemoryRollup
+    from xgen_agent_runtime.memory.provider import records_mode_default
+
+    records_on = records_mode_default() == "on"
     report: Dict[str, Any] = {
+        "mode": "records" if records_on else "ledger",
         "facts_changes": 0,
         "digest": False,
         "daily": False,
         "evergreen": False,
     }
 
-    # ① Fact Ledger — 스키마 구속 추출 (critical/__facts__.md, 매 턴 주입 대상)
-    try:
-        import asyncio as _asyncio
+    if records_on:
+        # ① 기록 — 이관(옛 원장 · 에버그린 · 고정 노트, 여러 pass 에 걸쳐) → 이 대화의 새 턴 추출 →
+        # 이웃 판정 → 주기적 정리. 원장 · 에버그린은 더 쓰지 않는다(기록이 대신한다).
+        try:
+            from xgen_agent_runtime.memory.records import RecordsPipeline
 
-        fact_report = await _asyncio.wait_for(
-            FactExtraction(provider, complete_structured=llm.complete_structured).run(),
-            timeout=FACTS_TIMEOUT_S,
-        )
-        if fact_report.ran:
-            report["facts_changes"] = fact_report.changes
-            if fact_report.changes:
+            rec_report = await _asyncio.wait_for(
+                RecordsPipeline(
+                    provider,
+                    complete_structured=lambda instruction, schema: llm.complete_structured(
+                        instruction, schema, purpose="memory.records"
+                    ),
+                    session_id=spec.interaction_id,
+                ).run(),
+                timeout=RECORDS_TIMEOUT_S,
+            )
+            report["facts_changes"] = rec_report.changes
+            report["records"] = {
+                "turns": rec_report.turns,
+                "candidates": rec_report.candidates,
+                **rec_report.reconcile,
+            }
+            if rec_report.migrated:
+                report["records"]["migrated"] = {
+                    k: rec_report.migrated.get(k)
+                    for k in ("notes", "mode", "records", "remaining", "finished_notes")
+                }
+            if rec_report.consolidation:
+                report["records"]["consolidation"] = rec_report.consolidation
+            if rec_report.skipped_reason:
+                report["records"]["skipped"] = rec_report.skipped_reason
+            if rec_report.changes or rec_report.migrated:
                 logger.info(
-                    "distill: fact ledger updated (workflow=%s, %d change(s), %d active)",
+                    "distill: records updated (workflow=%s, %d change(s), migrated=%s)",
                     spec.workflow_id,
-                    fact_report.changes,
-                    fact_report.active_facts,
+                    rec_report.changes,
+                    bool(rec_report.migrated),
                 )
-        elif fact_report.skipped_reason:
-            logger.debug("distill: facts skipped (%s)", fact_report.skipped_reason)
-    except Exception:  # noqa: BLE001 — facts 는 best-effort (Geny 동일)
-        logger.warning("distill: fact extraction failed", exc_info=True)
+        except Exception:  # noqa: BLE001 — best-effort; 끝난 배치는 저장돼 있다
+            logger.warning("distill: records pass failed", exc_info=True)
+
+    # ① (원장 모드) Fact Ledger — 스키마 구속 추출 (critical/__facts__.md, 매 턴 주입 대상)
+    if not records_on:
+        try:
+            fact_report = await _asyncio.wait_for(
+                FactExtraction(provider, complete_structured=llm.complete_structured).run(),
+                timeout=FACTS_TIMEOUT_S,
+            )
+            if fact_report.ran:
+                report["facts_changes"] = fact_report.changes
+                if fact_report.changes:
+                    logger.info(
+                        "distill: fact ledger updated (workflow=%s, %d change(s), %d active)",
+                        spec.workflow_id,
+                        fact_report.changes,
+                        fact_report.active_facts,
+                    )
+            elif fact_report.skipped_reason:
+                logger.debug("distill: facts skipped (%s)", fact_report.skipped_reason)
+        except Exception:  # noqa: BLE001 — facts 는 best-effort (Geny 동일)
+            logger.warning("distill: fact extraction failed", exc_info=True)
 
     # ② L1 롤링 다이제스트 + ③ 데일리(코드 렌더) + ④ 에버그린(임계)
     state = _load_state(spec.workflow_id, spec.host)
     passes = int(state.get("passes", 0)) + 1
     last_evergreen = int(state.get("last_evergreen_pass", 0))
-    run_evergreen = (passes - last_evergreen) >= EVERGREEN_EVERY_PASSES
+    # 기록 모드에서는 에버그린을 다시 쓰지 않는다 — 내구 지식은 기록이 맡고, 옛 에버그린은 이관된다.
+    run_evergreen = not records_on and (passes - last_evergreen) >= EVERGREEN_EVERY_PASSES
 
     async def _summarize(instruction: str) -> str:
         return await llm.complete(instruction, purpose="memory.rollup")
@@ -266,8 +315,9 @@ def launch_distillation(spec: DistillSpec) -> bool:
                 state["last_error"] = None
                 state["last_report"] = report
                 logger.info(
-                    "distill: pass done (workflow=%s, facts=%s, digest=%s, daily=%s, evergreen=%s)",
+                    "distill: pass done (workflow=%s, mode=%s, changes=%s, digest=%s, daily=%s, evergreen=%s)",
                     wf,
+                    report.get("mode", "ledger"),
                     report["facts_changes"],
                     report["digest"],
                     report["daily"],

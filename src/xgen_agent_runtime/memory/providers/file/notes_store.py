@@ -51,6 +51,11 @@ _WIKILINK = re.compile(r"\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]")
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9가-힣\-]+")
 
 
+#: Not embedded for semantic search: earlier versions of memory records and the records pipeline's
+#: state (memory/records). Searching them would bring back what is no longer true.
+_UNINDEXED_CATEGORIES = frozenset({"memory-history", "memory-system"})
+
+
 class _FilesystemNotesStore(NotesHandle):
     """File-backed notes store.
 
@@ -146,6 +151,16 @@ class _FilesystemNotesStore(NotesHandle):
                 out.append(note.as_meta())
         return out
 
+    async def read_category(self, category: str) -> List[Note]:
+        """Every note of ``category``, whole — one call instead of list + a read per note."""
+        async with self._lock:
+            await self._ensure_loaded()
+            return [
+                c
+                for c in (_clone(n) for n in self._cache.values() if (n.category or "") == category)
+                if c is not None
+            ]
+
     async def read(self, filename: str) -> Optional[Note]:
         async with self._lock:
             await self._ensure_loaded()
@@ -189,7 +204,7 @@ class _FilesystemNotesStore(NotesHandle):
             note_meta = note.as_meta()
         # Run auto-vector outside the write lock — embedding the body
         # is an HTTP round-trip and must never block other note ops.
-        if indexer is not None and body_for_index:
+        if indexer is not None and body_for_index and note.category not in _UNINDEXED_CATEGORIES:
             await self._safe_index(indexer, ref_for_index, body_for_index)
         await self._refresh_index_for(note.category)
         await _fire_hook(
@@ -230,7 +245,7 @@ class _FilesystemNotesStore(NotesHandle):
             indexer = self._vector_indexer
             ref_for_index, body_for_index = current.ref, current.body
             note_meta = current.as_meta()
-        if indexer is not None and body_for_index:
+        if indexer is not None and body_for_index and current.category not in _UNINDEXED_CATEGORIES:
             await self._safe_index(indexer, ref_for_index, body_for_index)
         await self._refresh_index_for(current.category)
         await _fire_hook(

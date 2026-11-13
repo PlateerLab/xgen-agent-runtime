@@ -74,7 +74,9 @@ from typing import Any, Dict, FrozenSet, List
 #: not put in every turn).
 #: v22: + ``user.steer`` (4.105.0 mid-turn steering: a message the user sent while the turn ran joined
 #: the conversation at a loop boundary — core/steer.py).
-EVENT_CATALOG_VERSION = 22
+#: v23: + ``memory.records_selected`` (4.108.0 memory records: what of the remembered went into this
+#: turn — whole, as a headline, or only counted — memory/records/assemble.py).
+EVENT_CATALOG_VERSION = 23
 
 
 class EventTypes(str, Enum):
@@ -300,6 +302,7 @@ class EventTypes(str, Enum):
     MEMORY_STRUCTURED_REFLECTION_DONE = "memory.structured_reflection_done"
     MEMORY_PROVIDER_RECORDED = "memory.provider_recorded"
     MEMORY_RETRIEVE_BREAKDOWN = "memory.retrieve_breakdown"
+    MEMORY_RECORDS_SELECTED = "memory.records_selected"
     MEMORY_RETRIEVED_EMPTY = "memory.retrieved_empty"
 
     # ── Stage 19: Summarize ──
@@ -961,6 +964,15 @@ PAYLOADS: Dict[EventTypes, Dict[str, str]] = {
         "total_chars": "int",
         "chunk_count": "int",
         "slim_mode": "bool",
+    },
+    EventTypes.MEMORY_RECORDS_SELECTED: {
+        "budget": "int — characters the memory block could use",
+        "chars": "int — characters it used",
+        "projects": "list[str] — projects whose state was shown (named in the turn, else the latest)",
+        "rules": "list[str] — record ids shown whole (same for state, related)",
+        "rules_short": "list[str] — record ids shown by their headline (same for state_short, related_short)",
+        "rules_left": "list[str] — record ids not shown for room, counted in the memory index (same for state_left, related_left)",
+        "legacy": "list[str] — old pinned notes not migrated yet, shown as they are",
     },
     EventTypes.MEMORY_RETRIEVED_EMPTY: {
         "query_preview": "str",

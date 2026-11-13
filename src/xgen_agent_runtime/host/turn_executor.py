@@ -146,7 +146,15 @@ def _memory_block_for(host: Any, workflow_id: str, *, write_available: Optional[
             write_available = bool(probe(workflow_id)) if callable(probe) else True
         except Exception:  # noqa: BLE001 — 훅 실패는 예전 동작(쓰기 블록)
             write_available = True
-    return MEMORY_PROMPT_BLOCK if write_available else MEMORY_READONLY_PROMPT_BLOCK
+    if not write_available:
+        return MEMORY_READONLY_PROMPT_BLOCK
+    from xgen_agent_runtime.memory.provider import records_mode_default
+
+    if records_mode_default() == "on":
+        from xgen_agent_runtime.host._constants import MEMORY_RECORDS_PROMPT_NOTE
+
+        return MEMORY_PROMPT_BLOCK + MEMORY_RECORDS_PROMPT_NOTE
+    return MEMORY_PROMPT_BLOCK
 
 
 def _folder_device_info(host: Any) -> Dict[str, Any]:

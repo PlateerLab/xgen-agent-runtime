@@ -1210,6 +1210,10 @@ _DEFAULT_LAYER_BUDGET_RATIO: Dict[str, float] = {
     # tenth of the budget cut it mid-sentence (with a marker since 2026-10-23); it gets a quarter.
     "session_summary": 0.25,
     "pinned": 0.30,
+    # Memory records (4.108.0): rules in force, the state of the projects in play, related facts —
+    # selected per turn, never cut (memory/records/assemble.py). Replaces "pinned" and the identity
+    # card when records are on, and carries the related records the search layers no longer show.
+    "records": 0.45,
     "vault_map": 0.05,
     "ltm_main": 0.20,
     "vector": 0.40,
@@ -1225,6 +1229,14 @@ _DEFAULT_IMPORTANCE_BOOST: Dict[str, float] = {
     "medium": 1.0,
     "low": 0.5,
 }
+
+
+def records_mode_default() -> str:
+    """``XGEN_MEMORY_RECORDS`` = on (default) | off — memory records vs the old pinned layer."""
+    import os
+
+    v = (os.environ.get("XGEN_MEMORY_RECORDS") or "on").strip().lower()
+    return "off" if v in ("off", "0", "false", "no") else "on"
 
 
 @dataclass
@@ -1295,6 +1307,11 @@ class MemoryHooks:
     # fact ledger's identity/relationship/prohibition facts (fallback:
     # identity-tagged pinned notes). 0 disables the layer.
     identity_card_chars: int = 600
+    # Memory records (4.108.0): "on" selects the memory block from typed records (rules / state /
+    # related facts) instead of injecting every pinned note whole; the old pinned notes are migrated
+    # by the distillation pass and, until then, still shown. "off" keeps the pinned layer as before.
+    # Default from ``XGEN_MEMORY_RECORDS`` (the distillation pass reads the same switch).
+    records_mode: str = field(default_factory=lambda: records_mode_default())
 
     # Categories excluded from the retriever's AUTOMATIC keyword/vector
     # layers (explicit memory_search tool calls are unaffected). Ambient
