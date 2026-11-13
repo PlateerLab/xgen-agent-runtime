@@ -115,6 +115,13 @@ GATES: Dict[str, Gate] = {
         # 옛 이름으로 부르면 tools.renamed 가 새 이름으로 보낸다.
         Gate("AppGuide", _named("AppCreate", "AppPublish", "AppStatus", "AppList", "AppDelete")),
         Gate("SshListServers", _named("SshRun", "SshUpload", "SshDownload")),
+        # 에이전트 만들기(사용자 계정으로 새 워크플로를 만들고 다듬는다) — 4.109.0. 호스트(xgen-workflow)가
+        # 문과 식구를 등록한다. 자기 그래프 고치기(WorkflowSelf)와 도구 만들기(ForgeTool)는 SelfExtendGuide 의 몫,
+        # 사람이 여는 웹 앱은 AppGuide 의 몫이다.
+        Gate(
+            "AgentBuilderGuide",
+            _named("AgentCreate", "AgentBuild", "AgentTestRun", "AgentList"),
+        ),
         Gate(
             "SelfExtendGuide",
             _lazy_family(

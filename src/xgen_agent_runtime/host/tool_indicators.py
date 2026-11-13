@@ -16,7 +16,7 @@ LangChain tool 실행 시점에 UI 인디케이터(라벨·아이콘·예상 소
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +47,48 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
         "display_label": "자기 진화",
         "verb_running": "자기 워크플로를 수정하는 중...",
         "verb_done": "자기 진화 적용",
+        "icon": "tool",
+        "category": "self",
+        "render_hint": "inline",
+    },
+    # ── 에이전트 만들기 (4.109.0, 호스트 등록) ─────────────────────────────
+    "AgentBuilderGuide": {
+        "display_label": "에이전트 만들기",
+        "verb_running": "에이전트 만드는 법을 여는 중...",
+        "verb_done": "에이전트 만들기 준비",
+        "icon": "tool",
+        "category": "self",
+        "render_hint": "inline",
+    },
+    "AgentCreate": {
+        "display_label": "에이전트 생성",
+        "verb_running": "새 에이전트를 만드는 중...",
+        "verb_done": "에이전트를 만들었습니다",
+        "icon": "tool",
+        "category": "self",
+        "render_hint": "inline",
+    },
+    "AgentBuild": {
+        "display_label": "에이전트 구성",
+        "verb_running": "에이전트 워크플로를 구성하는 중...",
+        "verb_done": "에이전트 구성",
+        "icon": "tool",
+        "category": "self",
+        "render_hint": "inline",
+    },
+    "AgentTestRun": {
+        "display_label": "에이전트 시험 실행",
+        "verb_running": "만든 에이전트를 시험하는 중...",
+        "verb_done": "시험 실행 완료",
+        "icon": "tool",
+        "category": "self",
+        "expected_duration_ms": 15000,
+        "render_hint": "inline",
+    },
+    "AgentList": {
+        "display_label": "내 에이전트",
+        "verb_running": "에이전트 목록을 보는 중...",
+        "verb_done": "에이전트 목록",
         "icon": "tool",
         "category": "self",
         "render_hint": "inline",
@@ -91,6 +133,24 @@ TOOL_INDICATORS: Dict[str, Dict[str, Any]] = {
 }
 
 
+#: 이름이 접두로 정해지는 도구 — 서브 에이전트 호출(``ask_agent_<이름>``, 4.109.0)은 연결된 에이전트마다
+#: 이름이 다르다.
+PREFIX_INDICATORS: Tuple[Tuple[str, Dict[str, Any]], ...] = (
+    (
+        "ask_agent_",
+        {
+            "display_label": "서브 에이전트",
+            "verb_running": "서브 에이전트에게 맡기는 중...",
+            "verb_done": "서브 에이전트 응답",
+            "icon": "tool",
+            "category": "agent",
+            "expected_duration_ms": 20000,
+            "render_hint": "inline",
+        },
+    ),
+)
+
+
 # ---------------------------------------------------------------------------
 # 조회 헬퍼
 # ---------------------------------------------------------------------------
@@ -119,7 +179,12 @@ def get_indicator(tool_name: str) -> Dict[str, Any]:
         >>> ind["category"]
         'generic'
     """
-    base = TOOL_INDICATORS.get(tool_name, DEFAULT_INDICATOR)
+    base = TOOL_INDICATORS.get(tool_name)
+    if base is None:
+        base = next(
+            (ind for prefix, ind in PREFIX_INDICATORS if str(tool_name).startswith(prefix)),
+            DEFAULT_INDICATOR,
+        )
     # DEFAULT_INDICATOR 를 복사할 때 mutation 방지 + tool_name 첨부
     return {**base, "tool_name": tool_name}
 

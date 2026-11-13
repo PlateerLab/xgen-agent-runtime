@@ -118,6 +118,10 @@ TURN_ONE_TOOLS = frozenset(
         #      문이 아니라 6(SelfExtendGuide → ForgeTool)의 몫이다 — 두 문의 설명이 그
         #      경계를 말한다(tests/unit/test_tool_request_routing.py).
         "AppGuide",
+        # 4-c. 에이전트 만들기 — AgentCreate/AgentBuild/AgentTestRun/AgentList 는 이 문 뒤에. 사용자가
+        #      "~하는 에이전트(워크플로) 만들어 줘" 할 때 쓰는 길이다. 문이 안 보이면 에이전트는 자기 그래프를
+        #      고치거나(WorkflowSelf) 앱을 만드는 쪽으로 새 버린다 — 세 문의 설명이 경계를 말한다.
+        "AgentBuilderGuide",
         # 6. 자기확장 — 제작(ForgeTool·ListForgedTools·DeleteForgedTool)·환경
         #    (PythonEnv·SystemPackages)·자기진화(WorkflowSelf)는 **문 하나** 뒤에.
         #
