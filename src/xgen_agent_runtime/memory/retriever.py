@@ -39,6 +39,11 @@ from xgen_agent_runtime.stages.s02_context.types import MemoryChunk
 
 logger = logging.getLogger(__name__)
 
+#: Categories of memory records (memory/records) — out of the generic search layers when records are on.
+_RECORD_CATEGORIES = frozenset({"rules", "facts", "state", "decisions", "procedures"})
+#: Record history and the records pipeline's own state — never automatic memory.
+_RECORDS_SYSTEM_CATEGORIES = frozenset({"memory-history", "memory-system"})
+
 
 def _clip_marked(text: str, cap: int, what: str, how: str) -> str:
     """``text`` within ``cap`` chars; when cut, say so and how to get the rest (never a silent cut).
@@ -103,6 +108,21 @@ _EXCLUDED_OVERFETCH = 5
 _COMPACTIONS_CATEGORY = "compactions"
 #: 그것만 빠질 때의 여유 배수.
 _COMPACTIONS_OVERFETCH = 2
+
+
+def _hidden_category(category: Any, hooks: MemoryHooks) -> bool:
+    """검색 층(벡터 · 키워드)에 싣지 않는 카테고리인가.
+
+    압축 기록과 기록 시스템 내부(이력 · 상태)는 늘 뺀다. 기록 모드에서는
+    기록 카테고리도 뺀다 — 기록은 records 층이 예산 안에서 고른다.
+    """
+    if category == _COMPACTIONS_CATEGORY or category in _RECORDS_SYSTEM_CATEGORIES:
+        return True
+    return category in _RECORD_CATEGORIES and _records_on(hooks)
+
+
+def _records_on(hooks: Any) -> bool:
+    return str(getattr(hooks, "records_mode", "off") or "off") == "on"
 
 
 def _layer_cap(hooks: MemoryHooks, layer: str) -> int:
@@ -253,23 +273,44 @@ class MemoryAwareRetriever(MemoryRetriever):
         )
         _record("session_summary", before)
 
+        # ── L1.4–L1.5 with memory records: one selected block (rules / state / related) ──
+        records_on = _records_on(hooks)
+        if records_on:
+            before = total
+            loaded = await self._load_records(
+                chunks,
+                total,
+                budget,
+                hooks,
+                search_query,
+                state,
+                prefetched=pf.get("records", _UNFETCHED),
+            )
+            if loaded is not None:
+                total = loaded
+                # Both parts (standing — rendered with the pinned tier — and related) count as records.
+                breakdown["records"] = sum(1 for c in chunks if (c.metadata or {}).get("records"))
+            else:
+                records_on = False  # assembly failed: the pinned layer below stands in
+
         # ── L1.4: identity card — NEVER dropped, own budget ─────────
         # The facts a persona must never act ignorant of (owner's name,
         # honorific, standing prohibitions). Separate from the pinned layer
         # because pinned is ratio-budgeted and was observed starving these
         # exact facts out of context ("asked its owner's name").
-        before = total
-        total = await self._load_identity_card(
-            chunks, total, hooks, prefetched=pf.get("identity_card", _UNFETCHED)
-        )
-        _record("identity_card", before)
+        if not records_on:
+            before = total
+            total = await self._load_identity_card(
+                chunks, total, hooks, prefetched=pf.get("identity_card", _UNFETCHED)
+            )
+            _record("identity_card", before)
 
-        # ── L1.5: pinned facts (always-inject, host-policy category) ──
-        before = total
-        total = await self._load_pinned_facts(
-            chunks, total, budget, hooks, prefetched=pf.get("pinned", _UNFETCHED)
-        )
-        _record("pinned", before)
+            # ── L1.5: pinned facts (always-inject, host-policy category) ──
+            before = total
+            total = await self._load_pinned_facts(
+                chunks, total, budget, hooks, prefetched=pf.get("pinned", _UNFETCHED)
+            )
+            _record("pinned", before)
 
         # ── L1.7: vault map (lightweight directory hint) ────────────
         if hooks.slim_mode or hooks.always_render_vault_map:
@@ -388,11 +429,15 @@ class MemoryAwareRetriever(MemoryRetriever):
 
         _add("summary", _fetch_summary)
 
-        if getattr(hooks, "identity_card_chars", 0) > 0:
+        records_on = _records_on(hooks)
+        if records_on:
+            _add("records", lambda: self._assemble_records(hooks, query))
+
+        if not records_on and getattr(hooks, "identity_card_chars", 0) > 0:
             _add("identity_card", lambda: self._build_identity_card(hooks))
 
         pinned_cap = _layer_cap(hooks, "pinned")
-        if pinned_cap > 0:
+        if pinned_cap > 0 and not records_on:
             _add(
                 "pinned",
                 lambda: self._provider.notes().load_pinned(
@@ -412,7 +457,11 @@ class MemoryAwareRetriever(MemoryRetriever):
         # 압축 기록("compactions")은 늘 뺀다. 이 세션의 것은 체크포인트로 이미 messages 에 있고,
         # 지난 세션의 것은 같은 대화의 아카이브를 줄인 판이다. 자동 층에 올리면 같은 요약이 "관련
         # 지식" 으로 한 번 더 들어간다. 명시적 memory_search 는 그대로 찾는다.
-        _excluded = _configured_excluded | {_COMPACTIONS_CATEGORY}
+        _excluded = _configured_excluded | {_COMPACTIONS_CATEGORY} | _RECORDS_SYSTEM_CATEGORIES
+        if records_on:
+            # Records reach the prompt through the records layer (selected, whole); the generic search
+            # layers would put the same lines in again as "related knowledge".
+            _excluded |= _RECORD_CATEGORIES
 
         def _drop_excluded(hits):
             if not hits:
@@ -585,6 +634,112 @@ class MemoryAwareRetriever(MemoryRetriever):
         return total + len(body)
 
     # ── L1.5 ────────────────────────────────────────────────────────
+
+    async def _records_context(self) -> str:
+        """The last few turns, as text — they decide which projects are in play."""
+        from xgen_agent_runtime.memory.records.pipeline import turns_for_extraction
+
+        try:
+            recent = await self._provider.stm().recent(n=8)
+        except Exception:  # noqa: BLE001
+            return ""
+        turns = turns_for_extraction(list(recent or []))
+        return "\n".join(t.text for t in turns if t.role in ("user", "assistant"))[-2000:]
+
+    async def _assemble_records(
+        self,
+        hooks: MemoryHooks,
+        query: str,
+        *,
+        room: Optional[int] = None,
+        context: Optional[str] = None,
+    ) -> Any:
+        """The records block for this turn (``None`` on failure → the pinned layer stands in)."""
+        from xgen_agent_runtime.memory.records.assemble import assemble
+
+        cap = _layer_cap(hooks, "records") or _layer_cap(hooks, "pinned")
+        if room is not None:
+            cap = min(cap, room)
+        if cap <= 0:
+            return None
+        if context is None:
+            context = await self._records_context()
+        # A host's first-tier (slim) turn keeps only the rules.
+        include = ("rules",) if hooks.slim_mode else ("rules", "state", "related")
+        try:
+            assembly = await asyncio.wait_for(
+                assemble(
+                    self._provider, query=query, context=context, budget_chars=cap, include=include
+                ),
+                timeout=20.0,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "memory_aware: records assembly failed; pinned layer instead", exc_info=True
+            )
+            return None
+        assembly.report["context"] = context
+        return assembly
+
+    async def _load_records(
+        self,
+        chunks: List[MemoryChunk],
+        total: int,
+        budget: int,
+        hooks: MemoryHooks,
+        query: str,
+        state: PipelineState,
+        *,
+        prefetched: Any = _UNFETCHED,
+    ) -> Optional[int]:
+        """Records → two chunks: the standing part (rules, state, index — rendered with the pinned tier,
+        so it can stay in the cached prefix) and this turn's related records (the per-turn tier)."""
+        assembly = (
+            prefetched
+            if prefetched is not _UNFETCHED
+            else await self._assemble_records(hooks, query)
+        )
+        if assembly is None:
+            return None
+        room = budget - total
+        if room <= 0:
+            return total
+        if len(assembly.text) > room:
+            # Earlier layers took more than usual: assemble again for the room that is left (whole
+            # records again — never a cut through the middle of one).
+            again = await self._assemble_records(
+                hooks, query, room=room, context=str(assembly.report.get("context") or "")
+            )
+            if again is None:
+                return None
+            assembly = again
+        report = {k: v for k, v in assembly.report.items() if k != "context"}
+        try:
+            state.add_event("memory.records_selected", report)
+        except Exception:  # noqa: BLE001
+            logger.debug("memory_aware: records event failed", exc_info=True)
+        for key, text, layer, score in (
+            ("memory_records", assembly.standing, "pinned", 2.5),
+            ("memory_records_related", assembly.related, "records", 1.5),
+        ):
+            if not text:
+                continue
+            chunks.append(
+                MemoryChunk(
+                    key=key,
+                    content=text,
+                    source="records",
+                    relevance_score=score,
+                    metadata={
+                        "layer": layer,
+                        "records": True,
+                        "char_count": len(text),
+                        **({"host_layer": hooks.pin_category} if layer == "pinned" else {}),
+                    },
+                )
+            )
+            total += len(text)
+        return total
 
     async def _load_identity_card(
         self,
@@ -840,7 +995,7 @@ class MemoryAwareRetriever(MemoryRetriever):
         for h in hits:
             if _is_current_session_record(h, getattr(self, "_current_session_id", "")):
                 continue
-            if (getattr(h, "metadata", None) or {}).get("category") == _COMPACTIONS_CATEGORY:
+            if _hidden_category((getattr(h, "metadata", None) or {}).get("category"), hooks):
                 continue  # 프리페치 없이 불린 경로도 같은 규칙(위 _drop_excluded)
             text = h.content or ""
             if not text or _dedup_key(h) in already:
@@ -926,6 +1081,8 @@ class MemoryAwareRetriever(MemoryRetriever):
         already = {_dedup_key(c) for c in chunks}
         for r in results:
             if _is_current_session_record(r, getattr(self, "_current_session_id", "")):
+                continue
+            if _hidden_category((r.metadata or {}).get("category"), hooks):
                 continue
             text = r.content or ""
             if not text:

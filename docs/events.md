@@ -3,8 +3,8 @@
 <!-- AUTO-GENERATED — do not edit by hand. -->
 <!-- Regenerate: python scripts/gen_event_docs.py -->
 
-> Generated from `xgen_agent_runtime.events.catalog` on 2026-10-31.
-> Catalogue version: **22** · events: **148**
+> Generated from `xgen_agent_runtime.events.catalog` on 2026-11-13.
+> Catalogue version: **23** · events: **149**
 
 Every event name the engine emits, value == wire string. The enum
 is a *names registry*, not a rename — consumers matching raw strings
@@ -1371,6 +1371,20 @@ Enum member: `EventTypes.MEMORY_RETRIEVE_BREAKDOWN`
 | `total_chars` | int |
 | `chunk_count` | int |
 | `slim_mode` | bool |
+
+### `memory.records_selected`
+
+Enum member: `EventTypes.MEMORY_RECORDS_SELECTED`
+
+| Field | Description |
+|---|---|
+| `budget` | int — characters the memory block could use |
+| `chars` | int — characters it used |
+| `projects` | list[str] — projects whose state was shown (named in the turn, else the latest) |
+| `rules` | list[str] — record ids shown whole (same for state, related) |
+| `rules_short` | list[str] — record ids shown by their headline (same for state_short, related_short) |
+| `rules_left` | list[str] — record ids not shown for room, counted in the memory index (same for state_left, related_left) |
+| `legacy` | list[str] — old pinned notes not migrated yet, shown as they are |
 
 ### `memory.retrieved_empty`
 

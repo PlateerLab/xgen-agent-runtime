@@ -157,14 +157,19 @@ async def _read_miss_payload(provider: Any, filename: str) -> Dict[str, Any]:
     return payload
 
 
-def build_memory_tools(provider: Any) -> List[Any]:
+def build_memory_tools(provider: Any, *, records: Optional[bool] = None) -> List[Any]:
     """provider 에 바인딩된 executor ``Tool`` 목록을 만든다.
 
     provider 가 None 이면 빈 리스트. 도구 실행은 전부 async — 파이프라인
-    루프(스레드 소유)에서만 provider 를 만진다.
+    루프(스레드 소유)에서만 provider 를 만진다. ``records`` (기본: ``XGEN_MEMORY_RECORDS``)
+    가 켜져 있으면 ``memory_pin`` 은 기록을 남기고 ``memory_record`` 도구가 더해진다.
     """
     if provider is None:
         return []
+    if records is None:
+        from xgen_agent_runtime.memory.provider import records_mode_default
+
+        records = records_mode_default() == "on"
 
     from xgen_agent_runtime.memory.provider import Importance, NoteDraft, NotePatch  # noqa: F401
     from xgen_agent_runtime.tools import ToolResult, build_tool
@@ -238,6 +243,15 @@ def build_memory_tools(provider: Any) -> List[Any]:
         frontmatter = stamp_written_in(
             dict(getattr(previous, "frontmatter", None) or {}), conversation
         )
+        if category in _RESERVED_CATEGORIES:
+            # 기록 · 기록 시스템의 분류다. 기록 JSON 이 없는 노트는 기록으로 읽히지 않고, 기록 모드에서는 검색에서도
+            # 빠져 어디에도 보이지 않게 된다. 일반 노트로 둔다(기록으로 남길 것은 memory_pin).
+            category = "topics"
+        if records and category == PINNED_CATEGORY:
+            # 이관된 고정 노트를 고쳐 쓰면 다시 이관된다(증류가 그 기록을 새 내용으로 고친다).
+            from xgen_agent_runtime.memory.records import MIGRATED_TAG
+
+            tags = [t for t in tags if t != MIGRATED_TAG]
         draft = NoteDraft(
             title=title,
             body=content,
@@ -261,6 +275,11 @@ def build_memory_tools(provider: Any) -> List[Any]:
         )
 
     async def _pin(tool_input: Dict[str, Any], _ctx: Any) -> ToolResult:
+        if records:
+            from xgen_agent_runtime.host.memory_record_tools import pin_record
+
+            out = await pin_record(provider, tool_input, _ctx)
+            return ToolResult(content=_ok(out), is_error="error" in out)
         title = str(tool_input.get("title") or "").strip()
         content = str(tool_input.get("content") or "").strip()
         if not title or not content:
@@ -293,6 +312,10 @@ def build_memory_tools(provider: Any) -> List[Any]:
         if not filename:
             return ToolResult(content=_err("filename is required"), is_error=True)
         note = await provider.notes().read(filename)
+        record = _record_view(note)
+        if record is not None:
+            # 기록 — 본문 대신 기록 그대로(종류 · 상태 · 권위 · 근거 · 버전). 바꾸는 길은 memory_record.
+            return ToolResult(content=_ok({"filename": note.ref.filename, "record": record}))
         if note is None:
             miss = await _read_miss_payload(provider, filename)
             return ToolResult(
@@ -373,7 +396,13 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 entry = fused.setdefault(key, {"score": 0.0, "chunk": c})
                 entry["score"] += 1.0 / (60 + rank + 1)
         items = []
-        for key, entry in sorted(fused.items(), key=lambda kv: -kv[1]["score"])[:limit]:
+        ranked = [
+            (key, entry)
+            for key, entry in sorted(fused.items(), key=lambda kv: -kv[1]["score"])
+            if ((getattr(entry["chunk"], "metadata", None) or {}).get("category"))
+            not in _HIDDEN_FROM_SEARCH
+        ]
+        for key, entry in ranked[:limit]:
             c = entry["chunk"]
             content = (getattr(c, "content", "") or "").strip()
             snippet = content[:400]
@@ -403,6 +432,12 @@ def build_memory_tools(provider: Any) -> List[Any]:
                 }
             )
         )
+
+    async def _record(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
+        from xgen_agent_runtime.host.memory_record_tools import memory_record_action
+
+        out = await memory_record_action(provider, tool_input, ctx)
+        return ToolResult(content=_ok(out), is_error="error" in out)
 
     async def _history(tool_input: Dict[str, Any], ctx: Any) -> ToolResult:
         return await conversation_history(
@@ -450,23 +485,7 @@ def build_memory_tools(provider: Any) -> List[Any]:
             execute=_write,
             capabilities=write_caps,
         ),
-        build_tool(
-            name="memory_pin",
-            description=(
-                "Pin a must-always-know fact (user preferences, binding decisions, "
-                "standing goals). Pinned facts are injected into every future turn."
-            ),
-            input_schema=_schema(
-                {
-                    "title": {"type": "string", "description": "Short fact title"},
-                    "content": {"type": "string", "description": "The fact (1-3 sentences)"},
-                    "tags": {"type": "string", "description": "Comma-separated tags"},
-                },
-                ["title", "content"],
-            ),
-            execute=_pin,
-            capabilities=write_caps,
-        ),
+        _pin_tool(build_tool, _schema, _pin, write_caps, records),
         build_tool(
             name="memory_read",
             description="Read one memory note's full body + metadata by filename.",
@@ -559,8 +578,150 @@ def build_memory_tools(provider: Any) -> List[Any]:
             capabilities=read_caps,
         ),
     ]
+    if records:
+        tools.append(_record_tool(build_tool, _schema, _record, write_caps))
     # 종류 표지 — 호스트의 결과 필터가 이름이 아니라 종류로 판정한다(tools.base.tool_origin).
     return [with_origin(t, "memory") for t in tools]
+
+
+#: memory_write 가 쓰지 않는 분류 — 기록(memory/records)과 기록 시스템의 것.
+_RESERVED_CATEGORIES = frozenset(
+    {"rules", "facts", "state", "decisions", "procedures", "memory-history", "memory-system"}
+)
+#: 기록 시스템 내부(이전 버전 · 파이프라인 상태) — 검색 결과에 내지 않는다(기록 자체는 낸다).
+_HIDDEN_FROM_SEARCH = frozenset({"memory-history", "memory-system"})
+
+
+def _record_view(note: Any) -> Optional[Dict[str, Any]]:
+    """기록 노트면 기록 dict, 아니면 None."""
+    if note is None:
+        return None
+    from xgen_agent_runtime.memory.records.model import RECORD_KEY, MemoryRecord
+
+    raw = (getattr(note, "frontmatter", None) or {}).get(RECORD_KEY)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    rec = MemoryRecord.from_json(raw)
+    if rec is None:
+        return None
+    d = rec.to_dict()
+    d["change"] = "memory_record(action='correct'|'retire'|'history'|..., id=...)"
+    return d
+
+
+def _pin_tool(build_tool: Any, schema: Any, execute: Any, caps: Any, records: bool) -> Any:
+    if not records:
+        return build_tool(
+            name="memory_pin",
+            description=(
+                "Pin a must-always-know fact (user preferences, binding decisions, "
+                "standing goals). Pinned facts are injected into every future turn."
+            ),
+            input_schema=schema(
+                {
+                    "title": {"type": "string", "description": "Short fact title"},
+                    "content": {"type": "string", "description": "The fact (1-3 sentences)"},
+                    "tags": {"type": "string", "description": "Comma-separated tags"},
+                },
+                ["title", "content"],
+            ),
+            execute=execute,
+            capabilities=caps,
+        )
+    return build_tool(
+        name="memory_pin",
+        description=(
+            "Keep something you must always know as a memory record: a standing rule the user set "
+            "(default), a fact, the current state of something, a decision, or how a task is done here. "
+            "Pinning the same kind + title (+ key) again updates that record instead of adding one. "
+            "Records are shown to you whenever they apply. Memory also learns from the conversation by "
+            "itself; pin when something must not be missed. Whose it is comes from the conversation: "
+            "the user's own words make it the user's."
+        ),
+        input_schema=schema(
+            {
+                "title": {
+                    "type": "string",
+                    "description": "What it is about (the subject), e.g. 'deploy approvals', 'xgen-sdk'",
+                },
+                "content": {"type": "string", "description": "The rule / fact (1-3 sentences)"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["rule", "fact", "state", "decision", "procedure"],
+                    "description": "Default rule. state = a value that changes (only the latest is kept live).",
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Which attribute of the subject, for facts and states (e.g. 'released version')",
+                },
+                "project": {"type": "string", "description": "The project it belongs to, if any"},
+                "tags": {
+                    "type": "string",
+                    "description": "Comma-separated tags (ignored for records)",
+                },
+            },
+            ["title", "content"],
+        ),
+        execute=execute,
+        capabilities=caps,
+    )
+
+
+def _record_tool(build_tool: Any, schema: Any, execute: Any, caps: Any) -> Any:
+    return build_tool(
+        name="memory_record",
+        description=(
+            "Look at and maintain your memory records (rules, facts, states, decisions, procedures). "
+            "list (filters: kind, status live|all|<status>, project, query), get, history (every "
+            "earlier version). Changes — each needs a reason, writes a new version and can be undone "
+            "with revert: confirm (still true), correct (new text), retire (no longer true / wanted), "
+            "resolve (a decision was settled), revert (to an earlier version), settle (a contested "
+            "record holds; the ones it contested are superseded). Records the user set, and contests, "
+            "change only when the user asked you to (user_asked=true)."
+        ),
+        input_schema=schema(
+            {
+                "action": {
+                    "type": "string",
+                    "enum": list(
+                        (
+                            "list",
+                            "get",
+                            "history",
+                            "confirm",
+                            "correct",
+                            "retire",
+                            "resolve",
+                            "revert",
+                            "settle",
+                        )
+                    ),
+                },
+                "id": {"type": "string", "description": "Record id (e.g. r-deploy-approvals)"},
+                "kind": {"type": "string", "description": "list: kind filter"},
+                "status": {
+                    "type": "string",
+                    "description": "list: live (default), all, or one status",
+                },
+                "project": {"type": "string", "description": "list: project filter"},
+                "query": {"type": "string", "description": "list: words to rank by"},
+                "text": {"type": "string", "description": "correct: the corrected record text"},
+                "headline": {
+                    "type": "string",
+                    "description": "correct: a one-line form (optional)",
+                },
+                "version": {"type": "integer", "description": "revert: the version to restore"},
+                "reason": {"type": "string", "description": "Why — kept in the record's history"},
+                "user_asked": {
+                    "type": "boolean",
+                    "description": "The user asked for this change (needed for the user's records and contests)",
+                },
+            },
+            ["action"],
+        ),
+        execute=execute,
+        capabilities=caps,
+    )
 
 
 # ── ConversationHistory ────────────────────────────────────────────────────

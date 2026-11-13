@@ -310,6 +310,7 @@ _MEMORY_TOOL_NAMES = (
     "memory_list",
     "memory_search",
     "memory_categories",
+    "memory_record",
 )
 
 

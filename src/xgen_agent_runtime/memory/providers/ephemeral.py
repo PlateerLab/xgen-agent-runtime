@@ -248,6 +248,10 @@ class _NotesStore(NotesHandle):
             out.append(note.as_meta())
         return out
 
+    async def read_category(self, category: str) -> List[Note]:
+        """Every note of ``category``, whole — one call instead of list + a read per note."""
+        return [n for n in self._notes.values() if n.category == category]
+
     async def read(self, filename: str) -> Optional[Note]:
         return self._notes.get(filename)
 

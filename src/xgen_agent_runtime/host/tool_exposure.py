@@ -105,6 +105,8 @@ TURN_ONE_TOOLS = frozenset(
         "memory_search",
         "memory_pin",
         "memory_categories",
+        # 기록 모드(XGEN_MEMORY_RECORDS)에서만 등록된다 — 기록 색인이 매 턴 이 이름을 가리킨다.
+        "memory_record",
         # 3-b. 이 대화의 원문(창 밖의 지난 턴·그때의 도구 결과). 창은 최근 몇 턴만 재생하므로, 이게 없으면
         #      모델은 지난 일을 기억으로 재구성하다 틀린다(2026-10-23 감사).
         "ConversationHistory",

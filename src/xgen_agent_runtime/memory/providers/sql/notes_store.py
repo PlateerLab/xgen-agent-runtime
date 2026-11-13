@@ -85,6 +85,14 @@ class _SQLNotesStore(NotesHandle):
             out.append(note.as_meta())
         return out
 
+    async def read_category(self, category: str) -> List[Note]:
+        """Every note of ``category``, whole — one query instead of list + a read per note."""
+        rows = await self._conn.fetchall(
+            "SELECT * FROM notes WHERE notes.category = ? ORDER BY notes.filename ASC",
+            (category,),
+        )
+        return [await self._row_to_note(row) for row in rows]
+
     async def read(self, filename: str) -> Optional[Note]:
         row = await self._conn.fetchone(
             "SELECT * FROM notes WHERE filename = ?",

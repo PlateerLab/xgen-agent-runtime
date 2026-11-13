@@ -104,6 +104,20 @@ in (ConversationHistory with that conversation) when you need its details.
 """
 
 
+#: 기록 메모리(4.108.0, ``XGEN_MEMORY_RECORDS``)가 켜진 턴에 위 블록 뒤에 붙는 문단 — 주입되는 기억 블록의 읽는 법과
+#: 고치는 길. 기록은 대화에서 저절로 쌓이므로 "저장하라" 가 아니라 "바뀌면 고쳐라 · 맞서면 물어라" 가 요점이다.
+MEMORY_RECORDS_PROMPT_NOTE = """Your memory is kept as records (rules, facts, state, decisions, procedures),
+learned from conversations automatically. The memory block above shows the rules in
+force (follow them), the current state of the work in play (each line dated when it
+was last confirmed — check an old one before relying on it), records related to this
+turn, and an index of what else is remembered (open a record with memory_read, find more
+with memory_search or memory_record list). When the user corrects or withdraws
+something remembered, change that record (memory_record correct / retire, with the
+reason) rather than writing a second note. Records marked contested contradict each
+other: ask the user which holds, then settle it.
+"""
+
+
 #: 쓰기 도구(memory_write/memory_pin)가 이 턴에 **없을 때**의 메모리 지침 — 호스트 정책(게스트·
 #: 동결본)이 쓰기 도구를 뺀 뒤에 고른다. 위 블록은 "기억하라면 저장하라" 고 약속하는데 도구가
 #: 없으면 모델이 파일 쓰기로 그 약속을 메운다(2026-09-21 관측). 문구와 표면은 같은 판정에서 나온다.
