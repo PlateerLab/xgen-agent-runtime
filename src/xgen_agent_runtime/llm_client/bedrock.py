@@ -117,6 +117,9 @@ class BedrockClient(AnthropicClient):
     """Anthropic models served through AWS Bedrock."""
 
     provider = "bedrock"
+    #: Bedrock InvokeModel takes betas in the body, not the header — no binding controls here;
+    #: a rejected thinking block is still retried without thinking (AnthropicClient heal).
+    _thinking_binding_controls = False
     _sdk_module = "anthropic"
 
     def __init__(

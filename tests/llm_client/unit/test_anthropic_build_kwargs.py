@@ -35,6 +35,14 @@ from xgen_agent_runtime.llm_client.anthropic import (
 from xgen_agent_runtime.llm_client.types import APIRequest
 
 
+def _shape(thinking: dict) -> dict:
+    """The thinking shape without the binding controls (``block_binding`` rides on every adaptive
+    request — tests/llm_client/unit/test_anthropic_thinking_binding.py)."""
+    if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        assert thinking.get("block_binding") == {"prefix_mismatch_behavior": "drop_block"}
+    return {k: v for k, v in (thinking or {}).items() if k != "block_binding"}
+
+
 def _req(**overrides) -> APIRequest:
     """Minimal valid APIRequest. Fields under test are overrides."""
     base: dict = {
@@ -182,7 +190,7 @@ def test_build_kwargs_alias_resolution_and_thinking_drop_together() -> None:
     # invalid ``budget_tokens`` (the API rejects it under adaptive
     # as ``thinking.adaptive.budget_tokens: Extra inputs are not
     # permitted``).
-    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive"}
 
 
 # ── 2.1.2 — Opus 4.7 unconditional sampling-param rejection ───────
@@ -405,7 +413,7 @@ def test_build_kwargs_translates_thinking_for_opus_4_7() -> None:
         model="claude-opus-4-7",
         thinking={"type": "enabled", "budget_tokens": 8192},
     ))
-    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive"}
 
 
 def test_build_kwargs_translates_thinking_after_alias_resolution() -> None:
@@ -417,7 +425,7 @@ def test_build_kwargs_translates_thinking_after_alias_resolution() -> None:
         thinking={"type": "enabled", "budget_tokens": 4096},
     ))
     assert kwargs["model"] == "claude-opus-4-7"
-    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive"}
 
 
 def test_build_kwargs_does_not_translate_for_sonnet_4_6() -> None:
@@ -438,7 +446,7 @@ def test_build_kwargs_leaves_adaptive_thinking_alone() -> None:
         model="claude-opus-4-7",
         thinking={"type": "adaptive"},
     ))
-    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive"}
 
 
 def test_build_kwargs_full_opus_combo() -> None:
@@ -454,7 +462,7 @@ def test_build_kwargs_full_opus_combo() -> None:
     ))
     assert kwargs["model"] == "claude-opus-4-7"
     assert "temperature" not in kwargs
-    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive"}
 
 
 # ── 2.1.3 — Retry self-heals the thinking migration too ───────────
@@ -497,7 +505,7 @@ def test_retry_kwargs_returns_none_when_thinking_already_adaptive() -> None:
 @pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"])
 def test_think_by_default_models_stream_summarized_thinking(model: str) -> None:
     kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(_req(model=model, temperature=0.7))
-    assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive", "display": "summarized"}
     assert "temperature" not in kwargs
 
 
@@ -505,7 +513,7 @@ def test_caller_chosen_display_is_kept() -> None:
     kwargs = AnthropicClient(api_key="sk-mock")._build_kwargs(
         _req(model="claude-sonnet-5", thinking={"type": "adaptive", "display": "omitted"})
     )
-    assert kwargs["thinking"] == {"type": "adaptive", "display": "omitted"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive", "display": "omitted"}
 
 
 @pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"])

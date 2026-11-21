@@ -8,9 +8,11 @@ profile.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.core.errors import APIError, ErrorCategory
 from xgen_agent_runtime.core.state import TokenUsage
@@ -48,6 +50,210 @@ _ANTHROPIC_MODEL_ALIASES: Dict[str, str] = {
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
 }
+
+
+# ── Thinking-block binding (Claude 5.5 generation) ──────────────────
+#
+# A thinking block's signature records what came before it when the model wrote it: the system
+# prompt, the tool set and every earlier message. Sonnet 5.5, Haiku 5.5, Opus 5.5 and the Fable /
+# Mythos 5.1+ models check that record when the block is sent back; a request that changed any of
+# it is rejected — 400 "Invalid `signature` in `thinking` block. The block is bound to a different
+# conversation" (enforced by default for accounts created on or after 2026-08-31). Two things the
+# runtime does on purpose change it mid-turn:
+#
+# * a gate tool opens its family, or ToolSearch activates a tool — the tool set (and the system
+#   prompt's catalogue) grows. Every block written before is then bound to a different conversation.
+#   The API allows removing a leading run of thinking blocks, so each block remembers the system
+#   prompt and tool set it was written under (``_meta.binding`` — internal, never sent) and is left
+#   out of later requests made under a different one (:func:`_without_unbound_thinking`). Blocks
+#   written after the change stay valid, so only the reasoning from before the change is lost.
+# * anything else (a history rewrite under context pressure) is the API's own safety net: with the
+#   ``thinking-binding-controls-2026-08-01`` beta and ``block_binding.prefix_mismatch_behavior:
+#   "drop_block"`` the API drops the stale blocks instead of failing the request. That field is
+#   accepted only with ``thinking.type: "adaptive"``; for the other thinking types (Sonnet 5.5's
+#   ``between_tools``, ``disabled``) a rejected request is retried once without thinking blocks
+#   (:func:`_retry_kwargs_after_deprecation`).
+_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+_THINKING_BLOCK_TYPES = ("thinking", "redacted_thinking")
+
+
+def _scrub_cache_control(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _scrub_cache_control(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list):
+        return [_scrub_cache_control(v) for v in value]
+    return value
+
+
+def thinking_binding(system: Any, tools: Any) -> str:
+    """The part of a thinking block's binding that is not the messages: system prompt + tool set.
+
+    Compared the way the API compares them — ``cache_control`` markers, the tools' order and
+    surrounding whitespace of system text do not count; tool names, descriptions and schemas do.
+    """
+    parts: List[Any] = []
+    if isinstance(system, str):
+        if system.strip():
+            parts.append(system.strip())
+    elif isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = str(block.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+            elif block is not None:
+                parts.append(_scrub_cache_control(block))
+    tool_set = sorted(
+        (_scrub_cache_control(t) for t in (tools or []) if isinstance(t, dict)),
+        key=lambda t: str(t.get("name") or t.get("type") or ""),
+    )
+    raw = json.dumps([parts, tool_set], sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _block_binding(block: Any) -> Optional[str]:
+    meta = block.get("_meta") if isinstance(block, dict) else None
+    value = meta.get("binding") if isinstance(meta, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _without_unbound_thinking(
+    messages: List[Dict[str, Any]], binding: str
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Leave out thinking blocks written under a different system prompt or tool set.
+
+    Pure and deterministic, so every later request of the conversation leaves out the same blocks
+    and the blocks written meanwhile keep a valid chain. Blocks without a recorded binding (older
+    histories, another client) are kept as they are."""
+    out: List[Dict[str, Any]] = []
+    dropped = 0
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if msg.get("role") != "assistant" or not isinstance(content, list):
+            out.append(msg)
+            continue
+        kept = []
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") in _THINKING_BLOCK_TYPES
+                and _block_binding(block) not in (None, binding)
+            ):
+                dropped += 1
+                continue
+            kept.append(block)
+        if len(kept) == len(content):
+            out.append(msg)
+        elif kept:
+            out.append({**msg, "content": kept})
+        # An assistant message that held only stale thinking has nothing left to send.
+    return out, dropped
+
+
+def _without_any_thinking(messages: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """Every thinking block removed (text and tool calls stay) — the API's documented recovery."""
+    out: List[Dict[str, Any]] = []
+    dropped = 0
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        kept = [
+            b
+            for b in content
+            if not (isinstance(b, dict) and b.get("type") in _THINKING_BLOCK_TYPES)
+        ]
+        dropped += len(content) - len(kept)
+        if len(kept) == len(content):
+            out.append(msg)
+        elif kept:
+            out.append({**msg, "content": kept})
+    return out, dropped
+
+
+def _is_thinking_binding_rejection(msg_lower: str) -> bool:
+    return (
+        "signature" in msg_lower
+        and "thinking" in msg_lower
+        and (
+            "bound to a different conversation" in msg_lower
+            or "invalid `signature`" in msg_lower
+            or "invalid signature" in msg_lower
+        )
+    )
+
+
+def _beta_values(headers: Optional[Dict[str, Any]]) -> List[str]:
+    for key, value in (headers or {}).items():
+        if str(key).lower() == "anthropic-beta" and value:
+            return [b.strip() for b in str(value).split(",") if b.strip()]
+    return []
+
+
+def _with_beta(
+    kwargs: Dict[str, Any], beta: str, default_headers: Optional[Dict[str, Any]]
+) -> None:
+    """Add ``beta`` to the request's ``anthropic-beta`` header, keeping the betas the client already
+    sends (a per-request header replaces the client's default one, it does not merge)."""
+    headers = {
+        k: v
+        for k, v in dict(kwargs.get("extra_headers") or {}).items()
+        if str(k).lower() != "anthropic-beta"
+    }
+    betas = _beta_values(kwargs.get("extra_headers")) or _beta_values(default_headers)
+    if beta not in betas:
+        betas = [*betas, beta]
+    headers["anthropic-beta"] = ",".join(betas)
+    kwargs["extra_headers"] = headers
+
+
+def _without_binding_controls(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    thinking = kwargs.get("thinking")
+    if not (isinstance(thinking, dict) and "block_binding" in thinking):
+        return None
+    retry = dict(kwargs)
+    retry["thinking"] = {k: v for k, v in thinking.items() if k != "block_binding"}
+    headers = dict(kwargs.get("extra_headers") or {})
+    betas = [b for b in _beta_values(headers) if b != _THINKING_BINDING_BETA]
+    headers = {k: v for k, v in headers.items() if str(k).lower() != "anthropic-beta"}
+    if betas:
+        headers["anthropic-beta"] = ",".join(betas)
+    if headers:
+        retry["extra_headers"] = headers
+    else:
+        retry.pop("extra_headers", None)
+    return retry
+
+
+def _log_input_transformations(raw: Any) -> None:
+    """Report thinking blocks the API dropped (``input_transformations``, present with the beta).
+
+    ``prefix_binding_mismatch`` means something before the block changed after it was written — a
+    history edit this runtime should not make, so it is a WARNING. A model switch
+    (``model_binding_mismatch``) is expected and only INFO."""
+    entries = getattr(raw, "input_transformations", None)
+    if entries is None:
+        extra = getattr(raw, "model_extra", None)
+        entries = extra.get("input_transformations") if isinstance(extra, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return
+    reasons: Dict[str, List[str]] = {}
+    for entry in entries:
+        get = entry.get if isinstance(entry, dict) else (lambda k, e=entry: getattr(e, k, None))
+        if get("type") != "thinking_dropped":
+            continue
+        reasons.setdefault(str(get("reason") or ""), []).append(str(get("path") or ""))
+    stale = reasons.pop("prefix_binding_mismatch", [])
+    if stale:
+        logger.warning(
+            "anthropic: the API dropped %d thinking block(s) whose earlier content changed "
+            "(prefix_binding_mismatch, first at %s)",
+            len(stale),
+            stale[0],
+        )
+    for reason, paths in reasons.items():
+        logger.info("anthropic: the API dropped %d thinking block(s) (%s)", len(paths), reason)
 
 
 def _resolve_anthropic_model(model: str) -> str:
@@ -267,6 +473,28 @@ def _retry_kwargs_after_deprecation(
     msg = str(getattr(exc, "message", "") or exc)
     msg_lower = msg.lower()
 
+    # Class 3 — the endpoint does not take the thinking-binding controls (a gateway or platform
+    # without the beta): send the request as it was before them.
+    if "block_binding" in msg_lower or _THINKING_BINDING_BETA in msg_lower:
+        retry = _without_binding_controls(kwargs)
+        if retry is not None:
+            return retry
+
+    # Class 4 — a thinking block is bound to a different conversation (history changed since it
+    # was written, and the request could not carry ``drop_block``). The API's documented recovery:
+    # the same request without thinking blocks; text and tool calls stay.
+    if _is_thinking_binding_rejection(msg_lower) and isinstance(kwargs.get("messages"), list):
+        messages, dropped = _without_any_thinking(kwargs["messages"])
+        if dropped:
+            logger.warning(
+                "anthropic: thinking blocks rejected as bound to a different conversation — "
+                "retrying once without the %d thinking block(s)",
+                dropped,
+            )
+            retry = dict(kwargs)
+            retry["messages"] = messages
+            return retry
+
     # Class 2 — thinking v1→v2 migration. Run first because the
     # diagnostic is structural (the request shape, not just one
     # missing field).
@@ -376,6 +604,10 @@ class AnthropicClient(BaseClient):
 
     _sdk_module = "anthropic"
 
+    #: Send the thinking-binding controls (beta header + ``block_binding``) on adaptive-thinking
+    #: requests. Off for platforms that take betas another way (Bedrock InvokeModel).
+    _thinking_binding_controls = True
+
     def __init__(
         self,
         api_key: str = "",
@@ -476,7 +708,7 @@ class AnthropicClient(BaseClient):
                     "anthropic: max_tokens retry failed; keeping the truncated response",
                     exc_info=True,
                 )
-        return self._parse_response(raw_response)
+        return self._parse_response(raw_response, self._binding_of(request))
 
     async def create_message_stream(
         self,
@@ -502,6 +734,7 @@ class AnthropicClient(BaseClient):
         )
         client = self._get_client()
         kwargs = self._build_kwargs(request)
+        binding = self._binding_of(request)
 
         # TTFT program (2.50.0, finding D1): iterate the FULL event
         # stream, not ``stream.text_stream``. The text-only iterator
@@ -565,7 +798,7 @@ class AnthropicClient(BaseClient):
                     )
             yield {
                 "type": "message_complete",
-                "response": self._parse_response(final),
+                "response": self._parse_response(final, binding),
             }
         except Exception as e:
             # Same retry-on-heal safety net as ``_send``, routed through
@@ -592,7 +825,7 @@ class AnthropicClient(BaseClient):
                         )
                         yield {
                             "type": "message_complete",
-                            "response": self._parse_response(final),
+                            "response": self._parse_response(final, binding),
                         }
                     return
                 except Exception as inner:
@@ -605,7 +838,18 @@ class AnthropicClient(BaseClient):
         # block types (``file``) into safe fallbacks. Without this the
         # Anthropic Messages API rejects requests with
         # ``messages.0.content.0.image._meta: Extra inputs are not permitted``.
-        sanitized_messages = canonical_messages_to_anthropic(request.messages)
+        # Thinking written under another system prompt or tool set would fail the API's binding
+        # check — leave it out (see the "Thinking-block binding" notes at module top).
+        messages, unbound = _without_unbound_thinking(
+            list(request.messages or []), self._binding_of(request)
+        )
+        if unbound:
+            logger.info(
+                "anthropic: left out %d thinking block(s) written under a different system prompt "
+                "or tool set (a tool family opened mid-turn)",
+                unbound,
+            )
+        sanitized_messages = canonical_messages_to_anthropic(messages)
 
         # Alias resolution — see ``_ANTHROPIC_MODEL_ALIASES`` docstring.
         # Pure function; no SDK call yet, so this is cheap.
@@ -731,9 +975,29 @@ class AnthropicClient(BaseClient):
             for key in _THINKING_INCOMPATIBLE_SAMPLING_KEYS:
                 kwargs.pop(key, None)
 
+        # The API's safety net for any other history change: drop stale thinking blocks instead of
+        # failing the request. Only ``adaptive`` takes the field (``between_tools`` / ``disabled``
+        # reject it — those rely on the retry in ``_retry_kwargs_after_deprecation``).
+        thinking = kwargs.get("thinking")
+        if (
+            self._thinking_binding_controls
+            and isinstance(thinking, dict)
+            and thinking.get("type") == "adaptive"
+            and "block_binding" not in thinking
+        ):
+            kwargs["thinking"] = {
+                **thinking,
+                "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+            }
+            _with_beta(kwargs, _THINKING_BINDING_BETA, self._default_headers)
+
         return kwargs
 
-    def _parse_response(self, raw: Any) -> APIResponse:
+    @staticmethod
+    def _binding_of(request: APIRequest) -> str:
+        return thinking_binding(request.system, request.tools)
+
+    def _parse_response(self, raw: Any, binding: Optional[str] = None) -> APIResponse:
         content_blocks: List[ContentBlock] = []
         # 같은 tool_use id 는 한 번만 받는다. 두 번 실리면 도구가 두 번 돌고, 그 응답을 담은 다음
         # 요청이 400 "tool_use ids must be unique" 로 거절된다(2026-11-09 claude-sonnet-5-5).
@@ -790,6 +1054,10 @@ class AnthropicClient(BaseClient):
                 signature = getattr(block, "signature", None)
                 if signature:
                     raw_thinking["signature"] = signature
+                if binding:
+                    # 어떤 system · 도구 목록 아래에서 쓴 생각인가(보내지 않는 내부 키) — 목록이
+                    # 바뀐 뒤의 요청에서는 이 블록을 뺀다(_without_unbound_thinking).
+                    raw_thinking["_meta"] = {"binding": binding}
                 content_blocks.append(
                     ContentBlock(
                         type="thinking",
@@ -799,12 +1067,12 @@ class AnthropicClient(BaseClient):
                 )
             elif block.type == "redacted_thinking":
                 # 안전상 가려진 추론 — 내용은 없지만 같은 이유로 그대로 되돌려 보내야 한다.
-                content_blocks.append(
-                    ContentBlock(
-                        type="redacted_thinking",
-                        raw={"type": "redacted_thinking", "data": getattr(block, "data", "")},
-                    )
-                )
+                raw_redacted = {"type": "redacted_thinking", "data": getattr(block, "data", "")}
+                if binding:
+                    raw_redacted["_meta"] = {"binding": binding}
+                content_blocks.append(ContentBlock(type="redacted_thinking", raw=raw_redacted))
+
+        _log_input_transformations(raw)
 
         if raw.usage:
             # ⚠ ``or 0`` 가 핵심 — SDK Usage 모델은 응답에 없는 필드를 **None**

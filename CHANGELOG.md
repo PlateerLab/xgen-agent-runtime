@@ -4,6 +4,35 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.109.2] - 2026-11-21
+
+### Fixed: 여러 단계 턴에서 400 "Invalid `signature` in `thinking` block" (Claude 5.5 세대)
+
+Sonnet 5.5 · Haiku 5.5(그리고 Opus 5.5 · Fable · Mythos 5.1 이후)는 되돌려 받은 생각 블록이 **쓰일 때 앞에 있던 것**
+(system · 도구 목록 · 앞선 메시지)과 지금 요청이 같은지 검사한다. 다르면 요청 전체가 400 으로 거절된다 — "The block is
+bound to a different conversation … Content that preceded this block when it was created is missing" 또는 "The tools
+list and the earlier messages both differ" (2026-11-20 홈 XGEN: 앱 도구 · 같은 Glob 반복 · 실패한 Bash 뒤의 턴, 기존
+샌드박스에서도 같다. 생각을 꺼도(`between_tools`) 났다). 요청 본문을 매번 기록해 앞 요청과 비교해 원인 둘을 찾았다.
+
+- **턴 맥락이 요청마다 옮겨 다녔다.** Stage 6 은 턴 맥락(`<session-context>` — 날짜 · 시각 · 기억 · 호스트 안내)을 매 요청
+  **가장 최근** user 메시지에 붙였다. 도구 루프에서 그것은 새 도구 결과라, 앞 요청이 싣던 메시지에서 블록이 빠졌고 시각도
+  분마다 바뀌었다 — 두 번째 요청부터 앞 생각 블록이 모두 무효. 이제 턴의 첫 요청이 자리(그때의 최근 user 메시지 = 사람의
+  요청)와 글을 정하고, 같은 턴의 모든 요청(연속 슬라이스 포함)이 같은 자리에 같은 글을 싣는다(`SharedKeys.TURN_CONTEXT_PIN`,
+  `begin_turn` 에서 비움). 압축으로 그 메시지가 바뀌었으면 다시 정한다. 시각은 턴이 시작된 때다(기억 · 안내는 원래 턴마다).
+- **문 도구가 가족을 열면 도구 목록이 바뀐다.** AppGuide · ToolSearch 등이 도구를 열면 그 전에 쓴 생각 블록은 다른 대화에
+  묶인 것이 된다. Anthropic 클라이언트가 생각 블록마다 쓸 때의 system · 도구 목록 지문을 적어 두고(`_meta.binding`, 보내지
+  않는다) 지문이 다른 요청에서는 그 블록을 뺀다 — 앞쪽 블록을 빼는 것은 API 가 허용한다. 연 뒤에 쓴 블록은 그대로 실린다.
+- **API 의 안전망.** adaptive 요청에 `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` 과 베타
+  `thinking-binding-controls-2026-08-01` 을 싣는다(클라이언트가 이미 보내는 다른 베타는 유지). 그 밖의 기록 변경은 요청을
+  실패시키는 대신 그 블록만 버린다. API 가 버렸다고 알린 블록(`input_transformations`)은 로그로 남긴다 —
+  `prefix_binding_mismatch` 는 WARNING(고쳐야 할 기록 변경), 모델 전환은 INFO. Bedrock 은 베타를 본문으로 받아 싣지 않는다.
+- **안전망을 못 싣는 요청**(`between_tools` · `disabled`, 또는 그 필드를 받지 않는 게이트웨이): 생각 블록 서명 400 이면 생각
+  블록 없이 한 번 다시 보낸다(API 문서의 복구 방법, 텍스트 · 도구 호출은 그대로). 필드나 베타를 받지 않는다는 400 이면 그것
+  없이 다시 보낸다.
+
+남은 것: 도구를 턴 중간에 여는 대신 처음부터 `defer_loading` 으로 선언하고 `tool_addition` 으로 보이면 연 뒤에도 앞 생각을
+쓸 수 있다(베타 `mid-conversation-tool-changes-2026-07-01`) — 이번에는 하지 않았다.
+
 ## [4.109.1] - 2026-11-13
 
 ### Fixed: 준비 중에 보낸 추가 메시지가 한 바퀴 늦게 들어가던 것
