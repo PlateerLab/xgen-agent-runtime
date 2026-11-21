@@ -337,12 +337,16 @@ _TRUNCATION_RETRY_MAX_TOKENS_SEND = 16000
 
 
 #: thinking 파라미터 없이도 adaptive 로 생각하는 계열(Anthropic 문서: Sonnet 5·Opus 5·Opus 5.5·
-#: Fable 5/5.1·Mythos). Opus 4.7/4.8 은 생략하면 생각하지 않는다 — 넣지 않는다.
+#: Fable 5/5.1·Mythos·Haiku 5.5). Opus 4.7/4.8 은 생략하면 생각하지 않는다 — 넣지 않는다. Haiku 4.5 는
+#: ``claude-haiku-4-5`` 라 걸리지 않는다. 여기 든 모델은 thinking 을 보내지 않아도 생각 블록을 돌려주므로
+#: adaptive 를 명시해 묶임 안전망(block_binding)도 함께 싣는다 — Haiku 5.5 가 빠져 있어 홈 XGEN 에서 Haiku 5.5
+#: 턴만 400 으로 끝났다(2026-11-21).
 _THINKS_BY_DEFAULT_PREFIXES: tuple[str, ...] = (
     "claude-sonnet-5",
     "claude-opus-5",
     "claude-fable-5",
     "claude-mythos",
+    "claude-haiku-5",
 )
 
 

@@ -186,6 +186,17 @@ def test_the_beta_header_keeps_the_betas_the_client_already_sends() -> None:
     assert kwargs["extra_headers"]["anthropic-beta"] == f"context-1m-2025-08-07,{BETA}"
 
 
+def test_haiku_5_5_thinks_by_default_so_it_gets_the_safety_net_too() -> None:
+    # Haiku 5.5 returns thinking blocks without a thinking parameter; leaving it out of the list sent
+    # its requests without drop_block, and only Haiku turns ended in the 400 (2026-11-21 home XGEN).
+    kwargs = AnthropicClient(api_key="k")._build_kwargs(_req(model="claude-haiku-5-5"))
+    assert kwargs["thinking"]["type"] == "adaptive"
+    assert kwargs["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+    assert kwargs["extra_headers"]["anthropic-beta"] == BETA
+    # Haiku 4.5 is not a 5.5-generation model: no thinking parameter is added.
+    assert "thinking" not in AnthropicClient(api_key="k")._build_kwargs(_req(model="claude-haiku-4-5"))
+
+
 def test_thinking_types_that_reject_block_binding_do_not_get_it() -> None:
     for thinking in ({"type": "between_tools"}, {"type": "disabled"}):
         kwargs = AnthropicClient(api_key="k")._build_kwargs(_req(thinking=thinking))

@@ -18,6 +18,8 @@ from __future__ import annotations
 import copy
 import json
 from types import SimpleNamespace
+
+import pytest
 from typing import Any, Dict, List
 
 from xgen_agent_runtime.core.shared_keys import SharedKeys
@@ -84,7 +86,14 @@ class _FakeSDK:
         )
 
 
-def _run(script, registry: ToolRegistry, state: PipelineState, text: str = "do the task") -> _FakeSDK:
+def _run(
+    script,
+    registry: ToolRegistry,
+    state: PipelineState,
+    text: str = "do the task",
+    *,
+    prompt_cache: bool = False,
+) -> _FakeSDK:
     sdk = _FakeSDK(script)
     client = AnthropicClient(api_key="k")
     client._client = sdk
@@ -98,6 +107,7 @@ def _run(script, registry: ToolRegistry, state: PipelineState, text: str = "do t
         enable_compaction=False,
         registry=registry,
         system_prompt="You are a test agent.",
+        enable_prompt_cache=prompt_cache,
     )
     runner.run_turn(pipe, text, state)
     return sdk
@@ -123,7 +133,29 @@ def _context_blocks(body: Dict[str, Any]) -> List[tuple]:
     return found
 
 
-def test_each_request_of_a_turn_starts_with_the_previous_request_unchanged(monkeypatch) -> None:
+def _without_cache_markers(value: Any) -> Any:
+    """The API ignores ``cache_control`` when it checks a thinking block's binding — so do we."""
+    if isinstance(value, dict):
+        return {k: _without_cache_markers(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list):
+        return [_without_cache_markers(v) for v in value]
+    if isinstance(value, str):
+        return value
+    return value
+
+
+def _as_blocks(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for m in messages:
+        content = m["content"]
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        out.append({**m, "content": _without_cache_markers(content)})
+    return out
+
+
+@pytest.mark.parametrize("prompt_cache", [False, True])
+def test_each_request_of_a_turn_starts_with_the_previous_request_unchanged(monkeypatch, prompt_cache) -> None:
     # The clock moves between calls; the turn keeps the time its first request carried.
     ticks = iter(f"Current date: 2026-11-20 (Fri) 10:{m:02d} KST" for m in range(60))
     monkeypatch.setattr(DateTimeBlock, "render", lambda self, state: next(ticks))
@@ -131,13 +163,16 @@ def test_each_request_of_a_turn_starts_with_the_previous_request_unchanged(monke
     reg.register(_Tool("Lookup", "result line\n" * 80), core=True)
     script = [_response(1, "Lookup"), _response(2, "Lookup"), _response(3, "Lookup"), _response(4)]
 
-    sdk = _run(script, reg, PipelineState(session_id="s", model="claude-sonnet-5-5"))
+    # Stage 5 (prompt cache) moves cache markers across the history before every call — the
+    # turn context must still stay where it was (2026-11-21 home XGEN: it moved at the 2nd tool round).
+    sdk = _run(script, reg, PipelineState(session_id="s", model="claude-sonnet-5-5"), prompt_cache=prompt_cache)
 
     bodies = sdk.bodies
     assert len(bodies) == 4
     for prev, cur in zip(bodies, bodies[1:]):
-        assert cur["system"] == prev["system"] and cur["tools"] == prev["tools"]
-        assert cur["messages"][: len(prev["messages"])] == prev["messages"]
+        assert _without_cache_markers(cur["system"]) == _without_cache_markers(prev["system"])
+        assert _without_cache_markers(cur["tools"]) == _without_cache_markers(prev["tools"])
+        assert _as_blocks(cur["messages"])[: len(prev["messages"])] == _as_blocks(prev["messages"])
     # One context block, on the person's message, with the first request's clock.
     for body in bodies:
         assert _context_blocks(body) == [(0, _context_blocks(bodies[0])[0][1])]
@@ -169,3 +204,15 @@ def test_a_new_turn_chooses_its_own_place_and_text() -> None:
     state.shared[SharedKeys.TURN_CONTEXT_PIN] = {"index": 0, "digest": "x", "text": "old"}
     state.begin_turn()
     assert SharedKeys.TURN_CONTEXT_PIN not in state.shared
+
+
+def test_the_pin_survives_cache_markers_and_string_content() -> None:
+    from xgen_agent_runtime.stages.s06_api.artifact.default.stage import _message_digest
+
+    plain = {"role": "user", "content": "do the task"}
+    marked = {
+        "role": "user",
+        "content": [{"type": "text", "text": "do the task", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert _message_digest(plain) == _message_digest(marked)
+    assert _message_digest(plain) != _message_digest({"role": "user", "content": "do another task"})

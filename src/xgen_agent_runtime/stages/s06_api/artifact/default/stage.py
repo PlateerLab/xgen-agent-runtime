@@ -70,11 +70,27 @@ def _latest_user_index(messages: List[Dict[str, Any]]) -> int:
     return -1
 
 
+def _content_identity(value: Any) -> Any:
+    """Content as the API compares it: cache markers and internal keys left out, a string the same
+    as one text block. Stage 5 moves ``cache_control`` across the history before every call, so a
+    digest that counted it called the pinned message "changed" at the second tool round."""
+    if isinstance(value, dict):
+        return {
+            k: _content_identity(v) for k, v in value.items() if k not in ("cache_control", "_meta")
+        }
+    if isinstance(value, list):
+        return [_content_identity(v) for v in value]
+    return value
+
+
 def _message_digest(message: Any) -> str:
     """Identity of a message's content, to tell whether a pinned message is still the same one."""
     try:
+        content = message.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
         raw = json.dumps(
-            [message.get("role"), message.get("content")],
+            [message.get("role"), _content_identity(content)],
             sort_keys=True,
             ensure_ascii=False,
             default=str,

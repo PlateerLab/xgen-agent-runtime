@@ -19,6 +19,8 @@ list and the earlier messages both differ" (2026-11-20 홈 XGEN: 앱 도구 · �
   분마다 바뀌었다 — 두 번째 요청부터 앞 생각 블록이 모두 무효. 이제 턴의 첫 요청이 자리(그때의 최근 user 메시지 = 사람의
   요청)와 글을 정하고, 같은 턴의 모든 요청(연속 슬라이스 포함)이 같은 자리에 같은 글을 싣는다(`SharedKeys.TURN_CONTEXT_PIN`,
   `begin_turn` 에서 비움). 압축으로 그 메시지가 바뀌었으면 다시 정한다. 시각은 턴이 시작된 때다(기억 · 안내는 원래 턴마다).
+  "같은 메시지인가" 는 API 가 비교하는 대로 본다 — Stage 5(프롬프트 캐시)가 호출마다 옮기는 `cache_control` 과 내부
+  `_meta` 는 빼고, 문자열과 텍스트 블록 하나는 같다. 이것을 세면 두 번째 도구 회차에서 자리가 다시 정해졌다(홈 XGEN).
 - **문 도구가 가족을 열면 도구 목록이 바뀐다.** AppGuide · ToolSearch 등이 도구를 열면 그 전에 쓴 생각 블록은 다른 대화에
   묶인 것이 된다. Anthropic 클라이언트가 생각 블록마다 쓸 때의 system · 도구 목록 지문을 적어 두고(`_meta.binding`, 보내지
   않는다) 지문이 다른 요청에서는 그 블록을 뺀다 — 앞쪽 블록을 빼는 것은 API 가 허용한다. 연 뒤에 쓴 블록은 그대로 실린다.
@@ -26,6 +28,8 @@ list and the earlier messages both differ" (2026-11-20 홈 XGEN: 앱 도구 · �
   `thinking-binding-controls-2026-08-01` 을 싣는다(클라이언트가 이미 보내는 다른 베타는 유지). 그 밖의 기록 변경은 요청을
   실패시키는 대신 그 블록만 버린다. API 가 버렸다고 알린 블록(`input_transformations`)은 로그로 남긴다 —
   `prefix_binding_mismatch` 는 WARNING(고쳐야 할 기록 변경), 모델 전환은 INFO. Bedrock 은 베타를 본문으로 받아 싣지 않는다.
+  Haiku 5.5 도 thinking 없이 생각 블록을 돌려주므로 "기본으로 생각하는 모델" 에 넣었다(adaptive · 요약 표시 · 안전망 —
+  빠져 있어 Haiku 5.5 턴만 400 으로 끝났다).
 - **안전망을 못 싣는 요청**(`between_tools` · `disabled`, 또는 그 필드를 받지 않는 게이트웨이): 생각 블록 서명 400 이면 생각
   블록 없이 한 번 다시 보낸다(API 문서의 복구 방법, 텍스트 · 도구 호출은 그대로). 필드나 베타를 받지 않는다는 400 이면 그것
   없이 다시 보낸다.
