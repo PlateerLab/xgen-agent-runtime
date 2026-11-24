@@ -64,7 +64,11 @@ async def _next_execution_number(provider: Any) -> int:
     try:
         # index().list_notes 는 limit=50 기본이라 포화된다 — notes.list 는
         # 메타 전량 반환 (양 백엔드 공통).
-        metas = await provider.notes().list(category=DAILY_CATEGORY, tag="execution")
+        notes = provider.notes()
+        count = getattr(notes, "count_execution_cards", None)
+        if callable(count):
+            return 1 + await count(DAILY_CATEGORY)
+        metas = await notes.list(category=DAILY_CATEGORY, tag="execution")
         return len(metas) + 1
     except Exception:  # noqa: BLE001 — 번호는 표시용, 실패해도 기록은 한다
         return 1

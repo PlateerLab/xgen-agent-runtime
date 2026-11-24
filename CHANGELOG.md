@@ -4,6 +4,11 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.110.2] - 2026-11-24
+
+- Use indexed archive lookup and execution counts when the memory provider supports them.
+- Honor text-only route capabilities before building the model's tool surface.
+
 ## [4.110.1] - 2026-11-24
 
 ### Fixed: 여러 단계 턴에서 400 "Invalid `signature` in `thinking` block" (Claude 5.5 세대)

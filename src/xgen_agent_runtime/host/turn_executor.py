@@ -378,15 +378,20 @@ class AgentTurnExecutor:
                             _bexc,
                         )
             #: 이 턴에 도구가 모델에게 닿는가 — SDK 는 항상, CLI 는 브릿지가 있을 때.
-            _tools_reach_model = (not _is_cli) or _cli_bridge_ok
+            text_only = bool(model and (credentials or {}).get("text_only_route") == model)
+            _tools_reach_model = not text_only and (not _is_cli or _cli_bridge_ok)
 
-            registry = adapt_tools(kwargs.get("tools"), result_sink=result_sink, core=_flat_tools)
+            registry = (
+                None
+                if text_only
+                else adapt_tools(kwargs.get("tools"), result_sink=result_sink, core=_flat_tools)
+            )
             rag_block, embedded_tools = collect_rag(
                 text,
                 kwargs.get("context"),
                 context_builder=host.rag_context_builder,
             )
-            if embedded_tools:
+            if embedded_tools and not text_only:
                 registry = adapt_tools(
                     embedded_tools, result_sink=result_sink, registry=registry, core=True
                 )
@@ -401,12 +406,16 @@ class AgentTurnExecutor:
             _device_tool_names: List[str] = []
             # 사용자 기기 접속(host.user_pc) — 호스트가 주면 연결 폴더는 UserPc 하나로 닿고, 기기의
             # 폴더 도구(파일·셸·복사…)는 모델에게 보이지 않는다. 주지 않으면 예전 규칙 그대로다.
-            _pc = _user_pc_connection(host)
+            _pc = None if text_only else _user_pc_connection(host)
             try:
                 # client_surface 게이트(host 내부): 대화 출처가 앱일 때만 기기 도구를
                 # 준다 (web 대화엔 앱이 연결돼 있어도 no-op).
-                connector_tools = host.build_connector_mcp_tools(
-                    kwargs.get("user_id"), kwargs.get("client_surface")
+                connector_tools = (
+                    []
+                    if text_only
+                    else host.build_connector_mcp_tools(
+                        kwargs.get("user_id"), kwargs.get("client_surface")
+                    )
                 )
                 if _pc is not None:
                     connector_tools = _user_pc.without_folder_tools(connector_tools or [])
@@ -1328,7 +1337,7 @@ class AgentTurnExecutor:
                 base_url=base_url,
                 system_prompt=system_prompt,
                 # CLI 는 레지스트리를 파이프라인이 아니라 표면 객체로 받는다(위 _tool_surface).
-                registry=None if _is_cli else registry,
+                registry=None if _is_cli or text_only else registry,
                 max_iterations=int(kwargs.get("max_iterations", 20)),
                 temperature=kwargs.get("temperature", 0.7),
                 max_tokens=max_tokens_val,
