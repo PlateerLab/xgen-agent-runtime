@@ -68,6 +68,16 @@ class ToolCapabilities:
     timeout_s: float = 0.0
     mandatory_approval: bool = False
 
+    @property
+    def parallel_read(self) -> bool:
+        """Only declared independent reads may overlap in a tool batch."""
+        return (
+            self.read_only
+            and self.concurrency_safe
+            and not self.destructive
+            and not self.mandatory_approval
+        )
+
 
 @dataclass(frozen=True)
 class PermissionDecision:

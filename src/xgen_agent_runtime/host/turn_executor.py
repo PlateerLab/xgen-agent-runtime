@@ -1314,6 +1314,12 @@ class AgentTurnExecutor:
                         interaction_id,
                     )
 
+            role_model = getattr(host, "resolve_summary_model", None)
+            summary_model = (
+                role_model(provider)
+                if not _is_cli and enable_compaction and callable(role_model)
+                else None
+            )
             pipeline = build_pipeline(
                 name=node_name,
                 provider=provider,
@@ -1342,6 +1348,7 @@ class AgentTurnExecutor:
                 # CLI 백엔드(claude_code·codex)는 CLI 가 자체 컨텍스트(자동 압축)를 관리한다.
                 # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게 되므로 항상 끈다.
                 # 첫 메시지에 접히는 지난 대화는 위 예산 단계가 CLI 창에 맞춘다.
+                summary_model=summary_model,
                 enable_compaction=(enable_compaction and provider not in _CLI_BACKENDS),
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).

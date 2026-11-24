@@ -4,7 +4,7 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [4.109.2] - 2026-11-21
+## [4.110.1] - 2026-11-24
 
 ### Fixed: 여러 단계 턴에서 400 "Invalid `signature` in `thinking` block" (Claude 5.5 세대)
 
@@ -36,6 +36,14 @@ list and the earlier messages both differ" (2026-11-20 홈 XGEN: 앱 도구 · �
 
 남은 것: 도구를 턴 중간에 여는 대신 처음부터 `defer_loading` 으로 선언하고 `tool_addition` 으로 보이면 연 뒤에도 앞 생각을
 쓸 수 있다(베타 `mid-conversation-tool-changes-2026-07-01`) — 이번에는 하지 않았다.
+
+## [4.110.0] - 2026-11-23
+
+- Preserve model-specified execution order around writes and approvals. The SDK host overlaps up to four declared independent reads.
+- Deduplicate client message IDs per sender and turn. Retried offers return the original receipt.
+- Record measured A/B duration and counts, and report first model request and first visible text latency for streaming hosts.
+- Support Korean tool queries, explicit discovery or activation, and activation schema byte counts. English and literal keyword searches retain their original ranking and automatic activation. Ambiguous Korean alias results return candidates.
+- Preserve the newest available transcript fragment when compacting large messages. Expose typed child tool failures to host adapters.
 
 ## [4.109.1] - 2026-11-13
 

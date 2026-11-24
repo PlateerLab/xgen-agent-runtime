@@ -65,6 +65,7 @@ class SteerInbox:
     def __init__(self, on_resolve: Optional[Callable[[SteerMessage, bool], None]] = None) -> None:
         self._lock = threading.Lock()
         self._queue: Deque[SteerMessage] = deque()
+        self._by_client: Dict[tuple[str, str], SteerMessage] = {}
         self._open = True
         self._on_resolve = on_resolve
         #: Set by the runner to the turn's cancel check. A turn being stopped
@@ -98,8 +99,15 @@ class SteerInbox:
         if not msg.text.strip():
             return None
         with self._lock:
+            key = (
+                (str(msg.meta.get("user_id", "")), msg.client_msg_id) if msg.client_msg_id else None
+            )
+            if key is not None and key in self._by_client:
+                return self._by_client[key]
             if not self._open:
                 return None
+            if key is not None:
+                self._by_client[key] = msg
             self._queue.append(msg)
         return msg
 

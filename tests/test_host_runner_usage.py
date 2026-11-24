@@ -135,7 +135,8 @@ def test_stream_turn_yields_usage_exactly_once_at_end() -> None:
     assert len(usages) == 1
     assert out[-1] is usages[0]  # 마지막 항목
     data = usages[0]["data"]
-    assert set(data) == _USAGE_KEYS
+    assert set(data) == _USAGE_KEYS | {"timing_ms"}
+    assert 0 <= data["timing_ms"]["first_text_ms"] <= data["timing_ms"]["execution_ms"]
     assert data["input_tokens"] == 30 and data["output_tokens"] == 5
     assert data["cache_read_tokens"] == 5 and data["cache_creation_tokens"] == 1
     assert data["total_cost_usd"] is None  # 비용 정보 없음 → null

@@ -200,6 +200,17 @@ def _capabilities_of(meta: Any) -> Optional[ToolCapabilities]:
     )
 
 
+class DelegatedText(str):
+    """Text-compatible child result, with a machine-readable disposition for the parent."""
+
+    status: str
+
+    def __new__(cls, text: str, *, status: str = "completed") -> DelegatedText:
+        value = super().__new__(cls, text)
+        value.status = status
+        return value
+
+
 def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: Any = ()) -> Tool:
     original = str(getattr(lc_tool, "name", "") or type(lc_tool).__name__)
     name = _sanitize_name(original, taken)
@@ -231,6 +242,12 @@ def _wrap_langchain(lc_tool: Any, result_sink: Optional[Dict[str, str]], taken: 
             text = with_opened(text, open_family(ctx, family))
         if result_sink is not None:
             result_sink[name] = text
+        if isinstance(output, DelegatedText):
+            return ToolResult(
+                content=text,
+                is_error=output.status != "completed",
+                metadata={"delegation_status": output.status},
+            )
         return ToolResult(content=text)
 
     # 종류 표지 — 연결된 노드의 도구(MCP 노드 포함). 기기 도구와 이름 접두가 겹칠 수 있다.

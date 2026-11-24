@@ -42,6 +42,7 @@ See ``executor_uplift/06_design_tool_system.md`` §7 and
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
@@ -76,7 +77,27 @@ def _fallback_descriptors() -> List[Dict[str, Any]]:
     return out
 
 
-def _rank(descriptor: Dict[str, Any], query: str) -> int:
+# Each query token must still match. Synonyms expand only that token.
+_ALIASES = {
+    "구글": ("google",),
+    "드라이브": ("drive",),
+    "문서": ("document", "docs"),
+    "검색": ("search", "find"),
+    "메일": ("mail",),
+    "이메일": ("email", "mail"),
+    "일정": ("calendar", "schedule"),
+    "캘린더": ("calendar",),
+    "파일": ("file",),
+    "목록": ("list",),
+    "조회": ("get", "list", "read"),
+    "읽기": ("read",),
+    "쓰기": ("write",),
+    "표": ("table", "spreadsheet"),
+    "시트": ("sheet",),
+}
+
+
+def _rank(descriptor: Dict[str, Any], query: str, *, use_aliases: bool = False) -> int:
     """Score a descriptor against ``query``. Higher = better match.
 
     0 means "no match" (filtered out). The heuristic:
@@ -117,14 +138,15 @@ def _rank(descriptor: Dict[str, Any], query: str) -> int:
     total = 0
     for token in tokens:
         token_score = 0
-        if token == name_lower:
-            token_score = max(token_score, 100)
-        elif token in name_lower:
-            token_score = max(token_score, 50)
-        if token in desc_lower:
-            token_score = max(token_score, 10)
-        if token in schema_text:
-            token_score = max(token_score, 1)
+        for term in (token, *(_ALIASES.get(token, ()) if use_aliases else ())):
+            if term == name_lower:
+                token_score = max(token_score, 100)
+            elif term in name_lower:
+                token_score = max(token_score, 50)
+            if term in desc_lower:
+                token_score = max(token_score, 10)
+            if term in schema_text:
+                token_score = max(token_score, 1)
         if token_score == 0:
             return 0  # one missing token → not a hit
         total += token_score
@@ -169,7 +191,7 @@ class ToolSearchTool(Tool):
         return (
             "Search the full tool catalog by keyword — it contains more "
             "tools than your current tool list. Matching tools that are "
-            "not yet in your tool list are activated automatically and "
+            "matching your English keywords are activated automatically and "
             "become callable on your next step. Call with NO query to "
             "BROWSE the whole hidden catalog as a compact list (nothing "
             "is activated). Use this whenever no visible tool fits the "
@@ -186,10 +208,15 @@ class ToolSearchTool(Tool):
                     "description": (
                         "Keyword query. An exact tool name is the most "
                         "precise query; multi-word queries prefer results "
-                        "matching every token, falling back to any-token "
+                        "matching every token. Use an exact name to open suggested "
                         "matches. OMIT (or pass '*') to browse the full "
                         "hidden catalog without activating anything."
                     ),
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["auto", "search", "activate"],
+                    "description": "Default auto opens literal matches. Korean aliases assist only after a literal miss; multiple alias candidates can be opened by exact name. search lists matches without opening them.",
                 },
                 "limit": {
                     "type": "integer",
@@ -246,6 +273,14 @@ class ToolSearchTool(Tool):
                 if score > 0:
                     ranked.append((score, desc))
 
+        assisted = False
+        if not ranked and any(t in _ALIASES for t in query.lower().split()):
+            assisted = True
+            for desc in descriptors:
+                score = _rank(desc, query, use_aliases=True)
+                if score > 0:
+                    ranked.append((score, desc))
+
         # No OR fallback. It used to retry with any single token when AND
         # found nothing, and label the result "(fuzzy: matched any keyword)".
         # The model read those as real matches: "artifact deploy react app"
@@ -280,7 +315,9 @@ class ToolSearchTool(Tool):
         # version, Stage 3 rebuilds state.tools next iteration, and the
         # schemas reach the model on its next step within this turn.
         activated: List[str] = []
-        if registry is not None:
+        mode = input.get("mode", "auto")
+        activate = mode == "activate" or (mode == "auto" and (not assisted or len(ranked) == 1))
+        if registry is not None and activate:
             for _, desc in top:
                 name = str(desc.get("name", ""))
                 if desc.get("_deferred") and self._activate(registry, name):
@@ -297,7 +334,15 @@ class ToolSearchTool(Tool):
             one_liner = d.splitlines()[0] if d else "(no description)"
             tag = ""
             if registry is not None:
-                tag = " [activated]" if name in activated else " [available]"
+                tag = (
+                    " [activated]"
+                    if name in activated
+                    else (
+                        " [candidate: search by exact name to activate]"
+                        if desc.get("_deferred")
+                        else " [available]"
+                    )
+                )
             lines.append(f"{i}. {name} — {one_liner}{tag}")
         if named and registry is not None:
             # 정확한 이름으로 찾은 도구의 정의가 CLI 한도 때문에 줄었으면 원문을 여기 싣는다 — 줄인 정의가
@@ -327,6 +372,15 @@ class ToolSearchTool(Tool):
                     for s, d in top
                 ],
                 "activated": activated,
+                "activated_schema_bytes": sum(
+                    len(
+                        json.dumps(
+                            d.get("input_schema", {}), ensure_ascii=False, separators=(",", ":")
+                        ).encode()
+                    )
+                    for _, d in top
+                    if d.get("name") in activated
+                ),
                 "searched": len(descriptors),
                 "fuzzy": fuzzy,
             },

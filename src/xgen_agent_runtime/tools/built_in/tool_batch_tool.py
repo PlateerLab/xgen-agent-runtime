@@ -257,7 +257,7 @@ class ToolBatchTool(Tool):
 
         router = RegistryRouter(registry)
         try:
-            safe = bool(target.capabilities(inputs[0]).concurrency_safe)
+            safe = all(target.capabilities(item).parallel_read for item in inputs)
         except Exception:  # noqa: BLE001
             safe = False
         limit = int((input or {}).get("max_concurrency") or DEFAULT_CONCURRENCY)

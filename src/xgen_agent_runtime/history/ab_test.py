@@ -50,7 +50,8 @@ class ABTestRunner:
             exec_id,
             "completed",
             result_text=result_text,
-            usage=usage,
+            usage={**usage, "iterations": iterations, "tool_calls": tool_calls_count},
+            duration_ms=duration_ms,
         )
 
     def get_comparison(self, exec_a_id: str, exec_b_id: str) -> Optional[Dict[str, Any]]:
