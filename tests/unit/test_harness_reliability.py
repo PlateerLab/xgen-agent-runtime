@@ -62,3 +62,29 @@ def test_office_deliverable_requires_its_main_part(extension, part):
         archive.writestr(part, "<document/>")
     assert not is_problem(describe_file("결과." + extension, buf.getvalue()))
     assert is_problem(describe_file("결과." + extension, b"incorrect file contents"))
+
+@pytest.mark.parametrize(("query","expected"), [
+    ("list documents", ["ListA", "ListB"]),
+    ("ListB", ["ListB"]),
+    ("ListA, ListB", ["ListA", "ListB"]),
+    ("list nonexistent", []),
+    ("문서", ["LocalDocs"]),
+    ("*", []),
+])
+async def test_native_search_keeps_existing_activation(query, expected):
+    registry = ToolRegistry()
+    for name, description in (("ListA","list documents"), ("ListB","list documents"), ("LocalDocs","문서")):
+        registry.register(build_tool(name=name, description=description, input_schema={"type":"object"}, execute=lambda *_: None), core=False)
+    search = ToolSearchTool()
+    result = await search.execute({"query":query}, ToolContext(tool_registry=registry))
+    assert result.metadata.get("activated", []) == expected
+
+
+def test_compaction_role_uses_host_approved_model_only_for_summary():
+    from xgen_agent_runtime.core.state import PipelineState
+    from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import LLMSummaryCompactor
+    state = PipelineState(session_id="a", model="parent")
+    for selected, expected in [(None, "parent"), ("small-approved", "small-approved")]:
+        resolver, enabled = LLMSummaryCompactor(summary_model=selected)._resolve(state)
+        assert enabled and resolver(state).model == expected
+        assert state.model == "parent"

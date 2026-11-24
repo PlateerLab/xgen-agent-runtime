@@ -97,7 +97,7 @@ _ALIASES = {
 }
 
 
-def _rank(descriptor: Dict[str, Any], query: str) -> int:
+def _rank(descriptor: Dict[str, Any], query: str, *, use_aliases: bool = False) -> int:
     """Score a descriptor against ``query``. Higher = better match.
 
     0 means "no match" (filtered out). The heuristic:
@@ -138,7 +138,7 @@ def _rank(descriptor: Dict[str, Any], query: str) -> int:
     total = 0
     for token in tokens:
         token_score = 0
-        for term in (token, *_ALIASES.get(token, ())):
+        for term in (token, *(_ALIASES.get(token, ()) if use_aliases else ())):
             if term == name_lower:
                 token_score = max(token_score, 100)
             elif term in name_lower:
@@ -191,7 +191,7 @@ class ToolSearchTool(Tool):
         return (
             "Search the full tool catalog by keyword — it contains more "
             "tools than your current tool list. Matching tools that are "
-            "matched by name or unambiguously by keyword are activated and "
+            "matching your English keywords are activated automatically and "
             "become callable on your next step. Call with NO query to "
             "BROWSE the whole hidden catalog as a compact list (nothing "
             "is activated). Use this whenever no visible tool fits the "
@@ -216,7 +216,7 @@ class ToolSearchTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["auto", "search", "activate"],
-                    "description": "auto opens exact names or a unique match; search only lists candidates; activate explicitly opens the selected matches.",
+                    "description": "Default auto opens literal matches. Korean aliases assist only after a literal miss; multiple alias candidates can be opened by exact name. search lists matches without opening them.",
                 },
                 "limit": {
                     "type": "integer",
@@ -273,6 +273,14 @@ class ToolSearchTool(Tool):
                 if score > 0:
                     ranked.append((score, desc))
 
+        assisted = False
+        if not ranked and any(t in _ALIASES for t in query.lower().split()):
+            assisted = True
+            for desc in descriptors:
+                score = _rank(desc, query, use_aliases=True)
+                if score > 0:
+                    ranked.append((score, desc))
+
         # No OR fallback. It used to retry with any single token when AND
         # found nothing, and label the result "(fuzzy: matched any keyword)".
         # The model read those as real matches: "artifact deploy react app"
@@ -308,7 +316,7 @@ class ToolSearchTool(Tool):
         # schemas reach the model on its next step within this turn.
         activated: List[str] = []
         mode = input.get("mode", "auto")
-        activate = mode == "activate" or (mode == "auto" and (named or len(ranked) == 1))
+        activate = mode == "activate" or (mode == "auto" and (not assisted or len(ranked) == 1))
         if registry is not None and activate:
             for _, desc in top:
                 name = str(desc.get("name", ""))

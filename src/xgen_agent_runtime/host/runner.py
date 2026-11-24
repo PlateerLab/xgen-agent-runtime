@@ -513,6 +513,7 @@ def build_pipeline(
     tool_result_filter: Optional[Any] = None,
     context_window_budget: int = 0,
     enable_compaction: bool = True,
+    summary_model: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
     enable_prompt_cache: bool = False,
     enable_deliverable_review: bool = True,
@@ -652,7 +653,7 @@ def build_pipeline(
     )
 
     builder.with_context(
-        compactor=LLMSummaryCompactor(),
+        compactor=LLMSummaryCompactor(summary_model=summary_model),
         compaction_enabled=bool(enable_compaction),
         prune_over_tokens=prune_over_tokens,
         # 원샷 호스트 계약 (executor 3.3.1): 이 파이프라인은 턴마다 새로

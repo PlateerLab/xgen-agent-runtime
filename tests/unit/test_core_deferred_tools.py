@@ -366,7 +366,7 @@ class TestToolSearchActivation:
         for i in range(5):
             reg.register(_NamedTool(f"widget_{i}", "widget maker"), core=False)
         ctx = ToolContext(tool_registry=reg)
-        result = await ToolSearchTool().execute({"query": "widget", "limit": 2, "mode": "activate"}, ctx)
+        result = await ToolSearchTool().execute({"query": "widget", "limit": 2}, ctx)
         assert result.metadata["results_count"] == 2
         assert len(result.metadata["activated"]) == 2
         assert len([n for n in reg.activated_names()]) == 2
