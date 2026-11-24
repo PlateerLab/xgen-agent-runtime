@@ -2,7 +2,7 @@
 
 Verifies that the capability-aware partition executor:
 - runs concurrency-safe tools in parallel (bounded)
-- runs unsafe tools sequentially after the parallel batch
+- runs unsafe tools sequentially at their original positions
 - preserves original ``tool_calls`` order in the result
 - falls back to fail-closed (unsafe) when registry is missing or
   capability probing raises
@@ -194,12 +194,11 @@ class TestPartitionExecutor:
                 executor.execute_all(tool_calls, router, ToolContext())
         )
 
-        # Order preserved even though safe batch ran first
+        # Order preserved on the model and execution sides
         names = [r["content"] for r in results]
         assert names == ["A:done", "W:done", "B:done"]
-        # A and B ran in parallel (safe batch); W ran after they finished
-        safe_end = max(a.finished_at[0], b.finished_at[0])
-        assert w.started_at[0] >= safe_end - 0.005
+        assert w.started_at[0] >= a.finished_at[0]
+        assert b.started_at[0] >= w.finished_at[0]
 
     def test_missing_registry_falls_back_to_unsafe(self) -> None:
         """Without a registry, capabilities() can't be probed — every

@@ -100,16 +100,7 @@ class StreamingToolExecutor(ToolExecutor):
         self._tasks: Dict[str, asyncio.Task[Dict[str, Any]]] = {}
         # Completed results keyed by tool_use_id (filled by task done)
         self._results: Dict[str, Dict[str, Any]] = {}
-        # Pending safe calls awaiting a slot (FIFO)
-        self._safe_queue: List[str] = []
-        # Pending unsafe calls awaiting serial slot (FIFO)
-        self._unsafe_queue: List[str] = []
-
-        self._sem = asyncio.Semaphore(max_concurrency)
-        # ``_chain_barrier`` is held by the currently-running unsafe tool;
-        # safe tools added while it's held wait for release before starting
-        # so the "unsafe serializes everything after it" invariant holds.
-        self._chain_barrier: Optional[asyncio.Future[None]] = None
+        self._waiting: list[str] = []
 
         # Keeps track of whether drain has been called — after drain,
         # add() becomes an error.
@@ -186,7 +177,7 @@ class StreamingToolExecutor(ToolExecutor):
     @property
     def pending_count(self) -> int:
         """Calls that have been added but haven't finished yet."""
-        return len(self._tasks) + len(self._safe_queue) + len(self._unsafe_queue)
+        return len(self._tasks) + len(self._waiting)
 
     def bind_registry(self, registry: ToolRegistry) -> None:
         """Late-bind the registry — mirrors PartitionExecutor / RegistryRouter."""
@@ -221,24 +212,8 @@ class StreamingToolExecutor(ToolExecutor):
         caps = self._lookup_capabilities(call)
         self._caps[tuid] = caps
 
-        if caps.concurrency_safe and self._chain_barrier is None:
-            # Safe and no active unsafe chain → start immediately
-            # (semaphore will still bound simultaneous in-flight).
-            self._tasks[tuid] = asyncio.create_task(self._run_safe(tuid, context))
-        elif caps.concurrency_safe:
-            # Safe but blocked by an active unsafe chain — queue until release
-            self._safe_queue.append(tuid)
-        else:
-            # Unsafe — raise the chain barrier immediately so any safe
-            # call added *after* this one queues behind it, even before
-            # we start executing. Barrier is released only when the
-            # unsafe queue fully drains (see ``_run_unsafe``).
-            if self._chain_barrier is None:
-                self._chain_barrier = asyncio.get_running_loop().create_future()
-            self._unsafe_queue.append(tuid)
-            # If no in-flight tasks, start this unsafe now.
-            if not self._tasks:
-                await self._start_next_unsafe(context)
+        self._waiting.append(tuid)
+        self._advance(context)
 
     async def drain(
         self,
@@ -257,34 +232,28 @@ class StreamingToolExecutor(ToolExecutor):
         # Store on_event so _run_safe / _run_unsafe can use it.
         self._on_event = on_event  # type: ignore[attr-defined]
 
-        # Drain loop: wait for in-flight tasks, then try to advance queues.
-        while self._tasks or self._safe_queue or self._unsafe_queue:
-            if self._tasks:
+        try:
+            while self._tasks:
                 done, _ = await asyncio.wait(
                     self._tasks.values(), return_when=asyncio.FIRST_COMPLETED
                 )
-                for task in done:
-                    # Find and remove the completed task entry
-                    tuid = next((k for k, v in self._tasks.items() if v is task), None)
-                    if tuid is None:
-                        continue
-                    del self._tasks[tuid]
-                    # Result is recorded by the task body itself via
-                    # self._results[tuid]; propagate exceptions if any.
-                    exc = task.exception()
-                    if exc is not None and tuid not in self._results:
-                        # The task crashed before writing a result — surface
-                        # as a synthetic error entry.
-                        self._results[tuid] = {
-                            "type": "tool_result",
-                            "tool_use_id": tuid,
-                            "content": f"error: {exc}",
-                            "is_error": True,
-                        }
-
-            # If the chain barrier was released, start waiting unsafe/safe.
-            await self._advance_queues(context)
-
+                for tuid, task in list(self._tasks.items()):
+                    if task in done:
+                        del self._tasks[tuid]
+                        try:
+                            task.result()
+                        except Exception as exc:
+                            self._results[tuid] = {
+                                "type": "tool_result",
+                                "tool_use_id": tuid,
+                                "content": f"error: {exc}",
+                                "is_error": True,
+                            }
+                self._advance(context)
+        finally:
+            for task in self._tasks.values():
+                task.cancel()
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         return [self._results[tuid] for tuid in self._order]
 
     # ─────────────────────────────────────────────────────────
@@ -303,64 +272,18 @@ class StreamingToolExecutor(ToolExecutor):
         except Exception:
             return ToolCapabilities()
 
-    async def _advance_queues(self, context: ToolContext) -> None:
-        """Attempt to promote queued calls once slots open up.
-
-        Ordering rules:
-        - ``unsafe`` has priority over ``safe`` whenever nothing is
-          in flight. The barrier is held for the entire unsafe queue
-          and released only when ``_run_unsafe`` sees an empty queue.
-        - ``safe`` drains only when the barrier is down (no unsafe
-          work pending *and* no unsafe work running).
-        """
-        # Unsafe first: if nothing is running and unsafe queued, start it.
-        if not self._tasks and self._unsafe_queue:
-            await self._start_next_unsafe(context)
+    def _advance(self, context: ToolContext) -> None:
+        if any(not self._caps[tuid].parallel_read for tuid in self._tasks):
             return
-
-        # Otherwise, if the chain barrier is down, safe calls may run.
-        if self._chain_barrier is None:
-            while self._safe_queue:
-                tuid = self._safe_queue.pop(0)
-                self._tasks[tuid] = asyncio.create_task(self._run_safe(tuid, context))
-
-    async def _start_next_unsafe(self, context: ToolContext) -> None:
-        """Pop the head of the unsafe queue and kick off its task.
-
-        The barrier is already up (set by ``add`` the moment the first
-        unsafe call entered the pipeline). ``_run_unsafe`` releases it
-        only when the queue is fully drained.
-        """
-        if not self._unsafe_queue:
-            return
-        tuid = self._unsafe_queue.pop(0)
-        if self._chain_barrier is None:
-            # Defensive — should have been set by add()
-            self._chain_barrier = asyncio.get_running_loop().create_future()
-        self._tasks[tuid] = asyncio.create_task(self._run_unsafe(tuid, context))
-
-    async def _run_safe(self, tuid: str, context: ToolContext) -> Dict[str, Any]:
-        """Execute a concurrency-safe call under the semaphore."""
-        async with self._sem:
-            return await self._dispatch(tuid, context)
-
-    async def _run_unsafe(self, tuid: str, context: ToolContext) -> Dict[str, Any]:
-        """Execute an unsafe call.
-
-        The chain barrier is released **only when the entire unsafe
-        queue has drained** — if more unsafe calls are queued, they
-        run serially before safe calls are allowed through. This keeps
-        the "unsafe serializes everything after it" invariant across
-        consecutive unsafe additions.
-        """
-        try:
-            return await self._dispatch(tuid, context)
-        finally:
-            if not self._unsafe_queue:
-                barrier = self._chain_barrier
-                self._chain_barrier = None
-                if barrier is not None and not barrier.done():
-                    barrier.set_result(None)
+        while self._waiting and len(self._tasks) < self._max_concurrency:
+            tuid = self._waiting[0]
+            read = self._caps[tuid].parallel_read
+            if not read and self._tasks:
+                return
+            self._waiting.pop(0)
+            self._tasks[tuid] = asyncio.create_task(self._dispatch(tuid, context))
+            if not read:
+                return
 
     async def _dispatch(self, tuid: str, context: ToolContext) -> Dict[str, Any]:
         """Shared execution body — routes, times, emits events, stores result."""

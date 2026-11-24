@@ -201,6 +201,7 @@ Rules:
 - Plain text only. Do not call tools.
 - Facts found by tools must survive: the raw tool output will be gone. Keep concrete file paths, identifiers, commands, numbers, error messages and URLs.
 - If the transcript starts with an earlier checkpoint summary, fold everything it says into this one: this summary replaces it.
+- Preserve corrections and cancellations in chronological order. Mark superseded tasks as closed. Preserve exact units and artifact references.
 - Be complete on facts and terse on prose. Stay under about {words} words.
 
 Use these sections (skip one only if it would be empty):
@@ -461,8 +462,10 @@ class LLMSummaryCompactor(SummaryCompactor):
         resolve_cfg: Optional[Callable[[PipelineState], ModelConfig]] = None,
         has_override: Optional[Callable[[], bool]] = None,
         client_getter: Optional[Callable[[PipelineState], Any]] = None,
+        summary_model: Optional[str] = None,
     ):
         super().__init__(keep_recent=keep_recent, summary_text=summary_text)
+        self._summary_model = summary_model
         self._resolve_cfg = resolve_cfg
         self._has_override = has_override or (lambda: False)
         self._client_getter = client_getter or (lambda s: getattr(s, "llm_client", None))
@@ -635,6 +638,9 @@ class LLMSummaryCompactor(SummaryCompactor):
         for line in reversed(lines):
             cost = estimate_text_scaled(state, line) + 1
             if used + cost > budget_tokens:
+                remaining = budget_tokens - used - 1
+                if remaining >= 128:
+                    kept.insert(0, _clip_tokens(state, line, remaining))
                 break
             kept.insert(0, line)
             used += cost
@@ -695,7 +701,7 @@ class LLMSummaryCompactor(SummaryCompactor):
             state_model = getattr(state, "model", None)
             if state_model:
                 resolve = lambda s: ModelConfig(  # noqa: E731
-                    model=getattr(s, "model", state_model) or state_model,
+                    model=self._summary_model or getattr(s, "model", state_model) or state_model,
                     max_tokens=_SUMMARY_MAX_TOKENS,
                     temperature=0.0,
                     thinking_enabled=False,

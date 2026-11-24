@@ -4,6 +4,14 @@ All notable changes to `xgen-agent-runtime` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.110.0] - 2026-11-23
+
+- Preserve model-specified execution order around writes and approvals. The SDK host overlaps up to four declared independent reads.
+- Deduplicate client message IDs per sender and turn. Retried offers return the original receipt.
+- Record measured A/B duration and counts, and report first model request and first visible text latency for streaming hosts.
+- Support Korean tool queries, explicit discovery or activation, and activation schema byte counts. English and literal keyword searches retain their original ranking and automatic activation. Ambiguous Korean alias results return candidates.
+- Preserve the newest available transcript fragment when compacting large messages. Expose typed child tool failures to host adapters.
+
 ## [4.109.1] - 2026-11-13
 
 ### Fixed: 준비 중에 보낸 추가 메시지가 한 바퀴 늦게 들어가던 것

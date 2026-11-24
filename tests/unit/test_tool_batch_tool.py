@@ -33,7 +33,7 @@ class _Search(Tool):
                                                  "limit": {"type": "integer"}}, "required": ["query"]}
 
     def capabilities(self, input: Dict[str, Any]) -> ToolCapabilities:
-        return ToolCapabilities(concurrency_safe=self.safe)
+        return ToolCapabilities(concurrency_safe=self.safe, read_only=True)
 
     async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
         self.in_flight += 1
