@@ -17,6 +17,8 @@ value and the execute path flows through the same unified surface.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Union
 
@@ -58,6 +60,45 @@ from xgen_agent_runtime.stages.s06_api.artifact.default.tool_loop import (
 )
 from xgen_agent_runtime.stages.s06_api.types import APIRequest, APIResponse
 from xgen_agent_runtime.llm_client import timeouts as _timeouts
+
+
+def _latest_user_index(messages: List[Dict[str, Any]]) -> int:
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            return i
+    return -1
+
+
+def _content_identity(value: Any) -> Any:
+    """Content as the API compares it: cache markers and internal keys left out, a string the same
+    as one text block. Stage 5 moves ``cache_control`` across the history before every call, so a
+    digest that counted it called the pinned message "changed" at the second tool round."""
+    if isinstance(value, dict):
+        return {
+            k: _content_identity(v) for k, v in value.items() if k not in ("cache_control", "_meta")
+        }
+    if isinstance(value, list):
+        return [_content_identity(v) for v in value]
+    return value
+
+
+def _message_digest(message: Any) -> str:
+    """Identity of a message's content, to tell whether a pinned message is still the same one."""
+    try:
+        content = message.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        raw = json.dumps(
+            [message.get("role"), _content_identity(content)],
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+    except (AttributeError, TypeError, ValueError):
+        raw = repr(message)
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()
+
 
 #: "모델이 무언가를 내놓았다" 로 치는 청크. 첫 응답 감시는 이것이 올 때까지 잰다 —
 #: 스트림을 열자마자 오는 머리 청크(사용량·메타)로 대기가 끝난 것처럼 보이면 안 된다.
@@ -803,41 +844,84 @@ class APIStage(Stage[Any, APIResponse]):
 
     @staticmethod
     def _inject_turn_context(
-        messages: List[Dict[str, Any]], context_text: str
+        messages: List[Dict[str, Any]], context_text: str, index: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """Attach the volatile turn context to the latest user message.
+        """Attach the volatile turn context to a user message (the latest one by default).
 
         TTFT program (2.50.0), the other half of Stage 3's
         ``volatile_placement="turn_context"``: clock + retrieved memory
-        ride as an extra content block on a COPY of the newest user
-        message — request-only, never written back to ``state.messages``,
-        so history stays clean and the injected text always lands after
-        every prompt-cache breakpoint (system, tools, history prefix all
-        stay byte-stable across turns).
+        ride as an extra content block on a COPY of a user message —
+        request-only, never written back to ``state.messages``, so history
+        stays clean and the injected text lands after the cached prefix.
+
+        Which message, and with which text, is decided once per turn by
+        :meth:`_turn_context_target` — see there for why it must not move.
         """
         if not context_text:
             return messages
-        for i in range(len(messages) - 1, -1, -1):
-            msg = messages[i]
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                blocks: List[Dict[str, Any]] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                blocks = list(content)
-            else:
-                return messages
-            blocks.append(
-                {
-                    "type": "text",
-                    "text": f"<session-context>\n{context_text}\n</session-context>",
-                }
-            )
-            patched = list(messages)
-            patched[i] = {**msg, "content": blocks}
-            return patched
-        return messages
+        if index is None:
+            index = _latest_user_index(messages)
+        if index < 0 or index >= len(messages):
+            return messages
+        msg = messages[index]
+        content = msg.get("content")
+        if isinstance(content, str):
+            blocks: List[Dict[str, Any]] = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = list(content)
+        else:
+            return messages
+        blocks.append(
+            {
+                "type": "text",
+                "text": f"<session-context>\n{context_text}\n</session-context>",
+            }
+        )
+        patched = list(messages)
+        patched[index] = {**msg, "content": blocks}
+        return patched
+
+    @staticmethod
+    def _turn_context_target(
+        state: PipelineState, messages: List[Dict[str, Any]], context_text: str
+    ) -> tuple:
+        """``(index, text)`` for this request's turn context — fixed for the whole turn.
+
+        The turn context used to ride on the **latest** user message of every request, and Stage 3
+        re-renders it (the clock) before every call. In a tool loop the latest user message is the
+        newest tool result, so each request took the block off the message the previous request
+        had carried it on. Claude 5.5-generation models bind every thinking block to the exact
+        content before it (system, tools, earlier messages); the moved block made the API reject
+        the turn's next request — 400 "Invalid `signature` in `thinking` block … Content that
+        preceded this block when it was created is missing" (2026-11-20 home XGEN, Sonnet 5.5 and
+        Haiku 5.5, on every multi-step turn).
+
+        So the first request of a turn decides where the block goes (the latest user message then
+        — the person's request, as before) and its text; every later request of the same turn,
+        continuation slices included, puts the same text back on that same message. Messages are
+        only appended within a turn, so the earlier requests stay a byte-identical prefix of the
+        later ones. If that message is no longer what it was (compaction rewrote the history), the
+        target is chosen again. The clock is therefore the turn's start time; retrieved memory and
+        host notes are per turn anyway.
+        """
+        pin = state.shared.get(SharedKeys.TURN_CONTEXT_PIN)
+        if isinstance(pin, dict):
+            idx = pin.get("index")
+            if (
+                isinstance(idx, int)
+                and 0 <= idx < len(messages)
+                and pin.get("digest") == _message_digest(messages[idx])
+                and isinstance(pin.get("text"), str)
+            ):
+                return idx, pin["text"]
+        idx = _latest_user_index(messages)
+        if idx >= 0:
+            state.shared[SharedKeys.TURN_CONTEXT_PIN] = {
+                "index": idx,
+                "digest": _message_digest(messages[idx]),
+                "text": context_text,
+            }
+        return idx, context_text
 
     def _call_kwargs(
         self,
@@ -856,7 +940,8 @@ class APIStage(Stage[Any, APIResponse]):
             messages = retire_tool_calls_by_name(messages, retired)
         turn_context = state.shared.get("turn_context_text")
         if isinstance(turn_context, str) and turn_context:
-            messages = self._inject_turn_context(messages, turn_context)
+            index, text = self._turn_context_target(state, messages, turn_context)
+            messages = self._inject_turn_context(messages, text, index)
         if extra_messages:
             messages.extend(extra_messages)
         folded = state.shared.get(SharedKeys.FOLDED_TOOL_RESULTS)

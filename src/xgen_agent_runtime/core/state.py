@@ -429,6 +429,8 @@ class PipelineState:
             "_api_ttft_emitted",
             "_prompt_tokens_memo",
             "turn_context_text",
+            # 턴 맥락을 실을 자리와 글(stage 6) — 턴마다 새로 정한다. 연속 슬라이스에는 이어진다.
+            "executor.turn_context_pin",
             "system_parts",
             "executor.tool_calls_total",
             # 반복 실패 차단(stages/s10_tool/repeat_guard.py)은 턴 단위다 —

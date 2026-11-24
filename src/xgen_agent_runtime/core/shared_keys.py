@@ -114,6 +114,14 @@ class SharedKeys:
     folders on the user's device connected to this conversation): a stale
     copy in history would contradict the current state."""
 
+    TURN_CONTEXT_PIN: Final = "executor.turn_context_pin"
+    """Where and with which text Stage 6 puts this turn's volatile context (turn-scoped).
+
+    ``{"index": int, "digest": str, "text": str}``, set by the first request of the turn and reused
+    by every later one, so the turn context never moves or changes mid-turn (a moved block
+    invalidates every thinking block after it on Claude 5.5-generation models). Cleared by
+    ``PipelineState.begin_turn``; kept across continuation slices of the same turn."""
+
     RETIRED_TOOL_CALLS: Final = "executor.retired_tool_calls"
     """Tools absent this turn whose earlier calls must not look callable.
 

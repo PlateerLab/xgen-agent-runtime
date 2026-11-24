@@ -24,6 +24,14 @@ from xgen_agent_runtime.llm_client.translators._codex import codex_argv
 from xgen_agent_runtime.llm_client.types import APIRequest
 
 
+def _shape(thinking: dict) -> dict:
+    """The thinking shape without the binding controls (``block_binding`` rides on every adaptive
+    request — tests/llm_client/unit/test_anthropic_thinking_binding.py)."""
+    if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        assert thinking.get("block_binding") == {"prefix_mismatch_behavior": "drop_block"}
+    return {k: v for k, v in (thinking or {}).items() if k != "block_binding"}
+
+
 def _opts(provider: str, model: str):
     return thinking_spec(provider, model).to_dict()
 
@@ -131,7 +139,7 @@ def test_anthropic_budget_model_uses_budget_tokens_and_keeps_answer_room():
 
 def test_anthropic_adaptive_model_uses_effort():
     kwargs = AnthropicClient(api_key="k")._build_kwargs(_areq("claude-opus-4-7", "xhigh"))
-    assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert _shape(kwargs["thinking"]) == {"type": "adaptive", "display": "summarized"}
     assert kwargs["extra_body"]["output_config"] == {"effort": "xhigh"}
     assert kwargs["max_tokens"] >= 32000
 
