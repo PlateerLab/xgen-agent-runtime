@@ -118,6 +118,12 @@ class ConversationArchivingStrategy(ProviderDrivenStrategy):
         """
         notes = provider.notes()
         prefix = self._session_prefix(state)
+        lookup = getattr(notes, "find_conversation_archive", None)
+        if callable(lookup):
+            existing = await lookup(prefix, CONVERSATIONS_CATEGORY)
+            if existing is not None:
+                return existing.ref.filename, existing
+            return f"{prefix}__{self._title_slug(first_user)}.md", None
         legacy = f"{prefix}.md"
         existing = await notes.read(legacy)
         if existing is not None:
