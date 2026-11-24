@@ -541,6 +541,7 @@ class TestABTestRunner:
         detail = svc.get_execution_detail(result.env_a.execution_id)
         assert detail["status"] == "completed"
         assert detail["result_text"] == "Answer A"
+        assert (detail["duration_ms"], detail["iterations"], detail["tool_calls"]) == (1000, 1, 2)
 
     def test_get_comparison(self, svc):
         runner = ABTestRunner(svc)

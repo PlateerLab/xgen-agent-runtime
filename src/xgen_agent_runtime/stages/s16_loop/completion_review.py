@@ -29,6 +29,7 @@ import json
 import logging
 import posixpath
 import re
+import zipfile
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from xgen_agent_runtime.core.state import PipelineState
@@ -222,7 +223,7 @@ def _describe_jsonl(text: str) -> str:
 
 
 #: 요약 문구 중 "결정론적으로 틀렸다" 를 뜻하는 표식 — 이것이 있을 때만 끼어든다.
-_PROBLEM_MARKS = ("MISSING", "EMPTY", "INVALID JSON", "ragged rows")
+_PROBLEM_MARKS = ("MISSING", "EMPTY", "INVALID JSON", "INVALID Office", "ragged rows")
 
 
 def is_problem(desc: str) -> bool:
@@ -238,6 +239,24 @@ def describe_file(path: str, data: Optional[bytes]) -> str:
     """파일 하나의 한 줄 요약. ``data`` 가 None 이면 없는 파일. 문제는 :func:`is_problem`."""
     if data is None:
         return "MISSING"
+    office_part = {
+        ".docx": "word/document.xml",
+        ".xlsx": "xl/workbook.xml",
+        ".pptx": "ppt/presentation.xml",
+    }.get(posixpath.splitext(path)[1].lower())
+    if office_part:
+        # Encrypted Office containers are not ZIP archives. Opening them would need the user's key.
+        if data.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
+            return "encrypted or legacy Office container; contents unverified"
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as package:
+                members = set(package.namelist())
+                if office_part in members and "[Content_Types].xml" in members:
+                    return "Office package contains its main document part"
+                return "INVALID Office package (missing required document parts)"
+        except (ValueError, zipfile.BadZipFile):
+            return "INVALID Office package"
+
     if len(data) == 0:
         ext = posixpath.splitext(path)[1].lower()
         return "EMPTY (0 bytes)" if ext in _DATA_EXTS else "empty file (0 bytes)"
@@ -333,7 +352,9 @@ class DeliverableReviewer:
             data = await fs.read_bytes(path)
         except FileNotFoundError:
             return None
-        return data[: self._max_read_bytes]
+        if len(data) > self._max_read_bytes:
+            raise ValueError("artifact exceeds review byte budget")
+        return data
 
     async def review(self, state: PipelineState) -> Optional[str]:
         marker = state.shared.get(REVIEW_KEY)

@@ -201,6 +201,7 @@ Rules:
 - Plain text only. Do not call tools.
 - Facts found by tools must survive: the raw tool output will be gone. Keep concrete file paths, identifiers, commands, numbers, error messages and URLs.
 - If the transcript starts with an earlier checkpoint summary, fold everything it says into this one: this summary replaces it.
+- Preserve corrections and cancellations in chronological order. Mark superseded tasks as closed. Preserve exact units and artifact references.
 - Be complete on facts and terse on prose. Stay under about {words} words.
 
 Use these sections (skip one only if it would be empty):
@@ -635,6 +636,9 @@ class LLMSummaryCompactor(SummaryCompactor):
         for line in reversed(lines):
             cost = estimate_text_scaled(state, line) + 1
             if used + cost > budget_tokens:
+                remaining = budget_tokens - used - 1
+                if remaining >= 128:
+                    kept.insert(0, _clip_tokens(state, line, remaining))
                 break
             kept.insert(0, line)
             used += cost

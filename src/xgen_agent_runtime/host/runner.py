@@ -635,7 +635,11 @@ def build_pipeline(
         # 토큰을 기록·과금에 반영한 뒤에 켠다.
         builder.with_cache(strategy="aggressive")
     if registry is not None and len(registry):
-        builder.with_tools(registry=registry)
+        from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import PartitionExecutor
+
+        builder.with_tools(
+            registry=registry, executor=PartitionExecutor(registry), max_concurrency=4
+        )
 
     # ── Stage 2(Context) — 항상 등록 ─────────────────────────────
     # 이전에는 memory_provider 가 있을 때만 등록해서, 기억을 끈 에이전트는
@@ -1664,6 +1668,12 @@ def stream_turn(
     cli_tool_started: Dict[str, float] = {}
     last_message_chunk = ""
     turn_started = time.monotonic()
+    milestones: Dict[str, int] = {}
+
+    def mark(name: str) -> None:
+        if name not in milestones:
+            milestones[name] = int((time.monotonic() - turn_started) * 1000)
+
     # 답이 다 나온 뒤의 기다림(파일 점검·기억 저장·실행 기록)을 호스트에 알린다 — 화면이 "..." 대신
     # 무엇을 하는지 보인다. 호스트에 ``note_turn_phase`` 가 없으면(커넥터 등) 아무것도 하지 않는다.
     note_phase = _TurnPhaseNotifier.for_host(host)
@@ -1726,10 +1736,12 @@ def stream_turn(
                                 continue
                             last_message_chunk = normalized
                         slice_streamed_text = True
+                        mark("first_text_ms")
                         out_parts.append(chunk)
                         call_parts.append(chunk)
                         yield chunk
                 elif event.type == "api.request":
+                    mark("first_model_request_ms")
                     if _messages_mark() != call_mark:
                         call_parts.clear()  # 앞 호출의 답은 상태에 들어갔다
                     call_mark = _messages_mark()
@@ -1743,6 +1755,7 @@ def stream_turn(
                     # slice may have streamed while this one did not.
                     result = event.data.get("result", "")
                     if not slice_streamed_text and result:
+                        mark("first_text_ms")
                         out_parts.append(result)
                         yield result
                 elif event.type == "pipeline.error":
@@ -1906,6 +1919,13 @@ def stream_turn(
         # 끝난 API 호출분을 낸다 — 백그라운드 태스크가 남아 있을 수 있어 partial 표시.
         usage = turn_usage(pipeline, state)
         if usage is not None:
+            usage = {
+                **usage,
+                "timing_ms": {
+                    **milestones,
+                    "execution_ms": int((time.monotonic() - turn_started) * 1000),
+                },
+            }
             if not turn_completed:
                 usage = {**usage, "partial": True}
             if usage_sink is not None:
@@ -1921,7 +1941,16 @@ def stream_turn(
             try:
                 _closed_usage = turn_usage(pipeline, state)
                 if _closed_usage is not None:
-                    usage_sink.update({**_closed_usage, "partial": True})
+                    usage_sink.update(
+                        {
+                            **_closed_usage,
+                            "partial": True,
+                            "timing_ms": {
+                                **milestones,
+                                "execution_ms": int((time.monotonic() - turn_started) * 1000),
+                            },
+                        }
+                    )
             except Exception:  # noqa: BLE001 — 집계는 정리를 막지 않는다
                 logger.debug("geny_bridge: usage aggregation on close failed", exc_info=True)
         if agen is not None:

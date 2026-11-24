@@ -152,6 +152,8 @@ class HistoryService:
         result_text: Optional[str] = None,
         usage: Optional[Dict[str, Any]] = None,
         error: Optional[Dict[str, Any]] = None,
+        *,
+        duration_ms: Optional[int] = None,
     ) -> None:
         """Record execution completion."""
         now = datetime.now(timezone.utc).isoformat()
@@ -186,7 +188,9 @@ class HistoryService:
         row = self._conn.execute(
             "SELECT started_at FROM executions WHERE id = ?", (exec_id,)
         ).fetchone()
-        if row:
+        if duration_ms is not None:
+            updates["duration_ms"] = max(0, int(duration_ms))
+        elif row:
             started = datetime.fromisoformat(row["started_at"])
             finished = datetime.fromisoformat(now)
             updates["duration_ms"] = int((finished - started).total_seconds() * 1000)
